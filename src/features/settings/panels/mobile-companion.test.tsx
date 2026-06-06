@@ -1,4 +1,4 @@
-import { cleanup, waitFor } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CompanionPairingPayload, CompanionStatus } from "@/lib/api";
 import { renderWithProviders } from "@/test/render-with-providers";
@@ -36,7 +36,7 @@ function status(overrides: Partial<CompanionStatus>): CompanionStatus {
 
 const PAIRING: CompanionPairingPayload = {
 	deviceId: "device-1",
-	label: "Phone",
+	label: "Device",
 	pat: "hlm_test",
 	url: "https://example.trycloudflare.com/#pair=hlm_test",
 };
@@ -90,5 +90,35 @@ describe("MobileCompanionPanel tunnel bootstrap", () => {
 			expect(apiMocks.pairCompanionDevice).toHaveBeenCalled(),
 		);
 		expect(apiMocks.enableCompanion).not.toHaveBeenCalled();
+	});
+
+	it("uses device copy and centers the empty paired-device state", async () => {
+		apiMocks.getCompanionStatus.mockResolvedValue(
+			status({
+				running: true,
+				addr: "127.0.0.1:5000",
+				publicUrl: "https://example.trycloudflare.com",
+				mode: "quick",
+			}),
+		);
+
+		renderWithProviders(<MobileCompanionPanel />);
+
+		await waitFor(() =>
+			expect(apiMocks.pairCompanionDevice).toHaveBeenCalled(),
+		);
+		expect(screen.getByText("Connect a device")).toBeInTheDocument();
+		expect(
+			screen.getByText(
+				"Scan with your device's camera. The current temporary link changes after Helmor or the tunnel restarts.",
+			),
+		).toBeInTheDocument();
+		const emptyState = screen.getByText("No devices paired yet.");
+		expect(emptyState.parentElement).toHaveClass(
+			"items-center",
+			"justify-center",
+			"text-center",
+		);
+		expect(screen.queryByText(/phone/i)).not.toBeInTheDocument();
 	});
 });

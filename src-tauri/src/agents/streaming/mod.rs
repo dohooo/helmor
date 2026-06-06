@@ -53,6 +53,25 @@ use super::{
     AgentStreamEvent, CmdResult, ExchangeContext,
 };
 
+/// Signal every OTHER client viewing this session to refetch the thread.
+///
+/// Reuses the existing `SessionMessagesAppended` UiMutationEvent, which the
+/// frontend bridge maps to invalidating the `sessionMessages` query. Fired at
+/// the two QUIESCENT turn boundaries — right after the user prompt is durable
+/// (so the just-sent bubble surfaces live on the desktop window + the phone
+/// over the companion SSE) and after the turn finalizes (so a client that was
+/// viewing but never attached the `SessionStreamHub` watcher still pulls the
+/// final assistant result from DB). The driver itself dedups by message id on
+/// refetch, so the extra invalidation is harmless.
+fn notify_session_messages_appended(app: &AppHandle, session_id: &str) {
+    crate::ui_sync::publish(
+        app,
+        crate::ui_sync::UiMutationEvent::SessionMessagesAppended {
+            session_id: session_id.to_string(),
+        },
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn stream_via_sidecar(
     app: AppHandle,
@@ -327,6 +346,12 @@ pub(super) fn stream_via_sidecar(
                     {
                         Ok(()) => {
                             tracing::debug!(rid = %rid, "User message persisted to DB");
+                            // Tell every OTHER client viewing this session to
+                            // refetch — surfaces the just-sent user bubble live
+                            // (desktop window + phone over SSE) the instant it
+                            // is committed, independent of the watcher enable
+                            // chain. Before the `ctx` move below.
+                            notify_session_messages_appended(&app, &ctx.helmor_session_id);
                             exchange_ctx = Some(ctx);
                         }
                         Err(error) => {
@@ -436,6 +461,13 @@ pub(super) fn stream_via_sidecar(
                         has_exchange_ctx = exchange_ctx.is_some(),
                         "stream: abnormal exit — finalized"
                     );
+
+                    // Heartbeat-timeout / disconnect also persists via
+                    // `cleanup_abnormal_stream_exit` above; refresh viewers that
+                    // never attached the hub watcher.
+                    if let Some(ctx) = exchange_ctx.as_ref() {
+                        notify_session_messages_appended(&app, &ctx.helmor_session_id);
+                    }
 
                     match turn_session.handle_abnormal_exit(kind, user_message, persisted) {
                         Ok(actions) => {
@@ -716,6 +748,15 @@ pub(super) fn stream_via_sidecar(
                         // Final render with DB-synced IDs so the frontend
                         // cache matches what the historical loader returns.
                         final_messages = pipeline_state.finish();
+                    }
+
+                    // Turn finalized at a quiescent boundary (writer dropped):
+                    // pull DB truth on any client that was viewing but never
+                    // attached the hub watcher (e.g. a turn too short for the
+                    // discovery round-trip). Guarded so anonymous streams emit
+                    // nothing.
+                    if let Some(ctx) = exchange_ctx.as_ref() {
+                        notify_session_messages_appended(&app, &ctx.helmor_session_id);
                     }
 
                     tracing::info!(
@@ -1127,6 +1168,12 @@ pub(super) fn stream_via_sidecar(
                         ) {
                             tracing::error!(rid = %rid, "Failed to finalize error exchange: {error}");
                         }
+                    }
+
+                    // Error finalized (write conn released): refresh any client
+                    // that was viewing but never attached the hub watcher.
+                    if let Some(ctx) = exchange_ctx.as_ref() {
+                        notify_session_messages_appended(&app, &ctx.helmor_session_id);
                     }
 
                     tracing::info!(

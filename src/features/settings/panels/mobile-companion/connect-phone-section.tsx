@@ -70,7 +70,9 @@ export function ConnectPhoneSection({
 		<div className="flex items-start justify-between gap-6 py-5">
 			<div className="flex h-[216px] min-w-0 flex-1 flex-col">
 				<div>
-					<p className="text-ui font-medium text-foreground">Connect a phone</p>
+					<p className="text-ui font-medium text-foreground">
+						Connect a device
+					</p>
 					<p className="mt-1 max-w-[460px] text-small leading-snug text-muted-foreground">
 						{connectDescription}
 					</p>

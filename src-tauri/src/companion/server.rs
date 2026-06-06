@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use axum::{
     body::Bytes,
-    extract::ws::WebSocketUpgrade,
+    extract::ws::{Message, WebSocket, WebSocketUpgrade},
     extract::{Path, Query, State},
     http::{
         header::{CONTENT_TYPE, SEC_WEBSOCKET_PROTOCOL},
@@ -18,7 +18,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use futures::{stream, StreamExt};
+use futures::{stream, SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -101,6 +101,7 @@ pub fn router(state: AppState) -> Router {
         .route("/rpc/{cmd}", post(rpc_handler))
         .route("/rpc-stream/{cmd}", post(rpc_stream_handler))
         .route("/v1/stream", get(stream_handler))
+        .route("/v1/ws", get(ws_stream_handler))
         .route("/v1/asset", get(asset_handler))
         .route("/__vite_hmr", get(dev_hmr_handler))
         // Everything else: in dev, proxy Vite; otherwise serve the embedded
@@ -329,6 +330,89 @@ async fn stream_handler(
         .into_response()
 }
 
+/// `GET /v1/ws` — WebSocket carrying the SAME live update feeds as `/v1/stream`,
+/// as `{ event, data }` text frames. Exists because cloudflare quick tunnels
+/// (`*.trycloudflare.com`) buffer long-lived streaming HTTP responses (SSE /
+/// NDJSON) indefinitely, so a phone reached over a quick tunnel never receives a
+/// live frame; a WebSocket is a persistent upgraded connection that the tunnel
+/// does NOT buffer. A browser `WebSocket` can't send an `Authorization` header,
+/// so auth is via the `helmor_companion_pat` cookie (same as `/v1/asset`), with
+/// a bearer fallback for non-browser clients.
+async fn ws_stream_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<StreamQuery>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let authorized = cookie_token(&headers)
+        .map(|token| auth::authorize_token(&token, state.token.as_str(), &state.verifier))
+        .unwrap_or(false)
+        || auth::authorize(&headers, state.token.as_str(), &state.verifier);
+    if !authorized {
+        return unauthorized();
+    }
+    let event_starter = state.event_starter.clone();
+    ws.on_upgrade(move |socket| pump_ws(socket, event_starter, query.watch))
+}
+
+/// Drive one `/v1/ws` connection: replay `hello`, then forward live frames
+/// (`ui-mutation` / `session`) plus a 15s `ping` keep-alive until the socket
+/// closes. Dropping `rx` on exit fires the `event_starter` teardown
+/// (`tx.closed()`), unsubscribing from `UiSyncManager` / `SessionStreamHub`.
+async fn pump_ws(socket: WebSocket, event_starter: EventStreamStarter, watch: Option<String>) {
+    let (mut sender, mut receiver) = socket.split();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<SseFrame>();
+    event_starter(tx, watch);
+
+    if sender
+        .send(Message::Text(ws_frame("hello", "{}").into()))
+        .await
+        .is_err()
+    {
+        return;
+    }
+
+    let mut ping = tokio::time::interval(Duration::from_secs(15));
+    ping.tick().await; // consume the immediate first tick (next fires at +15s)
+
+    loop {
+        tokio::select! {
+            frame = rx.recv() => match frame {
+                Some(f) => {
+                    if sender
+                        .send(Message::Text(ws_frame(f.event, &f.data).into()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                None => break,
+            },
+            _ = ping.tick() => {
+                if sender
+                    .send(Message::Text(ws_frame("ping", "{}").into()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            },
+            incoming = receiver.next() => match incoming {
+                Some(Ok(Message::Close(_))) | None => break,
+                Some(Ok(_)) => {}
+                Some(Err(_)) => break,
+            },
+        }
+    }
+}
+
+/// One `{ "event", "data" }` text frame for `/v1/ws`. `data` is already-
+/// serialized JSON embedded raw; `event` is a fixed JSON-safe label.
+fn ws_frame(event: &str, data: &str) -> String {
+    format!("{{\"event\":\"{event}\",\"data\":{data}}}")
+}
+
 fn unauthorized() -> Response {
     (
         StatusCode::UNAUTHORIZED,
@@ -437,7 +521,18 @@ mod tests {
 
     use axum::http::{header::COOKIE, HeaderMap, HeaderValue};
 
-    use super::{cookie_token, path_is_within, resolve_allowed_image_file};
+    use super::{cookie_token, path_is_within, resolve_allowed_image_file, ws_frame};
+
+    #[test]
+    fn ws_frame_wraps_event_and_raw_json_data() {
+        // hello / ping carry an empty object; the envelope is valid JSON.
+        assert_eq!(ws_frame("hello", "{}"), r#"{"event":"hello","data":{}}"#);
+        // `data` is already-serialized JSON, embedded raw (not re-quoted).
+        assert_eq!(
+            ws_frame("ui-mutation", r#"{"type":"sessionMessagesAppended"}"#),
+            r#"{"event":"ui-mutation","data":{"type":"sessionMessagesAppended"}}"#
+        );
+    }
 
     #[test]
     fn cookie_token_extracts_pat() {

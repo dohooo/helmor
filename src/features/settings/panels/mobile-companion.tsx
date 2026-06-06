@@ -26,7 +26,7 @@ function deviceLabel(): string {
 		month: "short",
 		day: "numeric",
 	});
-	return `Phone · ${date}`;
+	return `Device · ${date}`;
 }
 
 function errorText(error: unknown): string {
@@ -177,10 +177,10 @@ export function MobileCompanionPanel() {
 		: pairingCodeMutation.isError
 			? "Could not create a pairing code."
 			: !pairing
-				? "Preparing a private link for your phone."
+				? "Preparing a private link for your device."
 				: hasFixedLink
-					? "Scan with your phone's camera. This fixed link survives Helmor restarts."
-					: "Scan with your phone's camera. The current temporary link changes after Helmor or the tunnel restarts.";
+					? "Scan with your device's camera. This fixed link survives Helmor restarts."
+					: "Scan with your device's camera. The current temporary link changes after Helmor or the tunnel restarts.";
 	const fixedLinkActionReady = !starting && !enableMutation.isError;
 	const fixedLinkSetupState = stableHost
 		? {

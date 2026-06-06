@@ -9,8 +9,8 @@
  * When the page is served by the mobile **companion** HTTP server, the same
  * frontend runs in a plain browser with no Tauri runtime. The companion server
  * injects `window.__HELMOR_COMPANION__` into the served `index.html` before the
- * app bundle loads; that marker flips these primitives onto HTTP/SSE against
- * the companion server (`/rpc/{cmd}`, `/rpc-stream/{cmd}`, `/v1/stream`).
+ * app bundle loads; that marker flips these primitives onto HTTP/WebSocket
+ * against the companion server (`/rpc/{cmd}`, `/rpc-stream/{cmd}`, `/v1/ws`).
  *
  * Why a marker and not just `!isTauriRuntime()`: jsdom is also "not Tauri", and
  * the test suite mocks `@tauri-apps/api/core`. Branching on the explicit
@@ -381,11 +381,11 @@ function findCompanionChannel(
 async function companionInvoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
 	const record = isPlainArgs(args) ? args : undefined;
 
-	// Passive live-update subscriptions ride the shared, reconnecting /v1/stream
-	// SSE (multiplexed by event name) instead of a dedicated /rpc-stream fetch,
-	// which never reconnects — the root cause of "mobile stops updating after a
-	// background/lock". They attach a handler to the multiplexer and return
-	// immediately, mirroring Tauri's fire-and-forget Channel semantics.
+	// Passive live-update subscriptions ride the shared, reconnecting /v1/ws
+	// WebSocket (multiplexed by event name) instead of a dedicated /rpc-stream
+	// fetch, which never reconnects — the root cause of "mobile stops updating
+	// after a background/lock". They attach a handler to the multiplexer and
+	// return immediately, mirroring Tauri's fire-and-forget Channel semantics.
 	if (
 		record &&
 		(cmd === "subscribe_ui_mutations" || cmd === "subscribe_session_stream")
@@ -416,7 +416,7 @@ async function companionInvoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
 					handlerSet.delete(handler);
 					if (handlerSet.size === 0) sessionHandlers.delete(sessionId);
 					// Last watcher gone → drop `?watch=` so the server frees the
-					// session mirror (the SSE keeps running for ui-mutation).
+					// session mirror (the socket keeps running for ui-mutation).
 					if (sessionHandlers.size === 0) setWatchedSession(null);
 				};
 				setWatchedSession(sessionId);
@@ -527,23 +527,24 @@ let eventStreamStarted = false;
 
 // --- Companion live-update multiplexer -------------------------------------
 //
-// The single reconnecting `/v1/stream` SSE carries every passive live-update
-// feed, demultiplexed by the SSE `event:` name: `ui-mutation` (cache
+// The single reconnecting `/v1/ws` WebSocket carries every passive live-update
+// feed, demultiplexed by each frame's `event` field: `ui-mutation` (cache
 // invalidations, always), `session` (the watched session's live turn, gated by
 // `?watch=`), `hello` (each (re)connect — drives resync), `ping` (keep-alive).
 // `subscribe_ui_mutations` / `subscribe_session_stream` attach here instead of
-// opening their own non-reconnecting `/rpc-stream` fetch.
+// opening their own non-reconnecting `/rpc-stream` fetch. WebSocket (not SSE)
+// because cloudflare quick tunnels buffer streaming HTTP responses indefinitely.
 type CompanionPayloadHandler = (payload: unknown) => void;
 const uiMutationHandlers = new Set<CompanionPayloadHandler>();
 const sessionHandlers = new Map<string, Set<CompanionPayloadHandler>>();
 const streamReconnectListeners = new Set<() => void>();
-/** Session the NEXT SSE open should request via `?watch=` (null → none). */
+/** Session the NEXT socket open should request via `?watch=` (null → none). */
 let watchedSessionId: string | null = null;
-/** Watch target the CURRENTLY-OPEN SSE was opened for. `session` frames route
+/** Watch target the CURRENTLY-OPEN socket was opened for. `session` frames route
  *  by this (not `watchedSessionId`), so a frame in flight during a session
  *  switch can never be delivered to the newly-selected session's handler. */
 let activeConnectionWatch: string | null = null;
-/** Aborts the in-flight `/v1/stream` fetch to force an immediate reconnect. */
+/** Closes the in-flight `/v1/ws` socket to force an immediate reconnect. */
 let currentStreamAbort: AbortController | null = null;
 let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
 let companionStreamListenersBound = false;
@@ -578,8 +579,8 @@ function companionListen(
 }
 
 /**
- * Subscribe to companion SSE (re)connects. The callback fires on every `hello`
- * frame — i.e. each time the shared `/v1/stream` connection (re)establishes —
+ * Subscribe to companion stream (re)connects. The callback fires on every
+ * `hello` frame — i.e. each time the shared `/v1/ws` connection (re)establishes —
  * so callers can backfill state missed while disconnected (the stream carries
  * no `Last-Event-ID` replay). Companion-only: on the desktop Tauri runtime this
  * returns an inert unsubscribe and never fires.
@@ -620,7 +621,7 @@ function dispatchEvent(name: string, payload: unknown): void {
 	}
 }
 
-/** Single shared SSE connection to `/v1/stream`, reconnecting on drop. */
+/** Single shared WebSocket to `/v1/ws`, reconnecting on drop. */
 function ensureEventStream(): void {
 	if (eventStreamStarted) return;
 	eventStreamStarted = true;
@@ -628,14 +629,17 @@ function ensureEventStream(): void {
 	void runEventStream();
 }
 
-function streamUrl(): string {
-	const base = `${baseUrl()}/v1/stream`;
+function wsStreamUrl(): string {
+	// `https://…` → `wss://…`, `http://…` → `ws://…`. A browser WebSocket can't
+	// set an Authorization header, so the companion authenticates this via the
+	// same-origin `helmor_companion_pat` cookie (set in `syncCompanionCookie`).
+	const base = `${baseUrl().replace(/^http/, "ws")}/v1/ws`;
 	return watchedSessionId
 		? `${base}?watch=${encodeURIComponent(watchedSessionId)}`
 		: base;
 }
 
-/** Point the SSE at a different watched session (or null to clear). */
+/** Point the stream at a different watched session (or null to clear). */
 function setWatchedSession(sessionId: string | null): void {
 	if (watchedSessionId === sessionId) return;
 	watchedSessionId = sessionId;
@@ -657,16 +661,7 @@ async function runEventStream(): Promise<void> {
 		// correctly even while a switch is mid-flight.
 		activeConnectionWatch = watchedSessionId;
 		try {
-			const res = await fetch(streamUrl(), {
-				headers: authHeaders(),
-				signal: abort.signal,
-			});
-			if (!res.ok || !res.body) {
-				if (res.status === 401) setCompanionAuthState("unauthed");
-				throw new Error(`stream status ${res.status}`);
-			}
-			noteStreamFrame(); // arm the watchdog once connected
-			await pumpSse(res.body, dispatchEvent);
+			await openCompanionSocket(abort.signal);
 		} catch {
 			// Dropped / aborted (session switch, visibility, watchdog, network
 			// blip) — reconnect.
@@ -676,6 +671,41 @@ async function runEventStream(): Promise<void> {
 		// new connection attaches immediately; genuine failures back off.
 		if (!abort.signal.aborted) await delay(2000);
 	}
+}
+
+/**
+ * Open one `/v1/ws` WebSocket and resolve when it closes (or when `signal`
+ * aborts, which closes it — the deliberate-reconnect path used by session
+ * switch / watchdog / visibility). WebSocket, not SSE/fetch, because cloudflare
+ * quick tunnels buffer long-lived streaming HTTP responses but pass WebSocket
+ * frames live. Each text frame is a `{ event, data }` envelope routed by name.
+ */
+function openCompanionSocket(signal: AbortSignal): Promise<void> {
+	return new Promise((resolve) => {
+		let socket: WebSocket;
+		try {
+			socket = new WebSocket(wsStreamUrl());
+		} catch {
+			resolve();
+			return;
+		}
+		const onAbort = () => socket.close();
+		signal.addEventListener("abort", onAbort);
+		socket.onopen = () => noteStreamFrame(); // arm the watchdog once connected
+		socket.onmessage = (event) => {
+			if (typeof event.data !== "string") return;
+			const frame = safeJson(event.data);
+			if (frame && typeof frame === "object" && "event" in frame) {
+				const { event: name, data } = frame as { event: string; data: unknown };
+				dispatchEvent(name, data);
+			}
+		};
+		socket.onerror = () => socket.close();
+		socket.onclose = () => {
+			signal.removeEventListener("abort", onAbort);
+			resolve();
+		};
+	});
 }
 
 // --- Reconnect robustness: watchdog + visibility/online triggers -----------
@@ -742,48 +772,6 @@ async function pumpNdjson(
 	}
 	const tail = buffer.trim();
 	if (tail) onEvent(safeJson(tail));
-}
-
-/**
- * Minimal SSE frame parser: accumulates `event:` / `data:` lines and emits on
- * the blank-line frame boundary.
- */
-async function pumpSse(
-	body: ReadableStream<Uint8Array>,
-	onEvent: (name: string, payload: unknown) => void,
-): Promise<void> {
-	const reader = body.getReader();
-	const decoder = new TextDecoder();
-	let buffer = "";
-	let eventName = "message";
-	let data = "";
-
-	const flush = () => {
-		if (data) onEvent(eventName, safeJson(data));
-		eventName = "message";
-		data = "";
-	};
-
-	for (;;) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		buffer += decoder.decode(value, { stream: true });
-		let newline = buffer.indexOf("\n");
-		while (newline !== -1) {
-			const rawLine = buffer.slice(0, newline);
-			buffer = buffer.slice(newline + 1);
-			const line = rawLine.replace(/\r$/, "");
-			if (line === "") {
-				flush();
-			} else if (line.startsWith("event:")) {
-				eventName = line.slice(6).trim();
-			} else if (line.startsWith("data:")) {
-				data += line.slice(5).trim();
-			}
-			// `:` comment lines (keep-alive pings) are ignored.
-			newline = buffer.indexOf("\n");
-		}
-	}
 }
 
 function safeJson(text: string): unknown {

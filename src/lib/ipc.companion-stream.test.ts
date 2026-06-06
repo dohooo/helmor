@@ -1,39 +1,46 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Exercises the companion live-update multiplexer (src/lib/ipc.ts): the single
-// reconnecting `/v1/stream` SSE that carries `ui-mutation` / `session` frames,
+// reconnecting `/v1/ws` WebSocket that carries `ui-mutation` / `session` frames,
 // replacing the old non-reconnecting `/rpc-stream/subscribe_*` fetches that left
-// the mobile UI frozen after a background/lock.
+// the mobile UI frozen after a background/lock. WebSocket (not SSE) because
+// cloudflare quick tunnels buffer `text/event-stream` indefinitely.
 //
-// `window.__HELMOR_COMPANION__` flips the module onto the HTTP/SSE path;
+// `window.__HELMOR_COMPANION__` flips the module onto the HTTP/WebSocket path;
 // `vi.resetModules()` re-evaluates the module-level `COMPANION` const per test.
 
 type CompanionWindow = { __HELMOR_COMPANION__?: unknown };
 
-/** A mock `fetch` SSE response whose frames the test pushes on demand. */
-function makeSseResponse() {
-	let controller!: ReadableStreamDefaultController<Uint8Array>;
-	const encoder = new TextEncoder();
-	const body = new ReadableStream<Uint8Array>({
-		start(c) {
-			controller = c;
-		},
-	});
-	let closed = false;
-	return {
-		response: { ok: true, status: 200, body },
-		push(event: string, data: unknown) {
-			if (closed) return;
-			controller.enqueue(
-				encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
-			);
-		},
-		close() {
-			if (closed) return;
-			closed = true;
-			controller.close();
-		},
-	};
+/** A mock `WebSocket` the test drives: each instance records its URL and the
+ *  test pushes server frames via `emit(event, data)`. */
+class MockWebSocket {
+	static instances: MockWebSocket[] = [];
+	url: string;
+	onopen: (() => void) | null = null;
+	onmessage: ((event: { data: string }) => void) | null = null;
+	onerror: (() => void) | null = null;
+	onclose: (() => void) | null = null;
+	closed = false;
+
+	constructor(url: string) {
+		this.url = url;
+		MockWebSocket.instances.push(this);
+		// Open on a microtask, mirroring a real socket's async handshake.
+		queueMicrotask(() => this.onopen?.());
+	}
+
+	send(): void {}
+
+	close(): void {
+		if (this.closed) return;
+		this.closed = true;
+		this.onclose?.();
+	}
+
+	/** Deliver a server `{ event, data }` text frame to the client. */
+	emit(event: string, data: unknown): void {
+		this.onmessage?.({ data: JSON.stringify({ event, data }) });
+	}
 }
 
 describe("companion live-update multiplexer", () => {
@@ -46,6 +53,8 @@ describe("companion live-update multiplexer", () => {
 		(window as unknown as CompanionWindow).__HELMOR_COMPANION__ = {
 			base: "https://companion.test",
 		};
+		MockWebSocket.instances = [];
+		vi.stubGlobal("WebSocket", MockWebSocket);
 	});
 
 	afterEach(() => {
@@ -56,14 +65,10 @@ describe("companion live-update multiplexer", () => {
 		window.history.replaceState(null, "", "/");
 	});
 
-	it("routes subscribe_ui_mutations to /v1/stream (never /rpc-stream) and delivers frames", async () => {
-		const sse = makeSseResponse();
-		const fetchMock = vi.fn((url: string) => {
-			if (String(url).includes("/v1/stream")) {
-				return Promise.resolve(sse.response);
-			}
-			return Promise.resolve({ ok: true, status: 200, text: async () => "" });
-		});
+	it("routes subscribe_ui_mutations to a /v1/ws socket (never /rpc-stream) and delivers frames", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValue({ ok: true, status: 200, text: async () => "" });
 		vi.stubGlobal("fetch", fetchMock);
 
 		const ipc = await import("./ipc");
@@ -75,28 +80,28 @@ describe("companion live-update multiplexer", () => {
 			onEvent: channel,
 		});
 
-		await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+		await vi.waitFor(() =>
+			expect(MockWebSocket.instances.length).toBeGreaterThan(0),
+		);
+		const socket = MockWebSocket.instances[0];
+		// `wss://` upgrade to `/v1/ws`, and never a `/rpc-stream` fetch.
+		expect(socket.url).toBe("wss://companion.test/v1/ws");
 		const urls = fetchMock.mock.calls.map((call) => String(call[0]));
-		expect(urls.some((u) => u.includes("/v1/stream"))).toBe(true);
 		expect(urls.some((u) => u.includes("/rpc-stream"))).toBe(false);
 
-		sse.push("ui-mutation", { type: "workspaceListChanged" });
+		socket.emit("ui-mutation", { type: "workspaceListChanged" });
 		await vi.waitFor(() =>
 			expect(onmessage).toHaveBeenCalledWith({ type: "workspaceListChanged" }),
 		);
-		sse.close();
 	});
 
-	it("routes subscribe_session_stream through /v1/stream?watch= and delivers session frames", async () => {
-		const sse = makeSseResponse();
-		const fetchMock = vi.fn((url: string, opts?: { signal?: AbortSignal }) => {
-			if (String(url).includes("/v1/stream")) {
-				opts?.signal?.addEventListener("abort", () => sse.close());
-				return Promise.resolve(sse.response);
-			}
-			return Promise.resolve({ ok: true, status: 200, text: async () => "" });
-		});
-		vi.stubGlobal("fetch", fetchMock);
+	it("routes subscribe_session_stream through /v1/ws?watch= and delivers session frames", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi
+				.fn()
+				.mockResolvedValue({ ok: true, status: 200, text: async () => "" }),
+		);
 
 		const ipc = await import("./ipc");
 		const channel = new ipc.Channel();
@@ -108,34 +113,33 @@ describe("companion live-update multiplexer", () => {
 			onEvent: channel,
 		});
 
-		await vi.waitFor(() => {
-			const urls = fetchMock.mock.calls.map((call) => String(call[0]));
-			expect(urls.some((u) => u.includes("/v1/stream?watch=s1"))).toBe(true);
-		});
-
-		sse.push("session", { kind: "update", messages: [] });
+		await vi.waitFor(() =>
+			expect(
+				MockWebSocket.instances.some((w) => w.url.includes("/v1/ws?watch=s1")),
+			).toBe(true),
+		);
+		const socket = MockWebSocket.instances.find((w) =>
+			w.url.includes("watch=s1"),
+		);
+		socket?.emit("session", { kind: "update", messages: [] });
 		await vi.waitFor(() =>
 			expect(onmessage).toHaveBeenCalledWith({ kind: "update", messages: [] }),
 		);
-		sse.close();
 	});
 
 	it("fires onCompanionStreamReconnect on every hello frame", async () => {
-		const sse = makeSseResponse();
 		vi.stubGlobal(
 			"fetch",
-			vi.fn((url: string) =>
-				String(url).includes("/v1/stream")
-					? Promise.resolve(sse.response)
-					: Promise.resolve({ ok: true, status: 200, text: async () => "" }),
-			),
+			vi
+				.fn()
+				.mockResolvedValue({ ok: true, status: 200, text: async () => "" }),
 		);
 
 		const ipc = await import("./ipc");
 		const onReconnect = vi.fn();
 		ipc.onCompanionStreamReconnect(onReconnect);
 
-		// Attaching a subscriber opens the stream.
+		// Attaching a subscriber opens the socket.
 		const channel = new ipc.Channel();
 		channel.onmessage = vi.fn();
 		await ipc.invoke("subscribe_ui_mutations", {
@@ -143,11 +147,14 @@ describe("companion live-update multiplexer", () => {
 			onEvent: channel,
 		});
 
-		sse.push("hello", {});
+		await vi.waitFor(() =>
+			expect(MockWebSocket.instances.length).toBeGreaterThan(0),
+		);
+		const socket = MockWebSocket.instances[0];
+		socket.emit("hello", {});
 		await vi.waitFor(() => expect(onReconnect).toHaveBeenCalledTimes(1));
-		sse.push("hello", {});
+		socket.emit("hello", {});
 		await vi.waitFor(() => expect(onReconnect).toHaveBeenCalledTimes(2));
-		sse.close();
 	});
 
 	it("treats companion unsubscribe_* as a no-op (no request)", async () => {
@@ -167,26 +174,16 @@ describe("companion live-update multiplexer", () => {
 			}),
 		).resolves.toBeUndefined();
 		expect(fetchMock).not.toHaveBeenCalled();
+		expect(MockWebSocket.instances.length).toBe(0);
 	});
 
-	it("reconnects the SSE when the tab returns to the foreground", async () => {
-		const sse = makeSseResponse();
-		let streamCalls = 0;
-		const fetchMock = vi.fn((url: string, opts?: { signal?: AbortSignal }) => {
-			if (String(url).includes("/v1/stream")) {
-				streamCalls += 1;
-				if (streamCalls === 1) {
-					// A real fetch's body errors on abort; mirror that so pumpSse
-					// returns and the loop reconnects.
-					opts?.signal?.addEventListener("abort", () => sse.close());
-					return Promise.resolve(sse.response);
-				}
-				// Park the reconnect so the loop doesn't spin after the assertion.
-				return new Promise(() => {});
-			}
-			return Promise.resolve({ ok: true, status: 200, text: async () => "" });
-		});
-		vi.stubGlobal("fetch", fetchMock);
+	it("proactively reopens the socket on a reconnect trigger (online / foreground)", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi
+				.fn()
+				.mockResolvedValue({ ok: true, status: 200, text: async () => "" }),
+		);
 
 		const ipc = await import("./ipc");
 		const channel = new ipc.Channel();
@@ -195,12 +192,20 @@ describe("companion live-update multiplexer", () => {
 			subscriptionId: "sub-1",
 			onEvent: channel,
 		});
-		await vi.waitFor(() => expect(streamCalls).toBe(1));
+		await vi.waitFor(() =>
+			expect(MockWebSocket.instances.length).toBeGreaterThanOrEqual(1),
+		);
+		const before = MockWebSocket.instances.length;
 
-		// Returning to a backgrounded/locked tab must proactively rebuild the
-		// stream (the silent-hang the watchdog/visibility triggers exist for).
-		document.dispatchEvent(new Event("visibilitychange"));
-		await vi.waitFor(() => expect(streamCalls).toBe(2));
+		// A network-restore / foreground event must close the current socket and
+		// reopen at once — the silent-hang the watchdog/visibility triggers exist
+		// for. A fresh socket beyond `before` proves the reconnect fired. (Exact
+		// count is avoided: the persistent `runEventStream` loop + DOM listeners
+		// survive `vi.resetModules()`, so prior tests' modules may also reopen.)
+		window.dispatchEvent(new Event("online"));
+		await vi.waitFor(() =>
+			expect(MockWebSocket.instances.length).toBeGreaterThan(before),
+		);
 	});
 });
 
