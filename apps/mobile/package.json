@@ -1,0 +1,31 @@
+{
+	"name": "mobile",
+	"version": "1.0.0",
+	"main": "index.ts",
+	"dependencies": {
+		"expo": "~56.0.9",
+		"expo-camera": "~56.0.7",
+		"expo-constants": "~56.0.17",
+		"expo-haptics": "~56.0.3",
+		"expo-linking": "~56.0.13",
+		"expo-router": "~56.2.9",
+		"expo-secure-store": "~56.0.4",
+		"expo-status-bar": "~56.0.4",
+		"react": "19.2.3",
+		"react-native": "0.85.3",
+		"react-native-safe-area-context": "~5.7.0",
+		"react-native-screens": "4.25.2",
+		"react-native-webview": "13.16.1"
+	},
+	"devDependencies": {
+		"@types/react": "~19.2.2",
+		"typescript": "~6.0.3"
+	},
+	"scripts": {
+		"start": "expo start",
+		"android": "expo start --android",
+		"ios": "expo start --ios",
+		"web": "expo start --web"
+	},
+	"private": true
+}
