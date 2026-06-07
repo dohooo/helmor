@@ -1799,3 +1799,134 @@ fn triage_priming_message_renders_as_assistant_text() {
         msg.content
     );
 }
+
+// ============================================================================
+// Subagent streaming partials must nest under the parent tool call.
+//
+// A subagent (Task/Agent/Workflow) streams its turns with
+// `parent_tool_use_id` set. The finalized render folds that work under the
+// parent tool call's children. The mid-stream PARTIAL must carry the same
+// `child:<parent>:<turn>` id so the frontend nests the live tokens inside the
+// card — otherwise the partial flashes as a second top-level bubble that then
+// "collapses" into the card on finalize (the two-blocks-then-one bug).
+// ============================================================================
+
+#[test]
+fn stream_subagent_partial_tagged_as_child() {
+    let events = vec![
+        // Parent assistant emits the Task tool_use (top-level, pt=null).
+        json!({
+            "type": "stream_event",
+            "event": {"type": "content_block_start", "index": 0,
+                "content_block": {"type": "tool_use", "id": "toolu_agent", "name": "Task", "input": {}}},
+            "session_id": "s1", "parent_tool_use_id": null,
+        }),
+        json!({
+            "type": "assistant",
+            "message": {"id": "msg_parent", "role": "assistant",
+                "content": [{"type": "tool_use", "id": "toolu_agent", "name": "Task", "input": {"description": "go"}}]},
+            "session_id": "s1", "parent_tool_use_id": null,
+        }),
+        // Subagent prompt + a streaming text turn (pt=toolu_agent).
+        json!({
+            "type": "user",
+            "message": {"role": "user", "content": [{"type": "text", "text": "Investigate the repo"}]},
+            "session_id": "s1", "parent_tool_use_id": "toolu_agent",
+        }),
+        json!({
+            "type": "stream_event",
+            "event": {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            "session_id": "s1", "parent_tool_use_id": "toolu_agent",
+        }),
+        json!({
+            "type": "stream_event",
+            "event": {"type": "content_block_delta", "index": 0,
+                "delta": {"type": "text_delta", "text": "Looking into the repo..."}},
+            "session_id": "s1", "parent_tool_use_id": "toolu_agent",
+        }),
+        json!({
+            "type": "assistant",
+            "message": {"id": "msg_sub", "role": "assistant",
+                "content": [{"type": "text", "text": "Looking into the repo. Found it."}]},
+            "session_id": "s1", "parent_tool_use_id": "toolu_agent",
+        }),
+    ];
+
+    let fp = replay_stream_events("claude", &events);
+
+    // The last streaming partial (the subagent text) must be tagged as a
+    // child of the Task tool — that's what lets the frontend nest it.
+    let last_partial = fp
+        .emissions
+        .iter()
+        .rev()
+        .find_map(|e| match e {
+            common::RawStreamEmission::Partial { message, .. } => Some(message),
+            _ => None,
+        })
+        .expect("expected a streaming partial for the subagent text");
+    assert!(
+        last_partial
+            .id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("child:toolu_agent:")),
+        "subagent partial should carry a `child:toolu_agent:` id, got {:?}",
+        last_partial.id
+    );
+
+    // The finalized render keeps a single top-level Task message with the
+    // subagent work folded into the tool call's children — no standalone
+    // bubble. Pin the nesting itself so a grouping regression is caught.
+    use helmor_lib::pipeline::types::{ExtendedMessagePart, MessagePart};
+    assert_eq!(
+        fp.historical_render.len(),
+        1,
+        "subagent work must stay nested under the Task tool call"
+    );
+    let task_children = fp.historical_render[0]
+        .content
+        .iter()
+        .find_map(|part| match part {
+            ExtendedMessagePart::Basic(MessagePart::ToolCall { children, .. }) => Some(children),
+            _ => None,
+        })
+        .expect("top-level message should hold the Task tool call");
+    assert!(
+        task_children
+            .iter()
+            .any(|c| matches!(c, ExtendedMessagePart::Basic(MessagePart::Text { .. }))),
+        "the subagent's finalized text must nest as a Task child, got {task_children:?}"
+    );
+}
+
+#[test]
+fn stream_top_level_partial_stays_top_level() {
+    // A normal (pt=null) turn must NOT gain a `child:` id — only subagents do.
+    let events = vec![
+        json!({
+            "type": "stream_event",
+            "event": {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            "session_id": "s1", "parent_tool_use_id": null,
+        }),
+        json!({
+            "type": "stream_event",
+            "event": {"type": "content_block_delta", "index": 0,
+                "delta": {"type": "text_delta", "text": "Hello"}},
+            "session_id": "s1", "parent_tool_use_id": null,
+        }),
+    ];
+    let fp = replay_stream_events("claude", &events);
+    let partial = fp
+        .emissions
+        .iter()
+        .find_map(|e| match e {
+            common::RawStreamEmission::Partial { message, .. } => Some(message),
+            _ => None,
+        })
+        .expect("expected a streaming partial");
+    assert!(
+        !partial.id.as_deref().unwrap_or("").starts_with("child:"),
+        "top-level partial must not be tagged as a child, got {:?}",
+        partial.id
+    );
+}

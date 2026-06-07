@@ -494,14 +494,18 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 		[parts],
 	);
 	const toolUseCount = toolCallParts.length;
-	const visibleParts: ExtendedMessagePart[] = expanded
-		? parts
+	// While the sub-agent is live, surface the trailing text/reasoning block
+	// (the part currently streaming) in the collapsed preview. The collapsed
+	// view otherwise lists only tool calls, so a streaming text turn nested
+	// into the card would render nothing until the user expands it.
+	const lastPart = parts[parts.length - 1];
+	const liveTail =
+		streaming && lastPart && !isToolCallPart(lastPart) ? lastPart : null;
+	const collapsedParts: ExtendedMessagePart[] = liveTail
+		? [...toolCallParts.slice(-AGENT_PREVIEW_STEPS), liveTail]
 		: toolCallParts.slice(-AGENT_PREVIEW_STEPS);
-	const collapsedVisibleCount = Math.min(
-		toolCallParts.length,
-		AGENT_PREVIEW_STEPS,
-	);
-	const hiddenCount = parts.length - collapsedVisibleCount;
+	const visibleParts: ExtendedMessagePart[] = expanded ? parts : collapsedParts;
+	const hiddenCount = parts.length - collapsedParts.length;
 	const hasMore =
 		toolCallParts.length >= AGENT_PREVIEW_STEPS && hiddenCount > 0;
 	const canToggle = hasMore;

@@ -135,6 +135,12 @@ pub struct StreamAccumulator {
     /// `__part_id` indices when the SDK delivers finalized blocks in
     /// separate per-block `assistant` events (delta-style).
     cur_asst_block_count: usize,
+    /// `parent_tool_use_id` of the turn currently streaming into `blocks`.
+    /// Set from the `stream_event` envelope so `build_partial_from_blocks`
+    /// can tag a subagent's mid-stream partial as `child:<pt>:<turn>` —
+    /// matching the finalized render so the live partial nests under its
+    /// parent Task/Agent tool call instead of flashing as a top-level bubble.
+    pub(super) cur_streaming_parent_id: Option<String>,
     local_bash_task_refs: HashSet<String>,
     // ── Codex state ──────────────────────────────────────────────────
     /// Per-item delta accumulation for Codex App Server streaming.
@@ -305,6 +311,7 @@ impl StreamAccumulator {
             cur_asst_blocks: Vec::new(),
             cur_asst_template: None,
             cur_asst_block_count: 0,
+            cur_streaming_parent_id: None,
             local_bash_task_refs: HashSet::new(),
             codex_items: codex::new_item_states(),
             codex_partial_idx: None,

@@ -78,3 +78,39 @@ describe("AssistantToolCall default-collapsed", () => {
 		expect(screen.queryByText(/drwxr-xr-x/)).not.toBeInTheDocument();
 	});
 });
+
+describe("AssistantToolCall sub-agent live tail", () => {
+	it("shows a streaming sub-agent's trailing text inside the collapsed card", () => {
+		// A running Agent (result == null) whose only child is the text it is
+		// currently streaming. The collapsed preview must surface it so the
+		// live tokens don't vanish into the card.
+		render(
+			<AssistantToolCall
+				toolName="Agent"
+				args={{ description: "Investigate" }}
+				childParts={[
+					{ type: "text", id: "t0", text: "Looking into the repo..." },
+				]}
+			/>,
+		);
+		expect(screen.getByText("Looking into the repo...")).toBeInTheDocument();
+	});
+
+	it("keeps a finished sub-agent's text collapsed until expanded", () => {
+		// Same shape but finalized (result set) — the trailing text stays
+		// hidden in the collapsed preview, matching existing behavior.
+		render(
+			<AssistantToolCall
+				toolName="Agent"
+				args={{ description: "Investigate" }}
+				result="done"
+				childParts={[
+					{ type: "text", id: "t0", text: "Looking into the repo." },
+				]}
+			/>,
+		);
+		expect(
+			screen.queryByText("Looking into the repo."),
+		).not.toBeInTheDocument();
+	});
+});
