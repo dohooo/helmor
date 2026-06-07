@@ -1025,10 +1025,10 @@ describe("WorkspaceComposer", () => {
 		).toBeInTheDocument();
 		await user.click(screen.getByRole("tab", { name: "UI" }));
 		await user.type(
-			screen.getByLabelText("Optional note for Claude"),
+			screen.getByLabelText("Optional note for the agent"),
 			"Prefer the dedicated approval surface.",
 		);
-		expect(screen.getByLabelText("Optional note for Claude")).toHaveValue(
+		expect(screen.getByLabelText("Optional note for the agent")).toHaveValue(
 			"Prefer the dedicated approval surface.",
 		);
 		await user.click(screen.getByRole("tab", { name: "Checks" }));

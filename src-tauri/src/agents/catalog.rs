@@ -59,7 +59,9 @@ fn model_sections_for_inputs(
     let mut sections = vec![claude_section];
     sections.push(codex_section());
     sections.push(opencode_section_from_prefs(opencode_prefs));
-    sections.push(cursor_section_from_prefs(cursor_prefs));
+    if let Some(cursor) = cursor_section_from_prefs(cursor_prefs) {
+        sections.push(cursor);
+    }
 
     sections
 }
@@ -233,21 +235,22 @@ fn expand_opencode_options(prefs: OpencodePrefs) -> Vec<AgentModelOption> {
     }
 }
 
-/// Cursor picker section, driven by `app.cursor_provider` settings:
-/// `enabledModelIds` (user picks; `null` → auto-fill on next fetch) and
-/// `cachedModels` (last `Cursor.models.list` snapshot). When both are
-/// absent, fall back to the SDK-guaranteed `Auto` entry.
-fn cursor_section_from_prefs(prefs: Option<CursorPrefs>) -> AgentModelSection {
-    let options = match prefs {
-        Some(prefs) => expand_cursor_options(prefs),
-        None => vec![cursor_default_auto()],
-    };
-    AgentModelSection {
+/// Cursor picker section, driven by `app.cursor_provider`. Mirrors the Settings
+/// list: present only when an API key is set AND at least one model resolves.
+/// No key (or an emptied pick list) → omitted, so the composer stays in sync.
+fn cursor_section_from_prefs(prefs: Option<CursorPrefs>) -> Option<AgentModelSection> {
+    let prefs = prefs?;
+    prefs.api_key.as_ref()?;
+    let options = expand_cursor_options(prefs);
+    if options.is_empty() {
+        return None;
+    }
+    Some(AgentModelSection {
         id: "cursor".to_string(),
         label: "Cursor".to_string(),
         status: AgentModelSectionStatus::Ready,
         options,
-    }
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -265,6 +268,7 @@ struct CursorCachedParameter {
 
 #[derive(Debug, Clone)]
 struct CursorPrefs {
+    api_key: Option<String>,
     enabled_ids: Option<Vec<String>>,
     cached_models: Option<Vec<(String, CursorCachedModelEntry)>>,
 }
@@ -275,6 +279,12 @@ fn load_cursor_prefs() -> Option<CursorPrefs> {
         .flatten()?;
     let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
 
+    let api_key = parsed
+        .get("apiKey")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(str::to_string);
     let enabled_ids = match parsed.get("enabledModelIds") {
         Some(serde_json::Value::Array(arr)) => Some(
             arr.iter()
@@ -307,6 +317,7 @@ fn load_cursor_prefs() -> Option<CursorPrefs> {
     };
 
     Some(CursorPrefs {
+        api_key,
         enabled_ids,
         cached_models,
     })
@@ -576,10 +587,10 @@ mod tests {
 
     #[test]
     fn static_model_sections_returns_hardcoded_catalog() {
-        // `None` cursor_prefs → cursor section degrades to just Auto.
+        // `None` cursor_prefs (no API key) → cursor section omitted entirely.
         let sections = model_sections_for_inputs(Vec::new(), None, None);
 
-        assert_eq!(sections.len(), 4);
+        assert_eq!(sections.len(), 3);
         assert_eq!(sections[0].id, "claude");
         assert_eq!(sections[0].status, AgentModelSectionStatus::Ready);
         assert_eq!(
@@ -628,17 +639,8 @@ mod tests {
         assert_eq!(sections[2].status, AgentModelSectionStatus::Unavailable);
         assert!(sections[2].options.is_empty());
 
-        assert_eq!(sections[3].id, "cursor");
-        assert_eq!(sections[3].status, AgentModelSectionStatus::Ready);
-        // Without an `app.cursor_provider` row in the test DB, the Cursor
-        // section degrades to the hard fallback: a single Auto entry.
-        // Helmor id is the namespaced `cursor-default`; cli_model is the
-        // bare `default` Cursor's SDK expects.
-        let auto = &sections[3].options[0];
-        assert_eq!(auto.id, "cursor-default");
-        assert_eq!(auto.cli_model, "default");
-        assert_eq!(auto.provider, "cursor");
-        assert_eq!(sections[3].options.len(), 1);
+        // No `app.cursor_provider` row → no API key → no Cursor section.
+        assert!(sections.iter().all(|s| s.id != "cursor"));
     }
 
     #[test]
@@ -656,7 +658,7 @@ mod tests {
             None,
         );
 
-        assert_eq!(sections.len(), 4);
+        assert_eq!(sections.len(), 3);
         assert_eq!(sections[0].id, "claude");
         assert_eq!(sections[0].label, "Claude Code");
         assert_eq!(
@@ -996,11 +998,38 @@ mod tests {
     }
 
     #[test]
+    fn cursor_section_omitted_without_api_key() {
+        // Key deleted in Settings → no Cursor section in the composer, even
+        // though stale cached models / picks linger in the prefs.
+        let prefs = CursorPrefs {
+            api_key: None,
+            enabled_ids: Some(vec!["gpt-5.3-codex".to_string()]),
+            cached_models: Some(vec![cursor_cache("gpt-5.3-codex", "Codex 5.3", None)]),
+        };
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
+        assert!(sections.iter().all(|s| s.id != "cursor"));
+    }
+
+    #[test]
+    fn cursor_section_omitted_when_picks_emptied() {
+        // Key present but the user unchecked every model → omitted, matching
+        // the empty Settings list (no bare "Cursor" header in the picker).
+        let prefs = CursorPrefs {
+            api_key: Some("sk-test".to_string()),
+            enabled_ids: Some(Vec::new()),
+            cached_models: Some(vec![cursor_cache("gpt-5.3-codex", "Codex 5.3", None)]),
+        };
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
+        assert!(sections.iter().all(|s| s.id != "cursor"));
+    }
+
+    #[test]
     fn cursor_section_derives_effort_levels_from_cached_parameters() {
         // Real-world shape: gpt-5.3-codex via Cursor exposes a `reasoning`
         // enum but no `fast`. The composer should show the effort
         // dropdown with exactly those levels, and no Fast toggle.
         let prefs = CursorPrefs {
+            api_key: Some("sk-test".to_string()),
             enabled_ids: Some(vec!["gpt-5.3-codex".to_string()]),
             cached_models: Some(vec![cursor_cache(
                 "gpt-5.3-codex",
@@ -1023,6 +1052,7 @@ mod tests {
         // Composer 2: only `fast`, no reasoning. Composer toolbar should
         // show the Fast toggle but no effort dropdown.
         let prefs = CursorPrefs {
+            api_key: Some("sk-test".to_string()),
             enabled_ids: Some(vec!["composer-2".to_string()]),
             cached_models: Some(vec![cursor_cache(
                 "composer-2",
@@ -1044,6 +1074,7 @@ mod tests {
         // it; the catalog must NOT treat it as a toolbar dimension —
         // composer has no Thinking button.
         let prefs = CursorPrefs {
+            api_key: Some("sk-test".to_string()),
             enabled_ids: Some(vec!["claude-haiku".to_string()]),
             cached_models: Some(vec![cursor_cache(
                 "claude-haiku",
@@ -1063,6 +1094,7 @@ mod tests {
         // surface effort + fast for the toolbar; `thinking` is invisible
         // here (auto-enabled sidecar-side, no UI).
         let prefs = CursorPrefs {
+            api_key: Some("sk-test".to_string()),
             enabled_ids: Some(vec!["claude-opus-4-6".to_string()]),
             cached_models: Some(vec![cursor_cache(
                 "claude-opus-4-6",
@@ -1085,6 +1117,7 @@ mod tests {
         // Defensive: if both `effort` (Claude shape) and `reasoning`
         // (GPT shape) somehow appear on the same model, `effort` wins.
         let prefs = CursorPrefs {
+            api_key: Some("sk-test".to_string()),
             enabled_ids: Some(vec!["weird".to_string()]),
             cached_models: Some(vec![cursor_cache(
                 "weird",
@@ -1103,6 +1136,7 @@ mod tests {
     #[test]
     fn cursor_section_supports_both_effort_and_fast_when_present() {
         let prefs = CursorPrefs {
+            api_key: Some("sk-test".to_string()),
             enabled_ids: Some(vec!["claude-sonnet-4-5".to_string()]),
             cached_models: Some(vec![cursor_cache(
                 "claude-sonnet-4-5",
@@ -1126,6 +1160,7 @@ mod tests {
         // a fake effort dropdown — the user gets the picker entry with
         // no effort/fast UI until they hit Refresh.
         let prefs = CursorPrefs {
+            api_key: Some("sk-test".to_string()),
             enabled_ids: Some(vec!["legacy".to_string()]),
             cached_models: Some(vec![cursor_cache("legacy", "Legacy Cached", None)]),
         };
@@ -1141,6 +1176,7 @@ mod tests {
         // longer in the cache (e.g. they hit Refresh after Cursor
         // retired the model). Show the bare id as label, no effort.
         let prefs = CursorPrefs {
+            api_key: Some("sk-test".to_string()),
             enabled_ids: Some(vec!["mystery-model".to_string()]),
             cached_models: Some(Vec::new()),
         };
@@ -1184,6 +1220,7 @@ mod tests {
             })
             .collect();
         let prefs = CursorPrefs {
+            api_key: Some("sk-test".to_string()),
             enabled_ids: Some(pick.iter().map(|s| s.to_string()).collect()),
             cached_models: Some(cached_models),
         };

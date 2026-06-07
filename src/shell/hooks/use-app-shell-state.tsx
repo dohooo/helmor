@@ -22,6 +22,7 @@ import { publishShellEvent } from "@/shell/event-bus";
 import { useEnsureDefaultModel } from "@/shell/hooks/use-ensure-default-model";
 import { useGlobalShortcutHandlers } from "@/shell/hooks/use-global-shortcut-handlers";
 import { useNavigationSidebar } from "@/shell/hooks/use-navigation-sidebar";
+import { useOpencodeStartupSync } from "@/shell/hooks/use-opencode-startup-sync";
 import { useShellPanels } from "@/shell/hooks/use-panels";
 import { useSelectionControllers } from "@/shell/hooks/use-selection-controllers";
 import { useShellChromeState } from "@/shell/hooks/use-shell-chrome-state";
@@ -104,6 +105,7 @@ export function useAppShellState({
 	const appUpdateStatus = useAppUpdater();
 	useDockUnreadBadge();
 	useEnsureDefaultModel();
+	useOpencodeStartupSync();
 
 	const chrome = useShellChromeState({
 		queryClient,

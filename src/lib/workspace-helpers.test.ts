@@ -733,6 +733,43 @@ describe("resolveSessionSelectedModelId", () => {
 		).toBe("gpt-4o");
 	});
 
+	it("drops a persisted pick that's no longer in the catalog", () => {
+		// Cursor key removed → the persisted cursor model is gone; fall back
+		// to a valid default instead of returning the dangling id.
+		expect(
+			resolveSessionSelectedModelId({
+				session: {
+					id: "session-5",
+					agentType: "claude",
+					model: null,
+					lastUserMessageAt: null,
+				},
+				modelSelections: {
+					"session:session-5": "cursor-removed-model",
+				},
+				modelSections: MODEL_SECTIONS,
+				settingsDefaultModelId: "opus",
+			}),
+		).toBe("opus");
+	});
+
+	it("keeps a persisted pick while the catalog is still loading (empty)", () => {
+		expect(
+			resolveSessionSelectedModelId({
+				session: {
+					id: "session-6",
+					agentType: "claude",
+					model: null,
+					lastUserMessageAt: null,
+				},
+				modelSelections: {
+					"session:session-6": "cursor-removed-model",
+				},
+				modelSections: [],
+			}),
+		).toBe("cursor-removed-model");
+	});
+
 	it("falls back to the first available model when no session or settings model is available", () => {
 		expect(
 			resolveSessionSelectedModelId({

@@ -10,9 +10,8 @@ import { groupHeading } from "./model-multi-select";
 import { customSig, generateProviderId } from "./opencode-custom-providers";
 import {
 	defaultEnabledSlugs,
-	missingConfiguredProviders,
 	reconcileEnabledModelIds,
-} from "./opencode-models";
+} from "./opencode-model-defaults";
 
 describe("customSig", () => {
 	const base = {
@@ -184,35 +183,6 @@ describe("reconcileEnabledModelIds", () => {
 			"a/1",
 			"a/2",
 		]);
-	});
-});
-
-describe("missingConfiguredProviders", () => {
-	const models = (slugs: string[]): OpencodeCachedModel[] =>
-		slugs.map((slug) => ({ slug, label: slug }));
-
-	it("flags configured providers absent from the cached list (startup race)", () => {
-		// opencode returned only the free models; hundun + codex haven't connected.
-		const cached = models(["opencode/zen-a", "opencode/zen-b"]);
-		expect(
-			missingConfiguredProviders(cached, new Set(["hundun", "codex"])),
-		).toEqual(["hundun", "codex"]);
-	});
-
-	it("returns empty once every configured provider is present", () => {
-		const cached = models([
-			"opencode/zen-a",
-			"hundun/deepseek",
-			"codex/gpt-5.5",
-		]);
-		expect(
-			missingConfiguredProviders(cached, new Set(["hundun", "codex"])),
-		).toEqual([]);
-	});
-
-	it("returns empty when nothing is configured", () => {
-		const cached = models(["opencode/zen-a"]);
-		expect(missingConfiguredProviders(cached, new Set())).toEqual([]);
 	});
 });
 

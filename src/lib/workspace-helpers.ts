@@ -704,6 +704,16 @@ export function resolveSessionSelectedModelId({
 	if (!selectedModelId && session) {
 		selectedModelId = modelSelections[getComposerContextKey(null, session.id)];
 	}
+	// A persisted pick can outlive its model (e.g. the Cursor key was removed,
+	// dropping that section). Once the catalog has loaded, drop an id that's no
+	// longer in it so we fall back to a valid default instead of a dangling id.
+	if (
+		selectedModelId &&
+		modelSections.length > 0 &&
+		!findModelOption(modelSections, selectedModelId)
+	) {
+		selectedModelId = undefined;
+	}
 	return (
 		selectedModelId ??
 		inferDefaultModelId(session, modelSections, settingsDefaultModelId)

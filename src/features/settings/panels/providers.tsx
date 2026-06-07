@@ -62,7 +62,7 @@ export function ProvidersPanel() {
 					</ProviderConfigRow>
 					<ProviderConfigRow
 						label="Custom Providers"
-						description="Add a provider with your API key, or a custom OpenAI-compatible endpoint. Saved to your global opencode config."
+						description="Add a provider by API key or OpenAI-compatible endpoint, saved to ~/.config/opencode."
 					>
 						<OpencodeCustomProvidersPanel
 							onChanged={() =>
