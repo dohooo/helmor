@@ -12,6 +12,7 @@ mod builtin_claude_providers;
 mod catalog;
 pub(crate) mod claude_project_files;
 mod custom_providers;
+pub(crate) mod opencode_config;
 mod persistence;
 pub mod provider_capabilities;
 mod queries;
@@ -229,6 +230,15 @@ pub async fn list_cursor_models(
 ) -> CmdResult<Vec<queries::CursorModelEntry>> {
     // Inline blocking — same pattern as `list_slash_commands`.
     queries::fetch_cursor_models(sidecar.inner(), api_key)
+}
+
+#[tauri::command]
+pub async fn list_opencode_models(
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    force_reload: Option<bool>,
+) -> CmdResult<Vec<queries::OpencodeModelEntry>> {
+    // force_reload restarts the opencode server to pick up a just-written config.
+    queries::fetch_opencode_models(sidecar.inner(), force_reload.unwrap_or(false))
 }
 
 #[tauri::command]

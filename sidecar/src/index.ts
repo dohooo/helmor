@@ -11,12 +11,14 @@
 import { createInterface } from "node:readline";
 import type { PermissionUpdate } from "@anthropic-ai/claude-agent-sdk";
 import { isAbortError } from "./abort.js";
+import { applyAgentProxyToProcessEnv } from "./agent-proxy.js";
 import { ClaudeSessionManager } from "./claude-session-manager.js";
 import { CodexAppServerManager } from "./codex-app-server-manager.js";
 import { CursorSessionManager } from "./cursor-session-manager.js";
 import { createSidecarEmitter } from "./emitter.js";
 import { resolveHostResponse, setHostWriter } from "./host-bridge.js";
 import { errorDetails, logger } from "./logger.js";
+import { OpencodeSessionManager } from "./opencode-session-manager.js";
 import {
 	errorMessage,
 	optionalObject,
@@ -46,10 +48,12 @@ import { handleRunTriageTick, handleStopTriageTick } from "./triage/index.js";
 const claudeManager = new ClaudeSessionManager();
 const codexManager = new CodexAppServerManager();
 const cursorManager = new CursorSessionManager();
+const opencodeManager = new OpencodeSessionManager();
 const managers: Record<Provider, SessionManager> = {
 	claude: claudeManager,
 	codex: codexManager,
 	cursor: cursorManager,
+	opencode: opencodeManager,
 };
 
 // `parentGone` flips to true only when stdin EOFs — that's the
@@ -204,6 +208,7 @@ async function handleSendMessage(
 	try {
 		const provider = parseProvider(params.provider);
 		const sendParams = parseSendMessageParams(params);
+		applyAgentProxyToProcessEnv(sendParams.agentProxy);
 		logger.debug(`[${id}] sendMessage`, {
 			prompt: sendParams.prompt?.slice(0, 100),
 			model: sendParams.model ?? "(default)",
@@ -341,9 +346,16 @@ async function handleListModels(
 			typeof params.apiKey === "string" && params.apiKey.length > 0
 				? params.apiKey
 				: undefined;
-		logger.debug(`[${id}] listModels`, { provider, override: Boolean(apiKey) });
+		const forceReload = params.forceReload === true;
+		logger.debug(`[${id}] listModels`, {
+			provider,
+			override: Boolean(apiKey),
+			forceReload,
+		});
 		const models = await managers[provider].listModels(
-			apiKey ? { apiKey } : undefined,
+			apiKey || forceReload
+				? { ...(apiKey ? { apiKey } : {}), forceReload }
+				: undefined,
 		);
 		emitter.modelsListed(id, provider, models);
 		logger.debug(`[${id}] listModels → ${models.length} entries (${provider})`);
@@ -629,9 +641,11 @@ for await (const line of rl) {
 				const message =
 					typeof params.message === "string" ? params.message : undefined;
 				logger.debug(`[${id}] permissionResponse`, { permissionId, behavior });
-				// Route to the right provider — Codex permissions use "codex-" prefix
+				// Route by id prefix: `codex-`, `opencode-`, else Claude.
 				if (permissionId.startsWith("codex-")) {
 					codexManager.resolvePermission(permissionId, behavior);
+				} else if (permissionId.startsWith("opencode-")) {
+					opencodeManager.resolvePermission(permissionId, behavior);
 				} else {
 					claudeManager.resolvePermission(
 						permissionId,
@@ -672,7 +686,8 @@ for await (const line of rl) {
 							: { action: "cancel" };
 				const claimed =
 					claudeManager.resolveUserInput(userInputId, resolution) ||
-					codexManager.resolveUserInput(userInputId, resolution);
+					codexManager.resolveUserInput(userInputId, resolution) ||
+					opencodeManager.resolveUserInput(userInputId, resolution);
 				if (!claimed) {
 					// No live waiter — the parked promise was lost (sidecar
 					// restart, session ended, or duplicate submit). Surface

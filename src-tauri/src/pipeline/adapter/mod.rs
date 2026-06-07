@@ -18,6 +18,7 @@ mod blocks;
 mod codex_items;
 mod grouping;
 mod labels;
+mod opencode_parts;
 
 #[cfg(test)]
 mod tests;
@@ -288,6 +289,27 @@ fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, Wo
                 .unwrap_or("Goal updated")
                 .to_string();
             result.push(make_system(msg, &text));
+            i += 1;
+            continue;
+        }
+
+        // opencode native assistant message → universal render parts.
+        if msg_type == Some("opencode_message") {
+            if let Some(p) = parsed {
+                let content: Vec<ExtendedMessagePart> =
+                    opencode_parts::render_parts(p, &msg.id, msg.is_streaming)
+                        .into_iter()
+                        .map(ExtendedMessagePart::Basic)
+                        .collect();
+                result.push(ThreadMessageLike {
+                    role: MessageRole::Assistant,
+                    id: Some(msg.id.clone()),
+                    created_at: Some(msg.created_at.clone()),
+                    content,
+                    status: None,
+                    streaming: if msg.is_streaming { Some(true) } else { None },
+                });
+            }
             i += 1;
             continue;
         }

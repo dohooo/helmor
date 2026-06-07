@@ -1,26 +1,12 @@
 import { X } from "lucide-react";
-import { type RefObject, useCallback, useEffect, useRef } from "react";
+import type { RefObject } from "react";
+import { LoginTerminalPreview as LoginTerminalCore } from "@/components/agent-login/login-terminal";
 import {
 	type TerminalHandle,
 	TerminalOutput,
 } from "@/components/terminal-output";
-import {
-	type AgentLoginProvider,
-	resizeAgentLoginTerminal,
-	type ScriptEvent,
-	spawnAgentLoginTerminal,
-	stopAgentLoginTerminal,
-	writeAgentLoginTerminalStdin,
-} from "@/lib/api";
+import type { AgentLoginProvider } from "@/lib/api";
 import { cn } from "@/lib/utils";
-
-const providerLabels: Record<AgentLoginProvider, string> = {
-	claude: "Claude Code",
-	codex: "Codex",
-	// Cursor never reaches the login terminal — kept here only to
-	// satisfy the exhaustive Record type.
-	cursor: "Cursor",
-};
 
 export function OnboardingTerminalPreview({
 	title,
@@ -122,100 +108,23 @@ export function LoginTerminalPreview({
 	onError: (message: string) => void;
 	onClose?: () => void;
 }) {
-	const termRef = useRef<TerminalHandle | null>(null);
-	const resolvedProvider = provider ?? "codex";
-
-	// Keep onExit/onError out of the spawn effect's deps — the parent's
-	// `handleTerminalExit` is memoised against `activeLoginProvider`,
-	// which we *just* changed by clicking the login button. Including
-	// it in the deps caused the spawn effect to immediately tear down
-	// and respawn, so codex would launch and get killed in the same
-	// frame ("flash-crash" on click).
-	const onExitRef = useRef(onExit);
-	const onErrorRef = useRef(onError);
-	useEffect(() => {
-		onExitRef.current = onExit;
-		onErrorRef.current = onError;
-	}, [onExit, onError]);
-
-	// Auto-focus the xterm viewport on activation (RAF-deferred so the
-	// slot's height transition + xterm's textarea attach finish first;
-	// inline focus from the spawn effect raced layout and didn't take).
-	useEffect(() => {
-		if (!active || !provider || !instanceId) return;
-		const id = requestAnimationFrame(() => {
-			termRef.current?.focus();
-		});
-		return () => cancelAnimationFrame(id);
-	}, [active, provider, instanceId]);
-
-	useEffect(() => {
-		if (!active || !provider || !instanceId) return;
-
-		let cancelled = false;
-		const replay = () => {
-			termRef.current?.clear();
-			termRef.current?.refit();
-		};
-
-		if (termRef.current) replay();
-		else requestAnimationFrame(replay);
-
-		void spawnAgentLoginTerminal(provider, instanceId, (event: ScriptEvent) => {
-			if (cancelled) return;
-			switch (event.type) {
-				case "stdout":
-				case "stderr":
-					termRef.current?.write(event.data);
-					break;
-				case "error":
-					termRef.current?.write(`\r\n${event.message}\r\n`);
-					onErrorRef.current(event.message);
-					break;
-				case "exited":
-					onExitRef.current(event.code);
-					break;
-				case "started":
-					break;
-			}
-		}).catch((error) => {
-			if (cancelled) return;
-			const message =
-				error instanceof Error ? error.message : "Unable to start login.";
-			termRef.current?.write(`\r\n${message}\r\n`);
-			onErrorRef.current(message);
-		});
-
-		return () => {
-			cancelled = true;
-			void stopAgentLoginTerminal(provider, instanceId);
-		};
-	}, [active, provider, instanceId]);
-
-	const handleData = useCallback(
-		(data: string) => {
-			if (!provider || !instanceId) return;
-			void writeAgentLoginTerminalStdin(provider, instanceId, data);
-		},
-		[provider, instanceId],
-	);
-
-	const handleResize = useCallback(
-		(cols: number, rows: number) => {
-			if (!provider || !instanceId) return;
-			void resizeAgentLoginTerminal(provider, instanceId, cols, rows);
-		},
-		[provider, instanceId],
-	);
-
 	return (
-		<OnboardingTerminalPreview
-			title={`${providerLabels[resolvedProvider]} login`}
+		<LoginTerminalCore
+			provider={provider}
+			instanceId={instanceId}
 			active={active}
-			terminalRef={termRef}
-			onData={handleData}
-			onResize={handleResize}
-			onClose={onClose}
+			onExit={onExit}
+			onError={onError}
+			render={({ title, terminalRef, onData, onResize }) => (
+				<OnboardingTerminalPreview
+					title={title}
+					active={active}
+					terminalRef={terminalRef}
+					onData={onData}
+					onResize={onResize}
+					onClose={onClose}
+				/>
+			)}
 		/>
 	);
 }

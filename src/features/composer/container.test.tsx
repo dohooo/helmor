@@ -164,6 +164,18 @@ const MODEL_SECTIONS = [
 			},
 		],
 	},
+	{
+		id: "opencode",
+		label: "OpenCode",
+		options: [
+			{
+				id: "opencode/big-pickle",
+				provider: "opencode",
+				label: "OpenCode Zen · Big Pickle",
+				cliModel: "opencode/big-pickle",
+			},
+		],
+	},
 ] as const;
 
 const WORKSPACE_DETAIL = {
@@ -222,6 +234,24 @@ const WORKSPACE_SESSIONS = [
 		providerSessionId: null,
 		unreadCount: 0,
 		codexThinkingLevel: "high",
+		fastMode: false,
+		createdAt: "2026-04-05T00:00:00Z",
+		updatedAt: "2026-04-05T00:00:00Z",
+		lastUserMessageAt: null,
+		isHidden: false,
+		active: false,
+	},
+	{
+		id: "session-3",
+		workspaceId: "workspace-1",
+		title: "Session 3",
+		agentType: "opencode",
+		status: "idle",
+		model: "opencode/big-pickle",
+		permissionMode: "default",
+		providerSessionId: null,
+		unreadCount: 0,
+		codexThinkingLevel: null,
 		fastMode: false,
 		createdAt: "2026-04-05T00:00:00Z",
 		updatedAt: "2026-04-05T00:00:00Z",
@@ -1007,6 +1037,28 @@ describe("WorkspaceComposerContainer", () => {
 				argumentHint: "<objective>",
 				source: "builtin",
 				providers: ["codex"],
+			});
+		});
+
+		it("adds a built-in /compact command for OpenCode sessions", async () => {
+			apiMockState.listSlashCommands.mockResolvedValue({
+				commands: [],
+				isComplete: true,
+			});
+
+			renderWithLinkedDirs([], "session-3");
+
+			await waitFor(() => {
+				expect(composerMockState.lastSlashCommands.map((c) => c.name)).toEqual([
+					"add-dir",
+					"compact",
+				]);
+			});
+			expect(composerMockState.lastSlashCommands[1]).toEqual({
+				name: "compact",
+				description: "Compact this conversation's context",
+				source: "builtin",
+				providers: ["opencode"],
 			});
 		});
 

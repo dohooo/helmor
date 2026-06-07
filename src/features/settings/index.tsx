@@ -68,15 +68,11 @@ import { AppUpdatesPanel } from "./panels/app-updates";
 import { AppearancePanel } from "./panels/appearance";
 import { ComponentsPanel } from "./panels/components";
 import { ConductorImportPanel } from "./panels/conductor-import";
-import { CursorProviderPanel } from "./panels/cursor-provider";
 import { DevToolsPanel } from "./panels/dev-tools";
 import { InboxSettingsPanel } from "./panels/inbox";
 import { LocalLlmPanel } from "./panels/local-llm";
 import { MobileCompanionPanel } from "./panels/mobile-companion";
-import {
-	AgentProxyPanel,
-	ClaudeCustomProvidersPanel,
-} from "./panels/model-providers";
+import { ProvidersPanel } from "./panels/providers";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
 import { TriagePanel } from "./panels/triage";
 
@@ -95,6 +91,7 @@ import type { ContextProviderTab, SettingsSection } from "./types";
 /// Most match the section key with a leading capital, but a few names
 /// don't pluralise nicely under that rule — keep the overrides explicit.
 const SECTION_LABEL_OVERRIDES: Partial<Record<SettingsSection, string>> = {
+	model: "Models",
 	account: "Accounts",
 	inbox: "Contexts",
 };
@@ -185,6 +182,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 		"general",
 		"appearance",
 		"model",
+		"providers",
 		"shortcuts",
 		...(conductorEnabled ? (["import"] as const) : []),
 		"account",
@@ -281,8 +279,11 @@ export const SettingsDialog = memo(function SettingsDialog({
 							) : null}
 						</div>
 
-						{/* Content area */}
-						<div className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-8 pt-1 pb-6">
+						{/* Content area — `scrollbar-stable` reserves the scrollbar
+						    gutter so expanding/collapsing a provider row (which
+						    toggles the vertical scrollbar) never reflows the body
+						    width, matching the nav's stable gutter. */}
+						<div className="scrollbar-stable min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-8 pt-1 pb-6">
 							{activeSection === "general" && (
 								<SettingsGroup>
 									<SettingsRow
@@ -589,11 +590,10 @@ export const SettingsDialog = memo(function SettingsDialog({
 											void updateSettings(patch);
 										}}
 									/>
-									<ClaudeCustomProvidersPanel />
-									<CursorProviderPanel />
-									<AgentProxyPanel />
 								</SettingsGroup>
 							)}
+
+							{activeSection === "providers" && <ProvidersPanel />}
 
 							{activeSection === "experimental" && (
 								<SettingsGroup>

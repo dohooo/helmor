@@ -131,6 +131,7 @@ async fn dispatch(
         "list_hidden_sessions" => to_value(crate::commands::session_commands::list_hidden_sessions(arg_string(&args, "workspaceId")?).await?),
         "list_inbox_items" => to_value(crate::commands::forge_commands::list_inbox_items(arg_json(&args, "provider")?, arg_json(&args, "kind")?, arg_string(&args, "login")?, arg_opt_string(&args, "host"), arg_opt_string(&args, "cursor"), arg_opt_int(&args, "limit"), arg_opt_string(&args, "repo"), arg_opt_json(&args, "filters")?).await?),
         "list_inbox_kind_labels" => to_value(crate::commands::forge_commands::list_inbox_kind_labels(arg_json(&args, "provider")?).await?),
+        "list_opencode_models" => to_value(crate::agents::list_opencode_models(app.state::<crate::sidecar::ManagedSidecar>(), None).await?),
         "list_provider_capabilities" => to_value(crate::agents::list_provider_capabilities().await?),
         "list_remote_branches" => to_value(crate::commands::workspace_commands::list_remote_branches(arg_opt_string(&args, "workspaceId"), arg_opt_string(&args, "repoId")).await?),
         "list_repo_remotes" => to_value(crate::commands::repository_commands::list_repo_remotes(arg_string(&args, "repoId")?).await?),

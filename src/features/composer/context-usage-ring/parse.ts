@@ -2,18 +2,27 @@
 // The ring shows whatever was recorded at the last turn end — switching the
 // composer model in-place does not invalidate it; the next turn refreshes it.
 
+export type ContextCategory = {
+	readonly name: string;
+	readonly tokens: number;
+};
+
 /** Baseline: written at turn end by both Claude and Codex. */
 export type StoredContextUsageMeta = {
 	readonly modelId: string;
 	readonly usedTokens: number;
 	readonly maxTokens: number;
 	readonly percentage: number;
+	/** Cumulative session cost (USD); opencode only. */
+	readonly cost?: number;
+	/** opencode stores the breakdown in the baseline; Claude on the rich payload. */
+	readonly categories?: ReadonlyArray<ContextCategory>;
 };
 
 /** Claude-only breakdown fetched live on hover. */
 export type ClaudeRichContextUsage = StoredContextUsageMeta & {
 	readonly isAutoCompactEnabled: boolean;
-	readonly categories: ReadonlyArray<{ name: string; tokens: number }>;
+	readonly categories: ReadonlyArray<ContextCategory>;
 };
 
 /** <60 default, 60–80 warning, >=80 danger. */
@@ -36,6 +45,8 @@ export type DisplayResolution =
 			readonly percentage: number;
 			readonly tier: RingTier;
 			readonly rich: ClaudeRichContextUsage | null;
+			readonly cost: number | null;
+			readonly categories: ReadonlyArray<ContextCategory>;
 	  };
 
 /** Rich (hover-time live fetch) drives the ring when it carries
@@ -58,7 +69,24 @@ export function resolveContextUsageDisplay(
 		percentage: effective.percentage,
 		tier: ringTier(effective.percentage),
 		rich,
+		cost: typeof effective.cost === "number" ? effective.cost : null,
+		categories: effective.categories ?? [],
 	};
+}
+
+/** Parse a `categories` array, dropping malformed entries. */
+function parseCategories(value: Json): ContextCategory[] {
+	if (!Array.isArray(value)) return [];
+	const out: ContextCategory[] = [];
+	for (const entry of value) {
+		const obj = asObject(entry);
+		if (!obj) continue;
+		const name = typeof obj.name === "string" ? obj.name : null;
+		const tokens = asNumber(obj.tokens);
+		if (!name || tokens === null) continue;
+		out.push({ name, tokens });
+	}
+	return out;
 }
 
 /** A rich payload is trusted when it has non-zero used/max — anything
@@ -103,11 +131,15 @@ export function parseStoredMeta(
 	const used = asNumber(root.usedTokens);
 	const max = asNumber(root.maxTokens);
 	if (used === null || max === null) return null;
+	const cost = asNumber(root.cost);
+	const categories = parseCategories(root.categories);
 	return {
 		modelId: typeof root.modelId === "string" ? root.modelId : "",
 		usedTokens: used,
 		maxTokens: max,
 		percentage: asNumber(root.percentage) ?? clampPercent(used, max),
+		...(cost !== null ? { cost } : {}),
+		...(categories.length > 0 ? { categories } : {}),
 	};
 }
 
@@ -126,16 +158,7 @@ export function parseClaudeRichMeta(
 	const used = asNumber(root.usedTokens);
 	const max = asNumber(root.maxTokens);
 	if (used === null || max === null) return null;
-	const rawCategories = Array.isArray(root.categories) ? root.categories : [];
-	const categories: Array<{ name: string; tokens: number }> = [];
-	for (const entry of rawCategories) {
-		const obj = asObject(entry);
-		if (!obj) continue;
-		const name = typeof obj.name === "string" ? obj.name : null;
-		const tokens = asNumber(obj.tokens);
-		if (!name || tokens === null) continue;
-		categories.push({ name, tokens });
-	}
+	const categories = parseCategories(root.categories);
 	return {
 		modelId: typeof root.modelId === "string" ? root.modelId : "",
 		usedTokens: used,
@@ -154,6 +177,16 @@ export function formatTokens(tokens: number): string {
 	if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
 	if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`;
 	return String(tokens);
+}
+
+const USD = new Intl.NumberFormat("en-US", {
+	style: "currency",
+	currency: "USD",
+});
+
+/** Format USD: "$0.00" / "$1.23". */
+export function formatUsd(cost: number): string {
+	return USD.format(Number.isFinite(cost) && cost > 0 ? cost : 0);
 }
 
 // ── Rate limits (orthogonal to context meta) ───────────────────────────

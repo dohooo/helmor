@@ -1,5 +1,5 @@
-// Stage claude-code + codex + gh + glab + cloudflared into `sidecar/dist/vendor/`
-// for Tauri to ship as bundle resources. macOS host only.
+// Stage claude-code + codex + opencode + gh + glab + cloudflared into
+// `sidecar/dist/vendor/` for Tauri to ship as bundle resources. macOS host only.
 //
 // Cross-arch staging: in CI the host is always Apple Silicon (macos-26
 // runner), but we publish both aarch64-apple-darwin and x86_64-apple-darwin
@@ -41,6 +41,8 @@ const BUNDLE_CACHE = join(SIDECAR_ROOT, ".bundle-cache");
 //                registry.npmjs.org/@anthropic-ai/claude-code-darwin-{arm64,x64}/-/claude-code-darwin-{arm64,x64}-$VER.tgz
 //   cloudflared: shasum -a 256 of the .tgz at
 //                github.com/cloudflare/cloudflared/releases/download/$VER/cloudflared-darwin-{arm64,amd64}.tgz
+//   opencode:    shasum -a 256 of the npm tarball at
+//                registry.npmjs.org/opencode-darwin-{arm64,x64}/-/opencode-darwin-{arm64,x64}-$VER.tgz
 
 const GH_VERSION = "2.91.0";
 const GH_SHA256 = {
@@ -92,6 +94,17 @@ const CLAUDE_CODE_SHA256: Readonly<
 	},
 };
 
+// Keyed by `opencode-ai` version in sidecar/package.json. Cross-arch staging
+// downloads `opencode-darwin-{arm64,x64}` from npm and verifies against this.
+const OPENCODE_SHA256: Readonly<
+	Record<string, { arm64: string; x64: string }>
+> = {
+	"1.16.2": {
+		arm64: "2103383d7562c1783cb66d63d31630ff90448d1ade90f8a187778d18c4b9ee5f",
+		x64: "1be1b4ff8874f0f0848e88bf4de3943a4fff3a51c8b2a75c910fb7f710e7cd03",
+	},
+};
+
 // llama.cpp bundled binary. Drives `local_llm::Manager` (the
 // auto-rename / local-LLM stack). Versions are `b<N>` build tags from
 // github.com/ggml-org/llama.cpp/releases. Bumping the version: replace
@@ -128,6 +141,10 @@ interface TargetInfo {
 	codexTriple: string;
 	/** Codex npm tarball suffix: `darwin-arm64` / `darwin-x64`. */
 	codexNpmSuffix: string;
+	/** `opencode-darwin-<arch>` is the npm optional-dep package. */
+	opencodePkg: string;
+	/** opencode npm tarball suffix: `darwin-arm64` / `darwin-x64`. */
+	opencodeNpmSuffix: string;
 	/** `gh` release naming: `arm64` / `amd64`. */
 	ghArch: "arm64" | "amd64";
 	/** `glab` release naming: `arm64` / `amd64`. */
@@ -145,6 +162,8 @@ function infoForArch(arch: DarwinArch): TargetInfo {
 			codexPkg: "@openai/codex-darwin-arm64",
 			codexTriple: "aarch64-apple-darwin",
 			codexNpmSuffix: "darwin-arm64",
+			opencodePkg: "opencode-darwin-arm64",
+			opencodeNpmSuffix: "darwin-arm64",
 			ghArch: "arm64",
 			glabArch: "arm64",
 			cloudflaredArch: "arm64",
@@ -157,6 +176,8 @@ function infoForArch(arch: DarwinArch): TargetInfo {
 		codexPkg: "@openai/codex-darwin-x64",
 		codexTriple: "x86_64-apple-darwin",
 		codexNpmSuffix: "darwin-x64",
+		opencodePkg: "opencode-darwin-x64",
+		opencodeNpmSuffix: "darwin-x64",
 		ghArch: "amd64",
 		glabArch: "amd64",
 		cloudflaredArch: "amd64",
@@ -611,6 +632,67 @@ function stageCodexBinary(target: TargetInfo): void {
 }
 
 // ---------------------------------------------------------------------------
+// opencode — stage the NATIVE binary `opencode-darwin-<arch>/bin/opencode`,
+// NOT the `opencode-ai` Node shim. codesign needs JIT entitlements (true flag).
+// ---------------------------------------------------------------------------
+
+function readOpencodeVersion(): string {
+	const pkgJsonPath = join(NODE_MODULES, "opencode-ai", "package.json");
+	ensureExists(pkgJsonPath, "opencode-ai package.json");
+	const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf8")) as {
+		version?: string;
+	};
+	if (!pkg.version) {
+		throw new Error(`[stage-vendor] opencode-ai has no version field`);
+	}
+	return pkg.version;
+}
+
+function copyOpencodeBin(src: string): string {
+	const dest = join(DIST_VENDOR, "opencode", "opencode");
+	copyFile(src, dest);
+	chmodSync(dest, 0o755);
+	maybeSignMacBinary(dest, true);
+	return dest;
+}
+
+function stageOpencodeBinary(target: TargetInfo): string {
+	const installed = join(NODE_MODULES, target.opencodePkg, "bin", "opencode");
+	if (existsSync(installed)) {
+		return copyOpencodeBin(installed);
+	}
+
+	// Cross-arch: download the platform tarball from npm.
+	const version = readOpencodeVersion();
+	const shaTable = OPENCODE_SHA256[version];
+	if (!shaTable) {
+		throw new Error(
+			`[stage-vendor] no pinned SHA256 for opencode ${version} — add it to OPENCODE_SHA256 in stage-vendor.ts`,
+		);
+	}
+	ensureCacheDir();
+	const slug = `${target.opencodePkg}-${version}`;
+	const archive = join(BUNDLE_CACHE, `${slug}.tgz`);
+	const url = `https://registry.npmjs.org/${target.opencodePkg}/-/opencode-${target.opencodeNpmSuffix}-${version}.tgz`;
+	downloadAndVerify(url, archive, shaTable[target.arch]);
+
+	const extractDir = join(BUNDLE_CACHE, slug);
+	freshExtractDir(extractDir);
+	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
+		stdio: "inherit",
+	});
+
+	// npm tarballs nest everything under `package/`.
+	const binSrc = join(extractDir, "package", "bin", "opencode");
+	if (!existsSync(binSrc)) {
+		throw new Error(
+			`[stage-vendor] opencode binary missing after extract: ${binSrc}`,
+		);
+	}
+	return copyOpencodeBin(binSrc);
+}
+
+// ---------------------------------------------------------------------------
 // llama.cpp — download official macOS binary release for the target arch.
 // Different from gh/glab: ships as a fat zip containing llama-server +
 // llama-cli + a pile of shared libs (libllama, libggml-*, libmtmd, ...).
@@ -781,6 +863,9 @@ stageClaudeCodeBinary(target);
 // ----- Codex -----
 stageCodexBinary(target);
 
+// ----- opencode -----
+stageOpencodeBinary(target);
+
 // ----- gh + glab (forge CLIs) -----
 stageGhBinary(target.ghArch);
 stageGlabBinary(target.glabArch);
@@ -795,6 +880,7 @@ stageLlamaCppBinaries(target);
 console.log(`[stage-vendor] ✓ staged → ${DIST_VENDOR}`);
 console.log(`  claude-code ${humanSize(join(DIST_VENDOR, "claude-code"))}`);
 console.log(`  codex       ${humanSize(join(DIST_VENDOR, "codex"))}`);
+console.log(`  opencode    ${humanSize(join(DIST_VENDOR, "opencode"))}`);
 console.log(`  gh          ${humanSize(join(DIST_VENDOR, "gh"))}`);
 console.log(`  glab        ${humanSize(join(DIST_VENDOR, "glab"))}`);
 console.log(`  cloudflared ${humanSize(join(DIST_VENDOR, "cloudflared"))}`);

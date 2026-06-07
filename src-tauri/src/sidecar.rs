@@ -80,6 +80,7 @@ struct SidecarProcess {
 pub struct BundledAgentPaths {
     pub claude_bin: Option<PathBuf>,
     pub codex_bin: Option<PathBuf>,
+    pub opencode_bin: Option<PathBuf>,
 }
 
 /// Resolve the bundled Claude/Codex CLI binaries shipped inside the
@@ -118,13 +119,20 @@ fn resolve_bundled_agent_paths_for_exe(exe: &std::path::Path) -> Option<BundledA
         "claude"
     };
     let codex_bin_name = if cfg!(windows) { "codex.exe" } else { "codex" };
+    let opencode_bin_name = if cfg!(windows) {
+        "opencode.exe"
+    } else {
+        "opencode"
+    };
 
     let claude_bin = resources_dir.join(format!("vendor/claude-code/{claude_bin_name}"));
     let codex_bin = resources_dir.join(format!("vendor/codex/{codex_bin_name}"));
+    let opencode_bin = resources_dir.join(format!("vendor/opencode/{opencode_bin_name}"));
 
     Some(BundledAgentPaths {
         claude_bin: claude_bin.is_file().then_some(claude_bin),
         codex_bin: codex_bin.is_file().then_some(codex_bin),
+        opencode_bin: opencode_bin.is_file().then_some(opencode_bin),
     })
 }
 
@@ -182,6 +190,7 @@ impl SidecarProcess {
                 exe = ?exe,
                 claude_bin = ?bundled_paths.claude_bin,
                 codex_bin = ?bundled_paths.codex_bin,
+                opencode_bin = ?bundled_paths.opencode_bin,
                 "Resolved bundled agent paths"
             );
             if let Some(path) = bundled_paths.claude_bin {
@@ -189,6 +198,9 @@ impl SidecarProcess {
             }
             if let Some(path) = bundled_paths.codex_bin {
                 cmd.env("HELMOR_CODEX_BIN_PATH", &path);
+            }
+            if let Some(path) = bundled_paths.opencode_bin {
+                cmd.env("HELMOR_OPENCODE_BIN_PATH", &path);
             }
         }
         // Cursor key is NOT env-passed — pushed via `updateConfig` RPC
@@ -966,8 +978,10 @@ mod tests {
         let resources = root.path().join("Helmor.app/Contents/Resources/vendor");
         std::fs::create_dir_all(resources.join("claude-code")).unwrap();
         std::fs::create_dir_all(resources.join("codex")).unwrap();
+        std::fs::create_dir_all(resources.join("opencode")).unwrap();
         std::fs::write(resources.join("claude-code/claude"), "").unwrap();
         std::fs::write(resources.join("codex/codex"), "").unwrap();
+        std::fs::write(resources.join("opencode/opencode"), "").unwrap();
 
         let paths = resolve_bundled_agent_paths_for_exe(&exe).unwrap();
 
@@ -980,6 +994,11 @@ mod tests {
             paths.codex_bin.unwrap(),
             root.path()
                 .join("Helmor.app/Contents/Resources/vendor/codex/codex")
+        );
+        assert_eq!(
+            paths.opencode_bin.unwrap(),
+            root.path()
+                .join("Helmor.app/Contents/Resources/vendor/opencode/opencode")
         );
     }
 }

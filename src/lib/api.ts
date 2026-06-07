@@ -159,7 +159,7 @@ export type DataInfo = {
 	archiveRoot: string;
 };
 
-export type AgentProvider = "claude" | "codex" | "cursor";
+export type AgentProvider = "claude" | "codex" | "cursor" | "opencode";
 
 export type LocalLlmStatus = {
 	enabled: boolean;
@@ -894,18 +894,30 @@ export async function toggleMiniWindowMode(): Promise<boolean> {
 	return await invoke("toggle_mini_window_mode");
 }
 
-export type AgentLoginProvider = "claude" | "codex" | "cursor";
+export type AgentLoginProvider = "claude" | "codex" | "cursor" | "opencode";
 
 export type AgentLoginStatusResult = {
 	claude: boolean;
 	codex: boolean;
 	cursor: boolean;
+	opencode: boolean;
 	codexProvider?: string | null;
 	codexAuthMethod?: "login" | "apiKey" | string | null;
 };
 
 export async function getAgentLoginStatus(): Promise<AgentLoginStatusResult> {
 	return await invoke<AgentLoginStatusResult>("get_agent_login_status");
+}
+
+// Cursor is an SDK (no versioned CLI), so it has no entry.
+export type AgentVersionsResult = {
+	claude: string | null;
+	codex: string | null;
+	opencode: string | null;
+};
+
+export async function getAgentVersions(): Promise<AgentVersionsResult> {
+	return await invoke<AgentVersionsResult>("get_agent_versions");
 }
 
 export async function openAgentLoginTerminal(
@@ -1166,6 +1178,86 @@ export async function listCursorModels(
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to list Cursor models."),
+		);
+	}
+}
+
+export type OpencodeModelEntry = {
+	// `<providerID>/<modelID>` slug — doubles as the cliModel.
+	id: string;
+	label: string;
+	// Effort tiers (the model's `variants` keys). Empty ⟺ no effort switch.
+	effortLevels?: string[];
+};
+
+// `forceReload` restarts the opencode server to pick up config changes.
+export async function listOpencodeModels(
+	forceReload = false,
+): Promise<OpencodeModelEntry[]> {
+	try {
+		return await invoke<OpencodeModelEntry[]>("list_opencode_models", {
+			forceReload,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to list opencode models."),
+		);
+	}
+}
+
+export type OpencodeCustomModel = {
+	id: string;
+	name: string;
+	// Only set true when the upstream endpoint accepts a reasoning effort.
+	reasoning: boolean;
+};
+
+export type OpencodeCustomProvider = {
+	id: string;
+	name: string;
+	// `@ai-sdk/openai-compatible` (/v1/chat/completions) or `@ai-sdk/openai` (/v1/responses).
+	npm: string;
+	baseUrl: string;
+	apiKey: string;
+	headers: Record<string, string>;
+	models: OpencodeCustomModel[];
+};
+
+export async function getOpencodeCustomProviders(): Promise<
+	OpencodeCustomProvider[]
+> {
+	try {
+		return await invoke<OpencodeCustomProvider[]>(
+			"get_opencode_custom_providers",
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to read opencode config."),
+		);
+	}
+}
+
+// `preset` sets only `options.apiKey` (opencode fills npm/baseURL/models);
+// non-preset writes the full custom block.
+export async function upsertOpencodeCustomProvider(
+	provider: OpencodeCustomProvider,
+	preset: boolean,
+): Promise<void> {
+	try {
+		await invoke("upsert_opencode_custom_provider", { provider, preset });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to save opencode provider."),
+		);
+	}
+}
+
+export async function deleteOpencodeCustomProvider(id: string): Promise<void> {
+	try {
+		await invoke("delete_opencode_custom_provider", { id });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to delete opencode provider."),
 		);
 	}
 }

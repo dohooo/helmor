@@ -8,7 +8,7 @@
 import type { AgentProxySettings } from "./agent-proxy.js";
 import type { SidecarEmitter } from "./emitter.js";
 
-export type Provider = "claude" | "codex" | "cursor";
+export type Provider = "claude" | "codex" | "cursor" | "opencode";
 
 export interface SendMessageParams {
 	readonly sessionId: string;
@@ -189,8 +189,12 @@ export interface SessionManager {
 
 	/** List available models. `apiKey` overrides the manager's stored key
 	 *  for one-off probes (e.g. onboarding validation); when omitted the
-	 *  manager uses whatever it has configured. */
-	listModels(opts?: { apiKey?: string }): Promise<readonly ProviderModelInfo[]>;
+	 *  manager uses whatever it has configured. `forceReload` (opencode only)
+	 *  restarts the model server to pick up a just-written config change. */
+	listModels(opts?: {
+		apiKey?: string;
+		forceReload?: boolean;
+	}): Promise<readonly ProviderModelInfo[]>;
 
 	/**
 	 * Abort an in-flight session by id. No-op if the session is not active.

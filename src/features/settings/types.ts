@@ -7,6 +7,7 @@ export type SettingsSection =
 	| "shortcuts"
 	| "appearance"
 	| "model"
+	| "providers"
 	| "experimental"
 	| "import"
 	| "developer"

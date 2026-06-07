@@ -1,0 +1,45 @@
+---
+source: tests/pipeline_streams.rs
+expression: snapshot
+input_file: tests/fixtures/streams/opencode/todo-list.jsonl
+---
+line_count: 118
+checkpoint_count: 1
+checkpoints:
+  - line_index: 116
+    event_type: opencode/session.status
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - todo-list
+      - reasoning
+      - reasoning
+      - text
+final_state:
+  message_count: 1
+  roles:
+    - assistant
+  total_parts: 5
+persisted_turns:
+  turn_count: 1
+  total_blocks: 6
+  turns:
+    - role: assistant
+      block_types:
+        - reasoning
+        - tool
+        - reasoning
+        - tool
+        - reasoning
+        - text
+historical_render:
+  message_count: 1
+  messages:
+    - role: assistant
+      part_types:
+        - reasoning
+        - todo-list
+        - reasoning
+        - reasoning
+        - text

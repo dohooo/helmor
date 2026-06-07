@@ -23,6 +23,7 @@ import type {
 import {
 	createSession,
 	findProviderCapabilities,
+	getOpencodeCustomProviders,
 	mutateCodexGoal,
 	saveAutoCloseActionKinds,
 	setWorkspaceLinkedDirectories,
@@ -98,6 +99,13 @@ const CODEX_COMPACT_COMMAND: SlashCommandEntry = {
 	providers: ["codex"],
 };
 
+const OPENCODE_COMPACT_COMMAND: SlashCommandEntry = {
+	name: "compact",
+	description: "Compact this conversation's context",
+	source: "builtin",
+	providers: ["opencode"],
+};
+
 const CODEX_GOAL_COMMAND: SlashCommandEntry = {
 	name: "goal",
 	description:
@@ -125,6 +133,7 @@ const CLAUDE_WORKFLOWS_COMMAND: SlashCommandEntry = {
 const BUILTIN_CLIENT_COMMANDS: readonly SlashCommandEntry[] = [
 	ADD_DIR_COMMAND,
 	CODEX_COMPACT_COMMAND,
+	OPENCODE_COMPACT_COMMAND,
 	CODEX_GOAL_COMMAND,
 	CLAUDE_GOAL_COMMAND,
 	CLAUDE_WORKFLOWS_COMMAND,
@@ -489,6 +498,17 @@ export const WorkspaceComposerContainer = memo(
 		const modelsLoading =
 			modelSectionsQuery.isLoading &&
 			modelSections.every((s) => s.options.length === 0);
+		// Drives the OpenCode "Add custom model…" jump; only fetched when an OpenCode section exists.
+		const opencodeSectionPresent = modelSections.some(
+			(s) => s.id === "opencode",
+		);
+		const opencodeCustomProvidersQuery = useQuery({
+			queryKey: helmorQueryKeys.opencodeCustomProviders,
+			queryFn: getOpencodeCustomProviders,
+			enabled: opencodeSectionPresent,
+		});
+		const hasOpencodeCustomProviders =
+			(opencodeCustomProvidersQuery.data?.length ?? 0) > 0;
 		const currentSession =
 			(sessionsQuery.data ?? []).find(
 				(session) => session.id === displayedSessionId,
@@ -705,7 +725,9 @@ export const WorkspaceComposerContainer = memo(
 		// cursor sessions as claude — the Rust cache then served cached
 		// claude skills back to the cursor popup. Keep cursor explicit.
 		const slashProvider: AgentProvider =
-			provider === "codex" || provider === "cursor" ? provider : "claude";
+			provider === "codex" || provider === "cursor" || provider === "opencode"
+				? provider
+				: "claude";
 		// Prefer the repoId from a real workspace; on the start page there's no
 		// workspace yet, so fall back to the caller-supplied repoId hint.
 		const effectiveRepoId =
@@ -1166,7 +1188,9 @@ export const WorkspaceComposerContainer = memo(
 								? "codex"
 								: effectiveModel?.provider === "cursor"
 									? "cursor"
-									: "claude"
+									: effectiveModel?.provider === "opencode"
+										? "opencode"
+										: "claude"
 						}
 						focusShortcut={focusShortcut}
 						togglePlanShortcut={togglePlanShortcut}
@@ -1182,6 +1206,7 @@ export const WorkspaceComposerContainer = memo(
 						sending={sending}
 						selectedModelId={effectiveSelectedModelId}
 						modelSections={modelSections}
+						hasOpencodeCustomProviders={hasOpencodeCustomProviders}
 						modelsLoading={modelsLoading}
 						onSelectModel={handleSelectModelInner}
 						provider={provider}

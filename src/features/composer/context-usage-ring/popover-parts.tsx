@@ -2,14 +2,13 @@ import { cn } from "@/lib/utils";
 import {
 	formatResetsAt,
 	formatTokens,
+	formatUsd,
 	type RateLimitWindowDisplay,
 	type RingTier,
 	ringTier,
 } from "./parse";
 
-/** Top-of-card "Context — 12.4k/1.0M · 8%" row. Pass `used`/`max` as
- *  `null` when window size is unknown (fresh session placeholder) — only
- *  the percentage shows on the right. */
+/** "Context — used/max · %". Unknown max → show only the raw used count. */
 export function UsageHeader({
 	used,
 	max,
@@ -19,18 +18,27 @@ export function UsageHeader({
 	max: number | null;
 	percentage: number;
 }) {
-	const hasTokens = used !== null && max !== null;
+	const hasUsed = used !== null && used > 0;
+	const hasMax = max !== null && max > 0;
 	return (
 		<div className="flex items-center justify-between">
 			<div className="text-body font-semibold text-foreground">Context</div>
 			<div className="text-small tabular-nums text-muted-foreground">
-				{hasTokens ? (
+				{hasUsed && hasMax ? (
 					<>
 						{formatTokens(used)}/{formatTokens(max)}
 						<span className="mx-1.5 opacity-60">·</span>
+						<span className="text-foreground">
+							{formatPercentage(percentage)}
+						</span>
 					</>
-				) : null}
-				<span className="text-foreground">{formatPercentage(percentage)}</span>
+				) : hasUsed ? (
+					<span className="text-foreground">{formatTokens(used)}</span>
+				) : (
+					<span className="text-foreground">
+						{formatPercentage(percentage)}
+					</span>
+				)}
 			</div>
 		</div>
 	);
@@ -63,6 +71,16 @@ export function UsageBar({
 				className={cn("h-full transition-[width]", barColor)}
 				style={{ width: `${Math.min(100, percentage)}%` }}
 			/>
+		</div>
+	);
+}
+
+/** "Spent · $0.00" row (opencode only). */
+export function SpentRow({ cost }: { cost: number }) {
+	return (
+		<div className="flex items-center justify-between text-small">
+			<span className="text-muted-foreground">Spent</span>
+			<span className="tabular-nums text-foreground">{formatUsd(cost)}</span>
 		</div>
 	);
 }
@@ -109,8 +127,7 @@ export function LimitRow({ window }: { window: RateLimitWindowDisplay }) {
 	);
 }
 
-/** Claude rich breakdown: muted name + percentage per row, no dividers.
- *  Matches the original context-usage card style. */
+/** Per-category breakdown: % of window when the limit is known, raw token count otherwise. */
 export function CategoryList({
 	categories,
 	maxTokens,
@@ -129,7 +146,7 @@ export function CategoryList({
 				>
 					<span className="truncate text-muted-foreground">{c.name}</span>
 					<span className="tabular-nums text-muted-foreground">
-						{formatCategoryPercent(c.tokens, maxTokens)}
+						{formatCategoryValue(c.tokens, maxTokens)}
 					</span>
 				</div>
 			))}
@@ -137,8 +154,8 @@ export function CategoryList({
 	);
 }
 
-function formatCategoryPercent(tokens: number, maxTokens: number): string {
-	if (!(maxTokens > 0)) return "—";
+function formatCategoryValue(tokens: number, maxTokens: number): string {
+	if (!(maxTokens > 0)) return formatTokens(tokens);
 	const pct = (tokens / maxTokens) * 100;
 	if (pct <= 0) return "0.0%";
 	return `${pct.toFixed(1)}%`;

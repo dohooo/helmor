@@ -21,6 +21,28 @@ export function buildAgentProxyEnv(
 	};
 }
 
+const PROXY_ENV_KEYS = [
+	"HTTP_PROXY",
+	"HTTPS_PROXY",
+	"ALL_PROXY",
+	"http_proxy",
+	"https_proxy",
+	"all_proxy",
+] as const;
+
+/// Sets proxy on the sidecar's own env (cursor in-process + opencode's shared
+/// server need it there). Cleared when no proxy resolves so toggling off works.
+export function applyAgentProxyToProcessEnv(
+	agentProxy?: AgentProxySettings,
+): void {
+	const env = buildAgentProxyEnv(agentProxy);
+	if (env) {
+		for (const [key, value] of Object.entries(env)) process.env[key] = value;
+	} else {
+		for (const key of PROXY_ENV_KEYS) delete process.env[key];
+	}
+}
+
 function resolveProxyUrl(agentProxy?: AgentProxySettings): string | null {
 	if (!agentProxy) return null;
 	if (agentProxy.mode === "custom") return agentProxy.customUrl;

@@ -1,15 +1,9 @@
-import type { ClaudeIcon } from "@/components/icons";
-import type { AgentLoginProvider } from "@/lib/api";
+import type {
+	AgentLoginItem,
+	AgentLoginStatus,
+} from "@/components/agent-login/types";
 
-export type AgentLoginStatus = "ready" | "needsSetup";
-
-export type AgentLoginItem = {
-	icon: typeof ClaudeIcon;
-	provider: AgentLoginProvider;
-	label: string;
-	description: string;
-	status: AgentLoginStatus;
-};
+export type { AgentLoginItem, AgentLoginStatus };
 
 export type OnboardingStep =
 	| "intro"

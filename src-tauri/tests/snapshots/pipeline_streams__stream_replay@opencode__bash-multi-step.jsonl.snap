@@ -1,0 +1,59 @@
+---
+source: tests/pipeline_streams.rs
+expression: snapshot
+input_file: tests/fixtures/streams/opencode/bash-multi-step.jsonl
+---
+line_count: 220
+checkpoint_count: 1
+checkpoints:
+  - line_index: 218
+    event_type: opencode/session.status
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - reasoning
+      - tool-call
+      - text
+      - reasoning
+      - tool-call
+      - text
+      - reasoning
+      - tool-call
+      - text
+final_state:
+  message_count: 1
+  roles:
+    - assistant
+  total_parts: 10
+persisted_turns:
+  turn_count: 1
+  total_blocks: 10
+  turns:
+    - role: assistant
+      block_types:
+        - reasoning
+        - tool
+        - reasoning
+        - text
+        - tool
+        - reasoning
+        - text
+        - tool
+        - reasoning
+        - text
+historical_render:
+  message_count: 1
+  messages:
+    - role: assistant
+      part_types:
+        - reasoning
+        - reasoning
+        - tool-call
+        - text
+        - reasoning
+        - tool-call
+        - text
+        - reasoning
+        - tool-call
+        - text

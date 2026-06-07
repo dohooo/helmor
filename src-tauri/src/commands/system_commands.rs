@@ -80,10 +80,20 @@ pub struct AgentLoginStatus {
     pub claude: bool,
     pub codex: bool,
     pub cursor: bool,
+    pub opencode: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codex_provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codex_auth_method: Option<String>,
+}
+
+// `None` when the binary couldn't be resolved or `--version` failed. Cursor is SDK-only.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentVersions {
+    pub claude: Option<String>,
+    pub codex: Option<String>,
+    pub opencode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -448,6 +458,8 @@ fn helmor_skills_status() -> anyhow::Result<HelmorSkillsStatus> {
             claude: claude_login_ready(),
             codex: codex_auth_status().ready,
             cursor: cursor_login_ready(),
+            // opencode readiness comes from the login-status path, not here.
+            opencode: false,
             codex_provider: None,
             codex_auth_method: None,
         },
@@ -587,6 +599,8 @@ pub async fn install_helmor_skills() -> CmdResult<HelmorSkillsStatus> {
             claude: claude_login_ready(),
             codex: codex_auth_status().ready,
             cursor: cursor_login_ready(),
+            // opencode readiness comes from the login-status path, not here.
+            opencode: false,
             codex_provider: None,
             codex_auth_method: None,
         };
@@ -792,6 +806,7 @@ fn run_components_check_inner(force: bool) -> ComponentsUpdateCheck {
         claude: claude_login_ready(),
         codex: codex_auth_status().ready,
         cursor: cursor_login_ready(),
+        opencode: false,
         codex_provider: None,
         codex_auth_method: None,
     };
@@ -1149,11 +1164,59 @@ pub async fn get_agent_login_status() -> CmdResult<AgentLoginStatus> {
             claude: claude_login_ready(),
             codex: codex.ready,
             cursor: cursor_login_ready(),
+            opencode: opencode_login_ready(),
             codex_provider: codex.provider,
             codex_auth_method: codex.auth_method.map(str::to_string),
         })
     })
     .await
+}
+
+#[tauri::command]
+pub async fn get_agent_versions() -> CmdResult<AgentVersions> {
+    run_blocking(|| {
+        Ok(AgentVersions {
+            claude: agent_cli_version("claude"),
+            codex: agent_cli_version("codex"),
+            opencode: agent_cli_version("opencode"),
+        })
+    })
+    .await
+}
+
+fn agent_cli_version(provider: &str) -> Option<String> {
+    let output = std::process::Command::new(resolve_agent_binary(provider))
+        .arg("--version")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    parse_semver(&text)
+}
+
+// Extract the first `MAJOR.MINOR.PATCH(-suffix)?` token; CLI `--version` layouts vary.
+fn parse_semver(text: &str) -> Option<String> {
+    for token in text.split(|c: char| c.is_whitespace() || c == '(' || c == ')') {
+        let trimmed = token.trim_start_matches('v');
+        let mut dots = 0;
+        let valid = !trimmed.is_empty()
+            && trimmed.chars().all(|c| {
+                if c == '.' {
+                    dots += 1;
+                    true
+                } else {
+                    c.is_ascii_digit() || c == '-' || c.is_ascii_alphabetic()
+                }
+            })
+            && dots >= 2
+            && trimmed.chars().next().is_some_and(|c| c.is_ascii_digit());
+        if valid {
+            return Some(trimmed.to_string());
+        }
+    }
+    None
 }
 
 /// Cursor "ready" = non-empty `app.cursor_provider.apiKey`.
@@ -1188,9 +1251,36 @@ fn resolve_agent_binary(provider: &str) -> PathBuf {
     let bundled_path = match provider {
         "claude" => bundled.claude_bin,
         "codex" => bundled.codex_bin,
+        "opencode" => bundled.opencode_bin,
         _ => None,
     };
     bundled_path.unwrap_or_else(|| PathBuf::from(provider))
+}
+
+// Read from the sidecar-computed settings row, NOT `auth.json` (which misses env/config/Zen providers).
+fn opencode_login_ready() -> bool {
+    let raw = match crate::models::settings::load_setting_value("app.opencode_provider") {
+        Ok(Some(value)) => value,
+        Ok(None) => return false,
+        Err(error) => {
+            tracing::debug!("Failed to read app.opencode_provider: {error}");
+            return false;
+        }
+    };
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return false;
+    };
+    let status_ready = parsed
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .map(|status| status == "ready")
+        .unwrap_or(false);
+    let connected_nonempty = parsed
+        .get("connected")
+        .and_then(serde_json::Value::as_array)
+        .map(|arr| !arr.is_empty())
+        .unwrap_or(false);
+    status_ready || connected_nonempty
 }
 
 fn claude_login_ready() -> bool {
@@ -1305,6 +1395,7 @@ fn agent_login_command(provider: &str) -> anyhow::Result<String> {
     let args = match provider {
         "claude" => "auth login",
         "codex" => "login",
+        "opencode" => "auth login",
         _ => anyhow::bail!("Unknown agent provider: {provider}"),
     };
     // Quote the resolved binary path so spaces in `Helmor.app` survive
@@ -1902,6 +1993,26 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn parse_semver_extracts_version_from_varied_cli_output() {
+        assert_eq!(
+            parse_semver("2.1.154 (Claude Code)").as_deref(),
+            Some("2.1.154")
+        );
+        assert_eq!(
+            parse_semver("codex-cli 0.137.0").as_deref(),
+            Some("0.137.0")
+        );
+        assert_eq!(parse_semver("1.16.2\n").as_deref(), Some("1.16.2"));
+        assert_eq!(parse_semver("v3.4.5").as_deref(), Some("3.4.5"));
+        assert_eq!(
+            parse_semver("1.2.3-beta.1").as_deref(),
+            Some("1.2.3-beta.1")
+        );
+        assert_eq!(parse_semver("opencode cli"), None);
+        assert_eq!(parse_semver("version 1.2"), None);
+    }
 
     #[test]
     fn classify_cli_install_reports_missing_when_path_absent() {

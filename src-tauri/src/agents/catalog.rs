@@ -41,6 +41,7 @@ pub fn static_model_sections() -> Vec<AgentModelSection> {
     model_sections_for_inputs(
         super::custom_providers::configured_models(),
         load_cursor_prefs(),
+        load_opencode_prefs(),
     )
 }
 
@@ -49,6 +50,7 @@ pub fn static_model_sections() -> Vec<AgentModelSection> {
 fn model_sections_for_inputs(
     custom: Vec<super::custom_providers::ClaudeProviderModel>,
     cursor_prefs: Option<CursorPrefs>,
+    opencode_prefs: Option<OpencodePrefs>,
 ) -> Vec<AgentModelSection> {
     let mut claude_section = official_claude_section();
     claude_section
@@ -56,6 +58,7 @@ fn model_sections_for_inputs(
         .extend(custom_provider_options(custom));
     let mut sections = vec![claude_section];
     sections.push(codex_section());
+    sections.push(opencode_section_from_prefs(opencode_prefs));
     sections.push(cursor_section_from_prefs(cursor_prefs));
 
     sections
@@ -113,6 +116,120 @@ fn codex_section() -> AgentModelSection {
             codex_model("gpt-5.3-codex-spark", "GPT-5.3-Codex-Spark"),
             codex_model("gpt-5.2", "GPT-5.2"),
         ],
+    }
+}
+
+// Fully dynamic from `app.opencode_provider`; no static seed. Empty `connected` → Unavailable.
+fn opencode_section_from_prefs(prefs: Option<OpencodePrefs>) -> AgentModelSection {
+    let (status, options) = match prefs {
+        Some(prefs) if !prefs.connected.is_empty() => (
+            AgentModelSectionStatus::Ready,
+            expand_opencode_options(prefs),
+        ),
+        _ => (AgentModelSectionStatus::Unavailable, Vec::new()),
+    };
+    AgentModelSection {
+        id: "opencode".to_string(),
+        label: "OpenCode".to_string(),
+        status,
+        options,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct OpencodePrefs {
+    connected: Vec<String>,
+    enabled_ids: Option<Vec<String>>,
+    cached_models: Option<Vec<OpencodeCachedModelEntry>>,
+}
+
+#[derive(Debug, Clone)]
+struct OpencodeCachedModelEntry {
+    slug: String,
+    label: String,
+    // opencode `variants` keys; empty ⟺ no effort dropdown.
+    effort_levels: Vec<String>,
+}
+
+fn load_opencode_prefs() -> Option<OpencodePrefs> {
+    let raw = crate::models::settings::load_setting_value("app.opencode_provider")
+        .ok()
+        .flatten()?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+
+    let connected = match parsed.get("connected") {
+        Some(serde_json::Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|item| item.as_str().map(str::to_string))
+            .collect(),
+        _ => Vec::new(),
+    };
+    let enabled_ids = match parsed.get("enabledModelIds") {
+        Some(serde_json::Value::Array(arr)) => Some(
+            arr.iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect(),
+        ),
+        _ => None,
+    };
+    let cached_models = match parsed.get("cachedModels") {
+        Some(serde_json::Value::Array(arr)) => {
+            let mut out: Vec<OpencodeCachedModelEntry> = Vec::with_capacity(arr.len());
+            for item in arr {
+                let Some(slug) = item.get("slug").and_then(serde_json::Value::as_str) else {
+                    continue;
+                };
+                let label = item
+                    .get("label")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(slug)
+                    .to_string();
+                let effort_levels = item
+                    .get("effortLevels")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                out.push(OpencodeCachedModelEntry {
+                    slug: slug.to_string(),
+                    label,
+                    effort_levels,
+                });
+            }
+            Some(out)
+        }
+        _ => None,
+    };
+
+    Some(OpencodePrefs {
+        connected,
+        enabled_ids,
+        cached_models,
+    })
+}
+
+// `enabledModelIds == null` → default-all cached models; explicit empty list → no options.
+fn expand_opencode_options(prefs: OpencodePrefs) -> Vec<AgentModelOption> {
+    let cache = prefs.cached_models.unwrap_or_default();
+    match prefs.enabled_ids {
+        None => cache
+            .iter()
+            .map(|entry| opencode_model(&entry.slug, &entry.label, entry.effort_levels.clone()))
+            .collect(),
+        Some(enabled) => enabled
+            .iter()
+            .map(|slug| {
+                let entry = cache.iter().find(|entry| &entry.slug == slug);
+                let label = entry
+                    .map(|e| e.label.clone())
+                    .unwrap_or_else(|| slug.clone());
+                let effort_levels = entry.map(|e| e.effort_levels.clone()).unwrap_or_default();
+                opencode_model(slug, &label, effort_levels)
+            })
+            .collect(),
     }
 }
 
@@ -337,6 +454,20 @@ fn codex_model(id: &str, label: &str) -> AgentModelOption {
     }
 }
 
+// `id`/`cli_model` are both the `provider/model` slug; `effort_levels` map to opencode `variants`.
+fn opencode_model(slug: &str, label: &str, effort_levels: Vec<String>) -> AgentModelOption {
+    AgentModelOption {
+        id: slug.to_string(),
+        provider: "opencode".to_string(),
+        label: label.to_string(),
+        cli_model: slug.to_string(),
+        provider_key: None,
+        effort_levels,
+        supports_fast_mode: false,
+        supports_context_usage: true,
+    }
+}
+
 /// Build a Cursor option. Cursor wire ids collide with claude/codex
 /// (e.g. `default` = Claude Opus), so Helmor `id` is namespaced
 /// `cursor-<wire>`; `cli_model` keeps the bare wire id for `agent.send`.
@@ -410,8 +541,11 @@ pub fn resolve_model(model_id: &str, provider_hint: Option<&str>) -> ResolvedMod
         Some("cursor") => "cursor",
         Some("codex") => "codex",
         Some("claude") => "claude",
+        Some("opencode") => "opencode",
         _ if model_id.starts_with("cursor-") => "cursor",
         _ if model_id.starts_with("composer-") => "cursor",
+        // `/` is unique to opencode slugs (claude uses `|`, codex/cursor have none).
+        _ if model_id.contains('/') => "opencode",
         _ if model_id.starts_with("gpt-") => "codex",
         _ => "claude",
     };
@@ -443,9 +577,9 @@ mod tests {
     #[test]
     fn static_model_sections_returns_hardcoded_catalog() {
         // `None` cursor_prefs → cursor section degrades to just Auto.
-        let sections = model_sections_for_inputs(Vec::new(), None);
+        let sections = model_sections_for_inputs(Vec::new(), None, None);
 
-        assert_eq!(sections.len(), 3);
+        assert_eq!(sections.len(), 4);
         assert_eq!(sections[0].id, "claude");
         assert_eq!(sections[0].status, AgentModelSectionStatus::Ready);
         assert_eq!(
@@ -489,17 +623,22 @@ mod tests {
             .iter()
             .all(|model| model.supports_fast_mode));
 
-        assert_eq!(sections[2].id, "cursor");
-        assert_eq!(sections[2].status, AgentModelSectionStatus::Ready);
+        // No opencode prefs row → Unavailable, no options.
+        assert_eq!(sections[2].id, "opencode");
+        assert_eq!(sections[2].status, AgentModelSectionStatus::Unavailable);
+        assert!(sections[2].options.is_empty());
+
+        assert_eq!(sections[3].id, "cursor");
+        assert_eq!(sections[3].status, AgentModelSectionStatus::Ready);
         // Without an `app.cursor_provider` row in the test DB, the Cursor
         // section degrades to the hard fallback: a single Auto entry.
         // Helmor id is the namespaced `cursor-default`; cli_model is the
         // bare `default` Cursor's SDK expects.
-        let auto = &sections[2].options[0];
+        let auto = &sections[3].options[0];
         assert_eq!(auto.id, "cursor-default");
         assert_eq!(auto.cli_model, "default");
         assert_eq!(auto.provider, "cursor");
-        assert_eq!(sections[2].options.len(), 1);
+        assert_eq!(sections[3].options.len(), 1);
     }
 
     #[test]
@@ -514,9 +653,10 @@ mod tests {
                 api_key: "sk-test".to_string(),
             }],
             None,
+            None,
         );
 
-        assert_eq!(sections.len(), 3);
+        assert_eq!(sections.len(), 4);
         assert_eq!(sections[0].id, "claude");
         assert_eq!(sections[0].label, "Claude Code");
         assert_eq!(
@@ -589,6 +729,165 @@ mod tests {
     }
 
     #[test]
+    fn resolve_opencode_slug_routes_to_opencode() {
+        // Explicit hint.
+        let m = resolve_model("anthropic/claude-opus-4-5", Some("opencode"));
+        assert_eq!(m.provider, "opencode");
+        assert_eq!(m.cli_model, "anthropic/claude-opus-4-5");
+        assert_eq!(m.id, "anthropic/claude-opus-4-5");
+        let m = resolve_model("openai/gpt-5-codex", None);
+        assert_eq!(m.provider, "opencode");
+        assert_eq!(m.cli_model, "openai/gpt-5-codex");
+    }
+
+    fn opencode_cache(slug: &str, label: &str) -> OpencodeCachedModelEntry {
+        OpencodeCachedModelEntry {
+            slug: slug.to_string(),
+            label: label.to_string(),
+            effort_levels: Vec::new(),
+        }
+    }
+
+    fn opencode_cache_effort(
+        slug: &str,
+        label: &str,
+        efforts: &[&str],
+    ) -> OpencodeCachedModelEntry {
+        OpencodeCachedModelEntry {
+            slug: slug.to_string(),
+            label: label.to_string(),
+            effort_levels: efforts.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn opencode_section_default_all_emits_every_cached_model() {
+        let prefs = OpencodePrefs {
+            connected: vec!["opencode".to_string()],
+            enabled_ids: None,
+            cached_models: Some(vec![
+                opencode_cache("opencode/big-pickle", "OpenCode Zen · Big Pickle"),
+                opencode_cache("hundun/deepseek-v4-pro", "Hundun · DeepSeek V4 Pro"),
+            ]),
+        };
+        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs));
+        let opencode = sections.iter().find(|s| s.id == "opencode").unwrap();
+        assert_eq!(opencode.status, AgentModelSectionStatus::Ready);
+        assert_eq!(
+            opencode
+                .options
+                .iter()
+                .map(|o| o.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["opencode/big-pickle", "hundun/deepseek-v4-pro"]
+        );
+        let first = &opencode.options[0];
+        assert_eq!(first.provider, "opencode");
+        assert_eq!(first.cli_model, "opencode/big-pickle");
+        assert_eq!(first.label, "OpenCode Zen · Big Pickle");
+        assert!(first.effort_levels.is_empty());
+        assert!(!first.supports_fast_mode);
+        assert!(first.supports_context_usage);
+    }
+
+    #[test]
+    fn opencode_section_carries_per_model_effort_levels() {
+        let prefs = OpencodePrefs {
+            connected: vec!["opencode".to_string(), "hundun".to_string()],
+            enabled_ids: None,
+            cached_models: Some(vec![
+                opencode_cache("opencode/big-pickle", "OpenCode Zen · Big Pickle"),
+                opencode_cache_effort(
+                    "hundun/deepseek-v4-pro",
+                    "Hundun · DeepSeek V4 Pro",
+                    &["low", "medium", "high", "max"],
+                ),
+            ]),
+        };
+        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs));
+        let opencode = sections.iter().find(|s| s.id == "opencode").unwrap();
+        let zen = opencode
+            .options
+            .iter()
+            .find(|o| o.id == "opencode/big-pickle")
+            .unwrap();
+        let deepseek = opencode
+            .options
+            .iter()
+            .find(|o| o.id == "hundun/deepseek-v4-pro")
+            .unwrap();
+        assert!(
+            zen.effort_levels.is_empty(),
+            "no-effort model → no dropdown"
+        );
+        assert_eq!(deepseek.effort_levels, vec!["low", "medium", "high", "max"]);
+    }
+
+    #[test]
+    fn opencode_section_respects_enabled_subset() {
+        let prefs = OpencodePrefs {
+            connected: vec!["opencode".to_string(), "hundun".to_string()],
+            enabled_ids: Some(vec!["hundun/deepseek-v4-pro".to_string()]),
+            cached_models: Some(vec![
+                opencode_cache("opencode/big-pickle", "OpenCode Zen · Big Pickle"),
+                opencode_cache("hundun/deepseek-v4-pro", "Hundun · DeepSeek V4 Pro"),
+            ]),
+        };
+        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs));
+        let opencode = sections.iter().find(|s| s.id == "opencode").unwrap();
+        assert_eq!(opencode.status, AgentModelSectionStatus::Ready);
+        assert_eq!(opencode.options.len(), 1);
+        assert_eq!(opencode.options[0].id, "hundun/deepseek-v4-pro");
+        assert_eq!(opencode.options[0].label, "Hundun · DeepSeek V4 Pro");
+    }
+
+    #[test]
+    fn opencode_section_explicit_empty_enabled_list_yields_no_options() {
+        let prefs = OpencodePrefs {
+            connected: vec!["opencode".to_string()],
+            enabled_ids: Some(Vec::new()),
+            cached_models: Some(vec![opencode_cache(
+                "opencode/big-pickle",
+                "OpenCode Zen · Big Pickle",
+            )]),
+        };
+        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs));
+        let opencode = sections.iter().find(|s| s.id == "opencode").unwrap();
+        assert_eq!(opencode.status, AgentModelSectionStatus::Ready);
+        assert!(opencode.options.is_empty());
+    }
+
+    #[test]
+    fn opencode_section_no_connected_providers_is_unavailable() {
+        let prefs = OpencodePrefs {
+            connected: Vec::new(),
+            enabled_ids: None,
+            cached_models: Some(vec![opencode_cache(
+                "opencode/big-pickle",
+                "OpenCode Zen · Big Pickle",
+            )]),
+        };
+        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs));
+        let opencode = sections.iter().find(|s| s.id == "opencode").unwrap();
+        assert_eq!(opencode.status, AgentModelSectionStatus::Unavailable);
+        assert!(opencode.options.is_empty());
+    }
+
+    #[test]
+    fn opencode_section_unknown_enabled_slug_falls_back_to_slug_label() {
+        let prefs = OpencodePrefs {
+            connected: vec!["opencode".to_string()],
+            enabled_ids: Some(vec!["mystery/model".to_string()]),
+            cached_models: Some(Vec::new()),
+        };
+        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs));
+        let opencode = sections.iter().find(|s| s.id == "opencode").unwrap();
+        assert_eq!(opencode.options.len(), 1);
+        assert_eq!(opencode.options[0].id, "mystery/model");
+        assert_eq!(opencode.options[0].label, "mystery/model");
+    }
+
+    #[test]
     fn resolve_composer_routes_to_cursor() {
         let m = resolve_model("composer-2", None);
         assert_eq!(m.provider, "cursor");
@@ -623,7 +922,7 @@ mod tests {
 
     #[test]
     fn official_claude_section_surfaces_opus_4_8_default_above_4_7_and_4_6() {
-        let sections = model_sections_for_inputs(Vec::new(), None);
+        let sections = model_sections_for_inputs(Vec::new(), None, None);
         let claude = sections.iter().find(|s| s.id == "claude").unwrap();
         let ids: Vec<&str> = claude.options.iter().map(|o| o.id.as_str()).collect();
         // User-facing ordering: 4.8 (default) on top, then 4.7, then 4.6.
@@ -709,7 +1008,7 @@ mod tests {
                 Some(vec![cursor_param("reasoning", &["low", "medium", "high"])]),
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs));
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
         let cursor = sections.iter().find(|s| s.id == "cursor").unwrap();
         assert_eq!(cursor.options.len(), 1);
         let opt = &cursor.options[0];
@@ -731,7 +1030,7 @@ mod tests {
                 Some(vec![cursor_param("fast", &["true", "false"])]),
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs));
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
         let cursor = sections.iter().find(|s| s.id == "cursor").unwrap();
         let opt = &cursor.options[0];
         assert!(opt.effort_levels.is_empty());
@@ -752,7 +1051,7 @@ mod tests {
                 Some(vec![cursor_param("thinking", &["false", "true"])]),
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs));
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
         let opt = &sections.iter().find(|s| s.id == "cursor").unwrap().options[0];
         assert!(opt.effort_levels.is_empty());
         assert!(!opt.supports_fast_mode);
@@ -775,7 +1074,7 @@ mod tests {
                 ]),
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs));
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
         let opt = &sections.iter().find(|s| s.id == "cursor").unwrap().options[0];
         assert_eq!(opt.effort_levels, vec!["low", "medium", "high", "max"]);
         assert!(opt.supports_fast_mode);
@@ -796,7 +1095,7 @@ mod tests {
                 ]),
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs));
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
         let opt = &sections.iter().find(|s| s.id == "cursor").unwrap().options[0];
         assert_eq!(opt.effort_levels, vec!["max"]);
     }
@@ -814,7 +1113,7 @@ mod tests {
                 ]),
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs));
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
         let opt = &sections.iter().find(|s| s.id == "cursor").unwrap().options[0];
         assert_eq!(opt.effort_levels, vec!["low", "medium", "high"]);
         assert!(opt.supports_fast_mode);
@@ -830,7 +1129,7 @@ mod tests {
             enabled_ids: Some(vec!["legacy".to_string()]),
             cached_models: Some(vec![cursor_cache("legacy", "Legacy Cached", None)]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs));
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
         let opt = &sections.iter().find(|s| s.id == "cursor").unwrap().options[0];
         assert!(opt.effort_levels.is_empty());
         assert!(!opt.supports_fast_mode);
@@ -845,7 +1144,7 @@ mod tests {
             enabled_ids: Some(vec!["mystery-model".to_string()]),
             cached_models: Some(Vec::new()),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs));
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
         let opt = &sections.iter().find(|s| s.id == "cursor").unwrap().options[0];
         assert_eq!(opt.cli_model, "mystery-model");
         assert_eq!(opt.label, "mystery-model");
@@ -888,7 +1187,7 @@ mod tests {
             enabled_ids: Some(pick.iter().map(|s| s.to_string()).collect()),
             cached_models: Some(cached_models),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs));
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
         let cursor = sections.iter().find(|s| s.id == "cursor").unwrap();
         let by_wire: std::collections::HashMap<String, &AgentModelOption> = cursor
             .options

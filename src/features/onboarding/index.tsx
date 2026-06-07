@@ -30,6 +30,14 @@ type AppOnboardingProps = {
 	onComplete: () => void;
 };
 
+// Serialize window-mode transitions so the last-issued call wins (StrictMode re-entry).
+let windowModeChain: Promise<unknown> = Promise.resolve();
+function queueWindowMode(run: () => Promise<unknown>): Promise<unknown> {
+	const next = windowModeChain.then(run, run);
+	windowModeChain = next.catch(() => {});
+	return next;
+}
+
 export function AppOnboarding({ onComplete }: AppOnboardingProps) {
 	const [step, setStep] = useState<OnboardingStep>("intro");
 	const [loginItems, setLoginItems] = useState(() => buildAgentLoginItems());
@@ -75,16 +83,17 @@ export function AppOnboarding({ onComplete }: AppOnboardingProps) {
 	}, [refreshLoginItems]);
 
 	useEffect(() => {
-		const entered = enterOnboardingWindowMode().catch((error) => {
-			console.error("[onboarding] failed to enter fixed window mode", error);
-		});
-
+		void queueWindowMode(() =>
+			enterOnboardingWindowMode().catch((error) => {
+				console.error("[onboarding] failed to enter fixed window mode", error);
+			}),
+		);
 		return () => {
-			void entered.finally(() => {
-				void exitOnboardingWindowMode().catch((error) => {
+			void queueWindowMode(() =>
+				exitOnboardingWindowMode().catch((error) => {
 					console.error("[onboarding] failed to restore window mode", error);
-				});
-			});
+				}),
+			);
 		};
 	}, []);
 

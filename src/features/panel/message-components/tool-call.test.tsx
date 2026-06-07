@@ -1,6 +1,9 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { AssistantToolCall } from "./tool-call";
+
+// Without cleanup the DOM accumulates and cross-test text collides.
+afterEach(cleanup);
 
 describe("AssistantToolCall apply_patch", () => {
 	it("defaults multi-file edits to collapsed and suppresses generic patch text when expanded", () => {
@@ -76,5 +79,25 @@ describe("AssistantToolCall default-collapsed", () => {
 		expect(details!.open).toBe(false);
 		// Output content should not be rendered until the user opens the details.
 		expect(screen.queryByText(/drwxr-xr-x/)).not.toBeInTheDocument();
+	});
+});
+
+// opencode tools arrive pre-normalized by the Rust adapter; no opencode branch here.
+describe("AssistantToolCall normalized provider tools", () => {
+	it("renders a normalized Bash tool (universal shape) with description + command", () => {
+		render(
+			<AssistantToolCall
+				toolName="Bash"
+				args={{
+					command: "git ls-files --cached | sort",
+					description: "Find tracked files",
+				}}
+				result="a.ts\nb.ts"
+			/>,
+		);
+		expect(screen.getByText("Find tracked files")).toBeInTheDocument();
+		expect(
+			screen.getByText("git ls-files --cached | sort"),
+		).toBeInTheDocument();
 	});
 });

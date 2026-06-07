@@ -137,6 +137,27 @@ export type CursorProviderSettings = {
 	cachedModels: CursorCachedModel[] | null;
 };
 
+// `slug` = `<providerID>/<modelID>`.
+export type OpencodeCachedModel = {
+	slug: string;
+	label: string;
+	// Effort tiers (the model's `variants` keys). Empty ⟺ no effort switch.
+	effortLevels?: string[];
+};
+
+// Bump when the cached model schema changes so older caches refetch once.
+export const OPENCODE_CACHE_VERSION = 1;
+
+export type OpencodeProviderSettings = {
+	status: "ready" | "unavailable";
+	connected: string[];
+	cachedModels: OpencodeCachedModel[] | null;
+	// `null` = auto-fill all connected on first fetch; `[]` = user cleared.
+	enabledModelIds: string[] | null;
+	// Older/absent → one-time refetch to backfill new per-model metadata.
+	cacheVersion?: number;
+};
+
 export type AgentProxySettings = {
 	mode: "none" | "system" | "custom";
 	customUrl: string;
@@ -296,6 +317,7 @@ export type AppSettings = {
 	shortcuts: ShortcutOverrides;
 	claudeCustomProviders: ClaudeCustomProviderSettings;
 	cursorProvider: CursorProviderSettings;
+	opencodeProvider: OpencodeProviderSettings;
 	agentProxy: AgentProxySettings;
 	localLlm: LocalLlmSettings;
 	inboxSourceConfig: InboxSourceConfig;
@@ -395,6 +417,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		apiKey: "",
 		enabledModelIds: null,
 		cachedModels: null,
+	},
+	opencodeProvider: {
+		status: "unavailable",
+		connected: [],
+		cachedModels: null,
+		enabledModelIds: null,
 	},
 	agentProxy: {
 		mode: "none",
@@ -559,6 +587,7 @@ const SETTINGS_KEY_MAP: Record<
 	shortcuts: "app.shortcuts",
 	claudeCustomProviders: "app.claude_custom_providers",
 	cursorProvider: "app.cursor_provider",
+	opencodeProvider: "app.opencode_provider",
 	agentProxy: "app.agent_proxy",
 	localLlm: "app.local_llm",
 	inboxSourceConfig: "app.inbox_source_config",
@@ -926,6 +955,51 @@ function parseCursorProviderSettings(
 	}
 }
 
+function parseOpencodeProviderSettings(
+	raw: string | undefined,
+): OpencodeProviderSettings {
+	if (!raw) return DEFAULT_SETTINGS.opencodeProvider;
+	try {
+		const parsed = JSON.parse(raw) as Record<string, unknown>;
+		return {
+			status: parsed.status === "ready" ? "ready" : "unavailable",
+			connected: parseStringArray(parsed.connected),
+			cachedModels: parseOpencodeCachedModels(parsed.cachedModels),
+			enabledModelIds: parseEnabledModelIds(parsed.enabledModelIds),
+			cacheVersion:
+				typeof parsed.cacheVersion === "number" ? parsed.cacheVersion : 0,
+		};
+	} catch {
+		return DEFAULT_SETTINGS.opencodeProvider;
+	}
+}
+
+function parseStringArray(value: unknown): string[] {
+	if (!Array.isArray(value)) return [];
+	return value.filter((item): item is string => typeof item === "string");
+}
+
+function parseOpencodeCachedModels(
+	value: unknown,
+): OpencodeCachedModel[] | null {
+	if (!Array.isArray(value)) return null;
+	const models: OpencodeCachedModel[] = [];
+	for (const entry of value) {
+		if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+		const obj = entry as Record<string, unknown>;
+		if (typeof obj.slug !== "string" || typeof obj.label !== "string") continue;
+		const effortLevels = Array.isArray(obj.effortLevels)
+			? obj.effortLevels.filter((v): v is string => typeof v === "string")
+			: undefined;
+		models.push({
+			slug: obj.slug,
+			label: obj.label,
+			...(effortLevels && effortLevels.length > 0 ? { effortLevels } : {}),
+		});
+	}
+	return models;
+}
+
 function parseEnabledModelIds(value: unknown): string[] | null {
 	if (value === null) return null;
 	if (!Array.isArray(value)) return null;
@@ -1233,6 +1307,9 @@ export async function loadSettings(): Promise<AppSettings> {
 			cursorProvider: parseCursorProviderSettings(
 				raw[SETTINGS_KEY_MAP.cursorProvider],
 			),
+			opencodeProvider: parseOpencodeProviderSettings(
+				raw[SETTINGS_KEY_MAP.opencodeProvider],
+			),
 			agentProxy: parseAgentProxySettings(raw[SETTINGS_KEY_MAP.agentProxy]),
 			localLlm: parseLocalLlmSettings(raw[SETTINGS_KEY_MAP.localLlm]),
 			inboxSourceConfig: parseInboxSourceConfig(
@@ -1280,6 +1357,7 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 				key === "shortcuts" ||
 				key === "claudeCustomProviders" ||
 				key === "cursorProvider" ||
+				key === "opencodeProvider" ||
 				key === "agentProxy" ||
 				key === "localLlm" ||
 				key === "inboxSourceConfig" ||

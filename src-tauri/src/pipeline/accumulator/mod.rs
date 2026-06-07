@@ -11,6 +11,7 @@
 
 mod codex;
 mod cursor;
+mod opencode;
 mod streaming;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -150,6 +151,12 @@ pub struct StreamAccumulator {
     // ── Cursor state ─────────────────────────────────────────────────
     /// Per-run cursor state; see `cursor.rs`.
     cursor_state: cursor::CursorRunState,
+
+    // ── opencode state ───────────────────────────────────────────────
+    /// Per-turn opencode part accumulation; see `opencode.rs`.
+    opencode_state: opencode::OpencodeRunState,
+    /// Index into `collected[]` driving `build_opencode_partial`.
+    opencode_partial_idx: Option<usize>,
 
     // ── Coverage guard ───────────────────────────────────────────────
     /// Top-level event types that fell through `push_event`'s match
@@ -310,6 +317,8 @@ impl StreamAccumulator {
             codex_partial_idx: None,
             codex_turn_started_at: None,
             cursor_state: cursor::new_run_state(),
+            opencode_state: opencode::new_run_state(),
+            opencode_partial_idx: None,
             dropped_event_types: Vec::new(),
         }
     }
@@ -492,6 +501,30 @@ impl StreamAccumulator {
             Some("cursor/tool_call_start") => cursor::handle_tool_call_start(self, value),
             Some("cursor/tool_call_end") => cursor::handle_tool_call_end(self, value),
 
+            // ── opencode events (namespaced by the sidecar manager) ───
+            Some("opencode/session_init") => PushOutcome::NoOp,
+            Some("opencode/message.updated") => opencode::handle_message_updated(self, value),
+            Some("opencode/message.part.updated") => opencode::handle_part_updated(self, value),
+            // Subagent (`task` tool) parts, tagged with the parent `callID`.
+            Some("opencode/subtask.message.updated") => {
+                opencode::handle_subtask_message_updated(self, value)
+            }
+            Some("opencode/subtask.message.part.updated") => {
+                opencode::handle_subtask_part_updated(self, value)
+            }
+            // A turn finalizes when its session goes idle.
+            Some("opencode/session.idle") => opencode::handle_session_idle(self),
+            Some("opencode/session.status") => opencode::handle_session_status(self, value),
+            // Redundant/informational forms — handled as NoOps for the coverage guard.
+            Some("opencode/message.part.delta")
+            | Some("opencode/session.error")
+            | Some("opencode/session.created")
+            | Some("opencode/session.updated")
+            | Some("opencode/session.diff")
+            | Some("opencode/todo.updated")
+            | Some("opencode/message.removed")
+            | Some("opencode/message.part.removed") => PushOutcome::NoOp,
+
             // ── Codex informational notifications (no render) ────────
             Some("thread/status/changed")
             | Some("thread/tokenUsage/updated")
@@ -597,12 +630,27 @@ impl StreamAccumulator {
         })
     }
 
+    /// Streaming partial = clone of the last opencode `collected[]` snapshot.
+    pub fn build_opencode_partial(&mut self) -> Option<IntermediateMessage> {
+        let idx = self.opencode_partial_idx.take()?;
+        let entry = self.collected.get(idx)?;
+        Some(IntermediateMessage {
+            id: entry.id.clone(),
+            role: entry.role,
+            raw_json: entry.raw_json.clone(),
+            parsed: entry.parsed.clone(),
+            created_at: entry.created_at.clone(),
+            is_streaming: true,
+        })
+    }
+
     /// Whether the accumulator has an active streaming partial.
     pub fn has_active_partial(&self) -> bool {
         !self.blocks.is_empty()
             || !self.fallback_text.trim().is_empty()
             || !self.fallback_thinking.trim().is_empty()
             || self.codex_partial_idx.is_some()
+            || self.opencode_partial_idx.is_some()
     }
 
     // ── Persistence accessors ───────────────────────────────────────
@@ -732,6 +780,11 @@ impl StreamAccumulator {
     /// Idempotent.
     pub fn flush_cursor_in_progress(&mut self) {
         cursor::flush_in_progress(self);
+    }
+
+    /// Finalize the in-flight opencode message on abort. Idempotent.
+    pub fn flush_opencode_in_progress(&mut self) {
+        opencode::flush_in_progress(self);
     }
 
     /// Convert any active streaming partial into a finalized assistant

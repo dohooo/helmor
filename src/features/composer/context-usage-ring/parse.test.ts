@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	type ClaudeRichContextUsage,
 	formatTokens,
+	formatUsd,
 	parseClaudeRateLimits,
 	parseClaudeRichMeta,
 	parseCodexRateLimits,
@@ -69,6 +70,76 @@ describe("parseStoredMeta", () => {
 			parseStoredMeta(JSON.stringify({ modelId: "m", maxTokens: 1000 })),
 		).toBeNull();
 	});
+
+	it("reads the optional opencode `cost` field; omits it when absent", () => {
+		const withCost = parseStoredMeta(
+			JSON.stringify({
+				modelId: "opencode/big-pickle",
+				usedTokens: 13_988,
+				maxTokens: 1_000_000,
+				percentage: 1,
+				cost: 0.42,
+			}),
+		);
+		expect(withCost?.cost).toBe(0.42);
+		expect(resolveContextUsageDisplay(withCost, null)).toMatchObject({
+			cost: 0.42,
+		});
+		const noCost = parseStoredMeta(
+			JSON.stringify({ modelId: "m", usedTokens: 1, maxTokens: 10 }),
+		);
+		expect(noCost && "cost" in noCost).toBe(false);
+		expect(resolveContextUsageDisplay(noCost, null)).toMatchObject({
+			cost: null,
+		});
+	});
+
+	it("reads the opencode `categories` breakdown and surfaces it on the display", () => {
+		const meta = parseStoredMeta(
+			JSON.stringify({
+				modelId: "opencode/big-pickle",
+				usedTokens: 13_988,
+				maxTokens: 0,
+				percentage: 0,
+				cost: 0.12,
+				categories: [
+					{ name: "Input", tokens: 10_000 },
+					{ name: "Output", tokens: 3_988 },
+					{ name: "Bogus" }, // malformed → dropped
+				],
+			}),
+		);
+		expect(meta?.categories).toEqual([
+			{ name: "Input", tokens: 10_000 },
+			{ name: "Output", tokens: 3_988 },
+		]);
+		expect(resolveContextUsageDisplay(meta, null)).toMatchObject({
+			categories: [
+				{ name: "Input", tokens: 10_000 },
+				{ name: "Output", tokens: 3_988 },
+			],
+		});
+	});
+
+	it("omits `categories` when none are present (Claude/Codex baseline)", () => {
+		const meta = parseStoredMeta(
+			JSON.stringify({ modelId: "m", usedTokens: 1, maxTokens: 10 }),
+		);
+		expect(meta && "categories" in meta).toBe(false);
+		expect(resolveContextUsageDisplay(meta, null)).toMatchObject({
+			categories: [],
+		});
+	});
+});
+
+describe("formatUsd", () => {
+	it("formats cumulative spend like opencode's TUI", () => {
+		expect(formatUsd(0)).toBe("$0.00");
+		expect(formatUsd(0.42)).toBe("$0.42");
+		expect(formatUsd(12.3)).toBe("$12.30");
+		expect(formatUsd(-1)).toBe("$0.00");
+		expect(formatUsd(Number.NaN)).toBe("$0.00");
+	});
 });
 
 describe("parseClaudeRichMeta", () => {
@@ -124,6 +195,8 @@ describe("resolveContextUsageDisplay", () => {
 			percentage: 25,
 			tier: "default",
 			rich: null,
+			cost: null,
+			categories: [],
 		});
 	});
 

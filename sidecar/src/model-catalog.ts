@@ -95,6 +95,36 @@ const MODEL_CATALOG: Record<Provider, readonly ProviderModelInfo[]> = {
 			supportsFastMode: true,
 		},
 	],
+	// Static seed; live set comes from `OpencodeSessionManager.listModels`.
+	// MUST stay in sync with Rust `opencode_section()` in agents/catalog.rs.
+	// Ids are opencode's `provider/model` slug.
+	opencode: [
+		{
+			id: "anthropic/claude-opus-4-5",
+			label: "Claude Opus 4.5",
+			cliModel: "anthropic/claude-opus-4-5",
+		},
+		{
+			id: "anthropic/claude-sonnet-4-6",
+			label: "Claude Sonnet 4.6",
+			cliModel: "anthropic/claude-sonnet-4-6",
+		},
+		{
+			id: "anthropic/claude-haiku-4-5",
+			label: "Claude Haiku 4.5",
+			cliModel: "anthropic/claude-haiku-4-5",
+		},
+		{
+			id: "openai/gpt-5.2",
+			label: "GPT-5.2",
+			cliModel: "openai/gpt-5.2",
+		},
+		{
+			id: "openai/gpt-5-codex",
+			label: "GPT-5-Codex",
+			cliModel: "openai/gpt-5-codex",
+		},
+	],
 	// Static fallback only — `CursorSessionManager.listModels` hits the live
 	// `Cursor.models.list` API for the full set with up-to-date capability
 	// metadata. This list is what shows when the API key isn't configured

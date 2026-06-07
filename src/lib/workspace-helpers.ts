@@ -746,6 +746,9 @@ export function resolveSessionDisplayProvider({
 	if (session.agentType === "cursor") {
 		return "cursor";
 	}
+	if (session.agentType === "opencode") {
+		return "opencode";
+	}
 	return null;
 }
 

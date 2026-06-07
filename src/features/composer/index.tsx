@@ -130,6 +130,8 @@ type WorkspaceComposerProps = {
 	sending?: boolean;
 	selectedModelId: string | null;
 	modelSections: AgentModelSection[];
+	/** false → OpenCode picker shows an "Add custom model…" jump. */
+	hasOpencodeCustomProviders?: boolean;
 	modelsLoading?: boolean;
 	onSelectModel: (modelId: string) => void;
 	provider?: string;
@@ -191,7 +193,7 @@ type WorkspaceComposerProps = {
 	 *  and selects which rate-limits API to query. `"cursor"` exists but
 	 *  Cursor's SDK doesn't expose rate-limit / context-usage endpoints
 	 *  yet, so the indicators just hide for cursor sessions. */
-	agentType?: "claude" | "codex" | "cursor" | null;
+	agentType?: "claude" | "codex" | "cursor" | "opencode" | null;
 	focusShortcut?: string | null;
 	togglePlanShortcut?: string | null;
 	/** Hotkey that submits the current draft with the opposite follow-up
@@ -255,6 +257,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	sending = false,
 	selectedModelId,
 	modelSections,
+	hasOpencodeCustomProviders = false,
 	modelsLoading = false,
 	onSelectModel,
 	provider: _provider = "claude",
@@ -450,11 +453,12 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				handleOpenModelPicker,
 			);
 	}, [toolbarDisabled]);
-	const handleOpenModelSettings = useCallback(() => {
+	// "Add custom model…" jumps to the Providers settings page.
+	const handleOpenProviderSettings = useCallback(() => {
 		setModelPickerOpen(false);
 		window.dispatchEvent(
 			new CustomEvent(OPEN_SETTINGS_EVENT, {
-				detail: { section: "model" },
+				detail: { section: "providers" },
 			}),
 		);
 	}, []);
@@ -962,7 +966,21 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 													{section.id === "claude" &&
 													!hasConfiguredClaudeProviderModels ? (
 														<DropdownMenuItem
-															onClick={handleOpenModelSettings}
+															onClick={handleOpenProviderSettings}
+															className="flex items-center gap-3"
+														>
+															<span className="flex size-4 items-center justify-center text-muted-foreground">
+																<Plus className="size-4" strokeWidth={1.8} />
+															</span>
+															<span className="font-mono tabular-nums">
+																Add custom model...
+															</span>
+														</DropdownMenuItem>
+													) : null}
+													{section.id === "opencode" &&
+													!hasOpencodeCustomProviders ? (
+														<DropdownMenuItem
+															onClick={handleOpenProviderSettings}
 															className="flex items-center gap-3"
 														>
 															<span className="flex size-4 items-center justify-center text-muted-foreground">

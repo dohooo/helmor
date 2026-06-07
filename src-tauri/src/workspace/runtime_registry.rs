@@ -115,6 +115,11 @@ pub fn record_ended(id: &str) -> Result<()> {
 pub fn record_all_ended() -> Result<usize> {
     let conn =
         db::write_conn().context("Failed to borrow write connection for runtime registry sweep")?;
+    record_all_ended_in(&conn)
+}
+
+// Caller-supplied connection so tests can drive it against an in-memory DB.
+pub fn record_all_ended_in(conn: &Connection) -> Result<usize> {
     let affected = conn
         .execute(
             "UPDATE runtime_processes
@@ -293,9 +298,17 @@ mod tests {
         .unwrap();
     }
 
-    fn run_test_classification(env: &TestEnv) -> Vec<StaleRuntimeProcess> {
-        let mut conn = env.db_connection();
-        classify_stale_processes_in(&mut conn).expect("classification")
+    // Private in-memory DB so the classify/sweep tests are isolated from the
+    // process-global file DB (concurrent writes there made count asserts flaky).
+    fn fresh_db() -> Connection {
+        let conn = Connection::open_in_memory().expect("open in-memory runtime test db");
+        crate::models::db::init_connection(&conn, true).expect("init pragmas");
+        crate::schema::ensure_schema(&conn).expect("init runtime test schema");
+        conn
+    }
+
+    fn run_test_classification(conn: &mut Connection) -> Vec<StaleRuntimeProcess> {
+        classify_stale_processes_in(conn).expect("classification")
     }
 
     fn read_ended_at(conn: &Connection, id: &str) -> Option<String> {
@@ -336,8 +349,7 @@ mod tests {
 
     #[test]
     fn record_all_ended_stamps_only_live_rows() {
-        let env = TestEnv::new("runtime-record-all");
-        let conn = env.db_connection();
+        let conn = fresh_db();
         seed_row(&conn, "live-1", 100, 100, None);
         seed_row(&conn, "live-2", 200, 200, None);
         seed_row(
@@ -348,15 +360,15 @@ mod tests {
             Some("2026-01-01T00:00:00Z"),
         );
 
-        let affected = record_all_ended().unwrap();
+        let affected = record_all_ended_in(&conn).unwrap();
         assert_eq!(affected, 2);
         // Pre-stamped row's `ended_at` stays at the seed value.
         assert_eq!(
-            read_ended_at(&env.db_connection(), "already-ended").as_deref(),
+            read_ended_at(&conn, "already-ended").as_deref(),
             Some("2026-01-01T00:00:00Z")
         );
-        assert!(read_ended_at(&env.db_connection(), "live-1").is_some());
-        assert!(read_ended_at(&env.db_connection(), "live-2").is_some());
+        assert!(read_ended_at(&conn, "live-1").is_some());
+        assert!(read_ended_at(&conn, "live-2").is_some());
     }
 
     // ── classify_stale_processes ──────────────────────────────────────
@@ -377,8 +389,7 @@ mod tests {
 
     #[test]
     fn classify_marks_dead_rows_ended_and_reports_maybe_alive() {
-        let env = TestEnv::new("runtime-classify");
-        let conn = env.db_connection();
+        let mut conn = fresh_db();
         seed_row(
             &conn,
             "dead-row",
@@ -394,7 +405,7 @@ mod tests {
             None,
         );
 
-        let maybe_alive = run_test_classification(&env);
+        let maybe_alive = run_test_classification(&mut conn);
 
         assert_eq!(
             maybe_alive.len(),
@@ -406,28 +417,27 @@ mod tests {
 
         // Dead row was stamped, alive row was not.
         assert!(
-            read_ended_at(&env.db_connection(), "dead-row").is_some(),
+            read_ended_at(&conn, "dead-row").is_some(),
             "dead row should have ended_at stamped"
         );
         assert!(
-            read_ended_at(&env.db_connection(), "alive-row").is_none(),
+            read_ended_at(&conn, "alive-row").is_none(),
             "maybe-alive row must NOT be stamped (we don't kill on conservative classify)"
         );
     }
 
     #[test]
     fn classify_with_no_open_rows_is_noop() {
-        let env = TestEnv::new("runtime-classify-empty");
+        let mut conn = fresh_db();
         // No seeded rows. Should return an empty vec without
         // touching the DB.
-        let maybe_alive = run_test_classification(&env);
+        let maybe_alive = run_test_classification(&mut conn);
         assert!(maybe_alive.is_empty());
     }
 
     #[test]
     fn classify_ignores_already_ended_rows() {
-        let env = TestEnv::new("runtime-classify-skip-ended");
-        let conn = env.db_connection();
+        let mut conn = fresh_db();
         // An already-ended row whose PID happens to still be alive.
         // The classifier must NOT report it because the row was
         // already closed out by a previous run.
@@ -439,12 +449,12 @@ mod tests {
             Some("2026-01-01T00:00:00Z"),
         );
 
-        let maybe_alive = run_test_classification(&env);
+        let maybe_alive = run_test_classification(&mut conn);
         assert!(maybe_alive.is_empty());
         // Stamp is preserved exactly — classification doesn't rewrite
         // an existing ended_at.
         assert_eq!(
-            read_ended_at(&env.db_connection(), "old-ended").as_deref(),
+            read_ended_at(&conn, "old-ended").as_deref(),
             Some("2026-01-01T00:00:00Z")
         );
     }

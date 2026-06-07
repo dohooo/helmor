@@ -3,6 +3,7 @@ import type { DisplayResolution } from "./parse";
 import {
 	AutoCompactNote,
 	CategoryList,
+	SpentRow,
 	UsageBar,
 	UsageHeader,
 } from "./popover-parts";
@@ -18,10 +19,9 @@ export function ContextUsagePopoverContent({
 	display,
 	richLoading = false,
 }: Props) {
-	const showCategories =
-		display.kind === "full" &&
-		display.rich !== null &&
-		display.rich.categories.length > 0;
+	const categories = display.kind === "full" ? display.categories : [];
+	const showCategories = categories.length > 0;
+	const hasMax = display.kind === "full" && display.maxTokens > 0;
 
 	return (
 		<div className="flex flex-col gap-3 px-1 py-1">
@@ -32,14 +32,17 @@ export function ContextUsagePopoverContent({
 						max={display.maxTokens}
 						percentage={display.percentage}
 					/>
-					<UsageBar percentage={display.percentage} tier={display.tier} />
-					{showCategories && display.rich ? (
+					{hasMax ? (
+						<UsageBar percentage={display.percentage} tier={display.tier} />
+					) : null}
+					{display.cost !== null ? <SpentRow cost={display.cost} /> : null}
+					{showCategories ? (
 						<>
 							<CategoryList
-								categories={display.rich.categories}
-								maxTokens={display.rich.maxTokens}
+								categories={categories}
+								maxTokens={display.maxTokens}
 							/>
-							{display.rich.isAutoCompactEnabled ? <AutoCompactNote /> : null}
+							{display.rich?.isAutoCompactEnabled ? <AutoCompactNote /> : null}
 						</>
 					) : null}
 				</>
