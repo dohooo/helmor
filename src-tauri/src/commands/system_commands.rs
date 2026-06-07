@@ -140,12 +140,10 @@ pub struct ComponentsUpdateCheck {
     pub skills_error: Option<String>,
 }
 
-/// Where Helmor installs its managed CLI entrypoint on macOS.
+/// Where Helmor installs its managed CLI entrypoint (symlink on Unix,
+/// `.cmd` shim on Windows — see `platform::cli_install`).
 fn cli_install_target() -> std::path::PathBuf {
-    std::path::PathBuf::from(format!(
-        "/usr/local/bin/{}",
-        crate::cli::installed_cli_name()
-    ))
+    crate::platform::cli_install::install_target(crate::cli::installed_cli_name())
 }
 
 /// Name of the compiled CLI binary produced by `cargo build --bin helmor-cli`.
@@ -193,29 +191,51 @@ fn classify_cli_install(
         Err(_) => return CliInstallState::Stale,
     };
 
-    if !metadata.file_type().is_symlink() {
-        return CliInstallState::Stale;
+    #[cfg(windows)]
+    {
+        // Windows installs a `.cmd` shim instead of a symlink; "Managed"
+        // means the shim forwards to the currently bundled CLI binary.
+        if !metadata.file_type().is_file() {
+            return CliInstallState::Stale;
+        }
+        let Some(target) = crate::platform::cli_install::read_shim_target(install_path) else {
+            return CliInstallState::Stale;
+        };
+        match (
+            std::fs::canonicalize(target),
+            std::fs::canonicalize(bundled_cli),
+        ) {
+            (Ok(installed), Ok(expected)) if installed == expected => CliInstallState::Managed,
+            _ => CliInstallState::Stale,
+        }
     }
 
-    let target = match std::fs::read_link(install_path) {
-        Ok(target) => target,
-        Err(_) => return CliInstallState::Stale,
-    };
-    let resolved_target = if target.is_absolute() {
-        target
-    } else {
-        install_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("/"))
-            .join(target)
-    };
+    #[cfg(not(windows))]
+    {
+        if !metadata.file_type().is_symlink() {
+            return CliInstallState::Stale;
+        }
 
-    match (
-        std::fs::canonicalize(resolved_target),
-        std::fs::canonicalize(bundled_cli),
-    ) {
-        (Ok(installed), Ok(expected)) if installed == expected => CliInstallState::Managed,
-        _ => CliInstallState::Stale,
+        let target = match std::fs::read_link(install_path) {
+            Ok(target) => target,
+            Err(_) => return CliInstallState::Stale,
+        };
+        let resolved_target = if target.is_absolute() {
+            target
+        } else {
+            install_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("/"))
+                .join(target)
+        };
+
+        match (
+            std::fs::canonicalize(resolved_target),
+            std::fs::canonicalize(bundled_cli),
+        ) {
+            (Ok(installed), Ok(expected)) if installed == expected => CliInstallState::Managed,
+            _ => CliInstallState::Stale,
+        }
     }
 }
 
@@ -314,10 +334,18 @@ fn try_install_symlink_unprivileged(
         Ok(())
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        // No symlinks without elevation on Windows — install a `.cmd` shim
+        // and register its directory on the user PATH instead.
+        crate::platform::cli_install::write_shim(bundled_cli, install_path)?;
+        Ok(())
+    }
+
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = bundled_cli;
-        anyhow::bail!("CLI installation via symlink is only supported on Unix.")
+        anyhow::bail!("CLI installation is not supported on this platform.")
     }
 }
 
@@ -2055,6 +2083,28 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn classify_cli_install_reports_managed_for_matching_shim() {
+        let tmp = tempdir().unwrap();
+        let bundled_cli = tmp.path().join("Helmor/helmor-cli.exe");
+        let install_path = tmp.path().join("bin/helmor.cmd");
+        fs::create_dir_all(bundled_cli.parent().unwrap()).unwrap();
+        fs::create_dir_all(install_path.parent().unwrap()).unwrap();
+        fs::write(&bundled_cli, "").unwrap();
+        fs::write(
+            &install_path,
+            format!("@echo off\r\n\"{}\" %*\r\n", bundled_cli.display()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            classify_cli_install(&install_path, &bundled_cli),
+            CliInstallState::Managed
+        );
+    }
+
+    #[cfg(unix)]
     #[test]
     fn classify_cli_install_reports_managed_for_matching_symlink() {
         let tmp = tempdir().unwrap();
@@ -2087,6 +2137,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn install_cli_symlink_replaces_stale_copy_with_managed_symlink() {
         let tmp = tempdir().unwrap();
@@ -2105,6 +2156,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn check_and_heal_cli_symlink_repoints_a_stale_link() {
         let tmp = tempdir().unwrap();
@@ -2151,6 +2203,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn applescript_shell_arg_quotes_plain_path() {
         assert_eq!(
@@ -2159,6 +2212,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn applescript_shell_arg_escapes_single_quote_for_shell_then_applescript() {
         // Shell-quote turns `'` into `'\''`; the embedded backslash then needs
@@ -2169,6 +2223,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn applescript_shell_arg_escapes_double_quote_and_backslash() {
         assert_eq!(

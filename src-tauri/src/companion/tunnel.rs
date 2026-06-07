@@ -169,8 +169,9 @@ pub fn sign_in_cloudflare() -> Result<()> {
 /// `~/.cloudflared/<uuid>.json`.
 pub fn create_named_tunnel(name: &str) -> Result<(String, String)> {
     let bin = resolve_cloudflared();
-    let output = Command::new(&bin)
-        .args(["tunnel", "create", name])
+    let mut command = Command::new(&bin);
+    command.args(["tunnel", "create", name]);
+    let output = crate::platform::process::hide_console(&mut command)
         .output()
         .with_context(|| format!("failed to run cloudflared ({})", bin.display()))?;
     let combined = format!(
@@ -194,9 +195,9 @@ pub fn create_named_tunnel(name: &str) -> Result<(String, String)> {
 /// Delete a named tunnel. Best-effort: a missing tunnel is treated as success.
 pub fn delete_named_tunnel(tunnel_uuid: &str) -> Result<()> {
     let bin = resolve_cloudflared();
-    let _ = Command::new(&bin)
-        .args(["tunnel", "delete", tunnel_uuid])
-        .output();
+    let mut command = Command::new(&bin);
+    command.args(["tunnel", "delete", tunnel_uuid]);
+    let _ = crate::platform::process::hide_console(&mut command).output();
     Ok(())
 }
 
@@ -287,11 +288,13 @@ fn spawn_and_await(
 /// exited successfully.
 fn run_oneshot_interactive(args: &[String], timeout: Duration) -> Result<bool> {
     let bin = resolve_cloudflared();
-    let mut child = Command::new(&bin)
+    let mut command = Command::new(&bin);
+    command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    let mut child = crate::platform::process::hide_console(&mut command)
         .spawn()
         .with_context(|| format!("failed to spawn cloudflared ({})", bin.display()))?;
 

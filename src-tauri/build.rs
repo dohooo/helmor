@@ -8,6 +8,7 @@ const UPDATER_PUBKEY_KEY: &str = "HELMOR_UPDATER_PUBKEY";
 
 fn main() {
     ensure_external_bin_placeholders();
+    embed_windows_manifest();
 
     println!("cargo:rerun-if-changed=build.rs");
     for key in [
@@ -30,7 +31,47 @@ fn main() {
         load_env_var(&env_path, UPDATER_PUBKEY_KEY);
     }
 
-    tauri_build::build();
+    if windows_msvc_target() {
+        // The app manifest is embedded by the linker for ALL targets (see
+        // embed_test_manifest_on_windows) — tauri-build must not also embed
+        // one or the duplicate RT_MANIFEST resource fails the link (LNK1123).
+        tauri_build::try_build(
+            tauri_build::Attributes::new()
+                .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest()),
+        )
+        .expect("failed to run tauri-build");
+    } else {
+        tauri_build::build();
+    }
+}
+
+fn windows_msvc_target() -> bool {
+    env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
+}
+
+/// Embed `app.manifest` into every linked target on Windows/MSVC — the app
+/// bins AND the cargo test executables.
+///
+/// tauri-build's default embeds a manifest into the main exe only; test
+/// executables get none. They still import comctl32 v6-only symbols
+/// (`TaskDialogIndirect`, via tao/tauri dialogs), so without a
+/// common-controls-v6 manifest the loader binds comctl32 5.82 and every test
+/// exe aborts at startup with STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139).
+/// `rustc-link-arg-tests` alone doesn't cover the lib unit-test binary
+/// (cargo only applies it to integration-test targets), so the manifest goes
+/// in via the catch-all `rustc-link-arg` — and tauri-build is switched to
+/// `new_without_app_manifest()` so the two embeds don't collide.
+fn embed_windows_manifest() {
+    if !windows_msvc_target() {
+        return;
+    }
+    let manifest =
+        PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR should be set"))
+            .join("app.manifest");
+    println!("cargo:rerun-if-changed={}", manifest.display());
+    println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+    println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
 }
 
 fn ensure_external_bin_placeholders() {

@@ -28,6 +28,7 @@ pub(super) async fn run_in(
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
+    crate::platform::process::hide_console_tokio(&mut cmd);
     let child = cmd
         .spawn()
         .map_err(|e| anyhow!("spawn {BIN} failed: {e}"))?;

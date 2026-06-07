@@ -4,6 +4,7 @@
 //! it so call sites stay platform-agnostic. Submodules are added per phase of
 //! the Windows port (see `docs/superpowers/plans/2026-06-07-windows-port.md`).
 
+pub mod cli_install;
 pub mod fs;
 pub mod ipc;
 pub mod process;

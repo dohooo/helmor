@@ -16,6 +16,36 @@
 
 use std::process::Command;
 
+/// `CREATE_NO_WINDOW`: don't pop a console window for child CLIs.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Suppress the console window for a child CLI on Windows; no-op on Unix.
+///
+/// Unlike [`configure_new_group`] this has no process-group side effects, so
+/// it is the right wrapper for **short-lived, one-shot** commands (`git`,
+/// `gh`, `glab`, system probes, …). Without it every spawn on Windows flashes
+/// a console window — and because the console steals focus from the main
+/// window, focus-driven refetches (`refetchOnWindowFocus: "always"`) re-fire
+/// when it closes, producing a self-sustaining spawn loop.
+pub fn hide_console(cmd: &mut Command) -> &mut Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+/// [`hide_console`] for `tokio::process::Command`.
+pub fn hide_console_tokio(cmd: &mut tokio::process::Command) -> &mut tokio::process::Command {
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 /// Configure `cmd` so the spawned child can later be torn down as a whole tree.
 ///
 /// Call this on the `Command` *before* `spawn()`. On Unix it makes the child a
@@ -31,8 +61,6 @@ pub fn configure_new_group(cmd: &mut Command) -> &mut Command {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        // CREATE_NO_WINDOW (0x08000000): don't pop a console for child CLIs.
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
     cmd
@@ -113,7 +141,6 @@ pub fn pid_alive(pid: u32) -> bool {
 #[cfg(windows)]
 fn taskkill(pid: u32, force: bool) -> std::io::Result<std::process::ExitStatus> {
     use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let pid = pid.to_string();
     let mut cmd = Command::new("taskkill");
     cmd.args(["/PID", pid.as_str(), "/T"]);

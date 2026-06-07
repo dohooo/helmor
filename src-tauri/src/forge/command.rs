@@ -100,6 +100,7 @@ where
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
+    crate::platform::process::hide_console(&mut command);
 
     let child = command.spawn()?;
     let child_pid = child.id();
@@ -148,9 +149,9 @@ fn kill_process(child_pid: u32) {
 #[cfg(not(unix))]
 fn kill_process(child_pid: u32) {
     let pid = child_pid.to_string();
-    let _ = Command::new("taskkill")
-        .args(["/PID", pid.as_str(), "/T", "/F"])
-        .status();
+    let mut cmd = Command::new("taskkill");
+    cmd.args(["/PID", pid.as_str(), "/T", "/F"]);
+    let _ = crate::platform::process::hide_console(&mut cmd).status();
 }
 
 pub(crate) fn command_detail(output: &CommandOutput) -> String {
@@ -169,10 +170,10 @@ pub(crate) fn command_detail(output: &CommandOutput) -> String {
 }
 
 #[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     #[test]
     fn run_command_with_timeout_kills_stalled_command() {
         let started_at = std::time::Instant::now();

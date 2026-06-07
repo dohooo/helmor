@@ -112,6 +112,7 @@ security-framework-sys = "2"
 
 [target.'cfg(windows)'.dependencies]
 uds_windows = "1"
+winreg = "0.52"
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_System_Threading",
@@ -121,6 +122,7 @@ windows = { version = "0.58", features = [
     "Win32_Security",
     "Win32_Security_Cryptography",
     "Win32_System_Memory",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 [[bin]]
