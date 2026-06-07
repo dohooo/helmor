@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.31.0
+
+### Minor Changes
+
+- [#722](https://github.com/dohooo/helmor/pull/722) [`ff4426a`](https://github.com/dohooo/helmor/commit/ff4426aeae12c8ef1227fd99afacc13b9930aa9c) Thanks [@dohooo](https://github.com/dohooo)! - Add a mobile browser companion so you can reach your desktop Helmor from your phone or any browser:
+
+  - Open one stable `remote-*.helmor.ai` URL to drive your home machine's workspaces, sessions, and agents — the same responsive interface, live and in sync with the desktop.
+  - Pair each device once from Settings → Mobile companion; an unpaired browser shows clear pairing instructions instead of a blank or demo screen, and the credentials in your settings are never sent to paired devices.
+
+- [#721](https://github.com/dohooo/helmor/pull/721) [`d17c187`](https://github.com/dohooo/helmor/commit/d17c1879defd5dfe38374f763363db78c4e2d037) Thanks [@dohooo](https://github.com/dohooo)! - Add stacked PR support — work on a chain of small, dependent PRs instead of one big branch:
+  - `/helmor-cli stack` plans a large change as a stack of dependent PRs, and `/helmor-cli break` splits a change you've already written into one. Each layer is its own workspace and PR, and the workspace you start from becomes the stack's base.
+  - `/helmor-cli restack` re-syncs the layers above after a lower one changes or merges.
+  - The sidebar groups a stack's workspaces together, and each layer's header points at the workspace it builds on.
+
+### Patch Changes
+
+- [#723](https://github.com/dohooo/helmor/pull/723) [`05ae092`](https://github.com/dohooo/helmor/commit/05ae0926b4e5c395e44acaef5ac6971d86b27e2e) Thanks [@natllian](https://github.com/natllian)! - Conversations now stream live across paired devices, so a turn you start on the mobile companion (or another desktop window) appears on every open view in real time as the agent responds, instead of only showing up after a reload.
+
+- [#719](https://github.com/dohooo/helmor/pull/719) [`62d76c4`](https://github.com/dohooo/helmor/commit/62d76c4fa53025a49d2c26f8478a5f32d8947bad) Thanks [@natllian](https://github.com/natllian)! - Fix a task started from the start page never actually running — while still showing as working in the sidebar — when you immediately switch to another workspace before it finishes setting up.
+
 ## 0.30.0
 
 ### Minor Changes

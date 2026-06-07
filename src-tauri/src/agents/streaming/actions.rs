@@ -114,6 +114,12 @@ pub(super) enum Action {
 pub(super) struct ApplyContext<'a> {
     pub on_event: &'a Channel<AgentStreamEvent>,
     pub app: &'a AppHandle,
+    /// Per-session fan-out to *watcher* clients (a second desktop window or
+    /// the mobile companion). The hot path is gated on a single atomic load,
+    /// so this costs nothing when nobody is watching.
+    pub hub: &'a super::stream_hub::SessionStreamHub,
+    /// Helmor session id this stream belongs to; `None` ⇒ no fan-out target.
+    pub session_id: Option<&'a str>,
 }
 
 /// Execute a single action against the runtime resources.
@@ -125,6 +131,13 @@ pub(super) struct ApplyContext<'a> {
 pub(super) fn apply_action(action: Action, ctx: &ApplyContext) {
     match action {
         Action::EmitToFrontend(event) => {
+            // Fan out to watcher clients FIRST (borrows `event`), then hand the
+            // owned event to the initiating client's direct channel. The hub
+            // early-outs on a single atomic load when nobody is watching, so
+            // the desktop-only path is unaffected.
+            if let Some(session_id) = ctx.session_id {
+                ctx.hub.publish(session_id, &event);
+            }
             // The legacy event loop also ignores send errors with
             // `let _ = on_event.send(...)`; matching that behavior keeps
             // this iteration a no-op-equivalent migration. The

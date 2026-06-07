@@ -2,6 +2,24 @@
 	"_readme": "AUTO-GENERATED from .announcements during `bun run release:version`. Each item is one released version's in-app announcement. Do not edit released entries by hand.",
 	"items": [
 		{
+			"releaseVersion": "0.31.0",
+			"items": [
+				{
+					"text": "Open Helmor from your phone or any browser — pair a device once, then drive your desktop's workspaces and agents from a stable URL.",
+					"action": {
+						"label": "Open Mobile companion",
+						"value": {
+							"type": "openSettings",
+							"section": "experimental"
+						}
+					}
+				},
+				{
+					"text": "You can now build stacked PRs — a chain of small, dependent PRs. Plan one with /helmor-cli stack, or split a change you've already written with /helmor-cli break; the sidebar groups each stack together."
+				}
+			]
+		},
+		{
 			"releaseVersion": "0.30.0",
 			"items": [
 				{

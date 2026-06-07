@@ -37,6 +37,7 @@ import {
 	type ComposerSubmitPayload,
 	useConversationStreaming,
 } from "./hooks/use-streaming";
+import { useWatchSessionStream } from "./hooks/use-watch-session-stream";
 
 export type { ComposerSubmitPayload } from "./hooks/use-streaming";
 
@@ -293,6 +294,11 @@ export const WorkspaceConversationContainer = memo(
 			onSessionCompleted,
 			onSessionAborted,
 		});
+
+		// Mirror live turns this client didn't start (driven by another window
+		// or the phone via the mobile companion) into the shared thread cache,
+		// so the desktop streams in real time instead of needing a reload.
+		useWatchSessionStream({ sessionId: displayedSessionId, activeStreams });
 
 		const queueItems = useSubmitQueueForSession(displayedSessionId);
 
