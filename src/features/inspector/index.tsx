@@ -154,6 +154,7 @@ export function WorkspaceInspectorSidebar({
 		actionsRef,
 		activeTab,
 		changes,
+		changesLoaded,
 		changesRef,
 		containerRef,
 		flashingPaths,
@@ -536,6 +537,7 @@ export function WorkspaceInspectorSidebar({
 				workspaceRemoteUrl={workspaceRemoteUrl ?? null}
 				workspaceTargetBranch={workspaceTargetBranch ?? null}
 				changes={changes}
+				changesLoaded={changesLoaded}
 				editorMode={editorMode}
 				activeEditor={activeEditor}
 				preferredEditor={preferredEditor}

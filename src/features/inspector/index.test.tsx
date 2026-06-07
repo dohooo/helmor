@@ -731,6 +731,17 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		expect(screen.getByText("1m")).not.toHaveClass("pt-px");
 	});
 
+	it("shows an empty changes state after empty changes have loaded", async () => {
+		renderInspector();
+
+		expect(
+			screen.queryByText("No changes on this branch yet."),
+		).not.toBeInTheDocument();
+		expect(
+			await screen.findByText("No changes on this branch yet."),
+		).toBeInTheDocument();
+	});
+
 	it("renders link buttons only for remote items with urls", async () => {
 		const user = userEvent.setup();
 		apiMocks.loadWorkspaceForgeActionStatus.mockResolvedValue(

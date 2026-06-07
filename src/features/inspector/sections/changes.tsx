@@ -30,13 +30,7 @@ import {
 	ContextMenuSeparator,
 	ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { NumberTicker } from "@/components/ui/number-ticker";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-	Tooltip,
-	TooltipContent,
-	TooltipTrigger,
-} from "@/components/ui/tooltip";
 import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
@@ -75,6 +69,30 @@ const STATUS_COLORS: Record<InspectorFileItem["status"], string> = {
 	D: "text-red-500",
 };
 
+const fileIconCache = new Map<string, string>();
+const folderIconCache = new Map<string, string>();
+const DIFF_ROW_RENDER_STYLE = {
+	contentVisibility: "auto",
+	containIntrinsicSize: "auto 20px",
+} as const;
+
+function getCachedFileIcon(name: string): string {
+	const cached = fileIconCache.get(name);
+	if (cached) return cached;
+	const icon = getMaterialFileIcon(name);
+	fileIconCache.set(name, icon);
+	return icon;
+}
+
+function getCachedFolderIcon(name: string, open: boolean): string {
+	const key = `${name}\0${open ? "1" : "0"}`;
+	const cached = folderIconCache.get(key);
+	if (cached) return cached;
+	const icon = getMaterialFolderIcon(name, open || undefined);
+	folderIconCache.set(key, icon);
+	return icon;
+}
+
 /** A change item already projected into a single area's line counts.
  * `insertions`/`deletions` are derived from the corresponding area
  * (staged / unstaged / committed) — never used elsewhere. */
@@ -90,6 +108,7 @@ type ChangesSectionProps = {
 	workspaceRemoteUrl: string | null;
 	workspaceTargetBranch: string | null;
 	changes: InspectorFileItem[];
+	changesLoaded: boolean;
 	editorMode: boolean;
 	activeEditor?: ActiveEditorTarget | null;
 	preferredEditor?: DetectedEditor | null;
@@ -114,6 +133,7 @@ function ChangesSectionImpl({
 	workspaceRemoteUrl,
 	workspaceTargetBranch,
 	changes,
+	changesLoaded,
 	editorMode,
 	activeEditor,
 	preferredEditor = null,
@@ -382,7 +402,7 @@ function ChangesSectionImpl({
 					/>
 				)}
 
-				{!hasChanges && (
+				{changesLoaded && !hasChanges && !branchSwitching && (
 					<div className="px-3 py-3 text-mini leading-5 text-muted-foreground">
 						No changes on this branch yet.
 					</div>
@@ -691,16 +711,20 @@ function buildTree(changes: ChangeRow[]) {
 	for (const change of changes) {
 		const parts = change.path.split("/");
 		let current = root;
+		let currentPath = "";
 		for (let index = 0; index < parts.length - 1; index += 1) {
 			const part = parts[index];
-			if (!current.children.has(part)) {
-				current.children.set(part, {
+			currentPath = currentPath ? `${currentPath}/${part}` : part;
+			let child = current.children.get(part);
+			if (!child) {
+				child = {
 					name: part,
-					path: parts.slice(0, index + 1).join("/"),
+					path: currentPath,
 					children: new Map(),
-				});
+				};
+				current.children.set(part, child);
 			}
-			current = current.children.get(part)!;
+			current = child;
 		}
 		current.children.set(change.name, {
 			name: change.name,
@@ -738,12 +762,12 @@ function ChangesTreeView({
 	workspaceBranch: string | null;
 	workspaceRemoteUrl: string | null;
 }) {
-	const tree = buildTree(changes);
+	const tree = useMemo(() => buildTree(changes), [changes]);
 	const [expanded, setExpanded] = useState<Set<string>>(
 		() => new Set(collectFolderPaths(tree)),
 	);
 
-	const toggle = (path: string) => {
+	const toggle = useCallback((path: string) => {
 		setExpanded((previous) => {
 			const next = new Set(previous);
 			if (next.has(path)) {
@@ -753,27 +777,33 @@ function ChangesTreeView({
 			}
 			return next;
 		});
-	};
+	}, []);
 
 	return (
-		<div className="py-0.5">
-			<TreeNodeList
-				nodes={tree.children}
-				expanded={expanded}
-				onToggle={toggle}
-				depth={0}
-				editorMode={editorMode}
-				activeEditorPath={activeEditorPath}
-				onOpenEditorFile={onOpenEditorFile}
-				onOpenExternalEditor={onOpenExternalEditor}
-				flashingPaths={flashingPaths}
-				action={action}
-				onStageAction={onStageAction}
-				onDiscard={onDiscard}
-				workspaceBranch={workspaceBranch}
-				workspaceRemoteUrl={workspaceRemoteUrl}
-			/>
-		</div>
+		<ChangesRowsContextMenu
+			changes={changes}
+			workspaceBranch={workspaceBranch}
+			workspaceRemoteUrl={workspaceRemoteUrl}
+		>
+			<div className="py-0.5">
+				<TreeNodeList
+					nodes={tree.children}
+					expanded={expanded}
+					onToggle={toggle}
+					depth={0}
+					editorMode={editorMode}
+					activeEditorPath={activeEditorPath}
+					onOpenEditorFile={onOpenEditorFile}
+					onOpenExternalEditor={onOpenExternalEditor}
+					flashingPaths={flashingPaths}
+					action={action}
+					onStageAction={onStageAction}
+					onDiscard={onDiscard}
+					workspaceBranch={workspaceBranch}
+					workspaceRemoteUrl={workspaceRemoteUrl}
+				/>
+			</div>
+		</ChangesRowsContextMenu>
 	);
 }
 
@@ -819,14 +849,18 @@ function TreeNodeList({
 	workspaceBranch: string | null;
 	workspaceRemoteUrl: string | null;
 }) {
-	const sorted = [...nodes.values()].sort((left, right) => {
-		const leftIsFolder = left.children.size > 0 && !left.file;
-		const rightIsFolder = right.children.size > 0 && !right.file;
-		if (leftIsFolder !== rightIsFolder) {
-			return leftIsFolder ? -1 : 1;
-		}
-		return left.name.localeCompare(right.name);
-	});
+	const sorted = useMemo(
+		() =>
+			[...nodes.values()].sort((left, right) => {
+				const leftIsFolder = left.children.size > 0 && !left.file;
+				const rightIsFolder = right.children.size > 0 && !right.file;
+				if (leftIsFolder !== rightIsFolder) {
+					return leftIsFolder ? -1 : 1;
+				}
+				return left.name.localeCompare(right.name);
+			}),
+		[nodes],
+	);
 
 	return (
 		<>
@@ -840,6 +874,7 @@ function TreeNodeList({
 							<div
 								className="flex cursor-interactive items-center gap-1 py-[1.5px] pr-2 text-muted-foreground transition-colors hover:bg-accent/60"
 								style={{
+									...DIFF_ROW_RENDER_STYLE,
 									paddingLeft: `${depth * 12 + 8}px`,
 								}}
 								onClick={() => onToggle(node.path)}
@@ -860,7 +895,7 @@ function TreeNodeList({
 									strokeWidth={1.8}
 								/>
 								<img
-									src={getMaterialFolderIcon(node.name, isOpen || undefined)}
+									src={getCachedFolderIcon(node.name, isOpen)}
 									alt=""
 									className="size-4 shrink-0"
 								/>
@@ -892,8 +927,9 @@ function TreeNodeList({
 				const selected = file?.absolutePath === activeEditorPath;
 				const isFlashing = !!file && flashingPaths.has(file.path);
 
-				const row = (
+				return (
 					<div
+						key={node.path}
 						className={cn(
 							"group/row flex cursor-interactive items-center gap-1 py-[1.5px] pr-2 text-muted-foreground transition-colors hover:bg-accent/60",
 							selected &&
@@ -902,8 +938,10 @@ function TreeNodeList({
 									: "bg-muted/60 text-foreground"),
 						)}
 						style={{
+							...DIFF_ROW_RENDER_STYLE,
 							paddingLeft: `${depth * 12 + 22}px`,
 						}}
+						data-change-path={file?.path}
 						role="treeitem"
 						tabIndex={0}
 						onClick={() =>
@@ -922,7 +960,7 @@ function TreeNodeList({
 						}}
 					>
 						<img
-							src={getMaterialFileIcon(node.name)}
+							src={getCachedFileIcon(node.name)}
 							alt=""
 							className="size-4 shrink-0"
 						/>
@@ -935,22 +973,6 @@ function TreeNodeList({
 								onStageAction={onStageAction}
 								onDiscard={onDiscard}
 							/>
-						)}
-					</div>
-				);
-
-				return (
-					<div key={node.path}>
-						{file ? (
-							<FileRowContextMenu
-								file={file}
-								workspaceBranch={workspaceBranch}
-								workspaceRemoteUrl={workspaceRemoteUrl}
-							>
-								{row}
-							</FileRowContextMenu>
-						) : (
-							row
 						)}
 					</div>
 				);
@@ -988,19 +1010,20 @@ function ChangesFlatView({
 	const hasDiscard = !!onDiscard;
 
 	return (
-		<div className="py-0.5">
-			{changes.map((change) => {
-				const canOpenExternalEditor = change.status !== "D";
-				const hasHoverAction = canOpenExternalEditor || hasStage || hasDiscard;
+		<ChangesRowsContextMenu
+			changes={changes}
+			workspaceBranch={workspaceBranch}
+			workspaceRemoteUrl={workspaceRemoteUrl}
+		>
+			<div className="py-0.5">
+				{changes.map((change) => {
+					const canOpenExternalEditor = change.status !== "D";
+					const hasHoverAction =
+						canOpenExternalEditor || hasStage || hasDiscard;
 
-				return (
-					<FileRowContextMenu
-						key={change.path}
-						file={change}
-						workspaceBranch={workspaceBranch}
-						workspaceRemoteUrl={workspaceRemoteUrl}
-					>
+					return (
 						<div
+							key={change.path}
 							className={cn(
 								"group/row flex cursor-interactive items-center gap-1.5 py-[1.5px] pl-2 pr-2 text-muted-foreground transition-colors hover:bg-accent/60",
 								change.absolutePath === activeEditorPath &&
@@ -1008,6 +1031,8 @@ function ChangesFlatView({
 										? "bg-accent text-foreground"
 										: "bg-muted/60 text-foreground"),
 							)}
+							style={DIFF_ROW_RENDER_STYLE}
+							data-change-path={change.path}
 							role="button"
 							tabIndex={0}
 							onClick={() =>
@@ -1025,7 +1050,7 @@ function ChangesFlatView({
 							}}
 						>
 							<img
-								src={getMaterialFileIcon(change.name)}
+								src={getCachedFileIcon(change.name)}
 								alt=""
 								className="size-4 shrink-0"
 							/>
@@ -1075,10 +1100,10 @@ function ChangesFlatView({
 								/>
 							)}
 						</div>
-					</FileRowContextMenu>
-				);
-			})}
-		</div>
+					);
+				})}
+			</div>
+		</ChangesRowsContextMenu>
 	);
 }
 
@@ -1153,22 +1178,19 @@ function RowHoverActions({
 	return (
 		<span className="ml-auto hidden items-center gap-0.5 group-hover/row:inline-flex">
 			{canOpenExternalEditor && (
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<RowIconButton
-							aria-label="Open in editor"
-							onClick={() => onOpenExternalEditor(absolutePath)}
-							className="text-muted-foreground hover:bg-accent/60 hover:text-foreground"
-						>
-							<ExternalLinkIcon className="size-3.5" strokeWidth={2} />
-						</RowIconButton>
-					</TooltipTrigger>
-					<TooltipContent side="top">Open in editor</TooltipContent>
-				</Tooltip>
+				<RowIconButton
+					aria-label="Open in editor"
+					title="Open in editor"
+					onClick={() => onOpenExternalEditor(absolutePath)}
+					className="text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+				>
+					<ExternalLinkIcon className="size-3.5" strokeWidth={2} />
+				</RowIconButton>
 			)}
 			{onDiscard && (
 				<RowIconButton
 					aria-label="Discard file changes"
+					title="Discard file changes"
 					onClick={() => onDiscard(path)}
 					className="text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 				>
@@ -1178,6 +1200,7 @@ function RowHoverActions({
 			{action && onStageAction && (
 				<RowIconButton
 					aria-label={action === "stage" ? "Stage file" : "Unstage file"}
+					title={action === "stage" ? "Stage file" : "Unstage file"}
 					onClick={() => onStageAction(path)}
 					className="text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 				>
@@ -1198,12 +1221,14 @@ function RowIconButton({
 	children,
 	className,
 	"aria-label": ariaLabel,
+	title,
 }: {
 	onClick: () => void;
 	disabled?: boolean;
 	children: React.ReactNode;
 	className?: string;
 	"aria-label": string;
+	title?: string;
 }) {
 	return (
 		<Button
@@ -1211,6 +1236,7 @@ function RowIconButton({
 			variant="ghost"
 			size="icon-xs"
 			aria-label={ariaLabel}
+			title={title}
 			disabled={disabled}
 			onClick={(event) => {
 				event.stopPropagation();
@@ -1258,16 +1284,63 @@ async function copyToClipboard(value: string, label: string) {
 	}
 }
 
-function FileRowContextMenu({
-	file,
+function ChangesRowsContextMenu({
+	changes,
 	workspaceBranch,
 	workspaceRemoteUrl,
 	children,
 }: {
-	file: ChangeRow;
+	changes: ChangeRow[];
 	workspaceBranch: string | null;
 	workspaceRemoteUrl: string | null;
 	children: React.ReactNode;
+}) {
+	const [activeFile, setActiveFile] = useState<ChangeRow | null>(null);
+	const filesByPath = useMemo(
+		() => new Map(changes.map((change) => [change.path, change])),
+		[changes],
+	);
+	const handleContextMenu = useCallback(
+		(event: React.MouseEvent<HTMLElement>) => {
+			const target = event.target;
+			const row =
+				target instanceof Element
+					? target.closest<HTMLElement>("[data-change-path]")
+					: null;
+			const path = row?.dataset.changePath;
+			const file = path ? (filesByPath.get(path) ?? null) : null;
+			setActiveFile(file);
+			if (!file) {
+				event.preventDefault();
+			}
+		},
+		[filesByPath],
+	);
+
+	return (
+		<ContextMenu onOpenChange={(open) => !open && setActiveFile(null)}>
+			<ContextMenuTrigger asChild>
+				<div onContextMenu={handleContextMenu}>{children}</div>
+			</ContextMenuTrigger>
+			{activeFile && (
+				<FileRowContextMenuContent
+					file={activeFile}
+					workspaceBranch={workspaceBranch}
+					workspaceRemoteUrl={workspaceRemoteUrl}
+				/>
+			)}
+		</ContextMenu>
+	);
+}
+
+function FileRowContextMenuContent({
+	file,
+	workspaceBranch,
+	workspaceRemoteUrl,
+}: {
+	file: ChangeRow;
+	workspaceBranch: string | null;
+	workspaceRemoteUrl: string | null;
 }) {
 	const remoteFileUrl = useMemo(
 		() => buildRemoteFileUrl(workspaceRemoteUrl, workspaceBranch, file.path),
@@ -1298,31 +1371,25 @@ function FileRowContextMenu({
 	}, [remoteFileUrl]);
 
 	return (
-		<ContextMenu>
-			<ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-			<ContextMenuContent className="min-w-52">
-				<ContextMenuItem onClick={() => void handleReveal()}>
-					<FolderOpenIcon />
-					<span>Reveal in Finder</span>
-				</ContextMenuItem>
-				<ContextMenuSeparator />
-				<ContextMenuItem onClick={handleCopyAbsolute}>
-					<CopyIcon />
-					<span>Copy Path</span>
-				</ContextMenuItem>
-				<ContextMenuItem onClick={handleCopyRelative}>
-					<CopyIcon />
-					<span>Copy Relative Path</span>
-				</ContextMenuItem>
-				<ContextMenuItem
-					onClick={handleCopyRemoteUrl}
-					disabled={!remoteFileUrl}
-				>
-					<LinkIcon />
-					<span>Copy Remote File URL</span>
-				</ContextMenuItem>
-			</ContextMenuContent>
-		</ContextMenu>
+		<ContextMenuContent className="min-w-52">
+			<ContextMenuItem onClick={() => void handleReveal()}>
+				<FolderOpenIcon />
+				<span>Reveal in Finder</span>
+			</ContextMenuItem>
+			<ContextMenuSeparator />
+			<ContextMenuItem onClick={handleCopyAbsolute}>
+				<CopyIcon />
+				<span>Copy Path</span>
+			</ContextMenuItem>
+			<ContextMenuItem onClick={handleCopyRelative}>
+				<CopyIcon />
+				<span>Copy Relative Path</span>
+			</ContextMenuItem>
+			<ContextMenuItem onClick={handleCopyRemoteUrl} disabled={!remoteFileUrl}>
+				<LinkIcon />
+				<span>Copy Remote File URL</span>
+			</ContextMenuItem>
+		</ContextMenuContent>
 	);
 }
 
@@ -1339,26 +1406,8 @@ function LineStats({
 
 	return (
 		<span className="flex shrink-0 items-center gap-1 text-micro tabular-nums">
-			{insertions > 0 && (
-				<span className="text-chart-2">
-					+
-					<NumberTicker
-						value={insertions}
-						animateOnMount={false}
-						className="text-chart-2"
-					/>
-				</span>
-			)}
-			{deletions > 0 && (
-				<span className="text-destructive">
-					−
-					<NumberTicker
-						value={deletions}
-						animateOnMount={false}
-						className="text-destructive"
-					/>
-				</span>
-			)}
+			{insertions > 0 && <span className="text-chart-2">+{insertions}</span>}
+			{deletions > 0 && <span className="text-destructive">−{deletions}</span>}
 		</span>
 	);
 }
