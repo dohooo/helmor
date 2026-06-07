@@ -18,40 +18,34 @@ import { execFileSync, execSync } from "node:child_process";
 import { copyFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+	resolveBundleArtifacts,
+	resolveTargetTriple,
+} from "./build-platform.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const srcTauriDir = resolve(repoRoot, "src-tauri");
-const bundledBinDir = resolve(srcTauriDir, "target", "bundled");
-const cliName = process.platform === "win32" ? "helmor-cli.exe" : "helmor-cli";
 
 function detectTargetTriple() {
-	for (const key of [
-		"TAURI_TARGET_TRIPLE",
-		"TAURI_ENV_TARGET_TRIPLE",
-		"CARGO_BUILD_TARGET",
-	]) {
-		const override = process.env[key]?.trim();
-		if (override) {
-			return override;
-		}
-	}
-	const triple = execSync("rustc --print host-tuple", {
-		encoding: "utf8",
-	}).trim();
-	if (!triple) {
-		throw new Error("`rustc --print host-tuple` returned empty output");
-	}
-	return triple;
+	return resolveTargetTriple({
+		env: process.env,
+		readHostTriple: () =>
+			execSync("rustc --print host-tuple", { encoding: "utf8" }),
+	});
 }
 
 const triple = detectTargetTriple();
-const builtCli = resolve(srcTauriDir, "target", "debug", cliName);
-const stagedCli = resolve(bundledBinDir, `helmor-cli-${triple}`);
+const artifacts = resolveBundleArtifacts({
+	repoRoot,
+	targetTriple: triple,
+	profile: "debug",
+	platform: process.platform,
+});
 
 // Force cargo to re-link the top-level binary even when the compile is cached:
 // the stale artifact sitting here is `build.rs`'s no-op shell placeholder, and
 // it must not survive as the "built" CLI.
-rmSync(builtCli, { force: true });
+rmSync(artifacts.cliSource, { force: true });
 
 console.log("[stage-dev-cli] building debug helmor-cli…");
 execFileSync(
@@ -68,13 +62,17 @@ execFileSync(
 
 // Guard: if the placeholder somehow survived the build, fail loudly rather than
 // stage a silent no-op CLI.
-const head = readFileSync(builtCli).subarray(0, 16).toString("latin1");
+const head = readFileSync(artifacts.cliSource)
+	.subarray(0, 16)
+	.toString("latin1");
 if (head.startsWith("#!/bin/sh")) {
 	throw new Error(
-		`[stage-dev-cli] ${builtCli} is still the build.rs placeholder after build`,
+		`[stage-dev-cli] ${artifacts.cliSource} is still the build.rs placeholder after build`,
 	);
 }
 
-mkdirSync(bundledBinDir, { recursive: true });
-copyFileSync(builtCli, stagedCli);
-console.log(`[stage-dev-cli] staged ${builtCli} → ${stagedCli}`);
+mkdirSync(dirname(artifacts.cliExternalBin), { recursive: true });
+copyFileSync(artifacts.cliSource, artifacts.cliExternalBin);
+console.log(
+	`[stage-dev-cli] staged ${artifacts.cliSource} → ${artifacts.cliExternalBin}`,
+);

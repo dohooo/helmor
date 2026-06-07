@@ -19,11 +19,14 @@ import { execFileSync, execSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+	resolveBundleArtifacts,
+	resolveTargetTriple,
+} from "./build-platform.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sidecarDir = resolve(repoRoot, "sidecar");
 const srcTauriDir = resolve(repoRoot, "src-tauri");
-const bundledBinDir = resolve(srcTauriDir, "target", "bundled");
 const entitlementsPlist = resolve(repoRoot, "src-tauri", "Entitlements.plist");
 
 function run(cmd, cwd) {
@@ -67,23 +70,11 @@ function signSidecarWithEntitlements(path) {
 }
 
 function detectTargetTriple() {
-	for (const key of [
-		"TAURI_TARGET_TRIPLE",
-		"TAURI_ENV_TARGET_TRIPLE",
-		"CARGO_BUILD_TARGET",
-	]) {
-		const override = process.env[key]?.trim();
-		if (override) {
-			return override;
-		}
-	}
-	const output = execSync("rustc --print host-tuple", {
-		encoding: "utf8",
-	}).trim();
-	if (!output) {
-		throw new Error("`rustc --print host-tuple` returned empty output");
-	}
-	return output;
+	return resolveTargetTriple({
+		env: process.env,
+		readHostTriple: () =>
+			execSync("rustc --print host-tuple", { encoding: "utf8" }),
+	});
 }
 
 function main() {
@@ -94,55 +85,47 @@ function main() {
 	run("bun run build", sidecarDir);
 
 	const triple = detectTargetTriple();
-	const sidecarSource = resolve(sidecarDir, "dist", "helmor-sidecar");
-	const sidecarDestination = resolve(
-		sidecarDir,
-		"dist",
-		`helmor-sidecar-${triple}`,
-	);
-	const cliBinaryName =
-		process.platform === "win32" ? "helmor-cli.exe" : "helmor-cli";
-	const cliSource = resolve(
-		srcTauriDir,
-		"target",
-		triple,
-		"release",
-		cliBinaryName,
-	);
-	const cliDestination = resolve(bundledBinDir, `helmor-cli-${triple}`);
+	const artifacts = resolveBundleArtifacts({
+		repoRoot,
+		targetTriple: triple,
+		profile: "release",
+		platform: process.platform,
+	});
 
-	if (!existsSync(sidecarSource)) {
+	if (!existsSync(artifacts.sidecarSource)) {
 		throw new Error(
-			`[prepare-sidecar] expected compiled sidecar at ${sidecarSource} but it does not exist`,
+			`[prepare-sidecar] expected compiled sidecar at ${artifacts.sidecarSource} but it does not exist`,
 		);
 	}
 
 	// Tauri validates every `externalBin` during `cargo build`, including the
 	// sidecar companion. Stage the target-suffixed sidecar first so a clean CI
 	// checkout can compile `helmor-cli` without depending on stale artifacts.
-	copyFileSync(sidecarSource, sidecarDestination);
+	copyFileSync(artifacts.sidecarSource, artifacts.sidecarExternalBin);
 
 	run(
 		`cargo build --manifest-path ${resolve(srcTauriDir, "Cargo.toml")} --bin helmor-cli --release --target ${triple}`,
 		repoRoot,
 	);
 
-	mkdirSync(bundledBinDir, { recursive: true });
+	mkdirSync(dirname(artifacts.cliExternalBin), { recursive: true });
 
-	if (!existsSync(cliSource)) {
+	if (!existsSync(artifacts.cliSource)) {
 		throw new Error(
-			`[prepare-sidecar] expected compiled CLI at ${cliSource} but it does not exist`,
+			`[prepare-sidecar] expected compiled CLI at ${artifacts.cliSource} but it does not exist`,
 		);
 	}
 
-	copyFileSync(cliSource, cliDestination);
+	copyFileSync(artifacts.cliSource, artifacts.cliExternalBin);
 
 	// Sign the target-suffixed copy (the one Tauri ingests as externalBin).
 	// No-op when APPLE_SIGNING_IDENTITY is unset.
-	signSidecarWithEntitlements(sidecarDestination);
+	signSidecarWithEntitlements(artifacts.sidecarExternalBin);
 
-	console.log(`[prepare-sidecar] staged sidecar → ${sidecarDestination}`);
-	console.log(`[prepare-sidecar] staged CLI → ${cliDestination}`);
+	console.log(
+		`[prepare-sidecar] staged sidecar → ${artifacts.sidecarExternalBin}`,
+	);
+	console.log(`[prepare-sidecar] staged CLI → ${artifacts.cliExternalBin}`);
 }
 
 main();

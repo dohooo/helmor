@@ -1,0 +1,255 @@
+import { targetTripleFromEnv } from "../../scripts/build-platform.js";
+
+export type DarwinArch = "arm64" | "x64";
+export type ReleaseArch = "arm64" | "amd64";
+
+export interface TargetInfo {
+	arch: DarwinArch;
+	/** `@anthropic-ai/claude-code-darwin-<arch>` is the platform sub-package. */
+	claudeCodePkg: string;
+	/** claude-code npm tarball suffix: `darwin-arm64` / `darwin-x64`. */
+	claudeCodeNpmSuffix: string;
+	/** `@openai/codex-darwin-<arch>` is the npm optional-dep package. */
+	codexPkg: string;
+	/** Target triple inside the codex platform package. */
+	codexTriple: string;
+	/** Codex npm tarball suffix: `darwin-arm64` / `darwin-x64`. */
+	codexNpmSuffix: string;
+	/** `opencode-darwin-<arch>` is the npm optional-dep package. */
+	opencodePkg: string;
+	/** opencode npm tarball suffix: `darwin-arm64` / `darwin-x64`. */
+	opencodeNpmSuffix: string;
+	/** `gh` release naming: `arm64` / `amd64`. */
+	ghArch: ReleaseArch;
+	/** `glab` release naming: `arm64` / `amd64`. */
+	glabArch: ReleaseArch;
+	/** `cloudflared` release naming: `arm64` / `amd64`. */
+	cloudflaredArch: ReleaseArch;
+}
+
+export interface ArchivePlan {
+	slug: string;
+	archiveName: string;
+	url: string;
+	sha256: string;
+}
+
+export const GH_VERSION = "2.91.0";
+export const GH_SHA256 = {
+	arm64: "20446cd714d9fa1b69fbd410deade3731f38fe09a2b980c8488aa388dd320ada",
+	amd64: "8806784f93603fe6d3f95c3583a08df38f175df9ebc123dc8b15f919329980e2",
+} as const;
+
+export const GLAB_VERSION = "1.93.0";
+export const GLAB_SHA256 = {
+	arm64: "6d6ffa97d430b5e7ff912e64dbac14703acc57967df654be1950ae71858d5b6f",
+	amd64: "79d1a4f933919689c5fb7774feb1dd08f30b9c896dff4283b4a7387689ee0531",
+} as const;
+
+export const CLOUDFLARED_VERSION = "2026.5.2";
+export const CLOUDFLARED_SHA256 = {
+	arm64: "ba94054c9fd4297645093d59d51442e5e546d07bb0516120e694a13d5b216d38",
+	amd64: "7240f709506bc2c1eb9da4d89cf2555499c60280ecb854b7d80e8f17d4b7903d",
+} as const;
+
+export const CODEX_SHA256: Readonly<
+	Record<string, { arm64: string; x64: string }>
+> = {
+	"0.130.0": {
+		arm64: "f6fef2ceee8977079ad3b3296b4c14c2707934e6b4ec1aa1a32d6e512196b12d",
+		x64: "21f161ffd79fab88c5bd91e40d14c894fe6d4ad61ea4ebc80d4fcf20130960c2",
+	},
+	"0.134.0": {
+		arm64: "82c8bd152cdfb8175fd03d1d18ac0f8cddce22a7e68164572c107f628b0d8b7c",
+		x64: "fd518e72bb6f77d2183799b0be00e77d8cc1b465c06e7e129f69028218259a64",
+	},
+};
+
+export const CLAUDE_CODE_SHA256: Readonly<
+	Record<string, { arm64: string; x64: string }>
+> = {
+	"2.1.139": {
+		arm64: "ed9a4c64c8b5374da8389ff6aa4b58fce7a792f90ef2261a14445d9082a80799",
+		x64: "71d18ce1d457f37b427bdcb5933424c83bf22b39b2b7628415028585b832fe6c",
+	},
+	"2.1.154": {
+		arm64: "2394afa765253caaac8cb030c7954650c4052b537aacc664c634d6397bed064a",
+		x64: "95643be424f07808e7b67195695191b05d0edc6ad7c3c274424dfb062c875fb5",
+	},
+};
+
+export const OPENCODE_SHA256: Readonly<
+	Record<string, { arm64: string; x64: string }>
+> = {
+	"1.16.2": {
+		arm64: "2103383d7562c1783cb66d63d31630ff90448d1ade90f8a187778d18c4b9ee5f",
+		x64: "1be1b4ff8874f0f0848e88bf4de3943a4fff3a51c8b2a75c910fb7f710e7cd03",
+	},
+};
+
+export const LLAMA_VERSION = "b9496";
+export const LLAMA_SHA256: Readonly<{ arm64: string; x64: string }> = {
+	arm64: "f1eff7bb49590d80706b84e82e973a21f0bedb49560fbabfea2654756aa59dca",
+	x64: "0b415c8d366eabe9ab69fe7d8e79f29b63cc1baa33714967ca8a0c123ae75797",
+};
+
+const TARGETS: Readonly<Record<DarwinArch, TargetInfo>> = {
+	arm64: {
+		arch: "arm64",
+		claudeCodePkg: "@anthropic-ai/claude-code-darwin-arm64",
+		claudeCodeNpmSuffix: "darwin-arm64",
+		codexPkg: "@openai/codex-darwin-arm64",
+		codexTriple: "aarch64-apple-darwin",
+		codexNpmSuffix: "darwin-arm64",
+		opencodePkg: "opencode-darwin-arm64",
+		opencodeNpmSuffix: "darwin-arm64",
+		ghArch: "arm64",
+		glabArch: "arm64",
+		cloudflaredArch: "arm64",
+	},
+	x64: {
+		arch: "x64",
+		claudeCodePkg: "@anthropic-ai/claude-code-darwin-x64",
+		claudeCodeNpmSuffix: "darwin-x64",
+		codexPkg: "@openai/codex-darwin-x64",
+		codexTriple: "x86_64-apple-darwin",
+		codexNpmSuffix: "darwin-x64",
+		opencodePkg: "opencode-darwin-x64",
+		opencodeNpmSuffix: "darwin-x64",
+		ghArch: "amd64",
+		glabArch: "amd64",
+		cloudflaredArch: "amd64",
+	},
+};
+
+export function targetInfoForArch(arch: DarwinArch): TargetInfo {
+	return TARGETS[arch];
+}
+
+export function resolveVendorTarget(options?: {
+	hostPlatform?: NodeJS.Platform;
+	hostArch?: string;
+	env?: Record<string, string | undefined>;
+}): TargetInfo {
+	const hostPlatform = options?.hostPlatform ?? process.platform;
+	if (hostPlatform !== "darwin") {
+		throw new Error(
+			`[stage-vendor] Helmor only builds on macOS; host platform is ${hostPlatform}`,
+		);
+	}
+
+	const triple = targetTripleFromEnv(options?.env ?? process.env);
+	if (triple) {
+		if (triple === "aarch64-apple-darwin") return targetInfoForArch("arm64");
+		if (triple === "x86_64-apple-darwin") return targetInfoForArch("x64");
+		throw new Error(
+			`[stage-vendor] unsupported TAURI_TARGET_TRIPLE for macOS: ${triple}`,
+		);
+	}
+
+	const hostArch = options?.hostArch ?? process.arch;
+	if (hostArch === "arm64") return targetInfoForArch("arm64");
+	if (hostArch === "x64") return targetInfoForArch("x64");
+	throw new Error(`[stage-vendor] unsupported macOS host arch: ${hostArch}`);
+}
+
+export function ghArchivePlan(target: TargetInfo): ArchivePlan {
+	const arch = target.ghArch;
+	const slug = `gh_${GH_VERSION}_macOS_${arch}`;
+	return {
+		slug,
+		archiveName: `${slug}.zip`,
+		url: `https://github.com/cli/cli/releases/download/v${GH_VERSION}/${slug}.zip`,
+		sha256: GH_SHA256[arch],
+	};
+}
+
+export function glabArchivePlan(target: TargetInfo): ArchivePlan {
+	const arch = target.glabArch;
+	const slug = `glab_${GLAB_VERSION}_darwin_${arch}`;
+	return {
+		slug,
+		archiveName: `${slug}.tar.gz`,
+		url: `https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/${slug}.tar.gz`,
+		sha256: GLAB_SHA256[arch],
+	};
+}
+
+export function cloudflaredArchivePlan(target: TargetInfo): ArchivePlan {
+	const arch = target.cloudflaredArch;
+	const slug = `cloudflared-darwin-${arch}`;
+	return {
+		slug,
+		archiveName: `cloudflared-${CLOUDFLARED_VERSION}-darwin-${arch}.tgz`,
+		url: `https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/${slug}.tgz`,
+		sha256: CLOUDFLARED_SHA256[arch],
+	};
+}
+
+export function claudeCodeArchivePlan(
+	target: TargetInfo,
+	version: string,
+): ArchivePlan {
+	const shaTable = CLAUDE_CODE_SHA256[version];
+	if (!shaTable) {
+		throw new Error(
+			`[stage-vendor] no pinned SHA256 for claude-code ${version} — add it to CLAUDE_CODE_SHA256 in vendor-platform.ts`,
+		);
+	}
+	const slug = `claude-code-${target.claudeCodeNpmSuffix}-${version}`;
+	return {
+		slug,
+		archiveName: `${slug}.tgz`,
+		url: `https://registry.npmjs.org/${target.claudeCodePkg}/-/claude-code-${target.claudeCodeNpmSuffix}-${version}.tgz`,
+		sha256: shaTable[target.arch],
+	};
+}
+
+export function codexArchivePlan(
+	target: TargetInfo,
+	version: string,
+): ArchivePlan {
+	const shaTable = CODEX_SHA256[version];
+	if (!shaTable) {
+		throw new Error(
+			`[stage-vendor] no pinned SHA256 for codex ${version} — add it to CODEX_SHA256 in vendor-platform.ts`,
+		);
+	}
+	const slug = `codex-${version}-${target.codexNpmSuffix}`;
+	return {
+		slug,
+		archiveName: `${slug}.tgz`,
+		url: `https://registry.npmjs.org/@openai/codex/-/${slug}.tgz`,
+		sha256: shaTable[target.arch],
+	};
+}
+
+export function opencodeArchivePlan(
+	target: TargetInfo,
+	version: string,
+): ArchivePlan {
+	const shaTable = OPENCODE_SHA256[version];
+	if (!shaTable) {
+		throw new Error(
+			`[stage-vendor] no pinned SHA256 for opencode ${version} — add it to OPENCODE_SHA256 in vendor-platform.ts`,
+		);
+	}
+	const slug = `${target.opencodePkg}-${version}`;
+	return {
+		slug,
+		archiveName: `${slug}.tgz`,
+		url: `https://registry.npmjs.org/${target.opencodePkg}/-/opencode-${target.opencodeNpmSuffix}-${version}.tgz`,
+		sha256: shaTable[target.arch],
+	};
+}
+
+export function llamaArchivePlan(target: TargetInfo): ArchivePlan {
+	const archSlug = target.arch === "arm64" ? "macos-arm64" : "macos-x64";
+	const slug = `llama-${LLAMA_VERSION}-bin-${archSlug}`;
+	return {
+		slug,
+		archiveName: `${slug}.tar.gz`,
+		url: `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_VERSION}/${slug}.tar.gz`,
+		sha256: LLAMA_SHA256[target.arch],
+	};
+}
