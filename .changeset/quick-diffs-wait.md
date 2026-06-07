@@ -2,4 +2,6 @@
 "helmor": patch
 ---
 
-Defer large workspace diff rendering after workspace switches, trim diff-row render overhead, and preserve the empty state after changes load.
+Improve workspace switching responsiveness in large workspaces:
+- Highlight the selected workspace in the sidebar before the workspace pane finishes loading.
+- Reduce Git diff panel rendering overhead and keep its empty state visible after changes load.

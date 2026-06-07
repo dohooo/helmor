@@ -117,6 +117,10 @@ function getGroupGapSize(previousHasRows: boolean, nextHasRows: boolean) {
 	return previousHasRows && nextHasRows ? GROUP_GAP : EMPTY_GROUP_GAP;
 }
 
+function escapeAttributeSelectorValue(value: string) {
+	return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -219,6 +223,12 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	const [isAddRepositoryMenuOpen, setIsAddRepositoryMenuOpen] = useState(false);
 	const [isSidebarViewPopoverOpen, setIsSidebarViewPopoverOpen] =
 		useState(false);
+	const [visualSelectedWorkspaceId, setVisualSelectedWorkspaceId] = useState(
+		selectedWorkspaceId ?? null,
+	);
+	const previewResetTimeoutRef = useRef<number | null>(null);
+	const selectedWorkspaceIdRef = useRef(selectedWorkspaceId ?? null);
+	selectedWorkspaceIdRef.current = selectedWorkspaceId ?? null;
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
 	const dndPolicy = useMemo<WorkspaceDndPolicy>(
 		() =>
@@ -724,6 +734,61 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	const createBusy = Boolean(creatingWorkspaceRepoId);
 	const addRepositoryBusy = Boolean(addingRepository);
 
+	const cancelPreviewReset = useCallback(() => {
+		if (previewResetTimeoutRef.current !== null) {
+			window.clearTimeout(previewResetTimeoutRef.current);
+			previewResetTimeoutRef.current = null;
+		}
+	}, []);
+	const applyImmediateSelectionClass = useCallback(
+		(workspaceId: string | null) => {
+			const root = scrollContainerRef.current;
+			if (!root) return;
+			for (const element of root.querySelectorAll(
+				"[data-workspace-row-body].workspace-row-selected",
+			)) {
+				element.classList.remove("workspace-row-selected");
+			}
+			if (!workspaceId) return;
+			const target = root.querySelector(
+				`[data-workspace-row-body][data-workspace-row-id="${escapeAttributeSelectorValue(workspaceId)}"]`,
+			);
+			target?.classList.add("workspace-row-selected");
+		},
+		[],
+	);
+	const showVisualSelection = useCallback(
+		(workspaceId: string | null) => {
+			applyImmediateSelectionClass(workspaceId);
+			setVisualSelectedWorkspaceId(workspaceId);
+		},
+		[applyImmediateSelectionClass],
+	);
+	useEffect(() => {
+		cancelPreviewReset();
+		setVisualSelectedWorkspaceId(selectedWorkspaceId ?? null);
+	}, [cancelPreviewReset, selectedWorkspaceId]);
+	useEffect(() => cancelPreviewReset, [cancelPreviewReset]);
+	const handlePreviewSelectWorkspace = useCallback(
+		(workspaceId: string) => {
+			cancelPreviewReset();
+			showVisualSelection(workspaceId);
+			previewResetTimeoutRef.current = window.setTimeout(() => {
+				previewResetTimeoutRef.current = null;
+				showVisualSelection(selectedWorkspaceIdRef.current);
+			}, 1200);
+		},
+		[cancelPreviewReset, showVisualSelection],
+	);
+	const handleSelectWorkspace = useCallback(
+		(workspaceId: string) => {
+			cancelPreviewReset();
+			showVisualSelection(workspaceId);
+			onSelectWorkspace?.(workspaceId);
+		},
+		[cancelPreviewReset, onSelectWorkspace, showVisualSelection],
+	);
+
 	useEffect(() => {
 		const handleOpenNewWorkspace = () => {
 			if (addRepositoryBusy || createBusy || workspaceActionsBusy) return;
@@ -1000,7 +1065,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					) : null}
 					<WorkspaceRowItem
 						row={item.row}
-						selected={selectedWorkspaceId === item.row.id}
+						selected={visualSelectedWorkspaceId === item.row.id}
 						isSending={busyWorkspaceIds?.has(item.row.id)}
 						isInteractionRequired={interactionRequiredWorkspaceIds?.has(
 							item.row.id,
@@ -1008,7 +1073,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						// Hide per-row avatar inside a real repo bucket — header
 						// already shows it. Pinned/backlog/archived keep theirs.
 						hideRepoAvatar={repoIdFromGroupId(item.groupId) !== null}
-						onSelect={onSelectWorkspace}
+						onSelect={handleSelectWorkspace}
+						onPreviewSelect={handlePreviewSelectWorkspace}
 						onPrefetch={onPrefetchWorkspace}
 						onArchiveWorkspace={onArchiveWorkspace}
 						onMoveLocalToWorktree={onMoveLocalToWorktree}
@@ -1048,11 +1114,12 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			sectionOpenState,
 			sidebarGrouping,
 			toggleSection,
-			selectedWorkspaceId,
+			visualSelectedWorkspaceId,
 			busyWorkspaceIds,
 			interactionRequiredWorkspaceIds,
 			onCreateWorkspaceForRepo,
-			onSelectWorkspace,
+			handleSelectWorkspace,
+			handlePreviewSelectWorkspace,
 			onPrefetchWorkspace,
 			onArchiveWorkspace,
 			onMoveLocalToWorktree,
@@ -1277,7 +1344,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					dragState={dragState}
 					row={activeDragRow}
 					stackRows={activeDragStackRows}
-					selected={selectedWorkspaceId === activeDragRow.id}
+					selected={visualSelectedWorkspaceId === activeDragRow.id}
 					isSending={busyWorkspaceIds?.has(activeDragRow.id)}
 					isInteractionRequired={interactionRequiredWorkspaceIds?.has(
 						activeDragRow.id,
@@ -1296,7 +1363,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					}
 					repoIconSrc={repoDragGroup.rows[0]?.repoIconSrc ?? null}
 					repoInitials={repoDragGroup.rows[0]?.repoInitials ?? null}
-					selectedWorkspaceId={selectedWorkspaceId}
+					selectedWorkspaceId={visualSelectedWorkspaceId}
 					busyWorkspaceIds={busyWorkspaceIds}
 					interactionRequiredWorkspaceIds={interactionRequiredWorkspaceIds}
 				/>

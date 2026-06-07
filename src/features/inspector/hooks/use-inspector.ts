@@ -59,7 +59,6 @@ const MIN_ACTIONS_BODY = 160;
 const MIN_TABS_BODY = 160;
 const DEFAULT_CHANGES_BODY = 240;
 const DEFAULT_TABS_BODY = 160;
-const CHANGES_QUERY_DEFER_FRAMES = 2;
 
 type ResizeState = {
 	pointerY: number;
@@ -392,43 +391,12 @@ export function useWorkspaceInspectorSidebar({
 		!!workspaceRootPath &&
 		workspaceState !== "initializing" &&
 		workspaceState !== "archived";
-	const changesQueryIdentity = `${workspaceRootPath ?? ""}\0${workspaceId ?? ""}\0${workspaceState ?? ""}`;
-	const [changesQueryReadyKey, setChangesQueryReadyKey] = useState<
-		string | null
-	>(null);
-	const changesQueryReady =
-		changesQueryEnabled && changesQueryReadyKey === changesQueryIdentity;
-	useEffect(() => {
-		setChangesQueryReadyKey(null);
-		if (!changesQueryEnabled) return;
-
-		const frameIds: number[] = [];
-		const schedule = (remainingFrames: number) => {
-			const frameId = window.requestAnimationFrame(() => {
-				if (remainingFrames <= 1) {
-					setChangesQueryReadyKey(changesQueryIdentity);
-					return;
-				}
-				schedule(remainingFrames - 1);
-			});
-			frameIds.push(frameId);
-		};
-
-		schedule(CHANGES_QUERY_DEFER_FRAMES);
-		return () => {
-			for (const frameId of frameIds) {
-				window.cancelAnimationFrame(frameId);
-			}
-		};
-	}, [changesQueryEnabled, changesQueryIdentity]);
 	const changesQuery = useQuery({
 		...workspaceChangesQueryOptions(workspaceRootPath ?? "", workspaceId),
-		enabled: changesQueryEnabled && changesQueryReady,
+		enabled: changesQueryEnabled,
 	});
-	const changes: InspectorFileItem[] = changesQueryReady
-		? (changesQuery.data ?? EMPTY_CHANGES)
-		: EMPTY_CHANGES;
-	const changesLoaded = changesQueryReady && changesQuery.data !== undefined;
+	const changes: InspectorFileItem[] = changesQuery.data ?? EMPTY_CHANGES;
+	const changesLoaded = changesQueryEnabled && changesQuery.data !== undefined;
 
 	const prevChangesRef = useRef<Map<string, string> | null>(null);
 	const prevRootPathRef = useRef(workspaceRootPath);

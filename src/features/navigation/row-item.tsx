@@ -88,6 +88,7 @@ export type WorkspaceRowItemProps = {
 	hideRepoAvatar?: boolean;
 	rowRef?: (element: HTMLDivElement | null) => void;
 	onSelect?: (workspaceId: string) => void;
+	onPreviewSelect?: (workspaceId: string) => void;
 	onPrefetch?: (workspaceId: string) => void;
 	onArchiveWorkspace?: (workspaceId: string) => void;
 	onMoveLocalToWorktree?: (workspaceId: string) => void;
@@ -150,6 +151,7 @@ export const WorkspaceRowItem = memo(
 		hideRepoAvatar = false,
 		rowRef,
 		onSelect,
+		onPreviewSelect,
 		onPrefetch,
 		onArchiveWorkspace,
 		onMoveLocalToWorktree,
@@ -317,6 +319,22 @@ export const WorkspaceRowItem = memo(
 				onPointerLeave={handleRowPointerLeave}
 				onPointerDown={(event) => {
 					cancelPendingPrefetch();
+					const target = event.target;
+					const inRowActions =
+						target instanceof Element
+							? target.closest("[data-workspace-row-actions]") !== null
+							: false;
+					if (
+						event.button === 0 &&
+						!dragPreview &&
+						!event.metaKey &&
+						!event.ctrlKey &&
+						!event.altKey &&
+						!event.shiftKey &&
+						!inRowActions
+					) {
+						onPreviewSelect?.(row.id);
+					}
 					if (onDragPointerDown && groupId) {
 						onDragPointerDown({ event, row, groupId, title: displayTitle });
 					}
