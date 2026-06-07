@@ -55,6 +55,11 @@ pub fn active_api_key_provider(config: &str) -> Option<ApiKeyProvider> {
 ///
 /// Returns an empty vec on parse failure or when no providers declare an
 /// `env_key`.
+///
+/// Only consumed by the Unix login-shell env capture (`shell_env::unix`); on
+/// Windows the GUI process already inherits the full PATH, so this is unused
+/// outside tests there.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub fn declared_env_keys(config: &str) -> Vec<String> {
     let Ok(value) = toml::from_str::<toml::Value>(config) else {
         return Vec::new();

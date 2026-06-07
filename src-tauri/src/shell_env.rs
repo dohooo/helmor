@@ -15,9 +15,15 @@
 /// spawned. It is intentionally infallible — on failure it logs and
 /// returns, leaving the existing (minimal) environment in place.
 pub fn inherit_login_shell_env() {
+    // macOS/Linux GUI launches (Finder/Spotlight/.desktop) only see a minimal
+    // PATH, so we capture the login shell's environment. Windows GUI processes
+    // already inherit the full user/system PATH from the registry, so there is
+    // nothing to work around there.
+    #[cfg(unix)]
     unix::inherit();
 }
 
+#[cfg(unix)]
 mod unix {
     use std::collections::HashMap;
     use std::process::Command;
