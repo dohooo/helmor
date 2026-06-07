@@ -106,16 +106,20 @@ pub fn capabilities_for_provider(provider: &str) -> ProviderCapabilities {
             requires_api_key: false,
             permission_modes: vec![PermissionMode::Default, PermissionMode::BypassPermissions],
         },
+        // Plan mode runs Cursor's read-only `plan` conversation mode; the
+        // `createPlan` tool it ends with is surfaced as an ExitPlanMode-style
+        // plan-review card (see cursor sidecar `planCaptured`). Cursor's SDK
+        // only has agent/plan modes, so the dropdown offers just those two.
         "cursor" => ProviderCapabilities {
             provider: "cursor".into(),
             display_name: "Cursor".into(),
-            supports_plan_mode: false,
+            supports_plan_mode: true,
             supports_active_goal: false,
             supports_context_usage: false,
             supports_steer: false,
             supports_slash_commands: true,
             requires_api_key: true,
-            permission_modes: vec![PermissionMode::Default],
+            permission_modes: vec![PermissionMode::Default, PermissionMode::Plan],
         },
         // Plan mode runs the read-only `plan` agent (approval rides the question
         // flow). No /goal loop; has the context ring, steer, and slash commands.
@@ -239,7 +243,10 @@ mod tests {
     fn cursor_capabilities() {
         let caps = capabilities_for_provider("cursor");
         assert_eq!(caps.provider, "cursor");
-        assert!(!caps.supports_plan_mode);
+        assert!(
+            caps.supports_plan_mode,
+            "Cursor plan mode surfaces createPlan as a plan-review card"
+        );
         assert!(!caps.supports_active_goal);
         assert!(
             !caps.supports_context_usage,
@@ -248,7 +255,10 @@ mod tests {
         assert!(!caps.supports_steer);
         assert!(caps.supports_slash_commands);
         assert!(caps.requires_api_key, "Cursor authenticates via API key");
-        assert_eq!(caps.permission_modes, vec![PermissionMode::Default]);
+        assert_eq!(
+            caps.permission_modes,
+            vec![PermissionMode::Default, PermissionMode::Plan]
+        );
     }
 
     #[test]

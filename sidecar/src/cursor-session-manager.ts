@@ -2,6 +2,7 @@
  * stream events forwarded with `type` namespaced as `cursor/<original>`
  * so Rust dispatch doesn't collide with claude/codex event types. */
 
+import { basename, extname } from "node:path";
 import {
 	Agent,
 	Cursor,
@@ -9,10 +10,14 @@ import {
 	type ModelParameterValue,
 	type Run,
 	type SDKAgent,
+	type SDKImage,
 	type SDKMessage,
+	type SDKUserMessage,
 } from "@cursor/sdk";
 import { scanCursorSkills } from "./cursor-skill-scanner.js";
 import type { SidecarEmitter } from "./emitter.js";
+import { readImageWithResize } from "./image-resize.js";
+import { parseImageRefs } from "./images.js";
 import { errorDetails, logger } from "./logger.js";
 import { listProviderModels } from "./model-catalog.js";
 import type {
@@ -126,6 +131,7 @@ export class CursorSessionManager implements SessionManager {
 							apiKey,
 							model: { id: modelId },
 							local: { cwd },
+							mode: toCursorMode(params.permissionMode),
 						});
 				session = {
 					agent,
@@ -162,9 +168,18 @@ export class CursorSessionManager implements SessionManager {
 			params.fastMode,
 			apiKey,
 		);
+		// Lift `@<path>` image markers out of the prompt and materialize
+		// them as base64 attachments. Local agents only accept the
+		// `{ data, mimeType }` SDKImage variant (`url` throws).
+		const { text, imagePaths } = parseImageRefs(params.prompt, params.images);
+		const message = await buildCursorMessage(text, imagePaths);
 		let run: Run;
 		try {
-			run = await session.agent.send(params.prompt, {
+			run = await session.agent.send(message, {
+				// Pass mode every turn — Cursor sticks with the create-time
+				// mode otherwise, so toggling Plan on/off mid-conversation
+				// (incl. "Implement" → back to agent) wouldn't take effect.
+				mode: toCursorMode(params.permissionMode),
 				model: {
 					id: modelId,
 					...(modelParams.length > 0 ? { params: modelParams } : {}),
@@ -183,13 +198,37 @@ export class CursorSessionManager implements SessionManager {
 		session.currentRequestId = requestId;
 		session.aborted = false;
 
+		// Plan mode ends by calling the `createPlan` tool, whose `args.plan`
+		// is the finished plan markdown. We suppress the raw tool_call (so it
+		// doesn't render inline) and re-surface it on the same rail as Claude's
+		// ExitPlanMode (`planCaptured`) — but only AFTER the terminal FINISHED
+		// has flushed the assistant text, so the plan-review card lands after
+		// the turn's prose rather than racing ahead of it.
+		let pendingPlan: { callId: string; text: string | null } | null = null;
 		try {
 			for await (const event of run.stream()) {
 				const e = event as unknown as Record<string, unknown>;
+				if (e.type === "tool_call" && e.name === "createPlan") {
+					if (e.status === "completed") {
+						pendingPlan = {
+							callId: typeof e.call_id === "string" ? e.call_id : "",
+							text: extractCreatePlanText(e),
+						};
+					}
+					continue;
+				}
 				emitter.passthrough(requestId, namespaceEvent(event));
 				// Cursor SDK stream may not close on its own after FINISHED;
 				// break explicitly so emitter.end() is called promptly.
 				if (e.type === "status" && e.status === "FINISHED") {
+					if (pendingPlan) {
+						emitter.planCaptured(
+							requestId,
+							pendingPlan.callId,
+							pendingPlan.text,
+						);
+						pendingPlan = null;
+					}
 					break;
 				}
 			}
@@ -396,6 +435,68 @@ export class CursorSessionManager implements SessionManager {
 	}
 }
 
+/// Map Helmor's permissionMode to Cursor's conversation mode. Plan mode
+/// runs Cursor read-only; everything else is the normal agent mode.
+function toCursorMode(permissionMode: string | undefined): "agent" | "plan" {
+	return permissionMode === "plan" ? "plan" : "agent";
+}
+
+/// Pull the plan markdown out of a `createPlan` tool_call event
+/// (`args.plan`). Returns null when absent/blank so `planCaptured` falls
+/// back to a bare marker rather than an empty plan card.
+function extractCreatePlanText(e: Record<string, unknown>): string | null {
+	const args = e.args as Record<string, unknown> | undefined;
+	const plan = args?.plan;
+	return typeof plan === "string" && plan.trim() !== "" ? plan : null;
+}
+
+function extToMimeType(filePath: string): string {
+	switch (extname(filePath).toLowerCase()) {
+		case ".jpg":
+		case ".jpeg":
+			return "image/jpeg";
+		case ".png":
+			return "image/png";
+		case ".gif":
+			return "image/gif";
+		case ".webp":
+			return "image/webp";
+		default:
+			return "image/png";
+	}
+}
+
+/// Build the `agent.send` payload. Returns a plain string when there are
+/// no attachments (cheapest path); otherwise an SDKUserMessage carrying
+/// base64 images. Unreadable files degrade to a `[Image not found]` note
+/// appended to the text so the turn still goes through.
+async function buildCursorMessage(
+	text: string,
+	imagePaths: readonly string[],
+): Promise<string | SDKUserMessage> {
+	if (imagePaths.length === 0) return text;
+	const images: SDKImage[] = [];
+	const notes: string[] = [];
+	for (const imgPath of imagePaths) {
+		try {
+			const { buffer } = await readImageWithResize(imgPath);
+			images.push({
+				data: buffer.toString("base64"),
+				mimeType: extToMimeType(imgPath),
+			});
+		} catch (err) {
+			logger.error("Failed to read Cursor image attachment", {
+				imageName: basename(imgPath),
+				...errorDetails(err),
+			});
+			notes.push(`[Image not found: ${imgPath}]`);
+		}
+	}
+	const finalText = [text, ...notes].filter(Boolean).join("\n");
+	if (images.length === 0) return finalText;
+	return { text: finalText, images };
+}
+
 /// Prefix `type` with `cursor/` so Rust dispatch doesn't collide with
 /// claude/codex. `tool_call` is split into `tool_call_start` /
 /// `tool_call_end` based on `status` so accumulator can branch on type.
@@ -496,6 +597,10 @@ export const __CURSOR_INTERNAL = {
 	namespaceEvent,
 	modelInfoToProviderInfo,
 	computeModelParameterValues,
+	buildCursorMessage,
+	extToMimeType,
+	toCursorMode,
+	extractCreatePlanText,
 };
 
 // Keep `Agent` import live under verbatimModuleSyntax.
