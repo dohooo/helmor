@@ -12,6 +12,7 @@ import type {
 	TextPartInput,
 } from "@opencode-ai/sdk/v2";
 import type { SidecarEmitter } from "./emitter.js";
+import { prependLinkedDirectoriesContext } from "./linked-directories-context.js";
 import { errorDetails, logger } from "./logger.js";
 import { OpencodeServer } from "./opencode-server.js";
 import type {
@@ -472,7 +473,16 @@ export class OpencodeSessionManager implements SessionManager {
 					// Effort is a TOP-LEVEL variant; promptAsync ignores a nested model.variant.
 					...(effort ? { variant: effort } : {}),
 					...(planAgent ? { agent: planAgent } : {}),
-					parts: buildPromptParts(params.prompt, params.images),
+					// opencode has no additional-directories API param, so tell the
+					// model about /add-dir linked dirs in-prompt (it reaches them via
+					// absolute paths; bypass mode already allows external_directory).
+					parts: buildPromptParts(
+						prependLinkedDirectoriesContext(
+							params.prompt,
+							params.additionalDirectories,
+						),
+						params.images,
+					),
 				});
 			}
 		} catch (error) {
