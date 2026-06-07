@@ -1281,39 +1281,10 @@ fn resolve_agent_binary(provider: &str) -> PathBuf {
     // is usually an npm shim (`codex.cmd`/`.ps1`); CreateProcess ignores PATHEXT,
     // so resolve the real file ourselves rather than spawn a bare name that
     // "isn't found".
-    #[cfg(windows)]
-    if let Some(resolved) = which_on_path(provider) {
+    if let Some(resolved) = crate::platform::which(provider) {
         return resolved;
     }
     PathBuf::from(provider)
-}
-
-/// Resolve a bare command name to a concrete file on `PATH`, honoring `PATHEXT`
-/// (so `codex` → `codex.cmd`/`codex.exe`). Returns `None` if nothing matches.
-#[cfg(windows)]
-fn which_on_path(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT".to_string());
-    // If the caller already gave an extension, accept the exact file. Otherwise
-    // only accept a PATHEXT match — an extensionless file on Windows (e.g. npm's
-    // Unix `bash` shim) is NOT executable and must be skipped in favour of the
-    // `.cmd`/`.exe` sibling.
-    let already_has_ext = std::path::Path::new(name).extension().is_some();
-    for dir in std::env::split_paths(&path) {
-        if already_has_ext {
-            let direct = dir.join(name);
-            if direct.is_file() {
-                return Some(direct);
-            }
-        }
-        for ext in exts.split(';').filter(|e| !e.is_empty()) {
-            let candidate = dir.join(format!("{name}{}", ext.to_ascii_lowercase()));
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
 }
 
 // Read from the sidecar-computed settings row, NOT `auth.json` (which misses env/config/Zen providers).

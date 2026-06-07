@@ -148,7 +148,11 @@ impl SidecarProcess {
         let is_dev = sidecar_path.extension().is_some_and(|ext| ext == "ts");
 
         let mut cmd = if is_dev {
-            let mut c = Command::new("bun");
+            // On Windows `bun` on PATH is a `.cmd`/`.ps1` shim that CreateProcess
+            // can't resolve from the bare name; resolve the real file via PATHEXT.
+            let bun =
+                crate::platform::which("bun").unwrap_or_else(|| std::path::PathBuf::from("bun"));
+            let mut c = Command::new(bun);
             c.arg("run").arg(&sidecar_path);
             // Anchor cwd to sidecar/ so Bun discovers `bunfig.toml` and
             // applies the preload that registers our build-time plugins
