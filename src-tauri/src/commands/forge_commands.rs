@@ -250,7 +250,7 @@ pub async fn spawn_forge_cli_auth_terminal(
         // input — written synchronously to the PTY master right after
         // the shell registers, so a frontend re-render-driven
         // cleanup→respawn can't drop the bytes.
-        let boot_input = format!("{command}; exit\n");
+        let boot_input = crate::workspace::scripts::format_boot_command(&command);
         if let Err(error) = crate::workspace::scripts::run_terminal_session(
             &mgr,
             FORGE_CLI_AUTH_REPO_ID,

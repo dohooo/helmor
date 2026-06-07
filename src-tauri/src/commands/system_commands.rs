@@ -1296,10 +1296,17 @@ fn resolve_agent_binary(provider: &str) -> PathBuf {
 fn which_on_path(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT".to_string());
+    // If the caller already gave an extension, accept the exact file. Otherwise
+    // only accept a PATHEXT match — an extensionless file on Windows (e.g. npm's
+    // Unix `bash` shim) is NOT executable and must be skipped in favour of the
+    // `.cmd`/`.exe` sibling.
+    let already_has_ext = std::path::Path::new(name).extension().is_some();
     for dir in std::env::split_paths(&path) {
-        let direct = dir.join(name);
-        if direct.is_file() {
-            return Some(direct);
+        if already_has_ext {
+            let direct = dir.join(name);
+            if direct.is_file() {
+                return Some(direct);
+            }
         }
         for ext in exts.split(';').filter(|e| !e.is_empty()) {
             let candidate = dir.join(format!("{name}{}", ext.to_ascii_lowercase()));
@@ -1520,11 +1527,12 @@ pub async fn spawn_agent_login_terminal(
             instance_id = %instance_id,
             "spawn_agent_login_terminal: entering run_terminal_session"
         );
-        // Auto-type the login command via the run_terminal_session boot
+        // Auto-type the login command via the run_terminal_session boot input,
+        // in the active shell's syntax (PowerShell needs the call operator).
         // input — written synchronously to the PTY master right after
         // the shell registers, so a frontend re-render-driven
         // cleanup→respawn can't drop the bytes.
-        let boot_input = format!("{command}; exit\n");
+        let boot_input = crate::workspace::scripts::format_boot_command(&command);
         if let Err(error) = crate::workspace::scripts::run_terminal_session(
             &mgr,
             AGENT_LOGIN_REPO_ID,

@@ -609,6 +609,26 @@ fn default_shell() -> (String, Vec<String>) {
     }
 }
 
+/// Format a one-shot command to type into a freshly-spawned terminal session,
+/// in the syntax of the platform's default shell (see [`default_shell`]).
+///
+/// These commands begin with a quoted executable path. PowerShell treats a
+/// quoted string as a value, so it needs the call operator `&` to *execute* it;
+/// POSIX shells run a quoted path directly. Both append `; exit` so the session
+/// closes when the command finishes. Used by the onboarding auth terminals
+/// (`claude`/`codex`/`gh` login).
+pub fn format_boot_command(command: &str) -> String {
+    #[cfg(windows)]
+    {
+        // `&` = PowerShell call operator; `\r` submits the line in the PTY.
+        format!("& {command}; exit\r\n")
+    }
+    #[cfg(not(windows))]
+    {
+        format!("{command}; exit\n")
+    }
+}
+
 /// Spawn an interactive login shell on a PTY and feed it `script`.
 ///
 /// After the initial command is sent, the PTY stays open so the user can
