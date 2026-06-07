@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.32.0
+
+### Minor Changes
+
+- [#727](https://github.com/dohooo/helmor/pull/727) [`6b798fe`](https://github.com/dohooo/helmor/commit/6b798fec3cde97f747b5f5af58eeb9fbc1cdda36) Thanks [@natllian](https://github.com/natllian)! - Add OpenCode as a built-in coding agent, alongside Claude Code, Codex, and Cursor:
+  - Run OpenCode sessions with any model it can reach, including reasoning-effort levels, slash commands (skills and MCP prompts), `/compact`, image input, and subagents.
+  - Add OpenCode providers from Settings → Providers → Custom Providers: connect a known provider with just an API key, or a custom OpenAI-compatible endpoint, saved to your global opencode config.
+  - Refresh the Providers settings page so OpenCode and Claude Code expand to reveal their model and provider configuration, with provider brand icons throughout.
+
+### Patch Changes
+
+- [#735](https://github.com/dohooo/helmor/pull/735) [`aa2eb56`](https://github.com/dohooo/helmor/commit/aa2eb56678c2a0c2cf29c6ac97cd6135d716bd2c) Thanks [@natllian](https://github.com/natllian)! - Remove the GPT-5.3-Codex and GPT-5.2 Codex models from the model picker; any saved default, review, or action model that used one now falls back to an available model automatically.
+
+- [#728](https://github.com/dohooo/helmor/pull/728) [`e079ca0`](https://github.com/dohooo/helmor/commit/e079ca0cac4f435393112482e8d7f9023b0dc3fd) Thanks [@natllian](https://github.com/natllian)! - Fix a Claude Code workflow glitch where a sub-agent's streaming output briefly appeared as a separate message bubble before collapsing into its parent tool-call card.
+
+- [#729](https://github.com/dohooo/helmor/pull/729) [`1c86c67`](https://github.com/dohooo/helmor/commit/1c86c6714f200fea32d9e8940ec378208c0f77be) Thanks [@natllian](https://github.com/natllian)! - Collapsed tool-call groups now preview only their last few calls behind a "Show N more" toggle, so long runs of read-only commands no longer flood the message thread.
+
+- [#725](https://github.com/dohooo/helmor/pull/725) [`a954391`](https://github.com/dohooo/helmor/commit/a954391019dbc4157e33f66ec129d2c2a716b5d5) Thanks [@aidxun](https://github.com/aidxun)! - Fix sidebar drag previews so they stay aligned with the pointer while workspaces or repository groups move through the list.
+
+- [#730](https://github.com/dohooo/helmor/pull/730) [`3209733`](https://github.com/dohooo/helmor/commit/320973311c8db0006c01e101d52e3f33d50486e0) Thanks [@natllian](https://github.com/natllian)! - Improve workspace switching responsiveness in large workspaces:
+
+  - Highlight the selected workspace in the sidebar before the workspace pane finishes loading.
+  - Reduce Git diff panel rendering overhead and keep its empty state visible after changes load.
+
+- [#724](https://github.com/dohooo/helmor/pull/724) [`3b78220`](https://github.com/dohooo/helmor/commit/3b7822053bc8425f59e184a4be169abd84e1cd6d) Thanks [@passion729](https://github.com/passion729)! - Fix new Codex sessions in a fresh worktree being unable to use configured MCP servers (such as Linear) on the very first message.
+
 ## 0.31.0
 
 ### Minor Changes
