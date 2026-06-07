@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import type { WorkspaceRow } from "@/lib/api";
 import { WorkspaceAvatar } from "../avatar";
 import { WorkspaceRowItem } from "../row-item";
@@ -31,7 +32,7 @@ export function WorkspaceDragGhost({
 }: WorkspaceDragGhostProps) {
 	const stackCount =
 		stackRows && stackRows.length > 1 ? stackRows.length : null;
-	return (
+	return createPortal(
 		<div
 			className="pointer-events-none fixed z-50"
 			style={{
@@ -57,7 +58,8 @@ export function WorkspaceDragGhost({
 					</span>
 				) : null}
 			</div>
-		</div>
+		</div>,
+		document.body,
 	);
 }
 
@@ -82,7 +84,7 @@ export function RepoDragGhost({
 }: RepoDragGhostProps) {
 	// Re-use the sidebar's native header + row look; one outer opacity
 	// fades the whole stack so it reads as "same group, lifted off".
-	return (
+	return createPortal(
 		<div
 			className="pointer-events-none fixed z-50 opacity-60"
 			style={{
@@ -113,6 +115,7 @@ export function RepoDragGhost({
 					/>
 				</div>
 			))}
-		</div>
+		</div>,
+		document.body,
 	);
 }
