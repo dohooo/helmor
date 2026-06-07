@@ -192,6 +192,16 @@ export class OpencodeServer {
 			},
 		});
 
+		// A post-ready crash must drop the cached handle, or start() keeps
+		// handing out a client bound to a dead connection. Guarded so a
+		// kill()+respawn that already replaced `proc` doesn't clobber the new one.
+		child.on("exit", () => {
+			if (this.proc === child) {
+				this.proc = null;
+				this.handle = null;
+			}
+		});
+
 		logger.info(`opencode server ready at ${url}`);
 		return { client, url };
 	}

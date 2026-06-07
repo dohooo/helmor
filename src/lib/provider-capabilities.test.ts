@@ -106,11 +106,12 @@ describe("findProviderCapabilities", () => {
 // local default table to the Rust source-of-truth values so that window
 // never reopens.
 describe("DEFAULT_PROVIDER_CAPABILITIES (cold-start initialData)", () => {
-	it("covers exactly the three shipping providers", () => {
+	it("covers exactly the shipping providers", () => {
 		expect(DEFAULT_PROVIDER_CAPABILITIES.map((caps) => caps.provider)).toEqual([
 			"claude",
 			"codex",
 			"cursor",
+			"opencode",
 		]);
 	});
 
@@ -142,6 +143,15 @@ describe("DEFAULT_PROVIDER_CAPABILITIES (cold-start initialData)", () => {
 		);
 		expect(cursor?.displayName).toBe("Cursor");
 		expect(cursor?.requiresApiKey).toBe(true);
+		// OpenCode must resolve to itself, not fall back to "Claude".
+		const opencode = findProviderCapabilities(
+			DEFAULT_PROVIDER_CAPABILITIES,
+			"opencode",
+		);
+		expect(opencode?.displayName).toBe("OpenCode");
+		expect(opencode?.supportsContextUsage).toBe(true);
+		expect(opencode?.supportsActiveGoal).toBe(false);
+		expect(opencode?.requiresApiKey).toBe(false);
 	});
 
 	it("is wired as the query's initialData so the cold-start window is closed", () => {

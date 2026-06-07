@@ -117,6 +117,23 @@ pub fn capabilities_for_provider(provider: &str) -> ProviderCapabilities {
             requires_api_key: true,
             permission_modes: vec![PermissionMode::Default],
         },
+        // No plan artifact / no /goal loop; has the context ring, steer, and
+        // slash commands. Logs in via the embedded flow (not an API-key entry).
+        "opencode" => ProviderCapabilities {
+            provider: "opencode".into(),
+            display_name: "OpenCode".into(),
+            supports_plan_mode: false,
+            supports_active_goal: false,
+            supports_context_usage: true,
+            supports_steer: true,
+            supports_slash_commands: true,
+            requires_api_key: false,
+            permission_modes: vec![
+                PermissionMode::Default,
+                PermissionMode::AcceptEdits,
+                PermissionMode::BypassPermissions,
+            ],
+        },
         // Default arm covers "claude" and anything we haven't onboarded
         // yet — keeping the safe defaults equal to Claude's behaviour
         // means an unknown id never accidentally disables the
@@ -143,7 +160,7 @@ pub fn capabilities_for_provider(provider: &str) -> ProviderCapabilities {
 /// Convenience: list every provider Helmor ships today. Frontends use
 /// this to render the capability table in settings (eventually), and
 /// tests use it to assert there are no holes in the matrix.
-pub const KNOWN_PROVIDERS: &[&str] = &["claude", "codex", "cursor"];
+pub const KNOWN_PROVIDERS: &[&str] = &["claude", "codex", "cursor", "opencode"];
 
 #[cfg(test)]
 mod tests {
@@ -230,6 +247,30 @@ mod tests {
         assert!(caps.supports_slash_commands);
         assert!(caps.requires_api_key, "Cursor authenticates via API key");
         assert_eq!(caps.permission_modes, vec![PermissionMode::Default]);
+    }
+
+    #[test]
+    fn opencode_capabilities() {
+        let caps = capabilities_for_provider("opencode");
+        assert_eq!(caps.provider, "opencode");
+        assert_eq!(
+            caps.display_name, "OpenCode",
+            "must not fall back to Claude"
+        );
+        assert!(!caps.supports_plan_mode, "opencode emits no plan artifact");
+        assert!(!caps.supports_active_goal, "opencode has no /goal loop");
+        assert!(caps.supports_context_usage);
+        assert!(caps.supports_steer);
+        assert!(caps.supports_slash_commands);
+        assert!(!caps.requires_api_key, "opencode uses embedded login");
+        assert_eq!(
+            caps.permission_modes,
+            vec![
+                PermissionMode::Default,
+                PermissionMode::AcceptEdits,
+                PermissionMode::BypassPermissions,
+            ]
+        );
     }
 
     #[test]

@@ -1135,6 +1135,17 @@ export const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities[] = [
 		requiresApiKey: true,
 		permissionModes: ["default"],
 	},
+	{
+		provider: "opencode",
+		displayName: "OpenCode",
+		supportsPlanMode: false,
+		supportsActiveGoal: false,
+		supportsContextUsage: true,
+		supportsSteer: true,
+		supportsSlashCommands: true,
+		requiresApiKey: false,
+		permissionModes: ["default", "acceptEdits", "bypassPermissions"],
+	},
 ];
 
 /** Look up a single provider's capabilities from a previously-fetched

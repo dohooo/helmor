@@ -226,6 +226,8 @@ export class OpencodeSessionManager implements SessionManager {
 	private readonly server = new OpencodeServer();
 	private readonly sessions = new Map<string, SessionCtx>();
 	private readonly byOpencodeId = new Map<string, SessionCtx>();
+	/** Stop pressed while sendMessage was still in startup (no ctx yet). */
+	private readonly pendingAborts = new Set<string>();
 	/** `provider/model` slug → context-window size, for the usage ring. */
 	private readonly modelContextLimits = new Map<string, number>();
 	private readonly pendingPermissions = new Map<
@@ -333,6 +335,13 @@ export class OpencodeSessionManager implements SessionManager {
 		const { client } = handle;
 		const directory = params.cwd ?? process.cwd();
 
+		// Stop pressed during server startup → bail before creating a session.
+		if (this.pendingAborts.delete(params.sessionId)) {
+			emitter.aborted(requestId, "user_requested");
+			emitter.end(requestId);
+			return;
+		}
+
 		// Reuse cached session, else resume an existing id, else create fresh.
 		let ctx = this.sessions.get(params.sessionId);
 		if (!ctx) {
@@ -395,6 +404,14 @@ export class OpencodeSessionManager implements SessionManager {
 			});
 		}
 
+		// Stop pressed during session create/resume (after the startup check) →
+		// honor it now instead of running the turn.
+		if (this.pendingAborts.delete(params.sessionId)) {
+			emitter.aborted(requestId, "user_requested");
+			emitter.end(requestId);
+			return;
+		}
+
 		ctx.directory = directory;
 		ctx.activeRequestId = requestId;
 		ctx.activeEmitter = emitter;
@@ -444,7 +461,13 @@ export class OpencodeSessionManager implements SessionManager {
 				await client.session.promptAsync({
 					sessionID: ctx.openCodeSessionId,
 					directory,
-					...(model ? { model } : {}),
+					...(model
+						? {
+								model: { providerID: model.providerID, modelID: model.modelID },
+							}
+						: {}),
+					// Effort is a TOP-LEVEL variant; promptAsync ignores a nested model.variant.
+					...(effort ? { variant: effort } : {}),
 					parts: buildPromptParts(params.prompt, params.images),
 				});
 			}
@@ -908,7 +931,13 @@ export class OpencodeSessionManager implements SessionManager {
 
 	async stopSession(sessionId: string): Promise<void> {
 		const ctx = this.sessions.get(sessionId);
-		if (!ctx) return;
+		if (!ctx) {
+			// Mid-startup: sendMessage hasn't registered a ctx yet. Record the
+			// intent so it's honored once startup lands, not dropped.
+			this.pendingAborts.add(sessionId);
+			return;
+		}
+		this.pendingAborts.delete(sessionId);
 		ctx.aborted = true;
 		this.clearPending(ctx);
 		try {
@@ -940,7 +969,15 @@ export class OpencodeSessionManager implements SessionManager {
 			await client.session.promptAsync({
 				sessionID: ctx.openCodeSessionId,
 				directory: ctx.directory,
-				...(ctx.lastModel ? { model: ctx.lastModel } : {}),
+				...(ctx.lastModel
+					? {
+							model: {
+								providerID: ctx.lastModel.providerID,
+								modelID: ctx.lastModel.modelID,
+							},
+						}
+					: {}),
+				...(ctx.lastModel?.variant ? { variant: ctx.lastModel.variant } : {}),
 				parts: buildPromptParts(prompt, images),
 			});
 		} catch (error) {
@@ -971,6 +1008,7 @@ export class OpencodeSessionManager implements SessionManager {
 		this.byOpencodeId.clear();
 		this.pendingPermissions.clear();
 		this.pendingQuestions.clear();
+		this.pendingAborts.clear();
 		this.server.kill();
 	}
 }
