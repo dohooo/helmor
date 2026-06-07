@@ -108,7 +108,7 @@ describe("useEnsureDefaultModel", () => {
 				{ id: "codex", label: "Codex", status: "unavailable", options: [] },
 			],
 			settingsOverrides: {
-				reviewModelId: "user-custom-review",
+				reviewModelId: "opus-1m",
 				reviewEffort: "low",
 				prFastMode: true,
 			},
@@ -120,6 +120,51 @@ describe("useEnsureDefaultModel", () => {
 			prModelId: "opus-1m",
 			prEffort: DEFAULT_SETTINGS.defaultEffort,
 			reviewFastMode: DEFAULT_SETTINGS.defaultFastMode,
+		});
+	});
+
+	it("unsets stale review/pr models that left the catalog", () => {
+		const { updateSettings } = renderUseEnsureDefaultModel({
+			defaultModelId: "opus-1m",
+			sections: [
+				{
+					id: "claude",
+					label: "Claude Code",
+					status: "ready",
+					options: [
+						{
+							id: "opus-1m",
+							provider: "claude",
+							label: "Opus",
+							cliModel: "opus-1m",
+						},
+					],
+				},
+				{
+					id: "codex",
+					label: "Codex",
+					status: "ready",
+					options: [
+						{
+							id: "gpt-5.5",
+							provider: "codex",
+							label: "GPT-5.5",
+							cliModel: "gpt-5.5",
+						},
+					],
+				},
+			],
+			settingsOverrides: {
+				reviewModelId: "gpt-5.2",
+				prModelId: "gpt-5.3-codex",
+			},
+		});
+
+		// Default is valid, so only the delisted review/pr picks are reset to
+		// null (→ fall back to the default at consumption time).
+		expect(updateSettings).toHaveBeenCalledWith({
+			reviewModelId: null,
+			prModelId: null,
 		});
 	});
 
