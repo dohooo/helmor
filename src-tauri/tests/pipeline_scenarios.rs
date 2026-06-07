@@ -1875,11 +1875,27 @@ fn stream_subagent_partial_tagged_as_child() {
     );
 
     // The finalized render keeps a single top-level Task message with the
-    // subagent work folded into its children — no standalone bubble.
+    // subagent work folded into the tool call's children — no standalone
+    // bubble. Pin the nesting itself so a grouping regression is caught.
+    use helmor_lib::pipeline::types::{ExtendedMessagePart, MessagePart};
     assert_eq!(
         fp.historical_render.len(),
         1,
         "subagent work must stay nested under the Task tool call"
+    );
+    let task_children = fp.historical_render[0]
+        .content
+        .iter()
+        .find_map(|part| match part {
+            ExtendedMessagePart::Basic(MessagePart::ToolCall { children, .. }) => Some(children),
+            _ => None,
+        })
+        .expect("top-level message should hold the Task tool call");
+    assert!(
+        task_children
+            .iter()
+            .any(|c| matches!(c, ExtendedMessagePart::Basic(MessagePart::Text { .. }))),
+        "the subagent's finalized text must nest as a Task child, got {task_children:?}"
     );
 }
 
