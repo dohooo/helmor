@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use serde_json::{json, Value};
 
 use super::super::types::{CollectedTurn, MessageRole};
-use super::{PushOutcome, StreamAccumulator};
+use super::{now_ms, PushOutcome, StreamAccumulator};
 
 #[derive(Debug, Default)]
 pub(super) struct OpencodeRunState {
@@ -22,6 +22,10 @@ pub(super) struct OpencodeRunState {
     /// parentCallID → subagent run; `task` tools run in a child session whose
     /// parts (`opencode/subtask.*`) nest under the parent task tool's children.
     pub subtasks: HashMap<String, SubtaskAccum>,
+    /// Assistant turn timing from `message.updated` info.time (epoch ms);
+    /// drives the duration footer synthesized on finalize.
+    pub turn_created_ms: Option<f64>,
+    pub turn_completed_ms: Option<f64>,
 }
 
 #[derive(Debug, Default)]
@@ -59,6 +63,16 @@ pub(super) fn handle_message_updated(acc: &mut StreamAccumulator, value: &Value)
                 acc.resolved_model = slug;
             }
         }
+        // `time.created` is stable (first wins); `time.completed` is set on the
+        // final update (latest wins) — together they give the turn duration.
+        if let Some(time) = info.get("time") {
+            if let Some(created) = time.get("created").and_then(Value::as_f64) {
+                acc.opencode_state.turn_created_ms.get_or_insert(created);
+            }
+            if let Some(completed) = time.get("completed").and_then(Value::as_f64) {
+                acc.opencode_state.turn_completed_ms = Some(completed);
+            }
+        }
     }
     acc.opencode_state
         .role_by_message_id
@@ -84,10 +98,7 @@ pub(super) fn handle_part_updated(acc: &mut StreamAccumulator, value: &Value) ->
         return PushOutcome::NoOp;
     }
     let rendered = match kind {
-        "text" | "reasoning" => {
-            let text = part.get("text").and_then(Value::as_str).unwrap_or_default();
-            json!({ "type": kind, "text": text })
-        }
+        "text" | "reasoning" => render_text_or_reasoning(kind, part),
         "tool" => render_tool_part(part),
         "file" => json!({
             "type": "file",
@@ -115,6 +126,32 @@ pub(super) fn handle_part_updated(acc: &mut StreamAccumulator, value: &Value) ->
         _ => return PushOutcome::NoOp,
     };
     upsert_part(acc, part_id, rendered);
+    rebuild_collected(acc);
+    PushOutcome::StreamingDelta
+}
+
+// opencode streams text AND reasoning token-by-token via `message.part.delta`
+// IN PARALLEL with full-text `message.part.updated` snapshots. The delta's
+// `field` names the PART FIELD being updated — always "text", since both text
+// and reasoning parts store their content in `text` — so it must NOT be matched
+// against the part `type` (that drops reasoning). Append deltas so content
+// renders progressively; the later snapshot REPLACES with the full text
+// (self-healing), so the final state is always correct.
+pub(super) fn handle_part_delta(acc: &mut StreamAccumulator, value: &Value) -> PushOutcome {
+    let Some((part_id, delta)) = parse_text_delta(value) else {
+        return PushOutcome::NoOp;
+    };
+    if !is_assistant_message(acc, value.get("messageID").and_then(Value::as_str)) {
+        return PushOutcome::NoOp;
+    }
+    if !append_text_delta(
+        &mut acc.opencode_state.parts,
+        &mut acc.opencode_state.part_index,
+        part_id,
+        delta,
+    ) {
+        return PushOutcome::NoOp;
+    }
     rebuild_collected(acc);
     PushOutcome::StreamingDelta
 }
@@ -200,10 +237,7 @@ pub(super) fn handle_subtask_part_updated(
             return PushOutcome::NoOp;
         }
         let rendered = match kind {
-            "text" | "reasoning" => {
-                let text = part.get("text").and_then(Value::as_str).unwrap_or_default();
-                json!({ "type": kind, "text": text })
-            }
+            "text" | "reasoning" => render_text_or_reasoning(kind, part),
             "tool" => render_tool_part(part),
             _ => return PushOutcome::NoOp,
         };
@@ -219,6 +253,49 @@ pub(super) fn handle_subtask_part_updated(
     }
     rebuild_collected(acc);
     PushOutcome::StreamingDelta
+}
+
+// Subagent token streaming — mirrors `handle_part_delta` but for a child
+// session's parts, nested under the parent `task` tool. Requires the sidecar to
+// forward `opencode/subtask.message.part.delta`.
+pub(super) fn handle_subtask_part_delta(acc: &mut StreamAccumulator, value: &Value) -> PushOutcome {
+    let Some(parent) = value
+        .get("parent_call_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return PushOutcome::NoOp;
+    };
+    let Some((part_id, delta)) = parse_text_delta(value) else {
+        return PushOutcome::NoOp;
+    };
+    let message_id = value.get("messageID").and_then(Value::as_str);
+    let applied = {
+        let sub = acc.opencode_state.subtasks.entry(parent).or_default();
+        let is_assistant = message_id
+            .and_then(|m| sub.role_by_message_id.get(m))
+            .map(String::as_str)
+            == Some("assistant");
+        is_assistant && append_text_delta(&mut sub.parts, &mut sub.part_index, part_id, delta)
+    };
+    if !applied {
+        return PushOutcome::NoOp;
+    }
+    rebuild_collected(acc);
+    PushOutcome::StreamingDelta
+}
+
+// Render a text/reasoning part. Reasoning keeps its `time: { start, end }` so
+// the adapter can show "Thought for Ns" once the block closes (`end` set).
+fn render_text_or_reasoning(kind: &str, part: &Value) -> Value {
+    let text = part.get("text").and_then(Value::as_str).unwrap_or_default();
+    let mut out = json!({ "type": kind, "text": text });
+    if kind == "reasoning" {
+        if let Some(time) = part.get("time") {
+            out["time"] = time.clone();
+        }
+    }
+    out
 }
 
 fn render_tool_part(part: &Value) -> Value {
@@ -303,6 +380,50 @@ fn is_assistant_message(acc: &StreamAccumulator, message_id: Option<&str>) -> bo
 
 fn is_assistant_part(acc: &StreamAccumulator, part: &Value) -> bool {
     is_assistant_message(acc, part.get("messageID").and_then(Value::as_str))
+}
+
+// Extract `(partID, delta)` from a `message.part.delta` event. opencode only
+// deltas a part's `text` field (the home of both text and reasoning content);
+// anything else (or an empty delta) is ignored.
+fn parse_text_delta(value: &Value) -> Option<(&str, &str)> {
+    let field = value.get("field").and_then(Value::as_str)?;
+    if field != "text" && field != "reasoning" {
+        return None;
+    }
+    let part_id = value.get("partID").and_then(Value::as_str)?;
+    let delta = value.get("delta").and_then(Value::as_str)?;
+    if delta.is_empty() {
+        return None;
+    }
+    Some((part_id, delta))
+}
+
+// Append a streamed delta to the named part's `text`, creating a `text` part if
+// its snapshot hasn't landed yet (a later reasoning snapshot REPLACES it with
+// the right type — self-healing). Only text/reasoning parts accumulate; a delta
+// that somehow targets a tool/file part is ignored. Returns whether it applied.
+fn append_text_delta(
+    parts: &mut Vec<Value>,
+    part_index: &mut HashMap<String, usize>,
+    part_id: &str,
+    delta: &str,
+) -> bool {
+    if let Some(&idx) = part_index.get(part_id) {
+        let Some(slot) = parts.get_mut(idx) else {
+            return false;
+        };
+        let part_type = slot.get("type").and_then(Value::as_str).unwrap_or_default();
+        if part_type != "text" && part_type != "reasoning" {
+            return false;
+        }
+        let prev = slot.get("text").and_then(Value::as_str).unwrap_or_default();
+        slot["text"] = json!(format!("{prev}{delta}"));
+    } else {
+        let idx = parts.len();
+        parts.push(json!({ "type": "text", "text": delta }));
+        part_index.insert(part_id.to_string(), idx);
+    }
+    true
 }
 
 fn upsert_part(acc: &mut StreamAccumulator, part_id: &str, rendered: Value) {
@@ -411,11 +532,30 @@ fn finalize(acc: &mut StreamAccumulator) -> PushOutcome {
         });
     }
 
+    // Synthesize a turn-result row so the adapter renders the duration footer
+    // ("Ns • X ago"), matching Claude/Codex/Cursor. Gated on opencode-supplied
+    // `time.created` so trimmed fixtures (no timing) stay byte-identical and the
+    // duration never depends on wall-clock in tests.
+    if let Some(created) = acc.opencode_state.turn_created_ms {
+        let completed = acc.opencode_state.turn_completed_ms.unwrap_or_else(now_ms);
+        let duration = completed - created;
+        if duration > 0.0 {
+            let enriched = json!({ "type": "turn/completed", "duration_ms": duration });
+            let enriched_str = serde_json::to_string(&enriched).unwrap_or_default();
+            let id = uuid::Uuid::new_v4().to_string();
+            acc.result_id = Some(id.clone());
+            acc.result_json = Some(enriched_str.clone());
+            acc.collect_message(&enriched_str, &enriched, MessageRole::Assistant, Some(&id));
+        }
+    }
+
     // Reset per-turn state; role map persists across turns.
     acc.opencode_state.turn_id = None;
     acc.opencode_state.parts.clear();
     acc.opencode_state.part_index.clear();
     acc.opencode_state.subtasks.clear();
+    acc.opencode_state.turn_created_ms = None;
+    acc.opencode_state.turn_completed_ms = None;
 
     PushOutcome::Finalized
 }
@@ -431,6 +571,14 @@ mod tests {
             "type": "opencode/message.part.updated",
             "session_id": "ses_1",
             "part": { "type": part_type, "text": text, "messageID": role_msg, "id": part_id },
+        })
+    }
+
+    fn delta(role_msg: &str, part_id: &str, field: &str, delta: &str) -> serde_json::Value {
+        json!({
+            "type": "opencode/message.part.delta",
+            "session_id": "ses_1",
+            "messageID": role_msg, "partID": part_id, "field": field, "delta": delta,
         })
     }
 
@@ -455,6 +603,170 @@ mod tests {
         let parsed = msgs[0].parsed.as_ref().unwrap();
         assert_eq!(parsed["type"], "opencode_message");
         assert_eq!(parsed["parts"][0]["text"], "Hello");
+    }
+
+    #[test]
+    fn text_deltas_stream_progressively_then_snapshot_replaces() {
+        let mut acc = StreamAccumulator::new("opencode", "");
+        assistant(&mut acc, "m1");
+        // Token deltas arrive before the snapshot — text must grow per delta.
+        let out = acc.push_event(&delta("m1", "p1", "text", "Hel"), "");
+        assert_eq!(out, PushOutcome::StreamingDelta);
+        acc.push_event(&delta("m1", "p1", "text", "lo"), "");
+        let parsed = acc.collected()[0].parsed.as_ref().unwrap();
+        assert_eq!(parsed["parts"][0]["text"], "Hello");
+        // The full-text snapshot replaces in place (stays "Hello", no dup).
+        acc.push_event(&updated("m1", "text", "p1", "Hello"), "");
+        acc.push_event(
+            &json!({ "type": "opencode/session.idle", "session_id": "ses_1" }),
+            "",
+        );
+        let parsed = acc.collected()[0].parsed.as_ref().unwrap();
+        assert_eq!(parsed["parts"][0]["text"], "Hello");
+    }
+
+    #[test]
+    fn reasoning_deltas_stream_progressively() {
+        // Regression: opencode deltas a reasoning part with field="text" (its
+        // content lives in the part's `text` field). They must append, not be
+        // dropped on a type≠field mismatch.
+        let mut acc = StreamAccumulator::new("opencode", "");
+        assistant(&mut acc, "m1");
+        // Empty reasoning snapshot arrives first (real opencode cadence).
+        acc.push_event(&updated("m1", "reasoning", "pr", ""), "");
+        let out = acc.push_event(&delta("m1", "pr", "text", "Think"), "");
+        assert_eq!(out, PushOutcome::StreamingDelta);
+        acc.push_event(&delta("m1", "pr", "text", "ing"), "");
+        let parsed = acc.collected()[0].parsed.as_ref().unwrap();
+        assert_eq!(parsed["parts"][0]["type"], "reasoning");
+        assert_eq!(parsed["parts"][0]["text"], "Thinking");
+        // The full snapshot replaces in place — type + text stay correct.
+        acc.push_event(&updated("m1", "reasoning", "pr", "Thinking"), "");
+        acc.push_event(
+            &json!({ "type": "opencode/session.idle", "session_id": "ses_1" }),
+            "",
+        );
+        let parsed = acc.collected()[0].parsed.as_ref().unwrap();
+        assert_eq!(parsed["parts"][0]["type"], "reasoning");
+        assert_eq!(parsed["parts"][0]["text"], "Thinking");
+    }
+
+    #[test]
+    fn reasoning_part_preserves_time_for_thought_duration() {
+        // The reasoning part's `time: { start, end }` must survive into the
+        // persisted opencode_message so the adapter can show "Thought for Ns".
+        let mut acc = StreamAccumulator::new("opencode", "");
+        assistant(&mut acc, "m1");
+        acc.push_event(
+            &json!({
+                "type": "opencode/message.part.updated", "session_id": "ses_1",
+                "part": { "type": "reasoning", "id": "pr", "messageID": "m1",
+                    "text": "done", "time": { "start": 1000, "end": 2500 } },
+            }),
+            "",
+        );
+        acc.push_event(
+            &json!({ "type": "opencode/session.idle", "session_id": "ses_1" }),
+            "",
+        );
+        let part = &acc.collected()[0].parsed.as_ref().unwrap()["parts"][0];
+        assert_eq!(part["type"], "reasoning");
+        assert_eq!(part["time"]["start"], 1000);
+        assert_eq!(part["time"]["end"], 2500);
+    }
+
+    #[test]
+    fn subtask_text_deltas_stream_under_parent_task() {
+        let mut acc = StreamAccumulator::new("opencode", "");
+        assistant(&mut acc, "m1");
+        acc.push_event(
+            &json!({
+                "type": "opencode/message.part.updated", "session_id": "ses_1",
+                "part": { "type": "tool", "id": "p1", "messageID": "m1",
+                    "callID": "task_1", "tool": "task",
+                    "state": { "status": "running", "input": {} } },
+            }),
+            "",
+        );
+        acc.push_event(
+            &json!({ "type": "opencode/subtask.message.updated", "session_id": "child_1",
+                "parent_call_id": "task_1", "info": { "id": "cm1", "role": "assistant" } }),
+            "",
+        );
+        // Streamed deltas (no snapshot yet) nest + grow under the task tool.
+        let out = acc.push_event(
+            &json!({ "type": "opencode/subtask.message.part.delta", "session_id": "child_1",
+                "parent_call_id": "task_1", "messageID": "cm1", "partID": "cp1",
+                "field": "text", "delta": "Sub" }),
+            "",
+        );
+        assert_eq!(out, PushOutcome::StreamingDelta);
+        acc.push_event(
+            &json!({ "type": "opencode/subtask.message.part.delta", "session_id": "child_1",
+                "parent_call_id": "task_1", "messageID": "cm1", "partID": "cp1",
+                "field": "text", "delta": " reply" }),
+            "",
+        );
+        acc.push_event(
+            &json!({ "type": "opencode/session.idle", "session_id": "ses_1" }),
+            "",
+        );
+        let task = &acc.collected()[0].parsed.as_ref().unwrap()["parts"][0];
+        assert_eq!(task["tool"], "task");
+        let children = task["children"].as_array().expect("task has children");
+        assert_eq!(children[0]["text"], "Sub reply");
+    }
+
+    #[test]
+    fn user_deltas_are_ignored() {
+        let mut acc = StreamAccumulator::new("opencode", "");
+        acc.push_event(
+            &json!({ "type": "opencode/message.updated", "session_id": "ses_1",
+                     "info": { "id": "mu", "role": "user" } }),
+            "",
+        );
+        let out = acc.push_event(&delta("mu", "pu", "text", "secret"), "");
+        assert_eq!(out, PushOutcome::NoOp);
+        assert!(acc.collected().is_empty());
+    }
+
+    #[test]
+    fn finalize_synthesizes_turn_result_with_duration() {
+        let mut acc = StreamAccumulator::new("opencode", "");
+        acc.push_event(
+            &json!({ "type": "opencode/message.updated", "session_id": "ses_1",
+                     "info": { "id": "m1", "role": "assistant",
+                               "time": { "created": 1000.0, "completed": 134000.0 } } }),
+            "",
+        );
+        acc.push_event(&updated("m1", "text", "p1", "done"), "");
+        let out = acc.push_event(
+            &json!({ "type": "opencode/session.idle", "session_id": "ses_1" }),
+            "",
+        );
+        assert_eq!(out, PushOutcome::Finalized);
+        // assistant message + synthesized turn/completed footer row.
+        let msgs = acc.collected();
+        assert_eq!(msgs.len(), 2);
+        let footer = msgs[1].parsed.as_ref().unwrap();
+        assert_eq!(footer["type"], "turn/completed");
+        assert_eq!(footer["duration_ms"], 133000.0);
+        // Same row is staged for persistence so it survives a DB round-trip.
+        assert!(acc.result_json().unwrap().contains("turn/completed"));
+    }
+
+    #[test]
+    fn finalize_without_time_emits_no_footer() {
+        // Trimmed fixtures carry no `info.time` → no footer, byte-identical output.
+        let mut acc = StreamAccumulator::new("opencode", "");
+        assistant(&mut acc, "m1");
+        acc.push_event(&updated("m1", "text", "p1", "done"), "");
+        acc.push_event(
+            &json!({ "type": "opencode/session.idle", "session_id": "ses_1" }),
+            "",
+        );
+        assert_eq!(acc.collected().len(), 1);
+        assert!(acc.result_json().is_none());
     }
 
     #[test]

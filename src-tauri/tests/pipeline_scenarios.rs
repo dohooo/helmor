@@ -379,6 +379,55 @@ fn res_large_tokens() {
     assert_yaml_snapshot!(run_normalized(msgs));
 }
 
+// opencode reload: an assistant turn (opencode_message) followed by the
+// synthesized turn/completed footer round-trips to assistant text + the
+// "Ns" duration row, matching claude/codex.
+#[test]
+fn opencode_turn_renders_text_and_duration_footer() {
+    let assistant = json!({
+        "type": "opencode_message",
+        "session_id": "ses_1",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4-6",
+        "parts": [{ "type": "text", "text": "Hello world" }],
+    });
+    let msgs = vec![
+        make_record(
+            "om1",
+            "assistant",
+            &serde_json::to_string(&assistant).unwrap(),
+        ),
+        make_record(
+            "tc1",
+            "assistant",
+            r#"{"type":"turn/completed","duration_ms":125000}"#,
+        ),
+    ];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+// opencode reasoning on reload: a closed reasoning block's `time` round-trips
+// to a "Thought for Ns" duration on the reasoning part.
+#[test]
+fn opencode_reasoning_carries_thought_duration() {
+    let assistant = json!({
+        "type": "opencode_message",
+        "session_id": "ses_1",
+        "role": "assistant",
+        "parts": [
+            { "type": "reasoning", "text": "let me think",
+              "time": { "start": 1_000_000u64, "end": 1_004_000u64 } },
+            { "type": "text", "text": "Answer" },
+        ],
+    });
+    let msgs = vec![make_record(
+        "om1",
+        "assistant",
+        &serde_json::to_string(&assistant).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
 // ============================================================================
 // 4. Edge cases
 // ============================================================================

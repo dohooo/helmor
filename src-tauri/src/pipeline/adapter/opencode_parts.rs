@@ -27,6 +27,16 @@ pub(crate) fn render_parts(parsed: &Value, msg_id: &str, is_streaming: bool) -> 
     out
 }
 
+// opencode reasoning parts carry `time: { start, end }` (epoch ms); the gap is
+// the "Thought for Ns" duration, available once the block closes (`end` set).
+fn reasoning_duration_ms(part: &Value) -> Option<u64> {
+    let time = part.get("time")?;
+    let start = time.get("start").and_then(Value::as_f64)?;
+    let end = time.get("end").and_then(Value::as_f64)?;
+    let dur = end - start;
+    (dur > 0.0).then_some(dur.round() as u64)
+}
+
 fn render_part(part: &Value, id: String, streaming_now: bool) -> Option<MessagePart> {
     let kind = part.get("type").and_then(Value::as_str).unwrap_or_default();
     let text = part.get("text").and_then(Value::as_str).unwrap_or_default();
@@ -40,7 +50,8 @@ fn render_part(part: &Value, id: String, streaming_now: bool) -> Option<MessageP
             text: text.to_string(),
             // Some(true) → expanded while streaming; None → collapsed.
             streaming: streaming_now.then_some(true),
-            duration_ms: None,
+            // "Thought for Ns" once the block closes (time.end present).
+            duration_ms: reasoning_duration_ms(part),
         }),
         "tool" => {
             let tool = part.get("tool").and_then(Value::as_str).unwrap_or("tool");
@@ -289,6 +300,33 @@ mod tests {
                 assert_eq!(text, "hello");
             }
             other => panic!("expected text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reasoning_carries_thought_duration_from_time() {
+        // Closed reasoning block: time.end - time.start → "Thought for Ns".
+        let msg = json!({
+            "type": "opencode_message",
+            "parts": [{
+                "type": "reasoning", "text": "thinking",
+                "time": { "start": 1_780_746_688_918u64, "end": 1_780_746_690_443u64 },
+            }],
+        });
+        match &render_parts(&msg, "m1", false)[0] {
+            MessagePart::Reasoning { duration_ms, .. } => {
+                assert_eq!(*duration_ms, Some(1525));
+            }
+            other => panic!("expected reasoning, got {other:?}"),
+        }
+        // Still-open block (no end) → no duration yet.
+        let open = json!({
+            "type": "opencode_message",
+            "parts": [{ "type": "reasoning", "text": "thinking", "time": { "start": 1u64 } }],
+        });
+        match &render_parts(&open, "m1", false)[0] {
+            MessagePart::Reasoning { duration_ms, .. } => assert_eq!(*duration_ms, None),
+            other => panic!("expected reasoning, got {other:?}"),
         }
     }
 

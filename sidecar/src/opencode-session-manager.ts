@@ -679,7 +679,8 @@ export class OpencodeSessionManager implements SessionManager {
 	}
 
 	// Forward a subagent child session's message events tagged with the parent
-	// `task` callID. Only message.updated / message.part.updated; lifecycle ignored.
+	// `task` callID. message.updated / message.part.updated / message.part.delta
+	// (so subagent text + reasoning stream token-by-token); lifecycle ignored.
 	private forwardSubtaskEvent(
 		ctx: SessionCtx,
 		event: OpencodeEvent,
@@ -690,7 +691,8 @@ export class OpencodeSessionManager implements SessionManager {
 		if (!parentCallID) return;
 		if (
 			event.type !== "message.updated" &&
-			event.type !== "message.part.updated"
+			event.type !== "message.part.updated" &&
+			event.type !== "message.part.delta"
 		) {
 			return;
 		}

@@ -512,6 +512,8 @@ impl StreamAccumulator {
             Some("opencode/session_init") => PushOutcome::NoOp,
             Some("opencode/message.updated") => opencode::handle_message_updated(self, value),
             Some("opencode/message.part.updated") => opencode::handle_part_updated(self, value),
+            // Token-by-token text/reasoning deltas (parallel to part.updated snapshots).
+            Some("opencode/message.part.delta") => opencode::handle_part_delta(self, value),
             // Subagent (`task` tool) parts, tagged with the parent `callID`.
             Some("opencode/subtask.message.updated") => {
                 opencode::handle_subtask_message_updated(self, value)
@@ -519,12 +521,14 @@ impl StreamAccumulator {
             Some("opencode/subtask.message.part.updated") => {
                 opencode::handle_subtask_part_updated(self, value)
             }
+            Some("opencode/subtask.message.part.delta") => {
+                opencode::handle_subtask_part_delta(self, value)
+            }
             // A turn finalizes when its session goes idle.
             Some("opencode/session.idle") => opencode::handle_session_idle(self),
             Some("opencode/session.status") => opencode::handle_session_status(self, value),
             // Redundant/informational forms — handled as NoOps for the coverage guard.
-            Some("opencode/message.part.delta")
-            | Some("opencode/session.error")
+            Some("opencode/session.error")
             | Some("opencode/session.created")
             | Some("opencode/session.updated")
             | Some("opencode/session.diff")
