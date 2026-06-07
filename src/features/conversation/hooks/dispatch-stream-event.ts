@@ -31,6 +31,7 @@ import type {
 	PendingPermission,
 	useStreamingStore,
 } from "@/features/conversation/state/streaming-store";
+import { nestStreamingChildPartial } from "@/features/conversation/streaming-child-nesting";
 import { stabilizeStreamingMessages } from "@/features/conversation/streaming-tail-collapse";
 import type {
 	AgentModelOption,
@@ -317,12 +318,19 @@ export function createStreamFlushers(opts: {
 		if (!opts.accumulator.needsFlush) return;
 		opts.accumulator.needsFlush = false;
 
-		const rendered = opts.accumulator.pendingPartial
-			? stabilizeStreamingMessages([
-					...opts.accumulator.baseMessages,
-					opts.accumulator.pendingPartial,
-				])
-			: opts.accumulator.baseMessages;
+		const partial = opts.accumulator.pendingPartial;
+		let rendered: ThreadMessageLike[];
+		if (!partial) {
+			rendered = opts.accumulator.baseMessages;
+		} else {
+			// A subagent partial (`child:<parent>:…`) nests under its parent
+			// tool call so the live tokens render inside the card instead of
+			// flashing as a second top-level bubble. Everything else takes the
+			// trailing-tail merge path.
+			rendered =
+				nestStreamingChildPartial(opts.accumulator.baseMessages, partial) ??
+				stabilizeStreamingMessages([...opts.accumulator.baseMessages, partial]);
+		}
 		replaceStreamingTail(
 			opts.queryClient,
 			opts.cacheSessionId,
