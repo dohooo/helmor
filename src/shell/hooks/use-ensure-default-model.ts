@@ -20,11 +20,11 @@ function isModelCatalogSettled(sections: AgentModelSection[]) {
 }
 
 /**
- * Invariant: once the model catalog is ready, `settings.defaultModelId` must
- * point to a model that exists in the catalog. If it doesn't (never set, or
- * the previously-picked model is gone), pick a reasonable default and write
- * it back. This is the single place that decides the initial default — every
- * other consumer reads `settings.defaultModelId` directly.
+ * Invariant: once the model catalog has settled, every stored model id must
+ * point to a model that still exists. `defaultModelId` is repaired to a
+ * sensible default; stale `review`/`pr` picks (e.g. a delisted model) are
+ * unset so they fall back to the default. No per-model migration needed —
+ * this self-heals on cold-start for any future delist.
  */
 export function useEnsureDefaultModel() {
 	const { settings, isLoaded, updateSettings } = useSettings();
@@ -34,44 +34,59 @@ export function useEnsureDefaultModel() {
 	useEffect(() => {
 		if (!isLoaded) return;
 		if (!sections || sections.length === 0) return;
+		const settled = isModelCatalogSettled(sections);
 		const allOptions = sections.flatMap((s) => s.options);
+		const patch: Partial<AppSettings> = {};
 
-		// Already valid — nothing to do.
-		if (
-			settings.defaultModelId &&
-			findModelOption(sections, settings.defaultModelId)
-		) {
-			return;
+		// Unset stale review/pr picks (non-null but gone from the catalog) so
+		// they fall back to the default. Only act once settled, so we don't
+		// confuse "delisted" with "still loading".
+		if (settled) {
+			if (
+				settings.reviewModelId &&
+				!findModelOption(sections, settings.reviewModelId)
+			) {
+				patch.reviewModelId = null;
+			}
+			if (
+				settings.prModelId &&
+				!findModelOption(sections, settings.prModelId)
+			) {
+				patch.prModelId = null;
+			}
 		}
 
-		// User previously saved a model but it's not in the catalog. Only
-		// repair it once every provider has reached a terminal state.
-		if (settings.defaultModelId && !isModelCatalogSettled(sections)) return;
+		const defaultValid =
+			!!settings.defaultModelId &&
+			!!findModelOption(sections, settings.defaultModelId);
 
-		// Never been set (null), or a previously-saved value is now definitively
-		// unavailable — pick a sensible available default.
-		const pick =
-			sections.find((s) => s.id === "claude")?.options[0]?.id ??
-			allOptions[0]?.id ??
-			null;
-		if (!pick) return;
+		// Repair the default when it's never been set, or was set but is now
+		// definitively gone (wait for every provider to settle first).
+		if (!defaultValid && (settled || !settings.defaultModelId)) {
+			const pick =
+				sections.find((s) => s.id === "claude")?.options[0]?.id ??
+				allOptions[0]?.id ??
+				null;
+			if (pick) {
+				patch.defaultModelId = pick;
+				// Materialize null review/pr fields alongside the default so a
+				// fresh install doesn't depend on the next cold-start migration.
+				if (settings.reviewModelId === null) patch.reviewModelId = pick;
+				if (settings.prModelId === null) patch.prModelId = pick;
+				if (settings.reviewEffort === null) {
+					patch.reviewEffort = settings.defaultEffort;
+				}
+				if (settings.prEffort === null) patch.prEffort = settings.defaultEffort;
+				if (settings.reviewFastMode === null) {
+					patch.reviewFastMode = settings.defaultFastMode;
+				}
+				if (settings.prFastMode === null) {
+					patch.prFastMode = settings.defaultFastMode;
+				}
+			}
+		}
 
-		// Materialize null review/pr fields alongside the default so a fresh
-		// install doesn't depend on the next cold-start migration.
-		const patch: Partial<AppSettings> = { defaultModelId: pick };
-		if (settings.reviewModelId === null) patch.reviewModelId = pick;
-		if (settings.prModelId === null) patch.prModelId = pick;
-		if (settings.reviewEffort === null) {
-			patch.reviewEffort = settings.defaultEffort;
-		}
-		if (settings.prEffort === null) patch.prEffort = settings.defaultEffort;
-		if (settings.reviewFastMode === null) {
-			patch.reviewFastMode = settings.defaultFastMode;
-		}
-		if (settings.prFastMode === null) {
-			patch.prFastMode = settings.defaultFastMode;
-		}
-		updateSettings(patch);
+		if (Object.keys(patch).length > 0) updateSettings(patch);
 	}, [
 		isLoaded,
 		sections,

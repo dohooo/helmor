@@ -788,7 +788,7 @@ describe("resolveSessionSelectedModelId", () => {
 });
 
 describe("resolveSessionDisplayProvider", () => {
-	it("maps the resolved model to the provider", () => {
+	it("uses the session's provider, ignoring the composer model selection", () => {
 		expect(
 			resolveSessionDisplayProvider({
 				session: {
@@ -802,22 +802,41 @@ describe("resolveSessionDisplayProvider", () => {
 				},
 				modelSections: MODEL_SECTIONS,
 			}),
-		).toBe("codex");
+		).toBe("claude");
 	});
 
-	it("falls back to persisted agent type when model resolution is unavailable", () => {
+	it("keeps the opencode icon regardless of the selected sub-provider model", () => {
 		expect(
 			resolveSessionDisplayProvider({
 				session: {
 					id: "session-2",
-					agentType: "claude",
+					agentType: "opencode",
 					model: null,
 					lastUserMessageAt: null,
 				},
-				modelSelections: {},
-				modelSections: [],
+				modelSelections: {
+					"session:session-2": "gpt-4o",
+				},
+				modelSections: MODEL_SECTIONS,
 			}),
-		).toBe("claude");
+		).toBe("opencode");
+	});
+
+	it("falls back to the selected model's provider when the session has no agent", () => {
+		expect(
+			resolveSessionDisplayProvider({
+				session: {
+					id: "session-3",
+					agentType: null,
+					model: null,
+					lastUserMessageAt: null,
+				},
+				modelSelections: {
+					"session:session-3": "gpt-4o",
+				},
+				modelSections: MODEL_SECTIONS,
+			}),
+		).toBe("codex");
 	});
 });
 

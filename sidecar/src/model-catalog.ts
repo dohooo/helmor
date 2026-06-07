@@ -74,23 +74,9 @@ const MODEL_CATALOG: Record<Provider, readonly ProviderModelInfo[]> = {
 			supportsFastMode: true,
 		},
 		{
-			id: "gpt-5.3-codex",
-			label: "GPT-5.3-Codex",
-			cliModel: "gpt-5.3-codex",
-			effortLevels: CODEX_EFFORT_LEVELS,
-			supportsFastMode: true,
-		},
-		{
 			id: "gpt-5.3-codex-spark",
 			label: "GPT-5.3-Codex-Spark",
 			cliModel: "gpt-5.3-codex-spark",
-			effortLevels: CODEX_EFFORT_LEVELS,
-			supportsFastMode: true,
-		},
-		{
-			id: "gpt-5.2",
-			label: "GPT-5.2",
-			cliModel: "gpt-5.2",
 			effortLevels: CODEX_EFFORT_LEVELS,
 			supportsFastMode: true,
 		},
@@ -185,5 +171,5 @@ export function pickFastestCodexModel(): string {
 			best = { cliModel: m.cliModel, version, isMini };
 		}
 	}
-	return best?.cliModel ?? "gpt-5.2";
+	return best?.cliModel ?? "gpt-5.4-mini";
 }

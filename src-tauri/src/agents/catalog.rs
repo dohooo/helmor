@@ -114,9 +114,7 @@ fn codex_section() -> AgentModelSection {
             codex_model("gpt-5.5", "GPT-5.5"),
             codex_model("gpt-5.4", "GPT-5.4"),
             codex_model("gpt-5.4-mini", "GPT-5.4-Mini"),
-            codex_model("gpt-5.3-codex", "GPT-5.3-Codex"),
             codex_model("gpt-5.3-codex-spark", "GPT-5.3-Codex-Spark"),
-            codex_model("gpt-5.2", "GPT-5.2"),
         ],
     }
 }
@@ -620,14 +618,7 @@ mod tests {
                 .iter()
                 .map(|model| model.id.as_str())
                 .collect::<Vec<_>>(),
-            vec![
-                "gpt-5.5",
-                "gpt-5.4",
-                "gpt-5.4-mini",
-                "gpt-5.3-codex",
-                "gpt-5.3-codex-spark",
-                "gpt-5.2",
-            ]
+            vec!["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark",]
         );
         assert!(sections[1]
             .options
@@ -1271,10 +1262,10 @@ mod tests {
 
     #[test]
     fn provider_hint_disambiguates_overlapping_ids() {
-        // gpt-5.3-codex exists in both Codex and Cursor; the request's
-        // provider field is the tie-break. (Cursor's namespaced form
-        // would be `cursor-gpt-5.3-codex`, which obviates the hint —
-        // but bare ids may still arrive via legacy / external callers.)
+        // A bare `gpt-`-prefixed id routes to Codex by prefix, but a
+        // provider hint overrides that: the same id resolves to Cursor when
+        // hinted. (Cursor's namespaced form `cursor-gpt-5.3-codex` obviates
+        // the hint, but bare ids may still arrive via legacy / external callers.)
         let codex = resolve_model("gpt-5.3-codex", Some("codex"));
         assert_eq!(codex.provider, "codex");
         let cursor = resolve_model("gpt-5.3-codex", Some("cursor"));

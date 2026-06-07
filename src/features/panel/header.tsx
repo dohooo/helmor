@@ -26,7 +26,12 @@ import { BranchPickerPopover } from "@/components/branch-picker";
 import { CachedAvatar } from "@/components/cached-avatar";
 import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
 import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator";
-import { ClaudeIcon, CursorIcon, OpenAIIcon } from "@/components/icons";
+import {
+	ClaudeIcon,
+	CursorIcon,
+	OpenAIIcon,
+	OpenCodeIcon,
+} from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
@@ -859,6 +864,9 @@ function SessionProviderIcon({
 	}
 	if (agentType === "cursor") {
 		return <CursorIcon className="size-3 shrink-0 text-muted-foreground" />;
+	}
+	if (agentType === "opencode") {
+		return <OpenCodeIcon className="size-3 shrink-0 text-muted-foreground" />;
 	}
 	return <ClaudeIcon className="size-3 shrink-0 text-muted-foreground" />;
 }

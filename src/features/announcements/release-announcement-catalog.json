@@ -2,6 +2,21 @@
 	"_readme": "AUTO-GENERATED from .announcements during `bun run release:version`. Each item is one released version's in-app announcement. Do not edit released entries by hand.",
 	"items": [
 		{
+			"releaseVersion": "0.32.0",
+			"items": [
+				{
+					"text": "OpenCode is now a built-in coding agent — start a session and pick from any model it can reach, then connect your own providers in Settings.",
+					"action": {
+						"label": "Open Providers",
+						"value": {
+							"type": "openSettings",
+							"section": "providers"
+						}
+					}
+				}
+			]
+		},
+		{
 			"releaseVersion": "0.31.0",
 			"items": [
 				{
