@@ -33,7 +33,7 @@ pub(super) fn claude_code_user_agent() -> String {
 fn probe_claude_version() -> Option<String> {
     let mut cmd = Command::new("claude");
     cmd.args(["--allowed-tools", "", "--version"]);
-    crate::platform::process::hide_console(&mut cmd);
+    crate::platform::process::configure_background_cli(&mut cmd);
     let output = run_with_timeout(&mut cmd, CLAUDE_VERSION_PROBE_TIMEOUT)?;
     parse_claude_version_output(&output)
 }

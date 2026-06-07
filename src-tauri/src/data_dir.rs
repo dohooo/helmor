@@ -205,25 +205,7 @@ fn resolve_data_dir() -> Result<PathBuf> {
 }
 
 fn dirs_home() -> Option<PathBuf> {
-    // `HOME` is the Unix convention (and is set in CI / git-bash on Windows too).
-    if let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
-        return Some(PathBuf::from(home));
-    }
-    // Windows GUI processes typically have `USERPROFILE` rather than `HOME`.
-    #[cfg(windows)]
-    {
-        if let Some(profile) = std::env::var_os("USERPROFILE").filter(|v| !v.is_empty()) {
-            return Some(PathBuf::from(profile));
-        }
-        if let (Some(drive), Some(path)) =
-            (std::env::var_os("HOMEDRIVE"), std::env::var_os("HOMEPATH"))
-        {
-            let mut combined = drive;
-            combined.push(path);
-            return Some(PathBuf::from(combined));
-        }
-    }
-    None
+    crate::platform::paths::home_dir()
 }
 
 /// Ensure all required subdirectories exist.

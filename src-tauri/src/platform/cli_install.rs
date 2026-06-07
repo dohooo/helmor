@@ -30,7 +30,7 @@ pub fn install_target(cli_name: &str) -> PathBuf {
 pub fn shim_dir() -> PathBuf {
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
-        .or_else(|| super::home_dir().map(|home| home.join("AppData").join("Local")))
+        .or_else(|| super::paths::home_dir().map(|home| home.join("AppData").join("Local")))
         .unwrap_or_default()
         .join("Helmor")
         .join("bin")

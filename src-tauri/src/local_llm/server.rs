@@ -148,7 +148,7 @@ pub fn spawn(args: SpawnArgs) -> Result<ServerInstance> {
         .env("LLAMA_CACHE", args.hf_home.join("llama.cpp"))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = crate::platform::process::hide_console(&mut command)
+    let mut child = crate::platform::process::configure_background_cli(&mut command)
         .spawn()
         .with_context(|| format!("spawn bundled llama-server at {}", bin.display()))?;
 
@@ -291,7 +291,7 @@ pub fn sweep_orphan_pid(pid_path: &Path, tag: &str) {
     let mut term_cmd = Command::new("kill");
     term_cmd.args(["-TERM", &pid.to_string()]);
     if is_llama_server_pid(pid)
-        && crate::platform::process::hide_console(&mut term_cmd)
+        && crate::platform::process::configure_background_cli(&mut term_cmd)
             .status()
             .is_ok()
     {
@@ -301,7 +301,7 @@ pub fn sweep_orphan_pid(pid_path: &Path, tag: &str) {
         if is_llama_server_pid(pid) {
             let mut kill_cmd = Command::new("kill");
             kill_cmd.args(["-KILL", &pid.to_string()]);
-            let _ = crate::platform::process::hide_console(&mut kill_cmd).status();
+            let _ = crate::platform::process::configure_background_cli(&mut kill_cmd).status();
         }
     }
     let _ = fs::remove_file(pid_path);
@@ -310,7 +310,8 @@ pub fn sweep_orphan_pid(pid_path: &Path, tag: &str) {
 fn is_llama_server_pid(pid: i32) -> bool {
     let mut ps_cmd = Command::new("ps");
     ps_cmd.args(["-p", &pid.to_string(), "-o", "comm="]);
-    let Ok(output) = crate::platform::process::hide_console(&mut ps_cmd).output() else {
+    let Ok(output) = crate::platform::process::configure_background_cli(&mut ps_cmd).output()
+    else {
         return false;
     };
     if !output.status.success() {

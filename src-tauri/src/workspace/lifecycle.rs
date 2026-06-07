@@ -1097,7 +1097,7 @@ pub(crate) fn run_archive_hook_inner(
             "HELMOR_DEFAULT_BRANCH",
             record.default_branch.as_deref().unwrap_or("main"),
         );
-    let status = crate::platform::process::hide_console(&mut command).status();
+    let status = crate::platform::process::configure_background_cli(&mut command).status();
 
     match status {
         Ok(s) if s.success() => ArchiveHookOutcome::Success,

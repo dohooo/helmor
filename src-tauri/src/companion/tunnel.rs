@@ -169,9 +169,8 @@ pub fn sign_in_cloudflare() -> Result<()> {
 /// `~/.cloudflared/<uuid>.json`.
 pub fn create_named_tunnel(name: &str) -> Result<(String, String)> {
     let bin = resolve_cloudflared();
-    let mut command = Command::new(&bin);
-    command.args(["tunnel", "create", name]);
-    let output = crate::platform::process::hide_console(&mut command)
+    let output = Command::new(&bin)
+        .args(["tunnel", "create", name])
         .output()
         .with_context(|| format!("failed to run cloudflared ({})", bin.display()))?;
     let combined = format!(
@@ -195,9 +194,9 @@ pub fn create_named_tunnel(name: &str) -> Result<(String, String)> {
 /// Delete a named tunnel. Best-effort: a missing tunnel is treated as success.
 pub fn delete_named_tunnel(tunnel_uuid: &str) -> Result<()> {
     let bin = resolve_cloudflared();
-    let mut command = Command::new(&bin);
-    command.args(["tunnel", "delete", tunnel_uuid]);
-    let _ = crate::platform::process::hide_console(&mut command).output();
+    let _ = Command::new(&bin)
+        .args(["tunnel", "delete", tunnel_uuid])
+        .output();
     Ok(())
 }
 
@@ -221,9 +220,8 @@ fn spawn_and_await(
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
 
-    // Own process group (Unix) so a later teardown reaches the whole tree;
-    // on Windows the tree is killed via taskkill in `kill_process_group`.
-    crate::platform::process::configure_new_group(&mut command);
+    // Own process tree so later termination reaches child processes.
+    crate::platform::process::configure_tree_root(&mut command);
 
     let mut child = command.spawn().with_context(|| {
         format!(
@@ -294,7 +292,8 @@ fn run_oneshot_interactive(args: &[String], timeout: Duration) -> Result<bool> {
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
-    let mut child = crate::platform::process::hide_console(&mut command)
+    crate::platform::process::configure_tree_root(&mut command);
+    let mut child = command
         .spawn()
         .with_context(|| format!("failed to spawn cloudflared ({})", bin.display()))?;
 
@@ -315,7 +314,7 @@ fn run_oneshot_interactive(args: &[String], timeout: Duration) -> Result<bool> {
 
 /// `~/.cloudflared`.
 fn cloudflared_home() -> Option<PathBuf> {
-    crate::platform::home_dir().map(|home| home.join(".cloudflared"))
+    crate::platform::paths::home_dir().map(|home| home.join(".cloudflared"))
 }
 
 /// Resolve the cloudflared binary: env override → bundled vendor copy → PATH.
@@ -367,9 +366,8 @@ fn parse_tunnel_uuid(text: &str) -> Option<String> {
 /// SIGTERM the child's process group, wait briefly, then SIGKILL. Mirrors the
 /// sidecar teardown ladder.
 fn kill_process_group(child: &mut Child) {
-    let pid = child.id();
-    // Graceful tree stop first (Unix SIGTERM to group / Windows taskkill /T).
-    crate::platform::process::terminate_tree(pid);
+    let tree = crate::platform::process::ProcessTree::from_child_pid(child.id());
+    crate::platform::process::terminate_tree(tree);
     let deadline = Instant::now() + Duration::from_millis(2000);
     loop {
         if let Ok(Some(_)) = child.try_wait() {
@@ -380,8 +378,7 @@ fn kill_process_group(child: &mut Child) {
         }
         std::thread::sleep(Duration::from_millis(25));
     }
-    // Escalate to a forced tree kill.
-    crate::platform::process::kill_tree(pid);
+    crate::platform::process::kill_tree(tree);
     let _ = child.wait();
 }
 

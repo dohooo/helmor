@@ -15,15 +15,9 @@
 /// spawned. It is intentionally infallible — on failure it logs and
 /// returns, leaving the existing (minimal) environment in place.
 pub fn inherit_login_shell_env() {
-    // macOS/Linux GUI launches (Finder/Spotlight/.desktop) only see a minimal
-    // PATH, so we capture the login shell's environment. Windows GUI processes
-    // already inherit the full user/system PATH from the registry, so there is
-    // nothing to work around there.
-    #[cfg(unix)]
     unix::inherit();
 }
 
-#[cfg(unix)]
 mod unix {
     use std::collections::HashMap;
     use std::process::Command;
@@ -243,9 +237,8 @@ mod unix {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null());
-        // Start in its own process group (Unix) so we can kill the tree
-        // without also signalling ourselves; on Windows taskkill /T handles it.
-        crate::platform::process::configure_new_group(&mut command);
+        crate::platform::process::configure_tree_root(&mut command);
+
         let mut child = command
             .spawn()
             .map_err(|e| anyhow::anyhow!("spawn `{program}`: {e}"))?;
@@ -281,8 +274,9 @@ mod unix {
                 }
                 Ok(None) => {
                     if std::time::Instant::now() >= deadline {
-                        // Kill the whole tree, not just the shell.
-                        crate::platform::process::kill_tree(pid);
+                        crate::platform::process::kill_tree(
+                            crate::platform::process::ProcessTree::from_child_pid(pid),
+                        );
                         let _ = child.wait();
                         anyhow::bail!(
                             "login shell env capture timed out after {}s",

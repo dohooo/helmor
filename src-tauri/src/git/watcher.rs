@@ -825,7 +825,7 @@ mod tests {
     fn git(repo: &Path, args: &[&str]) {
         let mut cmd = Command::new("git");
         cmd.args(args).current_dir(repo);
-        let output = crate::platform::process::hide_console(&mut cmd)
+        let output = crate::platform::process::configure_background_cli(&mut cmd)
             .output()
             .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
         assert!(

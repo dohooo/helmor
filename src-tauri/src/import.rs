@@ -656,7 +656,9 @@ fn resolve_source_branch(
                 "--abbrev-ref",
                 "HEAD",
             ]);
-            if let Ok(output) = crate::platform::process::hide_console(&mut command).output() {
+            if let Ok(output) =
+                crate::platform::process::configure_background_cli(&mut command).output()
+            {
                 let actual = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !actual.is_empty()
                     && actual != "HEAD"

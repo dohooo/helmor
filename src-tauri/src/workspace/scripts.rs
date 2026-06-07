@@ -295,31 +295,28 @@ impl ScriptProcessManager {
 }
 
 /// Terminate a process tree, escalating from a cooperative stop to a force kill.
-/// Polls liveness via [`crate::platform::process::pid_alive`] to detect when the
-/// leader has been reaped by `run_script`'s `child.wait()` on another thread.
+/// Polls tree liveness via [`crate::platform::process::wait_for_tree_gone`] to
+/// detect when the leader has been reaped by `run_script`'s `child.wait()` on
+/// another thread.
 fn escalating_kill(pid: u32) {
     if pid == 0 {
         return;
     }
-    crate::platform::process::terminate_tree(pid);
-    if wait_pid_gone(pid, PROCESS_TERM_TIMEOUT) {
+    let tree = crate::platform::process::ProcessTree::from_child_pid(pid);
+    crate::platform::process::terminate_tree(tree);
+    if crate::platform::process::wait_for_tree_gone(
+        tree,
+        PROCESS_TERM_TIMEOUT,
+        PROCESS_POLL_INTERVAL,
+    ) {
         return;
     }
-    crate::platform::process::kill_tree(pid);
-    let _ = wait_pid_gone(pid, PROCESS_KILL_TIMEOUT);
-}
-
-fn wait_pid_gone(pid: u32, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if !crate::platform::process::pid_alive(pid) {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(PROCESS_POLL_INTERVAL);
-    }
+    crate::platform::process::kill_tree(tree);
+    let _ = crate::platform::process::wait_for_tree_gone(
+        tree,
+        PROCESS_KILL_TIMEOUT,
+        PROCESS_POLL_INTERVAL,
+    );
 }
 
 /// Force-kill any `stop.command` cleanup tree currently published in `pid_slot`.
@@ -329,7 +326,9 @@ fn wait_pid_gone(pid: u32, timeout: Duration) -> bool {
 fn kill_in_flight_stop_command(pid_slot: &Mutex<Option<u32>>) {
     let stop_pid = *pid_slot.lock().expect("stop_pid mutex poisoned");
     if let Some(pid) = stop_pid {
-        crate::platform::process::kill_tree(pid);
+        crate::platform::process::kill_tree(crate::platform::process::ProcessTree::from_child_pid(
+            pid,
+        ));
     }
 }
 
@@ -400,7 +399,7 @@ fn run_stop_command(
 
     // Own process group (Unix) so a concurrent Force Stop can kill the whole
     // cleanup tree; on Windows taskkill /T handles the tree by PID.
-    crate::platform::process::configure_new_group(&mut cmd);
+    crate::platform::process::configure_tree_root(&mut cmd);
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -455,7 +454,9 @@ fn run_stop_command(
                 std::thread::sleep(STOP_COMMAND_POLL_INTERVAL);
             }
             Err(e) => {
-                crate::platform::process::kill_tree(pid);
+                crate::platform::process::kill_tree(
+                    crate::platform::process::ProcessTree::from_child_pid(pid),
+                );
                 let _ = child.wait();
                 break StopOutcome::SpawnFailed(format!("try_wait failed: {e}"));
             }
@@ -1049,7 +1050,7 @@ mod tests {
         };
         assert!(still_registered);
         assert!(
-            crate::platform::process::pid_alive(pid_b),
+            crate::platform::process::pid_alive(pid_b as crate::platform::process::Pid),
             "ws-b should still be alive"
         );
 

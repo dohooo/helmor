@@ -95,12 +95,7 @@ where
         command.env(name, value);
     }
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-    crate::platform::process::hide_console(&mut command);
+    crate::platform::process::configure_tree_root(&mut command);
 
     let child = command.spawn()?;
     let child_pid = child.id();
@@ -139,19 +134,10 @@ where
     })
 }
 
-#[cfg(unix)]
 fn kill_process(child_pid: u32) {
-    unsafe {
-        libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
-    }
-}
-
-#[cfg(not(unix))]
-fn kill_process(child_pid: u32) {
-    let pid = child_pid.to_string();
-    let mut cmd = Command::new("taskkill");
-    cmd.args(["/PID", pid.as_str(), "/T", "/F"]);
-    let _ = crate::platform::process::hide_console(&mut cmd).status();
+    crate::platform::process::kill_tree(crate::platform::process::ProcessTree::from_child_pid(
+        child_pid,
+    ));
 }
 
 pub(crate) fn command_detail(output: &CommandOutput) -> String {
@@ -169,8 +155,7 @@ pub(crate) fn command_detail(output: &CommandOutput) -> String {
     }
 }
 
-#[cfg(test)]
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

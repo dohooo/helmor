@@ -158,11 +158,7 @@ impl SidecarProcess {
         let is_dev = sidecar_path.extension().is_some_and(|ext| ext == "ts");
 
         let mut cmd = if is_dev {
-            // On Windows `bun` on PATH is a `.cmd`/`.ps1` shim that CreateProcess
-            // can't resolve from the bare name; resolve the real file via PATHEXT.
-            let bun =
-                crate::platform::which("bun").unwrap_or_else(|| std::path::PathBuf::from("bun"));
-            let mut c = Command::new(bun);
+            let mut c = Command::new(crate::platform::executable::resolve_for_spawn("bun"));
             c.arg("run").arg(&sidecar_path);
             // Anchor cwd to sidecar/ so Bun discovers `bunfig.toml` and
             // applies the preload that registers our build-time plugins
@@ -181,11 +177,9 @@ impl SidecarProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
 
-        // Put the sidecar in its own process group (Unix) so tree teardown
-        // reaches all child processes (Claude CLI, Codex CLI) instead of only
-        // hitting the Bun parent. On Windows this suppresses child console
-        // windows; tree-kill is handled by `platform::process` via taskkill.
-        crate::platform::process::configure_new_group(&mut cmd);
+        // Put the sidecar in its own process tree so termination reaches
+        // Claude/Codex/OpenCode children instead of only hitting Bun.
+        crate::platform::process::configure_tree_root(&mut cmd);
 
         // Pass log config to the sidecar process
         if let Ok(dir) = crate::data_dir::logs_dir() {
@@ -299,7 +293,9 @@ impl SidecarProcess {
     /// child CLIs don't get reparented to launchd as orphans.
     fn kill(&mut self) {
         // Kill the whole tree first so child CLIs aren't reparented as orphans.
-        crate::platform::process::kill_tree(self.pid());
+        crate::platform::process::kill_tree(crate::platform::process::ProcessTree::from_child_pid(
+            self.pid(),
+        ));
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -327,7 +323,9 @@ impl SidecarProcess {
     /// signal.
     fn send_sigterm(&self) {
         // Graceful tree stop: Unix SIGTERM to the group, Windows taskkill /T.
-        crate::platform::process::terminate_tree(self.pid());
+        crate::platform::process::terminate_tree(
+            crate::platform::process::ProcessTree::from_child_pid(self.pid()),
+        );
     }
 }
 
@@ -983,32 +981,43 @@ mod tests {
 
     #[test]
     fn bundled_agent_paths_resolve_from_running_app() {
+        // The resolver appends `.exe` on Windows; build the fixture with the
+        // platform-native binary names so the test exercises real resolution.
+        let claude = if cfg!(windows) {
+            "claude.exe"
+        } else {
+            "claude"
+        };
+        let codex = if cfg!(windows) { "codex.exe" } else { "codex" };
+        let opencode = if cfg!(windows) {
+            "opencode.exe"
+        } else {
+            "opencode"
+        };
+
         let root = tempfile::tempdir().unwrap();
         let exe = root.path().join("Helmor.app/Contents/MacOS/Helmor");
         let resources = root.path().join("Helmor.app/Contents/Resources/vendor");
         std::fs::create_dir_all(resources.join("claude-code")).unwrap();
         std::fs::create_dir_all(resources.join("codex")).unwrap();
         std::fs::create_dir_all(resources.join("opencode")).unwrap();
-        std::fs::write(resources.join("claude-code/claude"), "").unwrap();
-        std::fs::write(resources.join("codex/codex"), "").unwrap();
-        std::fs::write(resources.join("opencode/opencode"), "").unwrap();
+        std::fs::write(resources.join("claude-code").join(claude), "").unwrap();
+        std::fs::write(resources.join("codex").join(codex), "").unwrap();
+        std::fs::write(resources.join("opencode").join(opencode), "").unwrap();
 
         let paths = resolve_bundled_agent_paths_for_exe(&exe).unwrap();
 
         assert_eq!(
             paths.claude_bin.unwrap(),
-            root.path()
-                .join("Helmor.app/Contents/Resources/vendor/claude-code/claude")
+            resources.join("claude-code").join(claude)
         );
         assert_eq!(
             paths.codex_bin.unwrap(),
-            root.path()
-                .join("Helmor.app/Contents/Resources/vendor/codex/codex")
+            resources.join("codex").join(codex)
         );
         assert_eq!(
             paths.opencode_bin.unwrap(),
-            root.path()
-                .join("Helmor.app/Contents/Resources/vendor/opencode/opencode")
+            resources.join("opencode").join(opencode)
         );
     }
 }

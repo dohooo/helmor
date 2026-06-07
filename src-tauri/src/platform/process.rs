@@ -1,153 +1,207 @@
-//! Cross-platform child-process group management.
-//!
-//! Helmor spawns long-lived child trees (the Bun sidecar, which itself spawns
-//! the Claude/Codex CLIs; `cloudflared`; `git`/`ssh`; user scripts) and must be
-//! able to tear down the *whole tree*, not just the direct child. It also
-//! persists child PIDs to SQLite and probes their liveness across app restarts
-//! (see `workspace/runtime_registry.rs`), so the abstraction is intentionally
-//! **PID-based** — there is no process-local handle to store.
-//!
-//! - **Unix:** the child leads a new process group (`setpgid` via
-//!   `process_group(0)`); tree signals target the negative PGID (== child PID).
-//! - **Windows:** there are no process groups in the POSIX sense, so tree-kill
-//!   walks the parent/child tree with `taskkill /T`. This mirrors the
-//!   already-present Windows path in `forge/command.rs`. Children are spawned
-//!   with `CREATE_NO_WINDOW` so console CLIs don't flash a window.
+//! Process spawning, liveness, and process-tree teardown.
 
 use std::process::Command;
+use std::time::{Duration, Instant};
 
-/// `CREATE_NO_WINDOW`: don't pop a console window for child CLIs.
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+#[cfg(unix)]
+pub type Pid = libc::pid_t;
 
-/// Suppress the console window for a child CLI on Windows; no-op on Unix.
-///
-/// Unlike [`configure_new_group`] this has no process-group side effects, so
-/// it is the right wrapper for **short-lived, one-shot** commands (`git`,
-/// `gh`, `glab`, system probes, …). Without it every spawn on Windows flashes
-/// a console window — and because the console steals focus from the main
-/// window, focus-driven refetches (`refetchOnWindowFocus: "always"`) re-fire
-/// when it closes, producing a self-sustaining spawn loop.
-pub fn hide_console(cmd: &mut Command) -> &mut Command {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    cmd
+#[cfg(not(unix))]
+pub type Pid = u32;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProcessTree {
+    pub pid: Pid,
+    pub pgid: Pid,
 }
 
-/// [`hide_console`] for `tokio::process::Command`.
-pub fn hide_console_tokio(cmd: &mut tokio::process::Command) -> &mut tokio::process::Command {
-    #[cfg(windows)]
-    {
-        cmd.creation_flags(CREATE_NO_WINDOW);
+impl ProcessTree {
+    pub fn new(pid: Pid, pgid: Pid) -> Self {
+        Self { pid, pgid }
     }
-    cmd
+
+    pub fn from_child_pid(pid: u32) -> Self {
+        let pid = pid as Pid;
+        Self::new(pid, pid)
+    }
 }
 
-/// Configure `cmd` so the spawned child can later be torn down as a whole tree.
-///
-/// Call this on the `Command` *before* `spawn()`. On Unix it makes the child a
-/// process-group leader. On Windows it suppresses console windows for child
-/// CLIs (tree termination itself is handled by [`kill_tree`]/[`terminate_tree`]
-/// via `taskkill /T`, which does not require a process group).
-pub fn configure_new_group(cmd: &mut Command) -> &mut Command {
+/// Configure a child as the root of a process tree.
+pub fn configure_tree_root(cmd: &mut Command) -> &mut Command {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
+    configure_background_cli(cmd)
+}
+
+/// Configure a background CLI spawn so it cannot steal focus on platforms
+/// where console children are visible by default.
+pub fn configure_background_cli(cmd: &mut Command) -> &mut Command {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
     cmd
 }
 
-/// Request a graceful stop of the child and its entire tree.
-///
-/// Unix sends `SIGTERM` to the process group. Windows runs `taskkill /T`
-/// (without `/F`), which posts `WM_CLOSE` to GUI children and lets the tree
-/// shut down cooperatively; callers escalate to [`kill_tree`] after a grace
-/// period if the process is still alive.
-pub fn terminate_tree(pid: u32) {
-    #[cfg(unix)]
-    unsafe {
-        libc::kill(-(pid as libc::pid_t), libc::SIGTERM);
-    }
+/// [`configure_background_cli`] for `tokio::process::Command`.
+pub fn configure_background_cli_tokio(
+    cmd: &mut tokio::process::Command,
+) -> &mut tokio::process::Command {
     #[cfg(windows)]
     {
-        let _ = taskkill(pid, false);
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+pub fn terminate_tree(tree: ProcessTree) {
+    #[cfg(unix)]
+    unsafe {
+        if can_signal_group(tree.pgid) {
+            libc::killpg(tree.pgid, libc::SIGTERM);
+        }
+        if tree.pid > 0 {
+            libc::kill(tree.pid, libc::SIGTERM);
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        let _ = taskkill(tree.pid, false);
     }
 }
 
-/// Force-kill the child and its entire tree.
-///
-/// Unix sends `SIGKILL` to the process group; Windows runs `taskkill /T /F`.
-/// Safe to call on an already-dead tree — both platforms treat "no such
-/// process" as success.
-pub fn kill_tree(pid: u32) {
+pub fn kill_tree(tree: ProcessTree) {
     #[cfg(unix)]
     unsafe {
-        libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+        if can_signal_group(tree.pgid) {
+            libc::killpg(tree.pgid, libc::SIGKILL);
+        }
+        if tree.pid > 0 {
+            libc::kill(tree.pid, libc::SIGKILL);
+        }
     }
+
     #[cfg(windows)]
     {
-        let _ = taskkill(pid, true);
+        let _ = taskkill(tree.pid, true);
     }
 }
 
-/// True if `pid` refers to a live process.
-///
-/// Unix uses `kill(pid, 0)` (treating `EPERM` as "alive but not ours").
-/// Windows opens the process with limited-query rights and checks that its
-/// exit code is still `STILL_ACTIVE`.
-pub fn pid_alive(pid: u32) -> bool {
-    if pid == 0 {
+pub fn pid_alive(pid: Pid) -> bool {
+    if pid <= 0 as Pid {
         return false;
     }
+
     #[cfg(unix)]
     unsafe {
-        if libc::kill(pid as libc::pid_t, 0) == 0 {
+        if libc::kill(pid, 0) == 0 {
             return true;
         }
-        matches!(
-            std::io::Error::last_os_error().raw_os_error(),
-            Some(libc::EPERM)
-        )
+        match std::io::Error::last_os_error().raw_os_error() {
+            Some(libc::ESRCH) => false,
+            Some(libc::EPERM) => true,
+            _ => true,
+        }
     }
+
     #[cfg(windows)]
-    {
+    unsafe {
         use windows::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
         use windows::Win32::System::Threading::{
             GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
         };
-        unsafe {
-            match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
-                Ok(handle) => {
-                    let mut code = 0u32;
-                    let ok = GetExitCodeProcess(handle, &mut code).is_ok();
-                    let _ = CloseHandle(handle);
-                    ok && code == STILL_ACTIVE.0 as u32
-                }
-                Err(_) => false,
+        match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+            Ok(handle) => {
+                let mut code = 0u32;
+                let ok = GetExitCodeProcess(handle, &mut code).is_ok();
+                let _ = CloseHandle(handle);
+                ok && code == STILL_ACTIVE.0 as u32
             }
+            Err(_) => false,
         }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        // Other non-Unix targets keep the conservative stub.
+        let _ = pid;
+        false
+    }
+}
+
+pub fn process_group_alive(pgid: Pid) -> bool {
+    #[cfg(unix)]
+    {
+        if pgid <= 0 {
+            return false;
+        }
+        let ret = unsafe { libc::killpg(pgid, 0) };
+        if ret == 0 {
+            return true;
+        }
+        match std::io::Error::last_os_error().raw_os_error() {
+            Some(libc::ESRCH) => false,
+            Some(libc::EPERM) => true,
+            _ => true,
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = pgid;
+        false
+    }
+}
+
+pub fn tree_gone(tree: ProcessTree) -> bool {
+    let pid_gone = !pid_alive(tree.pid);
+    let group_gone = !can_signal_group(tree.pgid) || !process_group_alive(tree.pgid);
+    pid_gone && group_gone
+}
+
+pub fn wait_for_tree_gone(tree: ProcessTree, timeout: Duration, poll: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if tree_gone(tree) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(poll);
+    }
+}
+
+fn can_signal_group(pgid: Pid) -> bool {
+    #[cfg(unix)]
+    {
+        pgid > 0 && pgid != unsafe { libc::getpgrp() }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = pgid;
+        false
     }
 }
 
 #[cfg(windows)]
-fn taskkill(pid: u32, force: bool) -> std::io::Result<std::process::ExitStatus> {
-    use std::os::windows::process::CommandExt;
+fn taskkill(pid: Pid, force: bool) -> std::io::Result<std::process::ExitStatus> {
     let pid = pid.to_string();
     let mut cmd = Command::new("taskkill");
     cmd.args(["/PID", pid.as_str(), "/T"]);
     if force {
         cmd.arg("/F");
     }
-    cmd.creation_flags(CREATE_NO_WINDOW).status()
+    configure_background_cli(&mut cmd);
+    cmd.status()
 }
 
 #[cfg(test)]
@@ -155,18 +209,66 @@ mod tests {
     use super::*;
 
     #[test]
-    fn current_process_is_alive() {
-        assert!(pid_alive(std::process::id()));
+    fn pid_alive_reports_current_process() {
+        assert!(pid_alive(std::process::id() as Pid));
     }
 
     #[test]
-    fn pid_zero_is_not_alive() {
-        assert!(!pid_alive(0));
+    fn pid_alive_rejects_invalid_pids() {
+        assert!(!pid_alive(0 as Pid));
+        #[cfg(unix)]
+        assert!(!pid_alive(-1));
     }
 
+    #[cfg(unix)]
     #[test]
-    fn implausible_pid_is_not_alive() {
-        // No real user process will own this PID.
-        assert!(!pid_alive(u32::MAX - 1));
+    fn kill_tree_reaches_background_children() {
+        use std::io::Write;
+        use std::os::unix::process::CommandExt;
+        use std::process::Stdio;
+
+        let mut pid_file = tempfile::NamedTempFile::new().unwrap();
+        let pid_path = pid_file.path().to_path_buf();
+        writeln!(pid_file, "pending").unwrap();
+
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg(format!("sleep 30 & echo $! > {}; wait", pid_path.display()))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+
+        let mut child = command.spawn().unwrap();
+        let pid = child.id() as Pid;
+        let pgid = unsafe { libc::getpgid(pid) };
+        let tree = ProcessTree::new(pid, pgid);
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            if let Ok(contents) = std::fs::read_to_string(&pid_path) {
+                if contents.trim().parse::<Pid>().is_ok() {
+                    break;
+                }
+            }
+            assert!(Instant::now() < deadline, "background pid was not written");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        kill_tree(tree);
+        let _ = child.wait();
+
+        assert!(
+            wait_for_tree_gone(tree, Duration::from_secs(2), Duration::from_millis(10)),
+            "process tree should be gone"
+        );
     }
 }

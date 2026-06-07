@@ -59,7 +59,7 @@ async fn detect_lark() -> SourceHealth {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    let spawn = crate::platform::process::hide_console_tokio(&mut cmd).spawn();
+    let spawn = crate::platform::process::configure_background_cli_tokio(&mut cmd).spawn();
     let mut child = match spawn {
         Ok(c) => c,
         Err(e) if e.kind() == ErrorKind::NotFound => {

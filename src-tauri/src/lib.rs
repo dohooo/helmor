@@ -19,7 +19,7 @@ pub mod maintenance;
 pub mod mcp;
 pub mod models;
 pub mod pipeline;
-pub mod platform;
+pub(crate) mod platform;
 pub mod rate_limits;
 pub mod schema;
 pub mod service;

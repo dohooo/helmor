@@ -19,10 +19,7 @@ pub struct ApiKeyProvider {
 
 /// Resolve `~/.codex/config.toml`, honouring `$CODEX_HOME` if set.
 pub fn config_path() -> PathBuf {
-    std::env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home_dir().join(".codex"))
-        .join("config.toml")
+    crate::platform::paths::codex_home_dir().join("config.toml")
 }
 
 /// The provider currently selected by `model_provider`, if it declares an
@@ -55,11 +52,6 @@ pub fn active_api_key_provider(config: &str) -> Option<ApiKeyProvider> {
 ///
 /// Returns an empty vec on parse failure or when no providers declare an
 /// `env_key`.
-///
-/// Only consumed by the Unix login-shell env capture (`shell_env::unix`); on
-/// Windows the GUI process already inherits the full PATH, so this is unused
-/// outside tests there.
-#[cfg_attr(not(unix), allow(dead_code))]
 pub fn declared_env_keys(config: &str) -> Vec<String> {
     let Ok(value) = toml::from_str::<toml::Value>(config) else {
         return Vec::new();
@@ -84,29 +76,6 @@ pub fn declared_env_keys(config: &str) -> Vec<String> {
         }
     }
     keys
-}
-
-fn home_dir() -> PathBuf {
-    if let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
-        return PathBuf::from(home);
-    }
-    // Windows GUI processes have USERPROFILE rather than HOME; `codex` itself
-    // resolves its home the same way, so Helmor must match to read the same
-    // `%USERPROFILE%\.codex\config.toml`.
-    #[cfg(windows)]
-    {
-        if let Some(profile) = std::env::var_os("USERPROFILE").filter(|v| !v.is_empty()) {
-            return PathBuf::from(profile);
-        }
-        if let (Some(drive), Some(path)) =
-            (std::env::var_os("HOMEDRIVE"), std::env::var_os("HOMEPATH"))
-        {
-            let mut combined = drive;
-            combined.push(path);
-            return PathBuf::from(combined);
-        }
-    }
-    PathBuf::from("/")
 }
 
 #[cfg(test)]

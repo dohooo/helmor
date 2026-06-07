@@ -27,6 +27,17 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+	claudeCodeArchivePlan,
+	cloudflaredArchivePlan,
+	codexArchivePlan,
+	ghArchivePlan,
+	glabArchivePlan,
+	llamaArchivePlan,
+	opencodeArchivePlan,
+	resolveVendorTarget,
+	type TargetInfo,
+} from "./vendor-platform.ts";
 
 /** Host platform flag: Windows needs `.exe` suffixes, zip extraction via
  *  `tar -xf`, no codesign, and different release/package naming. */
@@ -51,209 +62,15 @@ const BUNDLE_CACHE = join(SIDECAR_ROOT, ".bundle-cache");
 //   opencode:    shasum -a 256 of the npm tarball at
 //                registry.npmjs.org/opencode-darwin-{arm64,x64}/-/opencode-darwin-{arm64,x64}-$VER.tgz
 
-const GH_VERSION = "2.91.0";
-const GH_SHA256 = {
-	arm64: "20446cd714d9fa1b69fbd410deade3731f38fe09a2b980c8488aa388dd320ada",
-	amd64: "8806784f93603fe6d3f95c3583a08df38f175df9ebc123dc8b15f919329980e2",
-} as const;
-
-const GLAB_VERSION = "1.93.0";
-const GLAB_SHA256 = {
-	arm64: "6d6ffa97d430b5e7ff912e64dbac14703acc57967df654be1950ae71858d5b6f",
-	amd64: "79d1a4f933919689c5fb7774feb1dd08f30b9c896dff4283b4a7387689ee0531",
-} as const;
-
-// cloudflared powers the mobile-companion tunnel. Single Go binary from
-// upstream GitHub releases — signed like gh/glab (no JIT entitlements).
-const CLOUDFLARED_VERSION = "2026.5.2";
-const CLOUDFLARED_SHA256 = {
-	arm64: "ba94054c9fd4297645093d59d51442e5e546d07bb0516120e694a13d5b216d38",
-	amd64: "7240f709506bc2c1eb9da4d89cf2555499c60280ecb854b7d80e8f17d4b7903d",
-} as const;
-
-// Codex version is whatever sidecar/package.json pulled in. The SHAs below
-// must match THAT version — bump them together (or staging cross-arch will
-// abort with a clear error).
-const CODEX_SHA256: Readonly<Record<string, { arm64: string; x64: string }>> = {
-	"0.130.0": {
-		arm64: "f6fef2ceee8977079ad3b3296b4c14c2707934e6b4ec1aa1a32d6e512196b12d",
-		x64: "21f161ffd79fab88c5bd91e40d14c894fe6d4ad61ea4ebc80d4fcf20130960c2",
-	},
-	"0.134.0": {
-		arm64: "82c8bd152cdfb8175fd03d1d18ac0f8cddce22a7e68164572c107f628b0d8b7c",
-		x64: "fd518e72bb6f77d2183799b0be00e77d8cc1b465c06e7e129f69028218259a64",
-	},
-};
-
-// Same versioning rule as Codex: must match whatever sidecar/package.json
-// pulled in (`@anthropic-ai/claude-code`). Cross-arch staging downloads
-// straight from the npm registry and verifies against this table.
-const CLAUDE_CODE_SHA256: Readonly<
-	Record<string, { arm64: string; x64: string }>
-> = {
-	"2.1.139": {
-		arm64: "ed9a4c64c8b5374da8389ff6aa4b58fce7a792f90ef2261a14445d9082a80799",
-		x64: "71d18ce1d457f37b427bdcb5933424c83bf22b39b2b7628415028585b832fe6c",
-	},
-	"2.1.154": {
-		arm64: "2394afa765253caaac8cb030c7954650c4052b537aacc664c634d6397bed064a",
-		x64: "95643be424f07808e7b67195695191b05d0edc6ad7c3c274424dfb062c875fb5",
-	},
-};
-
-// Keyed by `opencode-ai` version in sidecar/package.json. Cross-arch staging
-// downloads `opencode-darwin-{arm64,x64}` from npm and verifies against this.
-const OPENCODE_SHA256: Readonly<
-	Record<string, { arm64: string; x64: string }>
-> = {
-	"1.16.2": {
-		arm64: "2103383d7562c1783cb66d63d31630ff90448d1ade90f8a187778d18c4b9ee5f",
-		x64: "1be1b4ff8874f0f0848e88bf4de3943a4fff3a51c8b2a75c910fb7f710e7cd03",
-	},
-};
-
-// llama.cpp bundled binary. Drives `local_llm::Manager` (the
-// auto-rename / local-LLM stack). Versions are `b<N>` build tags from
-// github.com/ggml-org/llama.cpp/releases. Bumping the version: replace
-// LLAMA_VERSION and the matching arm64/x64 sha256 (computed below from
-// the upstream zip on first run; see DEV-fallback notes in
-// `downloadAndVerifyLlama`). Wipe sidecar/.bundle-cache when bumping
-// so the new archive isn't blocked by a wrong-sha cached copy.
-const LLAMA_VERSION = "b9496";
-// Leave entries blank to skip strict verification during local dev —
-// stage-vendor will warn + trust HTTPS, print the computed sha, and
-// proceed. Fill these in (and commit) to lock the build in CI.
-const LLAMA_SHA256: Readonly<{ arm64: string; x64: string }> = {
-	arm64: "f1eff7bb49590d80706b84e82e973a21f0bedb49560fbabfea2654756aa59dca",
-	x64: "0b415c8d366eabe9ab69fe7d8e79f29b63cc1baa33714967ca8a0c123ae75797",
-};
+// Version pins, SHA256 tables, target mapping, and archive URL rules live in
+// `vendor-platform.ts` so platform-specific build support can grow there
+// without changing the staging executor below.
 
 // ---------------------------------------------------------------------------
 // Target detection — honor TAURI_TARGET_TRIPLE so cross-arch CI stages the
 // right binaries. Falls back to the host arch for `bun run dev` / local
 // staging where no env var is set.
 // ---------------------------------------------------------------------------
-
-type DarwinArch = "arm64" | "x64";
-
-interface TargetInfo {
-	/** Target OS — Windows changes archive formats, `.exe` suffixes, and naming. */
-	os: "darwin" | "windows";
-	arch: DarwinArch;
-	/** `@anthropic-ai/claude-code-darwin-<arch>` is the platform sub-package. */
-	claudeCodePkg: string;
-	/** claude-code npm tarball suffix: `darwin-arm64` / `darwin-x64`. */
-	claudeCodeNpmSuffix: string;
-	/** `@openai/codex-darwin-<arch>` is the npm optional-dep package. */
-	codexPkg: string;
-	/** Target triple inside the codex platform package. */
-	codexTriple: string;
-	/** Codex npm tarball suffix: `darwin-arm64` / `darwin-x64`. */
-	codexNpmSuffix: string;
-	/** `opencode-darwin-<arch>` is the npm optional-dep package. */
-	opencodePkg: string;
-	/** opencode npm tarball suffix: `darwin-arm64` / `darwin-x64`. */
-	opencodeNpmSuffix: string;
-	/** `gh` release naming: `arm64` / `amd64`. */
-	ghArch: "arm64" | "amd64";
-	/** `glab` release naming: `arm64` / `amd64`. */
-	glabArch: "arm64" | "amd64";
-	/** `cloudflared` release naming: `arm64` / `amd64`. */
-	cloudflaredArch: "arm64" | "amd64";
-}
-
-/** Windows x64 target. Only x64 is supported (no ARM64 Windows). Pulls the
- *  platform sub-packages bun already installed into node_modules. */
-function infoForWindows(): TargetInfo {
-	return {
-		os: "windows",
-		arch: "x64",
-		claudeCodePkg: "@anthropic-ai/claude-code-win32-x64",
-		claudeCodeNpmSuffix: "win32-x64",
-		// On Windows the codex binary lives in the platform sub-package, not the
-		// umbrella @openai/codex package (whose vendor dir is empty).
-		codexPkg: "@openai/codex-win32-x64",
-		codexTriple: "x86_64-pc-windows-msvc",
-		codexNpmSuffix: "win32-x64",
-		opencodePkg: "opencode-windows-x64",
-		opencodeNpmSuffix: "windows-x64",
-		ghArch: "amd64",
-		glabArch: "amd64",
-		cloudflaredArch: "amd64",
-	};
-}
-
-function infoForArch(arch: DarwinArch): TargetInfo {
-	if (arch === "arm64") {
-		return {
-			os: "darwin",
-			arch,
-			claudeCodePkg: "@anthropic-ai/claude-code-darwin-arm64",
-			claudeCodeNpmSuffix: "darwin-arm64",
-			codexPkg: "@openai/codex-darwin-arm64",
-			codexTriple: "aarch64-apple-darwin",
-			codexNpmSuffix: "darwin-arm64",
-			opencodePkg: "opencode-darwin-arm64",
-			opencodeNpmSuffix: "darwin-arm64",
-			ghArch: "arm64",
-			glabArch: "arm64",
-			cloudflaredArch: "arm64",
-		};
-	}
-	return {
-		os: "darwin",
-		arch,
-		claudeCodePkg: "@anthropic-ai/claude-code-darwin-x64",
-		claudeCodeNpmSuffix: "darwin-x64",
-		codexPkg: "@openai/codex-darwin-x64",
-		codexTriple: "x86_64-apple-darwin",
-		codexNpmSuffix: "darwin-x64",
-		opencodePkg: "opencode-darwin-x64",
-		opencodeNpmSuffix: "darwin-x64",
-		ghArch: "amd64",
-		glabArch: "amd64",
-		cloudflaredArch: "amd64",
-	};
-}
-
-function detectTarget(): TargetInfo {
-	// Windows: stage the x64 sub-packages bun installed into node_modules. No
-	// cross-arch matrix (TAURI_TARGET_TRIPLE is a macOS-CI concern), so the host
-	// arch is the target.
-	if (process.platform === "win32") {
-		if (process.arch !== "x64") {
-			throw new Error(
-				`[stage-vendor] unsupported Windows host arch: ${process.arch} (only x64)`,
-			);
-		}
-		return infoForWindows();
-	}
-
-	if (process.platform !== "darwin") {
-		throw new Error(
-			`[stage-vendor] Helmor builds on macOS and Windows; host platform is ${process.platform}`,
-		);
-	}
-
-	// Read env in the same order prepare-sidecar.mjs does so they stay in sync.
-	const triple =
-		process.env.TAURI_TARGET_TRIPLE?.trim() ||
-		process.env.TAURI_ENV_TARGET_TRIPLE?.trim() ||
-		process.env.CARGO_BUILD_TARGET?.trim();
-
-	if (triple) {
-		if (triple === "aarch64-apple-darwin") return infoForArch("arm64");
-		if (triple === "x86_64-apple-darwin") return infoForArch("x64");
-		throw new Error(
-			`[stage-vendor] unsupported TAURI_TARGET_TRIPLE for macOS: ${triple}`,
-		);
-	}
-
-	const arch = process.arch;
-	if (arch === "arm64") return infoForArch("arm64");
-	if (arch === "x64") return infoForArch("x64");
-	throw new Error(`[stage-vendor] unsupported macOS host arch: ${arch}`);
-}
 
 // ---------------------------------------------------------------------------
 // Copy + download helpers
@@ -396,22 +213,18 @@ function locateExtractedBin(extractDir: string, name: string): string {
 	);
 }
 
-function stageGhBinary(arch: "arm64" | "amd64"): string {
+function stageGhBinary(target: TargetInfo): string {
 	ensureCacheDir();
 	// gh ships macOS as `gh_<ver>_macOS_<arch>.zip` and Windows as
-	// `gh_<ver>_windows_<arch>.zip`; both nest `bin/gh[.exe]`.
-	const slug = IS_WINDOWS
-		? `gh_${GH_VERSION}_windows_${arch}`
-		: `gh_${GH_VERSION}_macOS_${arch}`;
-	const archive = join(BUNDLE_CACHE, `${slug}.zip`);
-	const url = `https://github.com/cli/cli/releases/download/v${GH_VERSION}/${slug}.zip`;
-	if (IS_WINDOWS) {
-		downloadMaybeVerify(url, archive, "");
-	} else {
-		downloadAndVerify(url, archive, GH_SHA256[arch]);
-	}
+	// `gh_<ver>_windows_<arch>.zip`; both nest `bin/gh[.exe]`. The Windows plan
+	// carries no pinned sha256 (soft-verify); macOS stays strict.
+	const plan = ghArchivePlan(target);
+	const archive = join(BUNDLE_CACHE, plan.archiveName);
+	// downloadMaybeVerify is strict when a sha256 is pinned (macOS) and trusts
+	// HTTPS when it's empty (Windows soft-verify).
+	downloadMaybeVerify(plan.url, archive, plan.sha256);
 
-	const extractDir = join(BUNDLE_CACHE, slug);
+	const extractDir = join(BUNDLE_CACHE, plan.slug);
 	freshExtractDir(extractDir);
 	extractArchive(archive, extractDir);
 
@@ -423,22 +236,16 @@ function stageGhBinary(arch: "arm64" | "amd64"): string {
 	return binDest;
 }
 
-function stageGlabBinary(arch: "arm64" | "amd64"): string {
+function stageGlabBinary(target: TargetInfo): string {
 	ensureCacheDir();
 	// macOS: `glab_<ver>_darwin_<arch>.tar.gz`; Windows: `..._windows_<arch>.zip`.
-	const ext = IS_WINDOWS ? "zip" : "tar.gz";
-	const slug = IS_WINDOWS
-		? `glab_${GLAB_VERSION}_windows_${arch}`
-		: `glab_${GLAB_VERSION}_darwin_${arch}`;
-	const archive = join(BUNDLE_CACHE, `${slug}.${ext}`);
-	const url = `https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/${slug}.${ext}`;
-	if (IS_WINDOWS) {
-		downloadMaybeVerify(url, archive, "");
-	} else {
-		downloadAndVerify(url, archive, GLAB_SHA256[arch]);
-	}
+	// `extractArchive` (bsdtar) transparently handles both formats. Windows plan
+	// carries no pinned sha256 (soft-verify); macOS stays strict.
+	const plan = glabArchivePlan(target);
+	const archive = join(BUNDLE_CACHE, plan.archiveName);
+	downloadMaybeVerify(plan.url, archive, plan.sha256);
 
-	const extractDir = join(BUNDLE_CACHE, slug);
+	const extractDir = join(BUNDLE_CACHE, plan.slug);
 	freshExtractDir(extractDir);
 	extractArchive(archive, extractDir);
 
@@ -460,35 +267,24 @@ function stageGlabBinary(arch: "arm64" | "amd64"): string {
 // just `cloudflared` at the archive root. Signed without entitlements (no JIT).
 // ---------------------------------------------------------------------------
 
-function stageCloudflaredBinary(arch: "arm64" | "amd64"): string {
+function stageCloudflaredBinary(target: TargetInfo): string {
 	ensureCacheDir();
 	const binDest = join(DIST_VENDOR, "cloudflared", `cloudflared${EXE}`);
+	const plan = cloudflaredArchivePlan(target);
+	const archive = join(BUNDLE_CACHE, plan.archiveName);
 
 	// Windows: upstream publishes a bare `cloudflared-windows-<arch>.exe` (no
-	// archive), so download it straight to the destination.
-	if (IS_WINDOWS) {
-		const url = `https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-windows-${arch}.exe`;
-		const cached = join(
-			BUNDLE_CACHE,
-			`cloudflared-${CLOUDFLARED_VERSION}-windows-${arch}.exe`,
-		);
-		downloadMaybeVerify(url, cached, "");
-		copyFile(cached, binDest);
+	// archive), so download it straight to the destination (no extraction).
+	// No pinned sha256 (soft-verify).
+	if (target.os === "windows") {
+		downloadMaybeVerify(plan.url, archive, plan.sha256);
+		copyFile(archive, binDest);
 		return binDest;
 	}
 
-	const slug = `cloudflared-darwin-${arch}`;
-	const archive = join(
-		BUNDLE_CACHE,
-		`cloudflared-${CLOUDFLARED_VERSION}-darwin-${arch}.tgz`,
-	);
-	const url = `https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/${slug}.tgz`;
-	downloadAndVerify(url, archive, CLOUDFLARED_SHA256[arch]);
+	downloadAndVerify(plan.url, archive, plan.sha256);
 
-	const extractDir = join(
-		BUNDLE_CACHE,
-		`cloudflared-${CLOUDFLARED_VERSION}-${arch}`,
-	);
+	const extractDir = join(BUNDLE_CACHE, plan.slug);
 	freshExtractDir(extractDir);
 	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
 		stdio: "inherit",
@@ -552,19 +348,12 @@ function stageClaudeCodeBinary(target: TargetInfo): string {
 
 	// Cross-arch: download the platform tarball from npm.
 	const version = readClaudeCodeVersion();
-	const shaTable = CLAUDE_CODE_SHA256[version];
-	if (!shaTable) {
-		throw new Error(
-			`[stage-vendor] no pinned SHA256 for claude-code ${version} — add it to CLAUDE_CODE_SHA256 in stage-vendor.ts`,
-		);
-	}
+	const plan = claudeCodeArchivePlan(target, version);
 	ensureCacheDir();
-	const slug = `claude-code-${target.claudeCodeNpmSuffix}-${version}`;
-	const archive = join(BUNDLE_CACHE, `${slug}.tgz`);
-	const url = `https://registry.npmjs.org/${target.claudeCodePkg}/-/claude-code-${target.claudeCodeNpmSuffix}-${version}.tgz`;
-	downloadAndVerify(url, archive, shaTable[target.arch]);
+	const archive = join(BUNDLE_CACHE, plan.archiveName);
+	downloadAndVerify(plan.url, archive, plan.sha256);
 
-	const extractDir = join(BUNDLE_CACHE, slug);
+	const extractDir = join(BUNDLE_CACHE, plan.slug);
 	freshExtractDir(extractDir);
 	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
 		stdio: "inherit",
@@ -700,19 +489,12 @@ function stageCodexBinary(target: TargetInfo): void {
 
 	// Cross-arch: download the platform tarball from npm.
 	const version = readCodexVersion();
-	const shaTable = CODEX_SHA256[version];
-	if (!shaTable) {
-		throw new Error(
-			`[stage-vendor] no pinned SHA256 for codex ${version} — add it to CODEX_SHA256 in stage-vendor.ts`,
-		);
-	}
+	const plan = codexArchivePlan(target, version);
 	ensureCacheDir();
-	const slug = `codex-${version}-${target.codexNpmSuffix}`;
-	const archive = join(BUNDLE_CACHE, `${slug}.tgz`);
-	const url = `https://registry.npmjs.org/@openai/codex/-/${slug}.tgz`;
-	downloadAndVerify(url, archive, shaTable[target.arch]);
+	const archive = join(BUNDLE_CACHE, plan.archiveName);
+	downloadAndVerify(plan.url, archive, plan.sha256);
 
-	const extractDir = join(BUNDLE_CACHE, slug);
+	const extractDir = join(BUNDLE_CACHE, plan.slug);
 	freshExtractDir(extractDir);
 	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
 		stdio: "inherit",
@@ -766,19 +548,12 @@ function stageOpencodeBinary(target: TargetInfo): string {
 
 	// Cross-arch: download the platform tarball from npm.
 	const version = readOpencodeVersion();
-	const shaTable = OPENCODE_SHA256[version];
-	if (!shaTable) {
-		throw new Error(
-			`[stage-vendor] no pinned SHA256 for opencode ${version} — add it to OPENCODE_SHA256 in stage-vendor.ts`,
-		);
-	}
+	const plan = opencodeArchivePlan(target, version);
 	ensureCacheDir();
-	const slug = `${target.opencodePkg}-${version}`;
-	const archive = join(BUNDLE_CACHE, `${slug}.tgz`);
-	const url = `https://registry.npmjs.org/${target.opencodePkg}/-/opencode-${target.opencodeNpmSuffix}-${version}.tgz`;
-	downloadAndVerify(url, archive, shaTable[target.arch]);
+	const archive = join(BUNDLE_CACHE, plan.archiveName);
+	downloadAndVerify(plan.url, archive, plan.sha256);
 
-	const extractDir = join(BUNDLE_CACHE, slug);
+	const extractDir = join(BUNDLE_CACHE, plan.slug);
 	freshExtractDir(extractDir);
 	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
 		stdio: "inherit",
@@ -842,17 +617,17 @@ function downloadMaybeVerify(
 
 function stageLlamaCppBinaries(target: TargetInfo): string {
 	ensureCacheDir();
+	const plan = llamaArchivePlan(target);
+	const archive = join(BUNDLE_CACHE, plan.archiveName);
 
 	// Windows: upstream ships `llama-<ver>-bin-win-cpu-x64.zip` (server + CLIs +
 	// their `.dll`s, no `bin/` wrapper). Stage the whole tree as a unit (the
 	// DLLs must sit beside llama-server.exe) — no dylib pruning/signing dance.
-	if (IS_WINDOWS) {
-		const slug = `llama-${LLAMA_VERSION}-bin-win-cpu-x64`;
-		const archive = join(BUNDLE_CACHE, `${slug}.zip`);
-		const url = `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_VERSION}/${slug}.zip`;
-		downloadMaybeVerify(url, archive, "");
+	// No pinned sha256 (soft-verify).
+	if (target.os === "windows") {
+		downloadMaybeVerify(plan.url, archive, plan.sha256);
 
-		const extractDir = join(BUNDLE_CACHE, slug);
+		const extractDir = join(BUNDLE_CACHE, plan.slug);
 		freshExtractDir(extractDir);
 		extractArchive(archive, extractDir);
 
@@ -878,16 +653,13 @@ function stageLlamaCppBinaries(target: TargetInfo): string {
 		return dest;
 	}
 
-	const archSlug = target.arch === "arm64" ? "macos-arm64" : "macos-x64";
-	const slug = `llama-${LLAMA_VERSION}-bin-${archSlug}`;
 	// Upstream ships macOS builds as `.tar.gz` (not `.zip` like the
 	// Windows artefacts) — extension matters for both the cache file
-	// name and the extract command below.
-	const archive = join(BUNDLE_CACHE, `${slug}.tar.gz`);
-	const url = `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_VERSION}/${slug}.tar.gz`;
-	downloadMaybeVerify(url, archive, LLAMA_SHA256[target.arch]);
+	// name and the extract command below. macOS keeps strict sha256 when
+	// pinned (soft-verify when the LLAMA_SHA256 entry is blank for dev).
+	downloadMaybeVerify(plan.url, archive, plan.sha256);
 
-	const extractDir = join(BUNDLE_CACHE, slug);
+	const extractDir = join(BUNDLE_CACHE, plan.slug);
 	freshExtractDir(extractDir);
 	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
 		stdio: "inherit",
@@ -928,7 +700,7 @@ function stageLlamaCppBinaries(target: TargetInfo): string {
 	// runtime, so prune everything else: smaller bundle and ~10 Mach-O
 	// files to sign/notarize instead of ~40.
 	//
-	// The keep-list is intentionally hard-coded against LLAMA_VERSION:
+	// The keep-list is intentionally hard-coded against the llama.cpp pin:
 	// if a future bump introduces a new runtime dylib (e.g. a new ggml
 	// backend), dev launch of `llama-server` will fail immediately with
 	// `dyld: Library not loaded`, which is the cleanest signal to update
@@ -985,7 +757,7 @@ function stageLlamaCppBinaries(target: TargetInfo): string {
 // Main
 // ---------------------------------------------------------------------------
 
-const target = detectTarget();
+const target = resolveVendorTarget();
 
 console.log(
 	`[stage-vendor] host=${process.platform}/${process.arch} target=${target.os}/${target.arch} (${target.codexTriple})`,
@@ -1022,13 +794,13 @@ stageCodexBinary(target);
 stageOptional("opencode", () => stageOpencodeBinary(target));
 
 // ----- gh + glab (forge CLIs) -----
-stageOptional("gh", () => stageGhBinary(target.ghArch));
-stageOptional("glab", () => stageGlabBinary(target.glabArch));
+// Wrapped in stageOptional so a missing/unpublished Windows artifact downgrades
+// to a warning; on macOS stageOptional re-throws, keeping staging strict.
+stageOptional("gh", () => stageGhBinary(target));
+stageOptional("glab", () => stageGlabBinary(target));
 
 // ----- cloudflared (mobile-companion tunnel) -----
-stageOptional("cloudflared", () =>
-	stageCloudflaredBinary(target.cloudflaredArch),
-);
+stageOptional("cloudflared", () => stageCloudflaredBinary(target));
 
 // ----- llama.cpp (local LLM server for auto-rename / Local AI) -----
 stageOptional("llama-cpp", () => stageLlamaCppBinaries(target));

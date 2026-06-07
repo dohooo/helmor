@@ -172,11 +172,11 @@ fn cli_install_remediation(cli_binary: &std::path::Path, install_path: &std::pat
 }
 
 fn shell_quote(path: &std::path::Path) -> String {
-    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+    crate::platform::shell::quote_path(path)
 }
 
 fn shell_quote_arg(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
+    crate::platform::shell::quote_posix_arg(value)
 }
 
 fn classify_cli_install(
@@ -421,7 +421,7 @@ fn applescript_shell_arg(path: &std::path::Path) -> String {
 }
 
 fn home_dir() -> PathBuf {
-    crate::platform::home_dir().unwrap_or_else(|| PathBuf::from("."))
+    crate::platform::paths::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
 fn claude_skills_dir() -> PathBuf {
@@ -471,22 +471,15 @@ fn helmor_skills_install_args(agents: &[&str]) -> Vec<String> {
     args
 }
 
-/// A `Command` that runs `npx` cross-platform. On Windows `npx` ships as a
-/// `.cmd`/`.ps1` shim (no `npx.exe`), which `Command::new("npx")` cannot
-/// resolve, so route it through `cmd.exe /c` (console-hidden — this runs
-/// during the silent startup check and must not flash a window).
+/// A `Command` that runs `npx` cross-platform. `resolve_for_spawn` finds the
+/// real executable (on Windows `npx` is a `.cmd`/`.ps1` shim that
+/// `CreateProcess` can't resolve from the bare name), and
+/// `configure_background_cli` keeps it from flashing a console window — this
+/// runs during the silent startup check.
 fn npx_command() -> Command {
-    #[cfg(windows)]
-    {
-        let mut c = Command::new("cmd");
-        c.args(["/c", "npx"]);
-        crate::platform::process::hide_console(&mut c);
-        c
-    }
-    #[cfg(not(windows))]
-    {
-        Command::new("npx")
-    }
+    let mut cmd = Command::new(crate::platform::executable::resolve_for_spawn("npx"));
+    crate::platform::process::configure_background_cli(&mut cmd);
+    cmd
 }
 
 fn helmor_skills_install_command(agents: &[&str]) -> String {
@@ -1235,11 +1228,9 @@ pub async fn get_agent_versions() -> CmdResult<AgentVersions> {
 }
 
 fn agent_cli_version(provider: &str) -> Option<String> {
-    let mut cmd = std::process::Command::new(resolve_agent_binary(provider));
-    cmd.arg("--version");
-    let output = crate::platform::process::hide_console(&mut cmd)
-        .output()
-        .ok()?;
+    let mut command = std::process::Command::new(resolve_agent_binary(provider));
+    crate::platform::process::configure_background_cli(&mut command);
+    let output = command.arg("--version").output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -1305,17 +1296,7 @@ fn resolve_agent_binary(provider: &str) -> PathBuf {
         "opencode" => bundled.opencode_bin,
         _ => None,
     };
-    if let Some(path) = bundled_path {
-        return path;
-    }
-    // No bundled binary (e.g. dev builds): fall back to PATH. On Windows the CLI
-    // is usually an npm shim (`codex.cmd`/`.ps1`); CreateProcess ignores PATHEXT,
-    // so resolve the real file ourselves rather than spawn a bare name that
-    // "isn't found".
-    if let Some(resolved) = crate::platform::which(provider) {
-        return resolved;
-    }
-    PathBuf::from(provider)
+    bundled_path.unwrap_or_else(|| crate::platform::executable::resolve_for_spawn(provider))
 }
 
 // Read from the sidecar-computed settings row, NOT `auth.json` (which misses env/config/Zen providers).
@@ -1345,9 +1326,9 @@ fn opencode_login_ready() -> bool {
 }
 
 fn claude_login_ready() -> bool {
-    let mut cmd = std::process::Command::new(resolve_agent_binary("claude"));
-    cmd.args(["auth", "status"]);
-    match crate::platform::process::hide_console(&mut cmd).output() {
+    let mut command = std::process::Command::new(resolve_agent_binary("claude"));
+    crate::platform::process::configure_background_cli(&mut command);
+    match command.args(["auth", "status"]).output() {
         Ok(output) if output.status.success() => parse_claude_login_status(&output.stdout),
         Ok(output) => {
             // Claude exits non-zero when the user isn't authenticated —
@@ -1398,9 +1379,9 @@ fn codex_auth_status() -> CodexAuthStatus {
 }
 
 fn codex_login_ready() -> bool {
-    let mut cmd = std::process::Command::new(resolve_agent_binary("codex"));
-    cmd.args(["login", "status"]);
-    match crate::platform::process::hide_console(&mut cmd).output() {
+    let mut command = std::process::Command::new(resolve_agent_binary("codex"));
+    crate::platform::process::configure_background_cli(&mut command);
+    match command.args(["login", "status"]).output() {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1499,10 +1480,9 @@ pub async fn spawn_agent_login_terminal(
         let _ = window.set_focus();
     }
 
-    let working_dir = crate::platform::home_dir()
-        .or_else(|| std::env::current_dir().ok())
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|| ".".to_string());
+    let working_dir = crate::platform::paths::home_dir_or_current_or_root()
+        .display()
+        .to_string();
     let context = ScriptContext {
         root_path: working_dir.clone(),
         workspace_path: None,
@@ -1525,7 +1505,7 @@ pub async fn spawn_agent_login_terminal(
         // input — written synchronously to the PTY master right after
         // the shell registers, so a frontend re-render-driven
         // cleanup→respawn can't drop the bytes.
-        let boot_input = crate::workspace::scripts::format_boot_command(&command);
+        let boot_input = crate::platform::shell::boot_input(&command);
         if let Err(error) = crate::workspace::scripts::run_terminal_session(
             &mgr,
             AGENT_LOGIN_REPO_ID,

@@ -7,10 +7,16 @@
 		"noUncheckedIndexedAccess": true,
 		"noImplicitOverride": true,
 		"noFallthroughCasesInSwitch": true,
+		"allowImportingTsExtensions": true,
 		"types": ["node", "bun"],
 		"esModuleInterop": true,
 		"skipLibCheck": true,
 		"noEmit": true
 	},
-	"include": ["src", "test"]
+	"include": [
+		"src",
+		"test",
+		"scripts/stage-vendor.ts",
+		"scripts/vendor-platform.ts"
+	]
 }
