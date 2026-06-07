@@ -95,12 +95,7 @@ fn auth_file_path() -> PathBuf {
 }
 
 fn home_dir() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.is_empty() {
-            return PathBuf::from(home);
-        }
-    }
-    PathBuf::from("/")
+    crate::platform::home_dir().unwrap_or_else(|| PathBuf::from("/"))
 }
 
 fn load_credentials(path: &Path) -> Result<CodexCredentials> {

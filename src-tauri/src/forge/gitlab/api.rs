@@ -157,8 +157,7 @@ fn xdg_glab_dir() -> Option<PathBuf> {
             return Some(PathBuf::from(value).join("glab-cli"));
         }
     }
-    let home = std::env::var_os("HOME")?;
-    let mut path = PathBuf::from(home);
+    let mut path = crate::platform::home_dir()?;
     path.push(".config");
     path.push("glab-cli");
     Some(path)

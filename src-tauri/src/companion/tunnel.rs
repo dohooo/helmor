@@ -312,7 +312,7 @@ fn run_oneshot_interactive(args: &[String], timeout: Duration) -> Result<bool> {
 
 /// `~/.cloudflared`.
 fn cloudflared_home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cloudflared"))
+    crate::platform::home_dir().map(|home| home.join(".cloudflared"))
 }
 
 /// Resolve the cloudflared binary: env override → bundled vendor copy → PATH.

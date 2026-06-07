@@ -393,9 +393,7 @@ fn applescript_shell_arg(path: &std::path::Path) -> String {
 }
 
 fn home_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
+    crate::platform::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
 fn claude_skills_dir() -> PathBuf {
@@ -1501,15 +1499,10 @@ pub async fn spawn_agent_login_terminal(
         let _ = window.set_focus();
     }
 
-    let working_dir = std::env::var("HOME")
-        .ok()
-        .filter(|home| !home.trim().is_empty())
-        .or_else(|| {
-            std::env::current_dir()
-                .ok()
-                .map(|path| path.display().to_string())
-        })
-        .unwrap_or_else(|| "/".to_string());
+    let working_dir = crate::platform::home_dir()
+        .or_else(|| std::env::current_dir().ok())
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| ".".to_string());
     let context = ScriptContext {
         root_path: working_dir.clone(),
         workspace_path: None,

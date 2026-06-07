@@ -225,8 +225,8 @@ pub async fn spawn_forge_cli_auth_terminal(
 ) -> CmdResult<()> {
     let host = host.unwrap_or_else(|| "gitlab.com".to_string());
     let command = forge::forge_cli_auth_command(provider, Some(&host))?;
-    let working_dir = std::env::var("HOME")
-        .ok()
+    let working_dir = crate::platform::home_dir()
+        .map(|p| p.display().to_string())
         .filter(|home| !home.trim().is_empty())
         .or_else(|| {
             std::env::current_dir()
