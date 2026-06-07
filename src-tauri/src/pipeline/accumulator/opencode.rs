@@ -26,6 +26,20 @@ pub(super) struct OpencodeRunState {
     /// drives the duration footer synthesized on finalize.
     pub turn_created_ms: Option<f64>,
     pub turn_completed_ms: Option<f64>,
+    /// Part events whose message role isn't known yet. opencode can emit an
+    /// assistant message's parts BEFORE the `message.updated` that declares the
+    /// role (observed on resume-after-abort), and a part dropped at ingest never
+    /// renders. Buffer by messageID; replay when the role lands (assistant) or
+    /// discard (user). Cleared each turn — orphans (role never arrives) are
+    /// unclassifiable and dropped.
+    pub pending_parts: HashMap<String, Vec<PendingPart>>,
+}
+
+/// A buffered opencode part event awaiting its message's role.
+#[derive(Debug)]
+pub(super) enum PendingPart {
+    Updated(Value),
+    Delta(Value),
 }
 
 #[derive(Debug, Default)]
@@ -74,10 +88,41 @@ pub(super) fn handle_message_updated(acc: &mut StreamAccumulator, value: &Value)
             }
         }
     }
+    let is_assistant = role == "assistant";
     acc.opencode_state
         .role_by_message_id
         .insert(id.to_string(), role);
-    PushOutcome::NoOp
+    if is_assistant {
+        // Role now known — replay any parts that arrived before this event.
+        replay_pending_parts(acc, id)
+    } else {
+        // User (prompt echo) — drop any parts buffered for it.
+        acc.opencode_state.pending_parts.remove(id);
+        PushOutcome::NoOp
+    }
+}
+
+// Replay parts buffered before their message's role was known. The role is now
+// recorded as assistant, so `handle_part_*` render them instead of re-buffering.
+fn replay_pending_parts(acc: &mut StreamAccumulator, message_id: &str) -> PushOutcome {
+    let Some(pending) = acc.opencode_state.pending_parts.remove(message_id) else {
+        return PushOutcome::NoOp;
+    };
+    let mut rendered = false;
+    for part in pending {
+        let outcome = match part {
+            PendingPart::Updated(value) => handle_part_updated(acc, &value),
+            PendingPart::Delta(value) => handle_part_delta(acc, &value),
+        };
+        if outcome == PushOutcome::StreamingDelta {
+            rendered = true;
+        }
+    }
+    if rendered {
+        PushOutcome::StreamingDelta
+    } else {
+        PushOutcome::NoOp
+    }
 }
 
 pub(super) fn handle_part_updated(acc: &mut StreamAccumulator, value: &Value) -> PushOutcome {
@@ -91,6 +136,17 @@ pub(super) fn handle_part_updated(acc: &mut StreamAccumulator, value: &Value) ->
     // `compaction` rides a USER-role message but must still surface; every other
     // non-assistant part is a prompt echo and stays filtered.
     if kind != "compaction" && !is_assistant_part(acc, part) {
+        // Role unknown (no `message.updated` yet)? Buffer for replay instead of
+        // dropping — opencode can emit assistant parts before the role event.
+        if let Some(mid) = part.get("messageID").and_then(Value::as_str) {
+            if !acc.opencode_state.role_by_message_id.contains_key(mid) {
+                acc.opencode_state
+                    .pending_parts
+                    .entry(mid.to_string())
+                    .or_default()
+                    .push(PendingPart::Updated(value.clone()));
+            }
+        }
         return PushOutcome::NoOp;
     }
     if kind == "step-finish" {
@@ -141,7 +197,18 @@ pub(super) fn handle_part_delta(acc: &mut StreamAccumulator, value: &Value) -> P
     let Some((part_id, delta)) = parse_text_delta(value) else {
         return PushOutcome::NoOp;
     };
-    if !is_assistant_message(acc, value.get("messageID").and_then(Value::as_str)) {
+    let message_id = value.get("messageID").and_then(Value::as_str);
+    if !is_assistant_message(acc, message_id) {
+        // Role unknown? Buffer for replay once the `message.updated` lands.
+        if let Some(mid) = message_id {
+            if !acc.opencode_state.role_by_message_id.contains_key(mid) {
+                acc.opencode_state
+                    .pending_parts
+                    .entry(mid.to_string())
+                    .or_default()
+                    .push(PendingPart::Delta(value.clone()));
+            }
+        }
         return PushOutcome::NoOp;
     }
     if !append_text_delta(
@@ -544,6 +611,9 @@ fn rebuild_collected(acc: &mut StreamAccumulator) {
 }
 
 fn finalize(acc: &mut StreamAccumulator) -> PushOutcome {
+    // Orphan parts whose role never arrived are unclassifiable; drop them so
+    // they can't leak into the next turn (cleared on both exit paths below).
+    acc.opencode_state.pending_parts.clear();
     if acc.opencode_state.parts.is_empty() {
         return PushOutcome::NoOp;
     }
@@ -762,6 +832,87 @@ mod tests {
         assert_eq!(task["tool"], "task");
         let children = task["children"].as_array().expect("task has children");
         assert_eq!(children[0]["text"], "Sub reply");
+    }
+
+    #[test]
+    fn parts_before_message_updated_are_buffered_and_replayed() {
+        // Regression: on resume-after-abort, opencode emits the assistant
+        // message's parts BEFORE the `message.updated` that declares the role.
+        // Parts must be buffered and replayed once the role lands, not dropped
+        // (dropping produced an empty turn → "provider returned an empty
+        // response").
+        let mut acc = StreamAccumulator::new("opencode", "");
+        // Snapshot + delta arrive first, role unknown → buffered, nothing yet.
+        assert_eq!(
+            acc.push_event(&updated("m1", "text", "p1", "Hel"), ""),
+            PushOutcome::NoOp
+        );
+        assert_eq!(
+            acc.push_event(&delta("m1", "p1", "text", "lo"), ""),
+            PushOutcome::NoOp
+        );
+        assert!(acc.collected().is_empty());
+        // Role event lands LAST → buffered parts replay in order.
+        let out = acc.push_event(
+            &json!({ "type": "opencode/message.updated", "session_id": "ses_1",
+                     "info": { "id": "m1", "role": "assistant" } }),
+            "",
+        );
+        assert_eq!(out, PushOutcome::StreamingDelta);
+        acc.push_event(
+            &json!({ "type": "opencode/session.idle", "session_id": "ses_1" }),
+            "",
+        );
+        let msgs = acc.collected();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(
+            msgs[0].parsed.as_ref().unwrap()["parts"][0]["text"],
+            "Hello"
+        );
+    }
+
+    #[test]
+    fn buffered_user_parts_are_dropped_when_role_lands() {
+        // The same buffering must NOT render a user prompt-echo whose part
+        // arrived before its `message.updated`.
+        let mut acc = StreamAccumulator::new("opencode", "");
+        assert_eq!(
+            acc.push_event(&updated("mu", "text", "pu", "my prompt"), ""),
+            PushOutcome::NoOp
+        );
+        acc.push_event(
+            &json!({ "type": "opencode/message.updated", "session_id": "ses_1",
+                     "info": { "id": "mu", "role": "user" } }),
+            "",
+        );
+        acc.push_event(
+            &json!({ "type": "opencode/session.idle", "session_id": "ses_1" }),
+            "",
+        );
+        assert!(acc.collected().is_empty());
+    }
+
+    #[test]
+    fn orphan_buffered_parts_do_not_leak_across_turns() {
+        // A part whose role never arrives is dropped at finalize and must not
+        // bleed into the next turn.
+        let mut acc = StreamAccumulator::new("opencode", "");
+        acc.push_event(&updated("ghost", "text", "pg", "orphan"), "");
+        acc.push_event(
+            &json!({ "type": "opencode/session.idle", "session_id": "ses_1" }),
+            "",
+        );
+        assert!(acc.collected().is_empty());
+        // Next turn: a normal assistant message renders cleanly, no orphan text.
+        assistant(&mut acc, "m2");
+        acc.push_event(&updated("m2", "text", "p2", "real"), "");
+        acc.push_event(
+            &json!({ "type": "opencode/session.idle", "session_id": "ses_1" }),
+            "",
+        );
+        let parsed = acc.collected()[0].parsed.as_ref().unwrap();
+        assert_eq!(parsed["parts"].as_array().unwrap().len(), 1);
+        assert_eq!(parsed["parts"][0]["text"], "real");
     }
 
     #[test]
