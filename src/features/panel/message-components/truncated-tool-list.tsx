@@ -17,6 +17,8 @@ type TruncatedToolListProps<T> = {
 	renderItem: (item: T, opts: { expanded: boolean }) => ReactNode;
 	/** Only items matching this count toward the preview cap. Defaults to all. */
 	previewFilter?: (item: T) => boolean;
+	/** Extra item appended to the collapsed preview (e.g. a live-streaming tail). Ignored when expanded. */
+	previewTail?: T | null;
 	previewCount?: number;
 	defaultExpanded?: boolean;
 	className?: string;
@@ -30,6 +32,7 @@ export function TruncatedToolList<T>({
 	getKey,
 	renderItem,
 	previewFilter,
+	previewTail,
 	previewCount = DEFAULT_PREVIEW_COUNT,
 	defaultExpanded = false,
 	className,
@@ -38,10 +41,15 @@ export function TruncatedToolList<T>({
 	const [expanded, setExpanded] = useState(defaultExpanded);
 
 	const previewItems = previewFilter ? items.filter(previewFilter) : items;
-	const collapsedVisibleCount = Math.min(previewItems.length, previewCount);
+	const collapsedSlice = previewItems.slice(-previewCount);
+	const collapsedVisibleCount = collapsedSlice.length + (previewTail ? 1 : 0);
 	const hiddenCount = items.length - collapsedVisibleCount;
 	const hasMore = previewItems.length >= previewCount && hiddenCount > 0;
-	const visible = expanded ? items : previewItems.slice(-previewCount);
+	const visible = expanded
+		? items
+		: previewTail
+			? [...collapsedSlice, previewTail]
+			: collapsedSlice;
 
 	return (
 		<div className={cn(LIST_CLASS_NAME, className)}>

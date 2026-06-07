@@ -493,6 +493,13 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 		[parts],
 	);
 	const toolUseCount = toolCallParts.length;
+	// While the sub-agent is live, surface the trailing text/reasoning block
+	// (the part currently streaming) in the collapsed preview. The collapsed
+	// view otherwise lists only tool calls, so a streaming text turn nested
+	// into the card would render nothing until the user expands it.
+	const lastPart = parts[parts.length - 1];
+	const liveTail =
+		streaming && lastPart && !isToolCallPart(lastPart) ? lastPart : null;
 
 	return (
 		<div className="flex flex-col">
@@ -521,6 +528,7 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 				items={parts}
 				previewCount={AGENT_PREVIEW_STEPS}
 				previewFilter={(part) => part.type === "tool-call"}
+				previewTail={liveTail}
 				getKey={partKey}
 				renderItem={(part, { expanded }) => {
 					if (isToolCallPart(part)) {
