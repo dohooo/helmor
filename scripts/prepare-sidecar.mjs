@@ -94,11 +94,14 @@ function main() {
 	run("bun run build", sidecarDir);
 
 	const triple = detectTargetTriple();
-	const sidecarSource = resolve(sidecarDir, "dist", "helmor-sidecar");
+	// Bun's `--compile` and cargo append `.exe` on Windows, and Tauri's
+	// externalBin resolution expects the `-<triple>` artifacts to carry it too.
+	const exe = process.platform === "win32" ? ".exe" : "";
+	const sidecarSource = resolve(sidecarDir, "dist", `helmor-sidecar${exe}`);
 	const sidecarDestination = resolve(
 		sidecarDir,
 		"dist",
-		`helmor-sidecar-${triple}`,
+		`helmor-sidecar-${triple}${exe}`,
 	);
 	const cliBinaryName =
 		process.platform === "win32" ? "helmor-cli.exe" : "helmor-cli";
@@ -109,7 +112,7 @@ function main() {
 		"release",
 		cliBinaryName,
 	);
-	const cliDestination = resolve(bundledBinDir, `helmor-cli-${triple}`);
+	const cliDestination = resolve(bundledBinDir, `helmor-cli-${triple}${exe}`);
 
 	if (!existsSync(sidecarSource)) {
 		throw new Error(
