@@ -53,8 +53,7 @@ fn config_dir() -> Result<PathBuf> {
             return Ok(PathBuf::from(xdg).join("opencode"));
         }
     }
-    let home = std::env::var_os("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".config").join("opencode"))
+    crate::platform::paths::xdg_config_dir("opencode").context("HOME is not set")
 }
 
 // Precedence: `opencode.jsonc` > `opencode.json` > `config.json`; default to `opencode.jsonc`.

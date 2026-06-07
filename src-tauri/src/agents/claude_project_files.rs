@@ -22,7 +22,7 @@ pub fn encode_project_dir(path: &Path) -> String {
 /// Resolve `~/.claude/projects` from `$HOME`. Returns `None` when HOME is
 /// unset or the directory does not exist (fresh install — nothing to do).
 fn claude_projects_root() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let home = crate::platform::paths::home_dir()?;
     let root = home.join(".claude").join("projects");
     if root.is_dir() {
         Some(root)

@@ -19,10 +19,7 @@ pub struct ApiKeyProvider {
 
 /// Resolve `~/.codex/config.toml`, honouring `$CODEX_HOME` if set.
 pub fn config_path() -> PathBuf {
-    std::env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home_dir().join(".codex"))
-        .join("config.toml")
+    crate::platform::paths::codex_home_dir().join("config.toml")
 }
 
 /// The provider currently selected by `model_provider`, if it declares an
@@ -79,12 +76,6 @@ pub fn declared_env_keys(config: &str) -> Vec<String> {
         }
     }
     keys
-}
-
-fn home_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/"))
 }
 
 #[cfg(test)]

@@ -85,22 +85,7 @@ impl CodexCredentials {
 }
 
 fn auth_file_path() -> PathBuf {
-    if let Ok(custom) = std::env::var("CODEX_HOME") {
-        let trimmed = custom.trim();
-        if !trimmed.is_empty() {
-            return PathBuf::from(trimmed).join("auth.json");
-        }
-    }
-    home_dir().join(".codex").join("auth.json")
-}
-
-fn home_dir() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.is_empty() {
-            return PathBuf::from(home);
-        }
-    }
-    PathBuf::from("/")
+    crate::platform::paths::codex_home_dir().join("auth.json")
 }
 
 fn load_credentials(path: &Path) -> Result<CodexCredentials> {

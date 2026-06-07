@@ -220,9 +220,8 @@ fn spawn_and_await(
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
 
-    // Own process group so a later SIGTERM reaches the whole tree.
-    use std::os::unix::process::CommandExt;
-    command.process_group(0);
+    // Own process tree so later termination reaches child processes.
+    crate::platform::process::configure_tree_root(&mut command);
 
     let mut child = command.spawn().with_context(|| {
         format!(
@@ -287,11 +286,14 @@ fn spawn_and_await(
 /// exited successfully.
 fn run_oneshot_interactive(args: &[String], timeout: Duration) -> Result<bool> {
     let bin = resolve_cloudflared();
-    let mut child = Command::new(&bin)
+    let mut command = Command::new(&bin);
+    command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    crate::platform::process::configure_tree_root(&mut command);
+    let mut child = command
         .spawn()
         .with_context(|| format!("failed to spawn cloudflared ({})", bin.display()))?;
 
@@ -312,7 +314,7 @@ fn run_oneshot_interactive(args: &[String], timeout: Duration) -> Result<bool> {
 
 /// `~/.cloudflared`.
 fn cloudflared_home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cloudflared"))
+    crate::platform::paths::home_dir().map(|home| home.join(".cloudflared"))
 }
 
 /// Resolve the cloudflared binary: env override → bundled vendor copy → PATH.
@@ -364,11 +366,8 @@ fn parse_tunnel_uuid(text: &str) -> Option<String> {
 /// SIGTERM the child's process group, wait briefly, then SIGKILL. Mirrors the
 /// sidecar teardown ladder.
 fn kill_process_group(child: &mut Child) {
-    let pid = child.id() as libc::pid_t;
-    // SAFETY: negative PID targets the whole group spawned via process_group(0).
-    unsafe {
-        libc::kill(-pid, libc::SIGTERM);
-    }
+    let tree = crate::platform::process::ProcessTree::from_child_pid(child.id());
+    crate::platform::process::terminate_tree(tree);
     let deadline = Instant::now() + Duration::from_millis(2000);
     loop {
         if let Ok(Some(_)) = child.try_wait() {
@@ -379,9 +378,7 @@ fn kill_process_group(child: &mut Child) {
         }
         std::thread::sleep(Duration::from_millis(25));
     }
-    unsafe {
-        libc::kill(-pid, libc::SIGKILL);
-    }
+    crate::platform::process::kill_tree(tree);
     let _ = child.wait();
 }
 

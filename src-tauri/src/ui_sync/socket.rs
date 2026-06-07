@@ -20,7 +20,7 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>) -> Result<()> {
             let _ = std::fs::remove_file(&socket_path);
         }
 
-        let listener = std::os::unix::net::UnixListener::bind(&socket_path)
+        let listener = crate::platform::ipc::bind_listener(&socket_path)
             .with_context(|| format!("Failed to bind UI sync socket {}", socket_path.display()))?;
         listener
             .set_nonblocking(false)
@@ -79,7 +79,7 @@ pub fn notify_running_app(event: super::events::UiMutationEvent) -> Result<bool>
             return Ok(false);
         }
 
-        let mut stream = match std::os::unix::net::UnixStream::connect(&socket_path) {
+        let mut stream = match crate::platform::ipc::connect(&socket_path) {
             Ok(stream) => stream,
             Err(_) => return Ok(false),
         };
@@ -125,7 +125,7 @@ pub fn is_listener_running() -> bool {
             return false;
         }
 
-        std::os::unix::net::UnixStream::connect(socket_path).is_ok()
+        crate::platform::ipc::connect(&socket_path).is_ok()
     }
 
     #[cfg(not(unix))]

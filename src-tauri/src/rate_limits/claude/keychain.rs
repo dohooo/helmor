@@ -156,7 +156,6 @@ fn push_unique_account(accounts: &mut Vec<String>, account: String) {
 #[cfg(target_os = "macos")]
 fn read_via_security_cli(service: &str, account: Option<&str>) -> Option<Vec<u8>> {
     use std::io::Read;
-    use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     use std::time::Instant;
 
@@ -177,14 +176,7 @@ fn read_via_security_cli(service: &str, account: Option<&str>) -> Option<Vec<u8>
 
     // SAFETY: `setpgid` is async-signal-safe, which is the only family
     // of calls allowed between fork and exec.
-    unsafe {
-        cmd.pre_exec(|| {
-            if libc::setpgid(0, 0) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    crate::platform::process::configure_tree_root(&mut cmd);
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -223,20 +215,11 @@ fn read_via_security_cli(service: &str, account: Option<&str>) -> Option<Vec<u8>
                     "/usr/bin/security read timed out after {:?}, killing process group",
                     SECURITY_CLI_TIMEOUT
                 );
-                // SAFETY: passing a negative pid to `kill` signals the
-                // whole process group rooted at `pgid`. `pgid` is the
-                // child we just `setpgid(0, 0)`'d, so the only members
-                // are `/usr/bin/security` and any subprocess it forked.
-                unsafe {
-                    libc::kill(-pgid, libc::SIGTERM);
-                }
+                let tree = crate::platform::process::ProcessTree::new(pgid, pgid);
+                crate::platform::process::terminate_tree(tree);
                 std::thread::sleep(SECURITY_CLI_SIGTERM_GRACE);
                 if matches!(child.try_wait(), Ok(None)) {
-                    // SAFETY: same as above. SIGKILL is the escalation
-                    // when the SIGTERM grace period didn't reap.
-                    unsafe {
-                        libc::kill(-pgid, libc::SIGKILL);
-                    }
+                    crate::platform::process::kill_tree(tree);
                     let _ = child.kill();
                 }
                 let _ = child.wait();

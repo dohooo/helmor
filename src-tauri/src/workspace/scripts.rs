@@ -325,66 +325,16 @@ impl ScriptProcessManager {
 /// for that group to disappear so a fast leader exit cannot leave descendants
 /// running after Stop returns.
 fn escalating_kill(pid: libc::pid_t, pgid: libc::pid_t) {
-    let current_pgrp = unsafe { libc::getpgrp() };
-    let can_signal_group = pgid > 0 && pgid != current_pgrp;
+    let tree = crate::platform::process::ProcessTree::new(pid, pgid);
+    crate::platform::process::terminate_tree(tree);
 
-    unsafe {
-        if can_signal_group {
-            libc::killpg(pgid, libc::SIGTERM);
-        }
-        libc::kill(pid, libc::SIGTERM);
-    }
-
-    if wait_for_processes_gone(pid, pgid, can_signal_group, PROCESS_TERM_TIMEOUT) {
+    if crate::platform::process::wait_for_tree_gone(tree, PROCESS_TERM_TIMEOUT, PTY_POLL_INTERVAL) {
         return;
     }
 
-    unsafe {
-        if can_signal_group {
-            libc::killpg(pgid, libc::SIGKILL);
-        }
-        libc::kill(pid, libc::SIGKILL);
-    }
-
-    let _ = wait_for_processes_gone(pid, pgid, can_signal_group, PROCESS_KILL_TIMEOUT);
-}
-
-fn wait_for_processes_gone(
-    pid: libc::pid_t,
-    pgid: libc::pid_t,
-    can_signal_group: bool,
-    timeout: Duration,
-) -> bool {
-    let deadline = Instant::now() + timeout;
-    loop {
-        let pid_gone = is_pid_gone(pid);
-        let group_gone = !can_signal_group || is_process_group_gone(pgid);
-        if pid_gone && group_gone {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(PTY_POLL_INTERVAL);
-    }
-}
-
-fn is_pid_gone(pid: libc::pid_t) -> bool {
-    let ret = unsafe { libc::kill(pid, 0) };
-    if ret == -1 {
-        let err = std::io::Error::last_os_error();
-        return err.raw_os_error() == Some(libc::ESRCH);
-    }
-    false
-}
-
-fn is_process_group_gone(pgid: libc::pid_t) -> bool {
-    let ret = unsafe { libc::killpg(pgid, 0) };
-    if ret == -1 {
-        let err = std::io::Error::last_os_error();
-        return err.raw_os_error() == Some(libc::ESRCH);
-    }
-    false
+    crate::platform::process::kill_tree(tree);
+    let _ =
+        crate::platform::process::wait_for_tree_gone(tree, PROCESS_KILL_TIMEOUT, PTY_POLL_INTERVAL);
 }
 
 /// SIGKILL any `stop.command` cleanup tree currently published in
@@ -395,10 +345,8 @@ fn is_process_group_gone(pgid: libc::pid_t) -> bool {
 /// the top of `graceful_kill`.
 fn kill_in_flight_stop_command(pgid_slot: &Mutex<Option<libc::pid_t>>) {
     let stop_pgid = *pgid_slot.lock().expect("stop_pgid mutex poisoned");
-    if let Some(pgid) = stop_pgid {
-        unsafe {
-            libc::killpg(pgid, libc::SIGKILL);
-        }
+    if let Some(pgid) = stop_pgid.filter(|pgid| *pgid > 0) {
+        crate::platform::process::kill_tree(crate::platform::process::ProcessTree::new(pgid, pgid));
     }
 }
 
@@ -532,12 +480,9 @@ fn run_stop_command(
                 // Don't leak the child + its reader threads on a
                 // try_wait failure — SIGKILL the pgid (or pid as
                 // fallback) and reap so the pipe ends close.
-                unsafe {
-                    if pgid > 0 {
-                        libc::killpg(pgid, libc::SIGKILL);
-                    }
-                    libc::kill(pid, libc::SIGKILL);
-                }
+                crate::platform::process::kill_tree(crate::platform::process::ProcessTree::new(
+                    pid, pgid,
+                ));
                 let _ = child.wait();
                 break StopOutcome::SpawnFailed(format!("try_wait failed: {e}"));
             }
@@ -1320,7 +1265,7 @@ mod tests {
         let mgr_c = mgr.clone();
         let key_c = key.clone();
         let tempdir = std::env::temp_dir().display().to_string();
-        let runner = std::thread::spawn(move || {
+        let mut runner = Some(std::thread::spawn(move || {
             run_script_with_shell(
                 &mgr_c,
                 &key_c.0,
@@ -1335,13 +1280,17 @@ mod tests {
                 None,
                 None,
             )
-        });
+        }));
 
         // Wait for run_script to register before we issue kill_all.
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(15);
         loop {
             if mgr.processes.lock().unwrap().contains_key(&key) {
                 break;
+            }
+            if runner.as_ref().is_some_and(|runner| runner.is_finished()) {
+                let result = runner.take().unwrap().join().unwrap();
+                panic!("run_script exited before registration: {result:?}");
             }
             assert!(Instant::now() < deadline, "run_script never registered");
             std::thread::sleep(Duration::from_millis(10));
@@ -1352,7 +1301,7 @@ mod tests {
         // run_script's reaper must have unregistered + returned. If
         // kill_all held the map lock past the signal, the unregister
         // would have blocked and this join would hang.
-        let _ = runner.join().unwrap();
+        let _ = runner.unwrap().join().unwrap();
         // Real path is sub-second (PROCESS_TERM + PROCESS_KILL = 700ms
         // upper bound). 5s headroom for CI load; a real regression
         // (deadlock / missed signal) hangs indefinitely and still trips.

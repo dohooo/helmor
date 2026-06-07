@@ -261,21 +261,7 @@ struct RawRuntimeRow {
 /// if it doesn't. We treat `EPERM` as alive too — it means the kernel
 /// has a process by that PID, even if we can't signal it.
 fn probe_pid_alive(pid: libc::pid_t) -> bool {
-    if pid <= 0 {
-        return false;
-    }
-    let ret = unsafe { libc::kill(pid, 0) };
-    if ret == 0 {
-        return true;
-    }
-    match std::io::Error::last_os_error().raw_os_error() {
-        Some(libc::ESRCH) => false,
-        // `EPERM` (process exists, signal not permitted) keeps us in
-        // the "maybe alive" camp — conservative classification matches
-        // the plan's "only auto-kill when ownership is proven" rule.
-        Some(libc::EPERM) => true,
-        _ => true,
-    }
+    crate::platform::process::pid_alive(pid)
 }
 
 #[cfg(test)]

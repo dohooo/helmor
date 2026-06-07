@@ -225,15 +225,9 @@ pub async fn spawn_forge_cli_auth_terminal(
 ) -> CmdResult<()> {
     let host = host.unwrap_or_else(|| "gitlab.com".to_string());
     let command = forge::forge_cli_auth_command(provider, Some(&host))?;
-    let working_dir = std::env::var("HOME")
-        .ok()
-        .filter(|home| !home.trim().is_empty())
-        .or_else(|| {
-            std::env::current_dir()
-                .ok()
-                .map(|path| path.display().to_string())
-        })
-        .unwrap_or_else(|| "/".to_string());
+    let working_dir = crate::platform::paths::home_dir_or_current_or_root()
+        .display()
+        .to_string();
     let context = ScriptContext {
         root_path: working_dir.clone(),
         workspace_path: None,
@@ -250,7 +244,7 @@ pub async fn spawn_forge_cli_auth_terminal(
         // input — written synchronously to the PTY master right after
         // the shell registers, so a frontend re-render-driven
         // cleanup→respawn can't drop the bytes.
-        let boot_input = format!("{command}; exit\n");
+        let boot_input = crate::platform::shell::boot_input(&command);
         if let Err(error) = crate::workspace::scripts::run_terminal_session(
             &mgr,
             FORGE_CLI_AUTH_REPO_ID,

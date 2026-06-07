@@ -169,11 +169,11 @@ fn cli_install_remediation(cli_binary: &std::path::Path, install_path: &std::pat
 }
 
 fn shell_quote(path: &std::path::Path) -> String {
-    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+    crate::platform::shell::quote_path(path)
 }
 
 fn shell_quote_arg(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
+    crate::platform::shell::quote_posix_arg(value)
 }
 
 fn classify_cli_install(
@@ -387,9 +387,7 @@ fn applescript_shell_arg(path: &std::path::Path) -> String {
 }
 
 fn home_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
+    crate::platform::paths::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
 fn claude_skills_dir() -> PathBuf {
@@ -614,7 +612,7 @@ pub async fn install_helmor_skills() -> CmdResult<HelmorSkillsStatus> {
             );
         }
 
-        let output = Command::new("npx")
+        let output = Command::new(crate::platform::executable::resolve_for_spawn("npx"))
             .args(helmor_skills_install_args(&agents))
             .output()
             .with_context(|| format!("Failed to start skills installer. Try:\n  {command}"))?;
@@ -847,7 +845,7 @@ fn run_components_check_inner(force: bool) -> ComponentsUpdateCheck {
 
 fn install_skills_silent(agents: &[&str]) -> anyhow::Result<()> {
     let command = helmor_skills_install_command(agents);
-    let output = Command::new("npx")
+    let output = Command::new(crate::platform::executable::resolve_for_spawn("npx"))
         .args(helmor_skills_install_args(agents))
         .output()
         .with_context(|| format!("Failed to start skills installer. Try:\n  {command}"))?;
@@ -1185,10 +1183,9 @@ pub async fn get_agent_versions() -> CmdResult<AgentVersions> {
 }
 
 fn agent_cli_version(provider: &str) -> Option<String> {
-    let output = std::process::Command::new(resolve_agent_binary(provider))
-        .arg("--version")
-        .output()
-        .ok()?;
+    let mut command = std::process::Command::new(resolve_agent_binary(provider));
+    crate::platform::process::configure_background_cli(&mut command);
+    let output = command.arg("--version").output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -1254,7 +1251,7 @@ fn resolve_agent_binary(provider: &str) -> PathBuf {
         "opencode" => bundled.opencode_bin,
         _ => None,
     };
-    bundled_path.unwrap_or_else(|| PathBuf::from(provider))
+    bundled_path.unwrap_or_else(|| crate::platform::executable::resolve_for_spawn(provider))
 }
 
 // Read from the sidecar-computed settings row, NOT `auth.json` (which misses env/config/Zen providers).
@@ -1284,10 +1281,9 @@ fn opencode_login_ready() -> bool {
 }
 
 fn claude_login_ready() -> bool {
-    match std::process::Command::new(resolve_agent_binary("claude"))
-        .args(["auth", "status"])
-        .output()
-    {
+    let mut command = std::process::Command::new(resolve_agent_binary("claude"));
+    crate::platform::process::configure_background_cli(&mut command);
+    match command.args(["auth", "status"]).output() {
         Ok(output) if output.status.success() => parse_claude_login_status(&output.stdout),
         Ok(output) => {
             // Claude exits non-zero when the user isn't authenticated —
@@ -1338,10 +1334,9 @@ fn codex_auth_status() -> CodexAuthStatus {
 }
 
 fn codex_login_ready() -> bool {
-    match std::process::Command::new(resolve_agent_binary("codex"))
-        .args(["login", "status"])
-        .output()
-    {
+    let mut command = std::process::Command::new(resolve_agent_binary("codex"));
+    crate::platform::process::configure_background_cli(&mut command);
+    match command.args(["login", "status"]).output() {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1440,15 +1435,9 @@ pub async fn spawn_agent_login_terminal(
         let _ = window.set_focus();
     }
 
-    let working_dir = std::env::var("HOME")
-        .ok()
-        .filter(|home| !home.trim().is_empty())
-        .or_else(|| {
-            std::env::current_dir()
-                .ok()
-                .map(|path| path.display().to_string())
-        })
-        .unwrap_or_else(|| "/".to_string());
+    let working_dir = crate::platform::paths::home_dir_or_current_or_root()
+        .display()
+        .to_string();
     let context = ScriptContext {
         root_path: working_dir.clone(),
         workspace_path: None,
@@ -1470,7 +1459,7 @@ pub async fn spawn_agent_login_terminal(
         // input — written synchronously to the PTY master right after
         // the shell registers, so a frontend re-render-driven
         // cleanup→respawn can't drop the bytes.
-        let boot_input = format!("{command}; exit\n");
+        let boot_input = crate::platform::shell::boot_input(&command);
         if let Err(error) = crate::workspace::scripts::run_terminal_session(
             &mgr,
             AGENT_LOGIN_REPO_ID,

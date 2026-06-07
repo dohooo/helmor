@@ -148,7 +148,7 @@ impl SidecarProcess {
         let is_dev = sidecar_path.extension().is_some_and(|ext| ext == "ts");
 
         let mut cmd = if is_dev {
-            let mut c = Command::new("bun");
+            let mut c = Command::new(crate::platform::executable::resolve_for_spawn("bun"));
             c.arg("run").arg(&sidecar_path);
             // Anchor cwd to sidecar/ so Bun discovers `bunfig.toml` and
             // applies the preload that registers our build-time plugins
@@ -167,11 +167,9 @@ impl SidecarProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
 
-        // Put the sidecar in its own process group so SIGTERM/SIGKILL
-        // reaches all child processes (Claude CLI, Codex CLI) instead
-        // of only hitting the Bun parent.
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
+        // Put the sidecar in its own process tree so termination reaches
+        // Claude/Codex/OpenCode children instead of only hitting Bun.
+        crate::platform::process::configure_tree_root(&mut cmd);
 
         // Pass log config to the sidecar process
         if let Ok(dir) = crate::data_dir::logs_dir() {
@@ -284,9 +282,9 @@ impl SidecarProcess {
     /// `ManagedSidecar::shutdown`. Kill the whole process group first so
     /// child CLIs don't get reparented to launchd as orphans.
     fn kill(&mut self) {
-        unsafe {
-            libc::kill(-(self.pid() as libc::pid_t), libc::SIGKILL);
-        }
+        crate::platform::process::kill_tree(crate::platform::process::ProcessTree::from_child_pid(
+            self.pid(),
+        ));
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -313,11 +311,9 @@ impl SidecarProcess {
     /// (negative PID) ensures child CLIs spawned by Bun also receive the
     /// signal.
     fn send_sigterm(&self) {
-        // SAFETY: `pid()` is the live child's PID (== PGID since we set
-        // process_group(0) at spawn). Negative PID targets the whole group.
-        unsafe {
-            libc::kill(-(self.pid() as libc::pid_t), libc::SIGTERM);
-        }
+        crate::platform::process::terminate_tree(
+            crate::platform::process::ProcessTree::from_child_pid(self.pid()),
+        );
     }
 }
 
