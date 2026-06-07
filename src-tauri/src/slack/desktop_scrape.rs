@@ -31,6 +31,14 @@
 //!   - Chromium `os_crypt_mac.mm`
 //!   - Electron `safeStorage` (same scheme as Chrome on macOS)
 //!   - hraftery/slacktokens (Python reference implementation)
+//!
+//! Windows/Linux: the Chromium cookie scheme here is portable (DPAPI-wrapped
+//! `Local State` key on Windows), but that path is not yet wired up, so on
+//! non-macOS targets the scraping helpers are currently unused. Suppress the
+//! resulting dead-code/unused-import noise there rather than litter every item
+//! with a cfg; the macOS build still gets full lint coverage.
+
+#![cfg_attr(not(target_os = "macos"), allow(dead_code, unused_imports))]
 
 use std::path::{Path, PathBuf};
 

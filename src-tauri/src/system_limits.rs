@@ -41,6 +41,10 @@ pub fn raise_nofile_soft_limit() {
     let _ = unsafe { _setmaxstdio(TARGET_NOFILE_SOFT_LIMIT as i32) };
 }
 
+// Used by the Unix `raise_nofile_soft_limit` and by the cross-platform unit
+// tests; the Windows lib path uses `_setmaxstdio` directly, so this is dead
+// code there.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn desired_nofile_soft_limit(current_soft: u64, hard: u64) -> u64 {
     current_soft.max(TARGET_NOFILE_SOFT_LIMIT.min(hard))
 }

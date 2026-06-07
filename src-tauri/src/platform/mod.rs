@@ -5,7 +5,5 @@
 //! the Windows port (see `docs/superpowers/plans/2026-06-07-windows-port.md`).
 
 pub mod fs;
+pub mod ipc;
 pub mod process;
-
-// Phase 3:  pub mod ipc;
-// Phase 4:  pub mod creds; pub mod slack_creds; pub mod hardware;

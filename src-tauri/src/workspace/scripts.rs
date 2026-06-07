@@ -22,9 +22,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use portable_pty::{
-    native_pty_system, Child, CommandBuilder, MasterPty, PtySize, PtySystem, SlavePty,
-};
+use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
 use tauri::ipc::Channel;
 
@@ -354,7 +352,13 @@ fn shell_command_for(command: &str) -> Command {
     #[cfg(windows)]
     {
         let mut cmd = Command::new(powershell_path());
-        cmd.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]);
+        cmd.args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            command,
+        ]);
         cmd
     }
 }
@@ -586,9 +590,7 @@ fn powershell_path() -> String {
 #[cfg(windows)]
 fn which_in_path(exe: &str) -> bool {
     std::env::var_os("PATH")
-        .map(|paths| {
-            std::env::split_paths(&paths).any(|dir| dir.join(exe).is_file())
-        })
+        .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(exe).is_file()))
         .unwrap_or(false)
 }
 
@@ -613,6 +615,7 @@ fn default_shell() -> (String, Vec<String>) {
 /// send additional input (arrow keys, Ctrl+C, responses to prompts) through
 /// `ScriptProcessManager::write_stdin`. The wrapped command's final `exit`
 /// is what ends the session on normal completion.
+#[allow(clippy::too_many_arguments)]
 pub fn run_script(
     manager: &ScriptProcessManager,
     repo_id: &str,
@@ -647,6 +650,7 @@ pub fn run_script(
 /// Used by the Inspector Terminal tab and by onboarding embedded auth terminals
 /// (`gh auth login`, `claude /login`, …). In both cases the PTY persists across
 /// multiple `write_stdin` calls.
+#[allow(clippy::too_many_arguments)]
 pub fn run_terminal_session(
     manager: &ScriptProcessManager,
     repo_id: &str,
@@ -763,9 +767,9 @@ pub(crate) fn run_script_with_shell(
 
     let _ = channel.send(ScriptEvent::Started {
         pid,
-        command: script.map(str::to_string).unwrap_or_else(|| {
-            format!("{shell_path} {}", shell_args.join(" "))
-        }),
+        command: script
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("{shell_path} {}", shell_args.join(" "))),
     });
 
     let key: ProcessKey = (
@@ -965,7 +969,11 @@ mod tests {
     fn spawn_and_register(
         mgr: &ScriptProcessManager,
         key: ProcessKey,
-    ) -> (Box<dyn portable_pty::Child + Send + Sync>, u32, Arc<AtomicBool>) {
+    ) -> (
+        Box<dyn portable_pty::Child + Send + Sync>,
+        u32,
+        Arc<AtomicBool>,
+    ) {
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: 24,
@@ -1038,7 +1046,10 @@ mod tests {
         let (mut child2, pid2, _) = spawn_and_register(&mgr, key.clone());
 
         let _ = child1.wait();
-        assert!(killed1.load(Ordering::Acquire), "killed flag set on replaced handle");
+        assert!(
+            killed1.load(Ordering::Acquire),
+            "killed flag set on replaced handle"
+        );
 
         let map = mgr.processes.lock().unwrap();
         assert_eq!(map.len(), 1);
