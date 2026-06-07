@@ -3955,7 +3955,6 @@ export async function generateSessionTitle(
 	userMessage: string,
 	titleSeed?: string | null,
 	provider?: AgentProvider | null,
-	model?: string | null,
 ): Promise<GenerateSessionTitleResponse | null> {
 	try {
 		return await invoke<GenerateSessionTitleResponse>(
@@ -3966,7 +3965,6 @@ export async function generateSessionTitle(
 					userMessage,
 					titleSeed: titleSeed ?? null,
 					provider: provider ?? null,
-					model: model ?? null,
 				},
 			},
 		);

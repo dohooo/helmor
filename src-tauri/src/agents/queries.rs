@@ -14,7 +14,6 @@ pub struct GenerateSessionTitleRequest {
     pub user_message: String,
     pub title_seed: Option<String>,
     pub provider: Option<String>,
-    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -215,7 +214,6 @@ pub async fn generate_session_title(
                 "branchRenamePrompt": branch_rename_prompt,
                 "generateBranch": should_generate_branch,
                 "provider": request.provider,
-                "model": request.model,
             });
             if let Some(model) = super::custom_providers::configured_models()
                 .into_iter()

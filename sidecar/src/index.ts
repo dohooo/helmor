@@ -252,7 +252,6 @@ async function handleGenerateTitle(
 				params.provider === "cursor")
 				? params.provider
 				: null;
-		const model = optionalString(params, "model");
 		const claudeEnvironment = parseOptionalStringRecord(
 			params,
 			"claudeEnvironment",
@@ -265,7 +264,6 @@ async function handleGenerateTitle(
 		logger.debug(`[${id}] generateTitle`, {
 			userMessage: userMessage.slice(0, 100),
 			provider: provider ?? "default",
-			model: model ?? "(default)",
 			claudeModel: claudeModel ?? "haiku",
 			customClaudeEnvironment: Boolean(claudeEnvironment),
 			generateBranch,
@@ -316,7 +314,7 @@ async function handleGenerateTitle(
 						branchRenamePrompt,
 						emitter,
 						TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
-						{ model, agentProxy, generateBranch },
+						{ agentProxy, generateBranch },
 					);
 					logger.debug(`[${id}] generateTitle completed (codex)`);
 					return;

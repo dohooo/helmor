@@ -7,7 +7,6 @@
  * delta accumulation) happens downstream in Rust.
  */
 
-import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -42,7 +41,6 @@ import type {
 } from "./session-manager.js";
 import {
 	buildTitlePrompt,
-	CODEX_EXEC_TITLE_TIMEOUT_MS,
 	parseTitleAndBranchWithDiagnostics,
 	TITLE_GENERATION_TIMEOUT_MS,
 } from "./title.js";
@@ -88,67 +86,6 @@ function resolveCodexBinPath(): string {
 	return "codex";
 }
 
-function runCodexExecTitle(
-	prompt: string,
-	model: string,
-	timeoutMs: number,
-): Promise<string> {
-	return new Promise((resolve, reject) => {
-		const env = { ...process.env };
-		delete env.OPENAI_API_KEY;
-		delete env.OPENAI_BASE_URL;
-		delete env.OPENAI_ORG_ID;
-		delete env.OPENAI_PROJECT;
-
-		const child = spawn(
-			CODEX_BIN_PATH,
-			[...CODEX_EXEC_TITLE_ARGS, "--model", model, "-"],
-			{
-				cwd: process.cwd(),
-				stdio: ["pipe", "pipe", "pipe"],
-				env,
-			},
-		);
-		let stdout = "";
-		let stderr = "";
-		let settled = false;
-		const timeout = setTimeout(() => {
-			if (settled) return;
-			settled = true;
-			child.kill();
-			reject(
-				new Error(`Codex title generation timed out after ${timeoutMs}ms`),
-			);
-		}, timeoutMs);
-		timeout.unref();
-
-		child.stdout.on("data", (chunk: Buffer) => {
-			stdout += chunk.toString();
-		});
-		child.stderr.on("data", (chunk: Buffer) => {
-			stderr += chunk.toString();
-		});
-		child.on("error", (err) => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timeout);
-			reject(err);
-		});
-		child.on("exit", (code, signal) => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timeout);
-			if (code === 0) {
-				resolve(stdout);
-				return;
-			}
-			const detail = stderr.trim() || stdout.trim() || signal || `code ${code}`;
-			reject(new Error(`Codex title generation failed: ${detail}`));
-		});
-		child.stdin.end(prompt);
-	});
-}
-
 function platformShort(): string {
 	const arch = process.arch === "x64" ? "x64" : "arm64";
 	if (process.platform === "darwin") return `darwin-${arch}`;
@@ -176,20 +113,6 @@ function codexTargetTriple(): string | null {
 }
 
 const CODEX_BIN_PATH = resolveCodexBinPath();
-const CODEX_EXEC_TITLE_ARGS = [
-	"exec",
-	"--ignore-rules",
-	"--ephemeral",
-	"--skip-git-repo-check",
-	"--sandbox",
-	"read-only",
-	"--config",
-	"mcp_servers={}",
-	"--config",
-	'model_reasoning_effort="low"',
-	"--color",
-	"never",
-] as const;
 
 /**
  * Recognised `/goal` slash-command shapes. `set` carries the objective;
@@ -1156,27 +1079,127 @@ export class CodexAppServerManager implements SessionManager {
 		options?: GenerateTitleOptions,
 	): Promise<void> {
 		const generateBranch = options?.generateBranch ?? true;
-		const model = pickFastestCodexModel();
-		const prompt = buildTitlePrompt(
-			userMessage,
-			branchRenamePrompt,
-			generateBranch,
-		);
-		const raw = await runCodexExecTitle(
-			prompt,
-			model,
-			Math.max(timeoutMs, CODEX_EXEC_TITLE_TIMEOUT_MS),
-		);
-		const { title, branchName } = parseTitleAndBranchWithDiagnostics(
-			requestId,
-			raw,
-			{
-				model,
-				generateBranch,
-				logError: (message, meta) => logger.error(message, meta),
+		const cwd = process.cwd();
+		const model = options?.model?.trim() || pickFastestCodexModel();
+		const fastMode = modelSupportsFastMode("codex", model);
+		const server = new CodexAppServer({
+			binaryPath: CODEX_BIN_PATH,
+			cwd,
+			agentProxy: options?.agentProxy,
+			// Title generation must never start the user's configured MCP
+			// servers: on a new worktree's first turn that races the real
+			// conversation's MCP init and can leave tools (e.g. Linear)
+			// unavailable. This is a throwaway one-shot, so disable MCP.
+			disableMcp: true,
+			onNotification: () => {},
+			onRequest: (req) => {
+				if (APPROVAL_METHODS.has(req.method)) {
+					server.sendResponse(req.id, { decision: "accept" });
+				}
 			},
-		);
-		emitter.titleGenerated(requestId, title, branchName);
+			onExit: () => {},
+			onError: () => {},
+		});
+
+		const timeout = setTimeout(() => server.kill(), timeoutMs);
+
+		try {
+			await server.sendRequest("initialize", HELMOR_CLIENT_INFO);
+			server.writeNotification("initialized");
+
+			const threadStartParams: Record<string, unknown> = {
+				model,
+				approvalPolicy: BYPASS_GRANULAR_POLICY,
+			};
+			const threadResponse = await server.sendRequest<Record<string, unknown>>(
+				"thread/start",
+				threadStartParams,
+			);
+			const threadId = deepGet(threadResponse, "thread", "id") as
+				| string
+				| undefined;
+			if (!threadId) throw new Error("thread/start did not return thread id");
+
+			let raw = "";
+			let failure: string | null = null;
+			const done = new Promise<void>((resolve) => {
+				server.setHandlers(
+					(n) => {
+						if (n.method === "item/agentMessage/delta") {
+							const delta = deepGet(n.params, "delta");
+							if (typeof delta === "string") raw += delta;
+						}
+						if (n.method === "error") {
+							const message = deepGet(n.params, "error", "message");
+							const asText =
+								typeof message === "string"
+									? message
+									: "Codex app-server error during title generation";
+							failure = asText;
+							return;
+						}
+						if (n.method === "turn/completed") {
+							const status = deepGet(n.params, "turn", "status");
+							if (status === "failed") {
+								const message = deepGet(n.params, "turn", "error", "message");
+								failure =
+									typeof message === "string"
+										? message
+										: "Codex turn failed during title generation";
+							}
+							resolve();
+						}
+					},
+					(req) => {
+						if (APPROVAL_METHODS.has(req.method)) {
+							server.sendResponse(req.id, { decision: "accept" });
+						}
+					},
+				);
+			});
+
+			const turnStartParams: Record<string, unknown> = {
+				threadId,
+				input: [
+					{
+						type: "text",
+						text: buildTitlePrompt(
+							userMessage,
+							branchRenamePrompt,
+							generateBranch,
+						),
+						text_elements: [],
+					},
+				],
+				model,
+				effort: "low",
+				approvalPolicy: BYPASS_GRANULAR_POLICY,
+			};
+			if (fastMode) turnStartParams.serviceTier = "fast";
+			await server.sendRequest("turn/start", turnStartParams);
+
+			await done;
+			if (failure) {
+				logger.error(`[${requestId}] title generation failed`, {
+					model,
+					generateBranch,
+					message: failure,
+				});
+			}
+			const { title, branchName } = parseTitleAndBranchWithDiagnostics(
+				requestId,
+				raw,
+				{
+					model,
+					generateBranch,
+					logError: (message, meta) => logger.error(message, meta),
+				},
+			);
+			emitter.titleGenerated(requestId, title, branchName);
+		} finally {
+			clearTimeout(timeout);
+			server.kill();
+		}
 	}
 
 	// ── listSlashCommands ────────────────────────────────────────────────

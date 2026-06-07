@@ -58,6 +58,10 @@ export interface CodexAppServerOptions {
 	onExit: OnExit;
 	onError: OnError;
 	agentProxy?: AgentProxySettings;
+	/** Disable user-configured MCP servers for this app-server instance.
+	 *  Used by one-shot title generation so it never races the real
+	 *  conversation's MCP init on a worktree's first run. */
+	disableMcp?: boolean;
 	/** Fired when Codex's own SSE retry loop emits a "Reconnecting…"
 	 *  line on stderr. The manager uses this to (a) pulse a synthetic
 	 *  heartbeat keeping Rust's 45s watchdog satisfied, (b) forward a
@@ -79,8 +83,13 @@ const CODEX_APP_SERVER_ARGS = [
 	"notify=[]",
 ] as const;
 
-export function buildCodexAppServerArgs(): string[] {
-	return [...CODEX_APP_SERVER_ARGS];
+export function buildCodexAppServerArgs(opts?: {
+	disableMcp?: boolean;
+}): string[] {
+	const args: string[] = [...CODEX_APP_SERVER_ARGS];
+	// Empty out `mcp_servers` so this process starts no MCP servers.
+	if (opts?.disableMcp) args.push("-c", "mcp_servers={}");
+	return args;
 }
 
 /**
@@ -131,11 +140,15 @@ export class CodexAppServer {
 		this.onNotification = opts.onNotification;
 		this.onRequest = opts.onRequest;
 
-		this.child = spawn(opts.binaryPath, buildCodexAppServerArgs(), {
-			cwd: opts.cwd,
-			stdio: ["pipe", "pipe", "pipe"],
-			env: buildCodexEnv(opts.binaryPath, opts.agentProxy),
-		});
+		this.child = spawn(
+			opts.binaryPath,
+			buildCodexAppServerArgs({ disableMcp: opts.disableMcp }),
+			{
+				cwd: opts.cwd,
+				stdio: ["pipe", "pipe", "pipe"],
+				env: buildCodexEnv(opts.binaryPath, opts.agentProxy),
+			},
+		);
 
 		this.output = readline.createInterface({ input: this.child.stdout });
 		this.output.on("line", (line) => this.handleLine(line));
