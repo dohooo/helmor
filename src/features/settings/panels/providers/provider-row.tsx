@@ -106,14 +106,15 @@ export function ProviderRow({
 							setOpen((value) => !value);
 						}
 					}}
-					className="group flex cursor-pointer items-center gap-3 py-4"
+					// Fixed min-height so the async status control (badge ↔ login button) can't reflow the row.
+					className="group flex min-h-[3.75rem] cursor-pointer items-center gap-3 py-4"
 				>
 					{identity}
 					{status}
 					{trailing}
 				</div>
 			) : (
-				<div className="flex items-center gap-3 py-4">
+				<div className="flex min-h-[3.75rem] items-center gap-3 py-4">
 					{identity}
 					{status}
 					{trailing}
