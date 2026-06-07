@@ -1242,6 +1242,7 @@ export const WorkspaceComposerContainer = memo(
 								: null
 						}
 						hasPlanReview={hasPlanReview}
+						providerCapabilities={providerCapabilitiesQuery.data}
 						pendingInsertRequests={pendingInsertRequests}
 						onPendingInsertRequestsConsumed={onPendingInsertRequestsConsumed}
 						slashCommands={slashCommands}

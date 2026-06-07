@@ -44,8 +44,10 @@ import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import type {
 	AgentModelSection,
 	CandidateDirectory,
+	ProviderCapabilities,
 	SlashCommandEntry,
 } from "@/lib/api";
+import { findProviderCapabilities } from "@/lib/api";
 import type {
 	ComposerCustomTag,
 	ResolvedComposerInsertRequest,
@@ -180,6 +182,9 @@ type WorkspaceComposerProps = {
 		onCancel: () => void;
 	} | null;
 	hasPlanReview?: boolean;
+	/** Provider capability table; the Plan toggle reads `supportsPlanMode`
+	 *  for the selected model's provider instead of hard-coding by id. */
+	providerCapabilities?: ProviderCapabilities[];
 	/** When true, the ring is always rendered next to the send button.
 	 *  When false (the default), the ring auto-reveals only after usage
 	 *  crosses the threshold defined inside the ring component. */
@@ -296,6 +301,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	onPermissionResponse = noopPermissionResponse,
 	goalReplace = null,
 	hasPlanReview = false,
+	providerCapabilities,
 	alwaysShowContextUsage = false,
 	sessionId = null,
 	providerSessionId = null,
@@ -412,8 +418,14 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const supportsEffort = availableEffortLevels.length > 0;
 	const supportsFastMode = selectedModel?.supportsFastMode === true;
 	const supportsContextUsage = selectedModel?.supportsContextUsage !== false;
-	// Cursor SDK auto-handles plans internally — no toggle to expose.
-	const supportsPlanMode = selectedModel?.provider !== "cursor";
+	// Plan toggle is capability-driven (Cursor auto-handles plans internally;
+	// OpenCode runs the plan agent). Falls back to "anything but cursor" while
+	// the table loads or for an unknown provider.
+	const supportsPlanMode =
+		findProviderCapabilities(
+			providerCapabilities ?? [],
+			selectedModel?.provider ?? "",
+		)?.supportsPlanMode ?? selectedModel?.provider !== "cursor";
 	const effectiveEffort = useMemo(
 		() => clampEffort(effortLevel, availableEffortLevels),
 		[effortLevel, availableEffortLevels],

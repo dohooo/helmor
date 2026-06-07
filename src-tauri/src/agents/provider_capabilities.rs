@@ -117,12 +117,13 @@ pub fn capabilities_for_provider(provider: &str) -> ProviderCapabilities {
             requires_api_key: true,
             permission_modes: vec![PermissionMode::Default],
         },
-        // No plan artifact / no /goal loop; has the context ring, steer, and
-        // slash commands. Logs in via the embedded flow (not an API-key entry).
+        // Plan mode runs the read-only `plan` agent (approval rides the question
+        // flow). No /goal loop; has the context ring, steer, and slash commands.
+        // Logs in via the embedded flow (not an API-key entry).
         "opencode" => ProviderCapabilities {
             provider: "opencode".into(),
             display_name: "OpenCode".into(),
-            supports_plan_mode: false,
+            supports_plan_mode: true,
             supports_active_goal: false,
             supports_context_usage: true,
             supports_steer: true,
@@ -131,6 +132,7 @@ pub fn capabilities_for_provider(provider: &str) -> ProviderCapabilities {
             permission_modes: vec![
                 PermissionMode::Default,
                 PermissionMode::AcceptEdits,
+                PermissionMode::Plan,
                 PermissionMode::BypassPermissions,
             ],
         },
@@ -257,7 +259,10 @@ mod tests {
             caps.display_name, "OpenCode",
             "must not fall back to Claude"
         );
-        assert!(!caps.supports_plan_mode, "opencode emits no plan artifact");
+        assert!(
+            caps.supports_plan_mode,
+            "opencode runs the read-only plan agent"
+        );
         assert!(!caps.supports_active_goal, "opencode has no /goal loop");
         assert!(caps.supports_context_usage);
         assert!(caps.supports_steer);
@@ -268,6 +273,7 @@ mod tests {
             vec![
                 PermissionMode::Default,
                 PermissionMode::AcceptEdits,
+                PermissionMode::Plan,
                 PermissionMode::BypassPermissions,
             ]
         );

@@ -427,6 +427,9 @@ export class OpencodeSessionManager implements SessionManager {
 		const effort = params.effortLevel?.trim();
 		if (model && effort) model.variant = effort;
 		if (model) ctx.lastModel = model;
+		// Plan mode runs opencode's read-only `plan` agent; it ends by calling
+		// `plan_exit`, which asks (via the question flow) to switch to `build`.
+		const planAgent = params.permissionMode === "plan" ? "plan" : undefined;
 		// `/compact` uses session.summarize (V2 compact is still a 503 stub in
 		// 1.16.x); it BLOCKS until idle and requires providerID/modelID.
 		const isCompact = params.prompt.trim() === "/compact";
@@ -468,6 +471,7 @@ export class OpencodeSessionManager implements SessionManager {
 						: {}),
 					// Effort is a TOP-LEVEL variant; promptAsync ignores a nested model.variant.
 					...(effort ? { variant: effort } : {}),
+					...(planAgent ? { agent: planAgent } : {}),
 					parts: buildPromptParts(params.prompt, params.images),
 				});
 			}
