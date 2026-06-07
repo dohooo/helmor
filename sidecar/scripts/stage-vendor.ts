@@ -13,6 +13,7 @@
 //  @openai/codex-darwin-{arm64,x64}/.../codex).
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	chmodSync,
 	cpSync,
@@ -26,6 +27,12 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+/** Host platform flag: Windows needs `.exe` suffixes, zip extraction via
+ *  `tar -xf`, no codesign, and different release/package naming. */
+const IS_WINDOWS = process.platform === "win32";
+/** Executable suffix for staged binaries on the target. */
+const EXE = IS_WINDOWS ? ".exe" : "";
 
 const SIDECAR_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const NODE_MODULES = join(SIDECAR_ROOT, "node_modules");
@@ -130,6 +137,8 @@ const LLAMA_SHA256: Readonly<{ arm64: string; x64: string }> = {
 type DarwinArch = "arm64" | "x64";
 
 interface TargetInfo {
+	/** Target OS — Windows changes archive formats, `.exe` suffixes, and naming. */
+	os: "darwin" | "windows";
 	arch: DarwinArch;
 	/** `@anthropic-ai/claude-code-darwin-<arch>` is the platform sub-package. */
 	claudeCodePkg: string;
@@ -153,9 +162,31 @@ interface TargetInfo {
 	cloudflaredArch: "arm64" | "amd64";
 }
 
+/** Windows x64 target. Only x64 is supported (no ARM64 Windows). Pulls the
+ *  platform sub-packages bun already installed into node_modules. */
+function infoForWindows(): TargetInfo {
+	return {
+		os: "windows",
+		arch: "x64",
+		claudeCodePkg: "@anthropic-ai/claude-code-win32-x64",
+		claudeCodeNpmSuffix: "win32-x64",
+		// On Windows the codex binary lives in the platform sub-package, not the
+		// umbrella @openai/codex package (whose vendor dir is empty).
+		codexPkg: "@openai/codex-win32-x64",
+		codexTriple: "x86_64-pc-windows-msvc",
+		codexNpmSuffix: "win32-x64",
+		opencodePkg: "opencode-windows-x64",
+		opencodeNpmSuffix: "windows-x64",
+		ghArch: "amd64",
+		glabArch: "amd64",
+		cloudflaredArch: "amd64",
+	};
+}
+
 function infoForArch(arch: DarwinArch): TargetInfo {
 	if (arch === "arm64") {
 		return {
+			os: "darwin",
 			arch,
 			claudeCodePkg: "@anthropic-ai/claude-code-darwin-arm64",
 			claudeCodeNpmSuffix: "darwin-arm64",
@@ -170,6 +201,7 @@ function infoForArch(arch: DarwinArch): TargetInfo {
 		};
 	}
 	return {
+		os: "darwin",
 		arch,
 		claudeCodePkg: "@anthropic-ai/claude-code-darwin-x64",
 		claudeCodeNpmSuffix: "darwin-x64",
@@ -185,9 +217,21 @@ function infoForArch(arch: DarwinArch): TargetInfo {
 }
 
 function detectTarget(): TargetInfo {
+	// Windows: stage the x64 sub-packages bun installed into node_modules. No
+	// cross-arch matrix (TAURI_TARGET_TRIPLE is a macOS-CI concern), so the host
+	// arch is the target.
+	if (process.platform === "win32") {
+		if (process.arch !== "x64") {
+			throw new Error(
+				`[stage-vendor] unsupported Windows host arch: ${process.arch} (only x64)`,
+			);
+		}
+		return infoForWindows();
+	}
+
 	if (process.platform !== "darwin") {
 		throw new Error(
-			`[stage-vendor] Helmor only builds on macOS; host platform is ${process.platform}`,
+			`[stage-vendor] Helmor builds on macOS and Windows; host platform is ${process.platform}`,
 		);
 	}
 
@@ -262,12 +306,16 @@ function ensureCacheDir(): void {
 }
 
 function sha256OfFile(path: string): string {
-	const out = execFileSync("shasum", ["-a", "256", path], {
-		encoding: "utf8",
-	});
-	const digest = out.split(/\s+/)[0];
-	if (!digest) throw new Error(`[stage-vendor] empty shasum for ${path}`);
-	return digest;
+	// Node crypto is cross-platform — avoids depending on a `shasum` binary
+	// (absent on Windows).
+	return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+/// Extract a `.zip` or `.tar.gz` archive into `destDir`. Uses bsdtar (`tar`),
+/// which ships in-box on Windows 10+ and macOS and transparently handles both
+/// formats — so we don't need a separate `unzip`.
+function extractArchive(archive: string, destDir: string): void {
+	execFileSync("tar", ["-xf", archive, "-C", destDir], { stdio: "inherit" });
 }
 
 function downloadAndVerify(
@@ -350,19 +398,25 @@ function locateExtractedBin(extractDir: string, name: string): string {
 
 function stageGhBinary(arch: "arm64" | "amd64"): string {
 	ensureCacheDir();
-	const slug = `gh_${GH_VERSION}_macOS_${arch}`;
+	// gh ships macOS as `gh_<ver>_macOS_<arch>.zip` and Windows as
+	// `gh_<ver>_windows_<arch>.zip`; both nest `bin/gh[.exe]`.
+	const slug = IS_WINDOWS
+		? `gh_${GH_VERSION}_windows_${arch}`
+		: `gh_${GH_VERSION}_macOS_${arch}`;
 	const archive = join(BUNDLE_CACHE, `${slug}.zip`);
 	const url = `https://github.com/cli/cli/releases/download/v${GH_VERSION}/${slug}.zip`;
-	downloadAndVerify(url, archive, GH_SHA256[arch]);
+	if (IS_WINDOWS) {
+		downloadMaybeVerify(url, archive, "");
+	} else {
+		downloadAndVerify(url, archive, GH_SHA256[arch]);
+	}
 
 	const extractDir = join(BUNDLE_CACHE, slug);
 	freshExtractDir(extractDir);
-	execFileSync("unzip", ["-q", "-o", archive, "-d", extractDir], {
-		stdio: "inherit",
-	});
+	extractArchive(archive, extractDir);
 
-	const binSrc = locateExtractedBin(extractDir, "gh");
-	const binDest = join(DIST_VENDOR, "gh", "gh");
+	const binSrc = locateExtractedBin(extractDir, `gh${EXE}`);
+	const binDest = join(DIST_VENDOR, "gh", `gh${EXE}`);
 	copyFile(binSrc, binDest);
 	chmodSync(binDest, 0o755);
 	maybeSignMacBinary(binDest, false);
@@ -371,24 +425,30 @@ function stageGhBinary(arch: "arm64" | "amd64"): string {
 
 function stageGlabBinary(arch: "arm64" | "amd64"): string {
 	ensureCacheDir();
-	const slug = `glab_${GLAB_VERSION}_darwin_${arch}`;
-	const archive = join(BUNDLE_CACHE, `${slug}.tar.gz`);
-	const url = `https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/${slug}.tar.gz`;
-	downloadAndVerify(url, archive, GLAB_SHA256[arch]);
+	// macOS: `glab_<ver>_darwin_<arch>.tar.gz`; Windows: `..._windows_<arch>.zip`.
+	const ext = IS_WINDOWS ? "zip" : "tar.gz";
+	const slug = IS_WINDOWS
+		? `glab_${GLAB_VERSION}_windows_${arch}`
+		: `glab_${GLAB_VERSION}_darwin_${arch}`;
+	const archive = join(BUNDLE_CACHE, `${slug}.${ext}`);
+	const url = `https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/${slug}.${ext}`;
+	if (IS_WINDOWS) {
+		downloadMaybeVerify(url, archive, "");
+	} else {
+		downloadAndVerify(url, archive, GLAB_SHA256[arch]);
+	}
 
 	const extractDir = join(BUNDLE_CACHE, slug);
 	freshExtractDir(extractDir);
-	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
-		stdio: "inherit",
-	});
+	extractArchive(archive, extractDir);
 
-	const binSrc = join(extractDir, "bin", "glab");
+	const binSrc = join(extractDir, "bin", `glab${EXE}`);
 	if (!existsSync(binSrc)) {
 		throw new Error(
 			`[stage-vendor] glab binary missing after extract: ${binSrc}`,
 		);
 	}
-	const binDest = join(DIST_VENDOR, "glab", "glab");
+	const binDest = join(DIST_VENDOR, "glab", `glab${EXE}`);
 	copyFile(binSrc, binDest);
 	chmodSync(binDest, 0o755);
 	maybeSignMacBinary(binDest, false);
@@ -402,6 +462,21 @@ function stageGlabBinary(arch: "arm64" | "amd64"): string {
 
 function stageCloudflaredBinary(arch: "arm64" | "amd64"): string {
 	ensureCacheDir();
+	const binDest = join(DIST_VENDOR, "cloudflared", `cloudflared${EXE}`);
+
+	// Windows: upstream publishes a bare `cloudflared-windows-<arch>.exe` (no
+	// archive), so download it straight to the destination.
+	if (IS_WINDOWS) {
+		const url = `https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-windows-${arch}.exe`;
+		const cached = join(
+			BUNDLE_CACHE,
+			`cloudflared-${CLOUDFLARED_VERSION}-windows-${arch}.exe`,
+		);
+		downloadMaybeVerify(url, cached, "");
+		copyFile(cached, binDest);
+		return binDest;
+	}
+
 	const slug = `cloudflared-darwin-${arch}`;
 	const archive = join(
 		BUNDLE_CACHE,
@@ -425,7 +500,6 @@ function stageCloudflaredBinary(arch: "arm64" | "amd64"): string {
 			`[stage-vendor] cloudflared binary missing after extract: ${binSrc}`,
 		);
 	}
-	const binDest = join(DIST_VENDOR, "cloudflared", "cloudflared");
 	copyFile(binSrc, binDest);
 	chmodSync(binDest, 0o755);
 	maybeSignMacBinary(binDest, false);
@@ -463,7 +537,7 @@ function readClaudeCodeVersion(): string {
 }
 
 function copyClaudeCodeBin(src: string): string {
-	const dest = join(DIST_VENDOR, "claude-code", "claude");
+	const dest = join(DIST_VENDOR, "claude-code", `claude${EXE}`);
 	copyFile(src, dest);
 	chmodSync(dest, 0o755);
 	maybeSignMacBinary(dest, true);
@@ -471,7 +545,7 @@ function copyClaudeCodeBin(src: string): string {
 }
 
 function stageClaudeCodeBinary(target: TargetInfo): string {
-	const installed = join(NODE_MODULES, target.claudeCodePkg, "claude");
+	const installed = join(NODE_MODULES, target.claudeCodePkg, `claude${EXE}`);
 	if (existsSync(installed)) {
 		return copyClaudeCodeBin(installed);
 	}
@@ -497,7 +571,7 @@ function stageClaudeCodeBinary(target: TargetInfo): string {
 	});
 
 	// npm tarballs nest everything under `package/`.
-	const binSrc = join(extractDir, "package", "claude");
+	const binSrc = join(extractDir, "package", `claude${EXE}`);
 	if (!existsSync(binSrc)) {
 		throw new Error(
 			`[stage-vendor] claude-code binary missing after extract: ${binSrc}`,
@@ -547,23 +621,28 @@ function stageCodexFromVendorRoot(archRoot: string): void {
 	// from `codex/codex` to `bin/codex` and ripgrep's dir from `path` to
 	// `codex-path`. Read the descriptor when present (forward-compatible) and
 	// fall back to the pre-0.134 fixed layout otherwise.
-	let entrypoint = "codex/codex";
+	let entrypoint = IS_WINDOWS ? "bin/codex.exe" : "codex/codex";
 	let pathDir = "path";
+	let resourcesDir: string | undefined;
 	const descriptor = join(archRoot, "codex-package.json");
 	if (existsSync(descriptor)) {
 		const meta = JSON.parse(readFileSync(descriptor, "utf8")) as {
 			entrypoint?: string;
 			pathDir?: string;
+			resourcesDir?: string;
 		};
 		if (meta.entrypoint) entrypoint = meta.entrypoint;
 		if (meta.pathDir) pathDir = meta.pathDir;
+		if (meta.resourcesDir) resourcesDir = meta.resourcesDir;
 	}
 
 	const binSrc = join(archRoot, entrypoint);
 	if (!existsSync(binSrc)) {
 		throw new Error(`[stage-vendor] codex binary missing at ${binSrc}`);
 	}
-	const binDest = join(DIST_VENDOR, "codex", "codex");
+	// Flatten the binary to vendor/codex/codex[.exe] — the Rust side resolves it
+	// there (see resolve_bundled_agent_paths).
+	const binDest = join(DIST_VENDOR, "codex", `codex${EXE}`);
 	copyFile(binSrc, binDest);
 	chmodSync(binDest, 0o755);
 	maybeSignMacBinary(binDest, false);
@@ -577,6 +656,24 @@ function stageCodexFromVendorRoot(archRoot: string): void {
 			if (statSync(file).isFile()) {
 				chmodSync(file, 0o755);
 				maybeSignMacBinary(file, false);
+			}
+		}
+	}
+
+	// Windows codex (layoutVersion 1) ships a `codex-resources/` dir
+	// (command-runner + sandbox helpers) that the flattened binary expects
+	// adjacent to itself. Copy it next to codex.exe.
+	if (resourcesDir) {
+		const resSrc = join(archRoot, resourcesDir);
+		if (existsSync(resSrc)) {
+			const resDest = join(DIST_VENDOR, "codex", resourcesDir);
+			cpSync(resSrc, resDest, { recursive: true });
+			for (const entry of readdirSync(resDest)) {
+				const file = join(resDest, entry);
+				if (statSync(file).isFile()) {
+					chmodSync(file, 0o755);
+					maybeSignMacBinary(file, false);
+				}
 			}
 		}
 	}
@@ -649,7 +746,7 @@ function readOpencodeVersion(): string {
 }
 
 function copyOpencodeBin(src: string): string {
-	const dest = join(DIST_VENDOR, "opencode", "opencode");
+	const dest = join(DIST_VENDOR, "opencode", `opencode${EXE}`);
 	copyFile(src, dest);
 	chmodSync(dest, 0o755);
 	maybeSignMacBinary(dest, true);
@@ -657,7 +754,12 @@ function copyOpencodeBin(src: string): string {
 }
 
 function stageOpencodeBinary(target: TargetInfo): string {
-	const installed = join(NODE_MODULES, target.opencodePkg, "bin", "opencode");
+	const installed = join(
+		NODE_MODULES,
+		target.opencodePkg,
+		"bin",
+		`opencode${EXE}`,
+	);
 	if (existsSync(installed)) {
 		return copyOpencodeBin(installed);
 	}
@@ -683,7 +785,7 @@ function stageOpencodeBinary(target: TargetInfo): string {
 	});
 
 	// npm tarballs nest everything under `package/`.
-	const binSrc = join(extractDir, "package", "bin", "opencode");
+	const binSrc = join(extractDir, "package", "bin", `opencode${EXE}`);
 	if (!existsSync(binSrc)) {
 		throw new Error(
 			`[stage-vendor] opencode binary missing after extract: ${binSrc}`,
@@ -704,7 +806,7 @@ function stageOpencodeBinary(target: TargetInfo): string {
 /// in we treat mismatches as fatal (release-build hardening); when it's
 /// empty we print the computed digest and trust HTTPS so dev runs
 /// aren't blocked by a missing pinned hash.
-function downloadAndVerifyLlama(
+function downloadMaybeVerify(
 	url: string,
 	dest: string,
 	expectedSha256: string,
@@ -725,8 +827,8 @@ function downloadAndVerifyLlama(
 	const actual = sha256OfFile(dest);
 	if (!expectedSha256) {
 		console.warn(
-			`[stage-vendor] LLAMA_SHA256 is blank for this arch — got ${actual}. ` +
-				"Fill it in to lock the version for CI / release builds.",
+			`[stage-vendor] no pinned sha256 — got ${actual} for ${url}. ` +
+				"Pin it to lock the version for CI / release builds.",
 		);
 		return;
 	}
@@ -740,6 +842,42 @@ function downloadAndVerifyLlama(
 
 function stageLlamaCppBinaries(target: TargetInfo): string {
 	ensureCacheDir();
+
+	// Windows: upstream ships `llama-<ver>-bin-win-cpu-x64.zip` (server + CLIs +
+	// their `.dll`s, no `bin/` wrapper). Stage the whole tree as a unit (the
+	// DLLs must sit beside llama-server.exe) — no dylib pruning/signing dance.
+	if (IS_WINDOWS) {
+		const slug = `llama-${LLAMA_VERSION}-bin-win-cpu-x64`;
+		const archive = join(BUNDLE_CACHE, `${slug}.zip`);
+		const url = `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_VERSION}/${slug}.zip`;
+		downloadMaybeVerify(url, archive, "");
+
+		const extractDir = join(BUNDLE_CACHE, slug);
+		freshExtractDir(extractDir);
+		extractArchive(archive, extractDir);
+
+		const candidates: string[] = [
+			extractDir,
+			join(extractDir, "build", "bin"),
+			...readdirSync(extractDir).flatMap((entry) => [
+				join(extractDir, entry),
+				join(extractDir, entry, "build", "bin"),
+			]),
+		];
+		const binDir = candidates.find(
+			(p) => existsSync(p) && existsSync(join(p, "llama-server.exe")),
+		);
+		if (!binDir) {
+			throw new Error(
+				`[stage-vendor] llama-server.exe missing under ${extractDir}`,
+			);
+		}
+		const dest = join(DIST_VENDOR, "llama-cpp");
+		freshExtractDir(dest);
+		cpSync(binDir, dest, { recursive: true });
+		return dest;
+	}
+
 	const archSlug = target.arch === "arm64" ? "macos-arm64" : "macos-x64";
 	const slug = `llama-${LLAMA_VERSION}-bin-${archSlug}`;
 	// Upstream ships macOS builds as `.tar.gz` (not `.zip` like the
@@ -747,7 +885,7 @@ function stageLlamaCppBinaries(target: TargetInfo): string {
 	// name and the extract command below.
 	const archive = join(BUNDLE_CACHE, `${slug}.tar.gz`);
 	const url = `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_VERSION}/${slug}.tar.gz`;
-	downloadAndVerifyLlama(url, archive, LLAMA_SHA256[target.arch]);
+	downloadMaybeVerify(url, archive, LLAMA_SHA256[target.arch]);
 
 	const extractDir = join(BUNDLE_CACHE, slug);
 	freshExtractDir(extractDir);
@@ -850,8 +988,25 @@ function stageLlamaCppBinaries(target: TargetInfo): string {
 const target = detectTarget();
 
 console.log(
-	`[stage-vendor] host=darwin/${process.arch} target=darwin/${target.arch} (${target.codexTriple})`,
+	`[stage-vendor] host=${process.platform}/${process.arch} target=${target.os}/${target.arch} (${target.codexTriple})`,
 );
+
+/// Run an optional stager: on Windows a failure (e.g. an upstream artifact that
+/// isn't published for win-x64) is downgraded to a warning so it doesn't abort
+/// the whole prepare; on macOS staging stays strict.
+function stageOptional(label: string, fn: () => void): void {
+	try {
+		fn();
+	} catch (e) {
+		if (IS_WINDOWS) {
+			console.warn(
+				`[stage-vendor] ${label} not staged on Windows (${(e as Error).message}) — feature falls back to a PATH-installed binary if present`,
+			);
+		} else {
+			throw e;
+		}
+	}
+}
 
 // Clean
 rmSync(DIST_VENDOR, { recursive: true, force: true });
@@ -864,17 +1019,19 @@ stageClaudeCodeBinary(target);
 stageCodexBinary(target);
 
 // ----- opencode -----
-stageOpencodeBinary(target);
+stageOptional("opencode", () => stageOpencodeBinary(target));
 
 // ----- gh + glab (forge CLIs) -----
-stageGhBinary(target.ghArch);
-stageGlabBinary(target.glabArch);
+stageOptional("gh", () => stageGhBinary(target.ghArch));
+stageOptional("glab", () => stageGlabBinary(target.glabArch));
 
 // ----- cloudflared (mobile-companion tunnel) -----
-stageCloudflaredBinary(target.cloudflaredArch);
+stageOptional("cloudflared", () =>
+	stageCloudflaredBinary(target.cloudflaredArch),
+);
 
 // ----- llama.cpp (local LLM server for auto-rename / Local AI) -----
-stageLlamaCppBinaries(target);
+stageOptional("llama-cpp", () => stageLlamaCppBinaries(target));
 
 // ----- Summary -----
 console.log(`[stage-vendor] ✓ staged → ${DIST_VENDOR}`);

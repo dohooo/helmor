@@ -45,8 +45,11 @@ function detectTargetTriple() {
 }
 
 const triple = detectTargetTriple();
+// Tauri's externalBin resolution appends `-<triple>` plus the platform exe
+// extension (`.exe` on Windows), so the staged name must carry it too.
+const exeSuffix = process.platform === "win32" ? ".exe" : "";
 const builtCli = resolve(srcTauriDir, "target", "debug", cliName);
-const stagedCli = resolve(bundledBinDir, `helmor-cli-${triple}`);
+const stagedCli = resolve(bundledBinDir, `helmor-cli-${triple}${exeSuffix}`);
 
 // Force cargo to re-link the top-level binary even when the compile is cached:
 // the stale artifact sitting here is `build.rs`'s no-op shell placeholder, and
