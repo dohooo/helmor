@@ -473,12 +473,14 @@ fn helmor_skills_install_args(agents: &[&str]) -> Vec<String> {
 
 /// A `Command` that runs `npx` cross-platform. On Windows `npx` ships as a
 /// `.cmd`/`.ps1` shim (no `npx.exe`), which `Command::new("npx")` cannot
-/// resolve, so route it through `cmd.exe /c`.
+/// resolve, so route it through `cmd.exe /c` (console-hidden — this runs
+/// during the silent startup check and must not flash a window).
 fn npx_command() -> Command {
     #[cfg(windows)]
     {
         let mut c = Command::new("cmd");
         c.args(["/c", "npx"]);
+        crate::platform::process::hide_console(&mut c);
         c
     }
     #[cfg(not(windows))]
@@ -1233,8 +1235,9 @@ pub async fn get_agent_versions() -> CmdResult<AgentVersions> {
 }
 
 fn agent_cli_version(provider: &str) -> Option<String> {
-    let output = std::process::Command::new(resolve_agent_binary(provider))
-        .arg("--version")
+    let mut cmd = std::process::Command::new(resolve_agent_binary(provider));
+    cmd.arg("--version");
+    let output = crate::platform::process::hide_console(&mut cmd)
         .output()
         .ok()?;
     if !output.status.success() {
@@ -1342,10 +1345,9 @@ fn opencode_login_ready() -> bool {
 }
 
 fn claude_login_ready() -> bool {
-    match std::process::Command::new(resolve_agent_binary("claude"))
-        .args(["auth", "status"])
-        .output()
-    {
+    let mut cmd = std::process::Command::new(resolve_agent_binary("claude"));
+    cmd.args(["auth", "status"]);
+    match crate::platform::process::hide_console(&mut cmd).output() {
         Ok(output) if output.status.success() => parse_claude_login_status(&output.stdout),
         Ok(output) => {
             // Claude exits non-zero when the user isn't authenticated —
@@ -1396,10 +1398,9 @@ fn codex_auth_status() -> CodexAuthStatus {
 }
 
 fn codex_login_ready() -> bool {
-    match std::process::Command::new(resolve_agent_binary("codex"))
-        .args(["login", "status"])
-        .output()
-    {
+    let mut cmd = std::process::Command::new(resolve_agent_binary("codex"));
+    cmd.args(["login", "status"]);
+    match crate::platform::process::hide_console(&mut cmd).output() {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
