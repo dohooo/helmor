@@ -64,6 +64,10 @@ async fn dispatch(
         "create_repo_run_action" => to_value(crate::commands::script_commands::create_repo_run_action(app.clone(), arg_string(&args, "repoId")?, arg_string(&args, "name")?, arg_string(&args, "command")?, arg_string(&args, "mode")?, arg_opt_string(&args, "stopCommand")).await?),
         "create_session" => to_value(crate::commands::session_commands::create_session(arg_string(&args, "workspaceId")?, arg_opt_json(&args, "actionKind")?, arg_opt_string(&args, "permissionMode"), arg_opt_string(&args, "model"), arg_opt_string(&args, "effortLevel"), arg_opt_bool(&args, "fastMode"), arg_opt_string(&args, "seedSessionId")).await?),
         "create_workspace_from_repo" => to_value(crate::commands::workspace_commands::create_workspace_from_repo(app.clone(), arg_string(&args, "repoId")?).await?),
+        "delete_opencode_custom_provider" => {
+            crate::commands::opencode_config_commands::delete_opencode_custom_provider(arg_string(&args, "id")?).await?;
+            Ok(Value::Null)
+        }
         "delete_query_cache" => {
             crate::commands::system_commands::delete_query_cache(arg_string(&args, "key")?).await?;
             Ok(Value::Null)
@@ -90,6 +94,7 @@ async fn dispatch(
         "generate_session_title" => to_value(crate::agents::generate_session_title(app.clone(), app.state::<crate::sidecar::ManagedSidecar>(), arg_json(&args, "request")?).await?),
         "get_add_repository_defaults" => to_value(crate::commands::repository_commands::get_add_repository_defaults().await?),
         "get_agent_login_status" => to_value(crate::commands::system_commands::get_agent_login_status().await?),
+        "get_agent_versions" => to_value(crate::commands::system_commands::get_agent_versions().await?),
         "get_app_update_status" => to_value(crate::commands::updater_commands::get_app_update_status(app.clone()).await?),
         "get_claude_rate_limits" => to_value(crate::commands::settings_commands::get_claude_rate_limits().await?),
         "get_cli_status" => to_value(crate::commands::system_commands::get_cli_status()?),
@@ -99,6 +104,7 @@ async fn dispatch(
         "get_helmor_skills_status" => to_value(crate::commands::system_commands::get_helmor_skills_status().await?),
         "get_inbox_item_detail" => to_value(crate::commands::forge_commands::get_inbox_item_detail(arg_json(&args, "provider")?, arg_string(&args, "login")?, arg_opt_string(&args, "host"), arg_json(&args, "source")?, arg_string(&args, "externalId")?).await?),
         "get_live_context_usage" => to_value(crate::commands::session_commands::get_live_context_usage(app.state::<crate::sidecar::ManagedSidecar>(), arg_json(&args, "request")?).await?),
+        "get_opencode_custom_providers" => to_value(crate::commands::opencode_config_commands::get_opencode_custom_providers().await?),
         "get_repo_current_branch" => to_value(crate::commands::workspace_commands::get_repo_current_branch(arg_string(&args, "repoId")?).await?),
         "get_session_codex_goal" => to_value(crate::commands::session_commands::get_session_codex_goal(arg_string(&args, "sessionId")?).await?),
         "get_session_context_usage" => to_value(crate::commands::session_commands::get_session_context_usage(arg_string(&args, "sessionId")?).await?),
@@ -335,6 +341,10 @@ async fn dispatch(
         "update_repository_remote" => to_value(crate::commands::repository_commands::update_repository_remote(app.clone(), arg_string(&args, "repoId")?, arg_string(&args, "remote")?).await?),
         "update_session_settings" => {
             crate::commands::session_commands::update_session_settings(arg_string(&args, "sessionId")?, arg_opt_string(&args, "model"), arg_opt_string(&args, "effortLevel"), arg_opt_string(&args, "permissionMode"), arg_opt_bool(&args, "fastMode")).await?;
+            Ok(Value::Null)
+        }
+        "upsert_opencode_custom_provider" => {
+            crate::commands::opencode_config_commands::upsert_opencode_custom_provider(arg_json(&args, "provider")?, arg_bool(&args, "preset")?).await?;
             Ok(Value::Null)
         }
         "validate_archive_workspace" => to_value(crate::commands::workspace_commands::validate_archive_workspace(arg_string(&args, "workspaceId")?).await?),
