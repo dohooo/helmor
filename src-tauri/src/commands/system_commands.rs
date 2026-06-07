@@ -149,8 +149,13 @@ fn cli_install_target() -> std::path::PathBuf {
 }
 
 /// Name of the compiled CLI binary produced by `cargo build --bin helmor-cli`.
+/// Windows appends the `.exe` extension that cargo emits.
 fn cli_source_binary_name() -> &'static str {
-    "helmor-cli"
+    if cfg!(windows) {
+        "helmor-cli.exe"
+    } else {
+        "helmor-cli"
+    }
 }
 
 fn bundled_cli_binary(app_exe: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
@@ -440,6 +445,22 @@ fn helmor_skills_install_args(agents: &[&str]) -> Vec<String> {
     args
 }
 
+/// A `Command` that runs `npx` cross-platform. On Windows `npx` ships as a
+/// `.cmd`/`.ps1` shim (no `npx.exe`), which `Command::new("npx")` cannot
+/// resolve, so route it through `cmd.exe /c`.
+fn npx_command() -> Command {
+    #[cfg(windows)]
+    {
+        let mut c = Command::new("cmd");
+        c.args(["/c", "npx"]);
+        c
+    }
+    #[cfg(not(windows))]
+    {
+        Command::new("npx")
+    }
+}
+
 fn helmor_skills_install_command(agents: &[&str]) -> String {
     let command_agents = if agents.is_empty() {
         vec!["claude-code", "codex"]
@@ -615,7 +636,7 @@ pub async fn install_helmor_skills() -> CmdResult<HelmorSkillsStatus> {
             );
         }
 
-        let output = Command::new("npx")
+        let output = npx_command()
             .args(helmor_skills_install_args(&agents))
             .output()
             .with_context(|| format!("Failed to start skills installer. Try:\n  {command}"))?;
@@ -848,7 +869,7 @@ fn run_components_check_inner(force: bool) -> ComponentsUpdateCheck {
 
 fn install_skills_silent(agents: &[&str]) -> anyhow::Result<()> {
     let command = helmor_skills_install_command(agents);
-    let output = Command::new("npx")
+    let output = npx_command()
         .args(helmor_skills_install_args(agents))
         .output()
         .with_context(|| format!("Failed to start skills installer. Try:\n  {command}"))?;
@@ -1255,7 +1276,39 @@ fn resolve_agent_binary(provider: &str) -> PathBuf {
         "opencode" => bundled.opencode_bin,
         _ => None,
     };
-    bundled_path.unwrap_or_else(|| PathBuf::from(provider))
+    if let Some(path) = bundled_path {
+        return path;
+    }
+    // No bundled binary (e.g. dev builds): fall back to PATH. On Windows the CLI
+    // is usually an npm shim (`codex.cmd`/`.ps1`); CreateProcess ignores PATHEXT,
+    // so resolve the real file ourselves rather than spawn a bare name that
+    // "isn't found".
+    #[cfg(windows)]
+    if let Some(resolved) = which_on_path(provider) {
+        return resolved;
+    }
+    PathBuf::from(provider)
+}
+
+/// Resolve a bare command name to a concrete file on `PATH`, honoring `PATHEXT`
+/// (so `codex` → `codex.cmd`/`codex.exe`). Returns `None` if nothing matches.
+#[cfg(windows)]
+fn which_on_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT".to_string());
+    for dir in std::env::split_paths(&path) {
+        let direct = dir.join(name);
+        if direct.is_file() {
+            return Some(direct);
+        }
+        for ext in exts.split(';').filter(|e| !e.is_empty()) {
+            let candidate = dir.join(format!("{name}{}", ext.to_ascii_lowercase()));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
 }
 
 // Read from the sidecar-computed settings row, NOT `auth.json` (which misses env/config/Zen providers).

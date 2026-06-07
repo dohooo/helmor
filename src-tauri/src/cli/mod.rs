@@ -83,12 +83,18 @@ pub(crate) fn agent_invocation_path() -> String {
         return installed_cli_name().to_string();
     }
 
+    // The compiled CLI is `helmor-cli.exe` on Windows, `helmor-cli` elsewhere.
+    let cli_name = if cfg!(windows) {
+        "helmor-cli.exe"
+    } else {
+        "helmor-cli"
+    };
     match std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("helmor-cli")))
+        .and_then(|exe| exe.parent().map(|dir| dir.join(cli_name)))
     {
         Some(path) => path.display().to_string(),
-        None => "helmor-cli".to_string(),
+        None => cli_name.to_string(),
     }
 }
 
