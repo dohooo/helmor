@@ -1,7 +1,7 @@
 {
-	"name": "mobile",
-	"version": "1.0.0",
-	"main": "index.ts",
+	"name": "@helmor/mobile",
+	"version": "0.1.0",
+	"main": "expo-router/entry",
 	"dependencies": {
 		"expo": "~56.0.9",
 		"expo-camera": "~56.0.7",
@@ -22,10 +22,15 @@
 		"typescript": "~6.0.3"
 	},
 	"scripts": {
-		"start": "expo start",
-		"android": "expo start --android",
-		"ios": "expo start --ios",
-		"web": "expo start --web"
+		"devices": "xcrun devicectl list devices && xcrun xctrace list devices",
+		"doctor": "bunx expo-doctor",
+		"start": "expo start --go",
+		"ios": "expo start --ios --go",
+		"ios:device": "expo run:ios --device",
+		"setup:ios": "xcodebuild -checkFirstLaunchStatus || sudo xcodebuild -runFirstLaunch",
+		"test": "bun test",
+		"typecheck": "tsc --noEmit",
+		"verify": "bun run typecheck && bun test && expo export --platform ios --output-dir ../../.agent-contexts/mobile-expo-export"
 	},
 	"private": true
 }

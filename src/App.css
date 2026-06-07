@@ -116,6 +116,16 @@ body {
 	background-color: var(--background);
 }
 
+:root {
+	--helmor-native-safe-area-top: 0px;
+	--helmor-native-safe-area-bottom: 0px;
+}
+
+html[data-helmor-native-app="ios"] main[aria-label="Application shell"] {
+	padding-top: var(--helmor-native-safe-area-top);
+	padding-bottom: var(--helmor-native-safe-area-bottom);
+}
+
 .conversation-scroll-viewport {
 	overscroll-behavior: none;
 	overflow-anchor: none;
