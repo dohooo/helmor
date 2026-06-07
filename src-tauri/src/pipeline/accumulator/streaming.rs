@@ -55,6 +55,15 @@ pub(super) enum StreamingBlock {
 }
 
 pub(super) fn handle_stream_event(acc: &mut StreamAccumulator, value: &Value) {
+    // Track the streaming turn's parent so `build_partial_from_blocks` can
+    // tag the partial as a `child:` of its parent Task/Agent tool call.
+    // Every event of a turn carries the same `parent_tool_use_id`; `null`
+    // (top-level agent) resets it to `None`.
+    acc.cur_streaming_parent_id = value
+        .get("parent_tool_use_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
     let event = match value.get("event") {
         Some(e) => e,
         None => return,
@@ -376,7 +385,7 @@ pub(super) fn build_partial_from_blocks(
         return None;
     }
 
-    let parsed = serde_json::json!({
+    let mut parsed = serde_json::json!({
         "type": "assistant",
         "message": {
             "type": "message",
@@ -385,6 +394,13 @@ pub(super) fn build_partial_from_blocks(
         },
         "__streaming": true,
     });
+
+    // Tag subagent partials with their parent so the adapter mints a
+    // `child:<pt>:<turn>` id — keeps the live partial nested under its
+    // parent Task/Agent tool call instead of flashing as a top-level bubble.
+    if let Some(parent) = acc.cur_streaming_parent_id.as_deref() {
+        parsed["parent_tool_use_id"] = Value::String(parent.to_string());
+    }
 
     Some(IntermediateMessage {
         id: partial_id,
@@ -461,7 +477,7 @@ pub(super) fn build_materialized_partial_from_blocks(
         return None;
     }
 
-    let parsed = serde_json::json!({
+    let mut parsed = serde_json::json!({
         "type": "assistant",
         "message": {
             "type": "message",
@@ -469,6 +485,12 @@ pub(super) fn build_materialized_partial_from_blocks(
             "content": content_blocks,
         },
     });
+
+    // Keep an aborted subagent turn folded under its parent tool call (and
+    // persisted that way) instead of orphaning it at the top level.
+    if let Some(parent) = acc.cur_streaming_parent_id.as_deref() {
+        parsed["parent_tool_use_id"] = Value::String(parent.to_string());
+    }
 
     Some(IntermediateMessage {
         id: partial_id,
@@ -511,7 +533,7 @@ pub(super) fn build_partial_fallback(
         }));
     }
 
-    let parsed = serde_json::json!({
+    let mut parsed = serde_json::json!({
         "type": "assistant",
         "message": {
             "type": "message",
@@ -520,6 +542,9 @@ pub(super) fn build_partial_fallback(
         },
         "__streaming": true,
     });
+    if let Some(parent) = acc.cur_streaming_parent_id.as_deref() {
+        parsed["parent_tool_use_id"] = Value::String(parent.to_string());
+    }
 
     IntermediateMessage {
         id: partial_id,
@@ -561,7 +586,7 @@ pub(super) fn build_materialized_partial_fallback(
         }));
     }
 
-    let parsed = serde_json::json!({
+    let mut parsed = serde_json::json!({
         "type": "assistant",
         "message": {
             "type": "message",
@@ -569,6 +594,9 @@ pub(super) fn build_materialized_partial_fallback(
             "content": content,
         },
     });
+    if let Some(parent) = acc.cur_streaming_parent_id.as_deref() {
+        parsed["parent_tool_use_id"] = Value::String(parent.to_string());
+    }
 
     Some(IntermediateMessage {
         id: partial_id,
