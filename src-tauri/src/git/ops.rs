@@ -171,8 +171,7 @@ where
     );
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
-    use std::os::unix::process::CommandExt;
-    command.process_group(0);
+    crate::platform::process::configure_new_group(&mut command);
 
     let child = command.spawn().context("Failed to spawn git")?;
     let child_pid = child.id();
@@ -208,12 +207,9 @@ where
             // negative PGID (== child PID because we set process_group(0)
             // at spawn) ensures child processes like ssh are also killed.
             //
-            // SAFETY: `child_pid` == PGID (we set process_group(0) at
-            // spawn). Negative PID targets the whole group. If the group
-            // has already exited, `libc::kill` returns ESRCH harmlessly.
-            unsafe {
-                libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
-            }
+            // Force-kill the whole tree (Unix SIGKILL to the group / Windows
+            // taskkill /T /F). Safe if the tree has already exited.
+            crate::platform::process::kill_tree(child_pid);
             let _ = waiter.join();
             bail!(
                 "git command timed out after {timeout:?} (likely a stalled remote or credential prompt)"

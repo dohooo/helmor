@@ -400,8 +400,6 @@ pub fn copy_dir_all(source: &Path, destination: &Path) -> Result<()> {
 }
 
 pub fn copy_symlink(source: &Path, destination: &Path) -> Result<()> {
-    use std::os::unix::fs::symlink;
-
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).with_context(|| {
             format!(
@@ -413,7 +411,7 @@ pub fn copy_symlink(source: &Path, destination: &Path) -> Result<()> {
 
     let link_target = fs::read_link(source)
         .with_context(|| format!("Failed to read symlink {}", source.display()))?;
-    symlink(&link_target, destination).with_context(|| {
+    crate::platform::fs::symlink_to(&link_target, destination).with_context(|| {
         format!(
             "Failed to copy symlink {} to {}",
             source.display(),

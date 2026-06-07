@@ -220,9 +220,9 @@ fn spawn_and_await(
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
 
-    // Own process group so a later SIGTERM reaches the whole tree.
-    use std::os::unix::process::CommandExt;
-    command.process_group(0);
+    // Own process group (Unix) so a later teardown reaches the whole tree;
+    // on Windows the tree is killed via taskkill in `kill_process_group`.
+    crate::platform::process::configure_new_group(&mut command);
 
     let mut child = command.spawn().with_context(|| {
         format!(
@@ -364,11 +364,9 @@ fn parse_tunnel_uuid(text: &str) -> Option<String> {
 /// SIGTERM the child's process group, wait briefly, then SIGKILL. Mirrors the
 /// sidecar teardown ladder.
 fn kill_process_group(child: &mut Child) {
-    let pid = child.id() as libc::pid_t;
-    // SAFETY: negative PID targets the whole group spawned via process_group(0).
-    unsafe {
-        libc::kill(-pid, libc::SIGTERM);
-    }
+    let pid = child.id();
+    // Graceful tree stop first (Unix SIGTERM to group / Windows taskkill /T).
+    crate::platform::process::terminate_tree(pid);
     let deadline = Instant::now() + Duration::from_millis(2000);
     loop {
         if let Ok(Some(_)) = child.try_wait() {
@@ -379,9 +377,8 @@ fn kill_process_group(child: &mut Child) {
         }
         std::thread::sleep(Duration::from_millis(25));
     }
-    unsafe {
-        libc::kill(-pid, libc::SIGKILL);
-    }
+    // Escalate to a forced tree kill.
+    crate::platform::process::kill_tree(pid);
     let _ = child.wait();
 }
 

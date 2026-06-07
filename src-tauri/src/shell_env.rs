@@ -230,16 +230,17 @@ mod unix {
         timeout: Duration,
     ) -> anyhow::Result<Vec<u8>> {
         use std::io::Read;
-        use std::os::unix::process::CommandExt;
 
-        let mut child = Command::new(program)
+        let mut command = Command::new(program);
+        command
             .args(args)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            // Start in its own process group so we can kill it
-            // without also signalling ourselves.
-            .process_group(0)
+            .stderr(std::process::Stdio::null());
+        // Start in its own process group (Unix) so we can kill the tree
+        // without also signalling ourselves; on Windows taskkill /T handles it.
+        crate::platform::process::configure_new_group(&mut command);
+        let mut child = command
             .spawn()
             .map_err(|e| anyhow::anyhow!("spawn `{program}`: {e}"))?;
 
@@ -274,8 +275,8 @@ mod unix {
                 }
                 Ok(None) => {
                     if std::time::Instant::now() >= deadline {
-                        // Kill the process group, not just the shell.
-                        unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
+                        // Kill the whole tree, not just the shell.
+                        crate::platform::process::kill_tree(pid);
                         let _ = child.wait();
                         anyhow::bail!(
                             "login shell env capture timed out after {}s",

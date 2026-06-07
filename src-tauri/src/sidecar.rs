@@ -167,11 +167,11 @@ impl SidecarProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
 
-        // Put the sidecar in its own process group so SIGTERM/SIGKILL
-        // reaches all child processes (Claude CLI, Codex CLI) instead
-        // of only hitting the Bun parent.
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
+        // Put the sidecar in its own process group (Unix) so tree teardown
+        // reaches all child processes (Claude CLI, Codex CLI) instead of only
+        // hitting the Bun parent. On Windows this suppresses child console
+        // windows; tree-kill is handled by `platform::process` via taskkill.
+        crate::platform::process::configure_new_group(&mut cmd);
 
         // Pass log config to the sidecar process
         if let Ok(dir) = crate::data_dir::logs_dir() {
@@ -284,9 +284,8 @@ impl SidecarProcess {
     /// `ManagedSidecar::shutdown`. Kill the whole process group first so
     /// child CLIs don't get reparented to launchd as orphans.
     fn kill(&mut self) {
-        unsafe {
-            libc::kill(-(self.pid() as libc::pid_t), libc::SIGKILL);
-        }
+        // Kill the whole tree first so child CLIs aren't reparented as orphans.
+        crate::platform::process::kill_tree(self.pid());
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -313,11 +312,8 @@ impl SidecarProcess {
     /// (negative PID) ensures child CLIs spawned by Bun also receive the
     /// signal.
     fn send_sigterm(&self) {
-        // SAFETY: `pid()` is the live child's PID (== PGID since we set
-        // process_group(0) at spawn). Negative PID targets the whole group.
-        unsafe {
-            libc::kill(-(self.pid() as libc::pid_t), libc::SIGTERM);
-        }
+        // Graceful tree stop: Unix SIGTERM to the group, Windows taskkill /T.
+        crate::platform::process::terminate_tree(self.pid());
     }
 }
 

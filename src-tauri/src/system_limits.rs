@@ -2,6 +2,12 @@
 
 const TARGET_NOFILE_SOFT_LIMIT: u64 = 4096;
 
+/// Raise the soft cap on simultaneously-open file descriptors toward
+/// [`TARGET_NOFILE_SOFT_LIMIT`]. On Unix this lifts `RLIMIT_NOFILE`; on Windows
+/// there is no per-process descriptor rlimit (kernel handles are bounded by
+/// memory), but the C runtime caps `stdio`-level FDs at 512 by default, so we
+/// raise that instead.
+#[cfg(unix)]
 pub fn raise_nofile_soft_limit() {
     let mut current = libc::rlimit {
         rlim_cur: 0,
@@ -22,6 +28,17 @@ pub fn raise_nofile_soft_limit() {
         rlim_max: current.rlim_max,
     };
     let _ = unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &updated) };
+}
+
+#[cfg(windows)]
+pub fn raise_nofile_soft_limit() {
+    // The CRT `_setmaxstdio` ceiling is what bounds fopen/_open-style FDs on
+    // Windows; lift it to our target. Win32 HANDLEs (sockets, files opened via
+    // CreateFile) are not affected by this and need no tuning.
+    extern "C" {
+        fn _setmaxstdio(new_max: i32) -> i32;
+    }
+    let _ = unsafe { _setmaxstdio(TARGET_NOFILE_SOFT_LIMIT as i32) };
 }
 
 fn desired_nofile_soft_limit(current_soft: u64, hard: u64) -> u64 {
