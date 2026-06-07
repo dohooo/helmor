@@ -734,32 +734,34 @@ export function resolveSessionDisplayProvider({
 	modelSections: AgentModelSection[];
 	settingsDefaultModelId?: string | null;
 }): AgentProvider | null {
+	// The Session Tab only has the four provider icons, so drive it from the
+	// session's agent — not the composer model (an opencode session can run many
+	// sub-provider models whose own logos aren't one of our four).
+	const agentProvider = agentTypeToProvider(session.agentType);
+	if (agentProvider) {
+		return agentProvider;
+	}
+	// New sessions without an assigned agent fall back to the selected model's
+	// provider so the icon still reflects what the next turn will use.
 	const selectedModelId = resolveSessionSelectedModelId({
 		session,
 		modelSelections,
 		modelSections,
 		settingsDefaultModelId,
 	});
-	const selectedProvider = findModelOption(
-		modelSections,
-		selectedModelId,
-	)?.provider;
-	if (selectedProvider) {
-		return selectedProvider;
+	return findModelOption(modelSections, selectedModelId)?.provider ?? null;
+}
+
+function agentTypeToProvider(agentType?: string | null): AgentProvider | null {
+	switch (agentType) {
+		case "claude":
+		case "codex":
+		case "cursor":
+		case "opencode":
+			return agentType;
+		default:
+			return null;
 	}
-	if (session.agentType === "codex") {
-		return "codex";
-	}
-	if (session.agentType === "claude") {
-		return "claude";
-	}
-	if (session.agentType === "cursor") {
-		return "cursor";
-	}
-	if (session.agentType === "opencode") {
-		return "opencode";
-	}
-	return null;
 }
 
 /**
