@@ -42,7 +42,9 @@ interface SessionCtx {
 	activeEmitter: SidecarEmitter | null;
 	settle: TurnSettle | null;
 	aborted: boolean;
-	readonly abort: AbortController;
+	/** Mutable: replaced with a fresh controller when a stopped session is
+	 *  reused, so the next turn's pump subscribes with a live signal. */
+	abort: AbortController;
 	pumpStarted: boolean;
 	/** Last turn's model + effort variant, reused by `steer`. */
 	lastModel?: { providerID: string; modelID: string; variant?: string };
@@ -223,7 +225,9 @@ export function buildContextUsageMeta(input: {
 }
 
 export class OpencodeSessionManager implements SessionManager {
-	private readonly server = new OpencodeServer();
+	// The shared server's process death is a terminal signal for every
+	// in-flight turn bound to it — settle them so `await turnDone` can't hang.
+	private readonly server = new OpencodeServer(() => this.handleServerExit());
 	private readonly sessions = new Map<string, SessionCtx>();
 	private readonly byOpencodeId = new Map<string, SessionCtx>();
 	/** Stop pressed while sendMessage was still in startup (no ctx yet). */
@@ -507,6 +511,9 @@ export class OpencodeSessionManager implements SessionManager {
 
 	private ensureSessionPump(client: OpencodeClient, ctx: SessionCtx): void {
 		if (ctx.pumpStarted) return;
+		// A stopped session left `ctx.abort` aborted; swap in a fresh one so
+		// the reused turn's pump subscribes with a live signal.
+		if (ctx.abort.signal.aborted) ctx.abort = new AbortController();
 		ctx.pumpStarted = true;
 		void this.runSessionPump(client, ctx);
 	}
@@ -515,20 +522,46 @@ export class OpencodeSessionManager implements SessionManager {
 		client: OpencodeClient,
 		ctx: SessionCtx,
 	): Promise<void> {
+		// Capture THIS pump's controller — `ctx.abort` may be swapped out by a
+		// concurrent reuse, and we must check the signal we actually subscribed
+		// with, not whatever is current when the loop unwinds.
+		const abort = ctx.abort;
 		try {
 			const subscription = await client.event.subscribe(
 				{ directory: ctx.directory },
-				{ signal: ctx.abort.signal },
+				{ signal: abort.signal },
 			);
 			for await (const event of subscription.stream) {
 				this.handleEvent(ctx, event as OpencodeEvent);
 			}
+			// Clean exit (server closed the SSE) WITHOUT an intentional stop:
+			// the turn will never see `session.idle`, so settle it as an error
+			// instead of leaving `await turnDone` pending forever.
+			if (!abort.signal.aborted) {
+				ctx.settle?.reject(
+					new Error("opencode event stream ended before the turn finished"),
+				);
+			}
 		} catch (error) {
-			if (ctx.abort.signal.aborted) return;
+			if (abort.signal.aborted) return;
 			logger.error("opencode session pump failed", errorDetails(error));
 			ctx.settle?.reject(new Error("opencode event stream disconnected"));
 		} finally {
-			ctx.pumpStarted = false;
+			// Only clear the flag if we still own the current controller — a
+			// reuse may have already started a replacement pump.
+			if (ctx.abort === abort) ctx.pumpStarted = false;
+		}
+	}
+
+	/**
+	 * The shared opencode server process exited. Every session bound to it has
+	 * a dead SSE + dead provider state, so reject any in-flight turn rather
+	 * than let `await turnDone` hang. A later turn restarts the server (via
+	 * `server.start()`) and a fresh pump.
+	 */
+	private handleServerExit(): void {
+		for (const ctx of this.sessions.values()) {
+			ctx.settle?.reject(new Error("opencode server exited unexpectedly"));
 		}
 	}
 
@@ -946,16 +979,26 @@ export class OpencodeSessionManager implements SessionManager {
 		this.pendingAborts.delete(sessionId);
 		ctx.aborted = true;
 		this.clearPending(ctx);
-		try {
-			const handle = await this.server.start(process.env);
-			await handle.client.session.abort({
-				sessionID: ctx.openCodeSessionId,
-				directory: ctx.directory,
-			});
-		} catch (error) {
-			logger.debug("opencode abort failed", errorDetails(error));
-		}
+		// Unblock the local turn FIRST — never gate it behind the remote abort
+		// RPC, which can hang against a wedged server and strand `await
+		// turnDone` forever (the bug this fixes). Stop the pump too so we don't
+		// leak the SSE subscription; reuse swaps in a fresh controller.
 		ctx.settle?.resolve();
+		ctx.abort.abort();
+		ctx.pumpStarted = false;
+		// Best-effort remote abort, fire-and-forget: it tells opencode to stop
+		// server-side work but must not block (or fail) the local teardown.
+		void this.server
+			.start(process.env)
+			.then((handle) =>
+				handle.client.session.abort({
+					sessionID: ctx.openCodeSessionId,
+					directory: ctx.directory,
+				}),
+			)
+			.catch((error) =>
+				logger.debug("opencode abort failed", errorDetails(error)),
+			);
 	}
 
 	// Mid-turn steer via a second promptAsync on the busy session. RPC-first:

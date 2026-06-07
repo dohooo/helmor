@@ -88,6 +88,14 @@ export class OpencodeServer {
 	private handle: Promise<OpencodeServerHandle> | null = null;
 	private proxyUrl: string | null = null;
 
+	/**
+	 * @param onProcessExit Fired whenever a spawned server process exits
+	 *   (crash, kill, or restart). Lets the manager settle in-flight turns
+	 *   bound to a now-dead server instead of waiting on an SSE event that
+	 *   will never arrive.
+	 */
+	constructor(private readonly onProcessExit?: () => void) {}
+
 	/** Idempotent. Restarts if the proxy in `env` changed. Only called at turn
 	 *  start, so it never interrupts an in-flight stream. */
 	start(env: NodeJS.ProcessEnv): Promise<OpencodeServerHandle> {
@@ -200,6 +208,9 @@ export class OpencodeServer {
 				this.proc = null;
 				this.handle = null;
 			}
+			// Notify regardless of whether a newer proc replaced this one — turns
+			// bound to THIS (now-dead) server must be settled either way.
+			this.onProcessExit?.();
 		});
 
 		logger.info(`opencode server ready at ${url}`);
