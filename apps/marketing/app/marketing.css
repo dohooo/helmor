@@ -525,22 +525,17 @@ html.light .light-burst {
 	--cursor-y: 0.5;
 	--swirl-strength: 1;
 	--swirl-mode: 1;
-	will-change: transform, filter;
+	will-change: transform;
 }
 html.light .smoke {
 	mix-blend-mode: multiply;
 	opacity: calc(var(--fx-intensity) * 0.75);
 }
-.smoke svg {
-	position: absolute;
-	inset: 0;
-	width: 100%;
-	height: 100%;
-	display: block;
-}
-
-/* Three drifting plumes at different depths. Drift is CSS transform (cheap);
- * turbulence shimmer is done inside the filter via SMIL animate of baseFrequency. */
+/* Three drifting plumes at different depths, each painting a baked smoke
+ * raster (wired in .smoke-swirl). Drift + cursor swirl are cheap GPU
+ * transforms — the original feTurbulence/feDisplacementMap SVGs were baked to
+ * static WebP (apps/marketing/scripts/bake-smoke.mjs), so nothing recomputes
+ * a filter per frame. */
 .plume {
 	position: absolute;
 	width: 120%;
@@ -601,6 +596,11 @@ html.light .smoke {
 .smoke-swirl {
 	position: absolute;
 	inset: 0;
+	/* Baked smoke raster (apps/marketing/scripts/bake-smoke.mjs); background-size
+	 * cover reproduces the source SVG preserveAspectRatio="xMidYMid slice". */
+	background-size: cover;
+	background-position: center;
+	background-repeat: no-repeat;
 	transform: translate3d(
 		calc(
 			(var(--cursor-x) - 0.5) *
@@ -621,12 +621,15 @@ html.light .smoke {
 }
 .plume-back .smoke-swirl {
 	--swirl-offset: 14px;
+	background-image: url(/smoke/plume-back.webp);
 }
 .plume-mid .smoke-swirl {
 	--swirl-offset: 28px;
+	background-image: url(/smoke/plume-mid.webp);
 }
 .plume-front .smoke-swirl {
 	--swirl-offset: 46px;
+	background-image: url(/smoke/plume-front.webp);
 }
 
 /* Backlit dust motes — the "air has particles in it" cue. Count/positions
