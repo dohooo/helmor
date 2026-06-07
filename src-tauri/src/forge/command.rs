@@ -134,7 +134,6 @@ where
     })
 }
 
-#[cfg(unix)]
 fn kill_process(child_pid: u32) {
     crate::platform::process::kill_tree(crate::platform::process::ProcessTree::from_child_pid(
         child_pid,
