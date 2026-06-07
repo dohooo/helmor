@@ -29,6 +29,9 @@ import { useOpencodeModelSync } from "./use-opencode-model-sync";
 export type OpencodeModelsHandle = {
 	/** `forceReload` restarts the opencode server first so newly-configured models show up. */
 	refresh: (opts?: { forceReload?: boolean }) => void;
+	/** Best-effort: restart + re-read config ONLY if no opencode turn is running,
+	 *  so a config save never interrupts active work (most of the time it's idle). */
+	syncIfIdle: () => void;
 };
 
 export function OpencodeModels({
@@ -86,8 +89,11 @@ export function OpencodeModels({
 				if (opts?.forceReload) void reloadSync();
 				else void sync();
 			},
+			syncIfIdle: () => {
+				if (runningOpencode.length === 0) void sync({ forceReload: true });
+			},
 		}),
-		[reloadSync, sync],
+		[reloadSync, sync, runningOpencode.length],
 	);
 
 	// Auto-fetch when no catalog yet or cache predates the current schema. Ref guards against re-firing within a mount.

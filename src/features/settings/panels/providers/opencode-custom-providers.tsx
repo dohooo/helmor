@@ -150,7 +150,9 @@ export function OpencodeCustomProvidersPanel({
 	const [custom, setCustom] = useState<CustomDraft>(EMPTY_CUSTOM);
 	const [error, setError] = useState<string | null>(null);
 
-	// Debounce the model-catalog refresh: each config write restarts the opencode server.
+	// Debounce the model-catalog sync: each config write restarts the opencode
+	// server. The sync is best-effort (onChanged skips it when a turn is running),
+	// so it never interrupts work — debouncing just coalesces rapid blur saves.
 	const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	useEffect(
 		() => () => {

@@ -1,4 +1,7 @@
-import type { AgentLoginItem } from "@/components/agent-login/types";
+import type {
+	AgentLoginItem,
+	AgentLoginStatus,
+} from "@/components/agent-login/types";
 import {
 	ClaudeIcon,
 	CursorIcon,
@@ -10,40 +13,53 @@ import type { AgentLoginStatusResult } from "@/lib/api";
 export function buildAgentLoginItems(
 	status?: AgentLoginStatusResult | null,
 ): AgentLoginItem[] {
+	// `undefined` = the first status check hasn't resolved yet (cold start) →
+	// show "Connecting" instead of a premature "Log in". `null` = the check ran
+	// but failed → fall through to the not-connected copy.
+	const checking = status === undefined;
+	const resolve = (ready: boolean | undefined): AgentLoginStatus =>
+		checking ? "checking" : ready ? "ready" : "needsSetup";
+	const CHECKING_COPY = "Checking sign-in…";
 	return [
 		{
 			icon: ClaudeIcon,
 			provider: "claude",
 			label: "Claude Code",
-			description: status?.claude
-				? "Signed in and ready to run in local workspaces."
-				: "Sign in to Claude Code to use Anthropic models in Helmor.",
-			status: status?.claude ? "ready" : "needsSetup",
+			description: checking
+				? CHECKING_COPY
+				: status?.claude
+					? "Signed in and ready to run in local workspaces."
+					: "Sign in to Claude Code to use Anthropic models in Helmor.",
+			status: resolve(status?.claude),
 		},
 		{
 			icon: OpenCodeIcon,
 			provider: "opencode",
 			label: "OpenCode",
-			description: status?.opencode
-				? "Connected and ready to run OpenCode models in Helmor."
-				: "Sign in with `opencode auth login` to use OpenCode models in Helmor.",
-			status: status?.opencode ? "ready" : "needsSetup",
+			description: checking
+				? CHECKING_COPY
+				: status?.opencode
+					? "Connected and ready to run OpenCode models in Helmor."
+					: "Sign in with `opencode auth login` to use OpenCode models in Helmor.",
+			status: resolve(status?.opencode),
 		},
 		{
 			icon: OpenAIIcon,
 			provider: "codex",
 			label: "Codex",
-			description: codexDescription(status),
-			status: status?.codex ? "ready" : "needsSetup",
+			description: checking ? CHECKING_COPY : codexDescription(status),
+			status: resolve(status?.codex),
 		},
 		{
 			icon: CursorIcon,
 			provider: "cursor",
 			label: "Cursor",
-			description: status?.cursor
-				? "API key saved and ready to run Cursor models in Helmor."
-				: "Add a Cursor API key to use Cursor models in Helmor.",
-			status: status?.cursor ? "ready" : "needsSetup",
+			description: checking
+				? CHECKING_COPY
+				: status?.cursor
+					? "API key saved and ready to run Cursor models in Helmor."
+					: "Add a Cursor API key to use Cursor models in Helmor.",
+			status: resolve(status?.cursor),
 		},
 	];
 }

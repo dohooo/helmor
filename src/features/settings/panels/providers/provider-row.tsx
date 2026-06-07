@@ -11,6 +11,7 @@ export function ProviderRow({
 	name,
 	version,
 	ready,
+	connecting = false,
 	loginProvider,
 	onLoginExit,
 	collapsible = false,
@@ -21,6 +22,9 @@ export function ProviderRow({
 	name: string;
 	version?: string | null;
 	ready: boolean;
+	/** Still determining readiness (status check in flight / server booting) —
+	 *  show "Connecting…" instead of a premature "Log in". */
+	connecting?: boolean;
 	loginProvider: AgentLoginProvider | null;
 	onLoginExit?: () => void;
 	collapsible?: boolean;
@@ -44,7 +48,8 @@ export function ProviderRow({
 	const status = (
 		<>
 			{ready ? <StatusBadge /> : null}
-			{loginProvider && !ready ? (
+			{!ready && connecting ? <ConnectingBadge /> : null}
+			{loginProvider && !ready && !connecting ? (
 				<Button
 					type="button"
 					variant="outline"
@@ -175,6 +180,15 @@ function StatusBadge() {
 		<span className="flex shrink-0 items-center gap-1.5 rounded-full bg-emerald-500/10 px-2 py-0.5 text-mini font-medium text-emerald-500">
 			<span className="size-1.5 rounded-full bg-emerald-500" />
 			Ready
+		</span>
+	);
+}
+
+function ConnectingBadge() {
+	return (
+		<span className="flex shrink-0 items-center gap-1.5 rounded-full bg-muted px-2 py-0.5 text-mini font-medium text-muted-foreground">
+			<span className="size-1.5 animate-pulse rounded-full bg-muted-foreground/60" />
+			Connecting
 		</span>
 	);
 }

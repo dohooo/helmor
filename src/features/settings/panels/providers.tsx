@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useIsMutating, useQuery } from "@tanstack/react-query";
 import { useRef } from "react";
 import {
 	ClaudeColorIcon,
@@ -35,6 +35,13 @@ export function ProvidersPanel() {
 	const versions = versionsQuery.data;
 	const opencodeModelsRef = useRef<OpencodeModelsHandle | null>(null);
 
+	// First status fetch in flight → show "Connecting…" instead of a premature
+	// "Log in". opencode also stays connecting while a model sync (server boot)
+	// runs, since its readiness is derived from that fetch's cache.
+	const statusLoading = statusQuery.isLoading;
+	const opencodeSyncing =
+		useIsMutating({ mutationKey: ["opencodeModelSync"] }) > 0;
+
 	const refetchStatus = () => {
 		void statusQuery.refetch();
 	};
@@ -47,6 +54,7 @@ export function ProvidersPanel() {
 					name="OpenCode"
 					version={versions?.opencode}
 					ready={Boolean(status?.opencode)}
+					connecting={statusLoading || opencodeSyncing}
 					loginProvider="opencode"
 					onLoginExit={() => {
 						refetchStatus();
@@ -65,9 +73,7 @@ export function ProvidersPanel() {
 						description="Add a provider by API key or OpenAI-compatible endpoint, saved to ~/.config/opencode."
 					>
 						<OpencodeCustomProvidersPanel
-							onChanged={() =>
-								opencodeModelsRef.current?.refresh({ forceReload: true })
-							}
+							onChanged={() => opencodeModelsRef.current?.syncIfIdle()}
 						/>
 					</ProviderConfigRow>
 				</ProviderRow>
@@ -76,6 +82,7 @@ export function ProvidersPanel() {
 					name="Claude Code"
 					version={versions?.claude}
 					ready={Boolean(status?.claude)}
+					connecting={statusLoading}
 					loginProvider="claude"
 					onLoginExit={refetchStatus}
 					collapsible
@@ -92,6 +99,7 @@ export function ProvidersPanel() {
 					name="Codex"
 					version={versions?.codex}
 					ready={Boolean(status?.codex)}
+					connecting={statusLoading}
 					loginProvider="codex"
 					onLoginExit={refetchStatus}
 				/>

@@ -1,6 +1,10 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
-import { getOpencodeCustomProviders, listOpencodeModels } from "@/lib/api";
+import {
+	type AgentLoginStatusResult,
+	getOpencodeCustomProviders,
+	listOpencodeModels,
+} from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import {
 	OPENCODE_CACHE_VERSION,
@@ -26,6 +30,9 @@ export function useOpencodeModelSync(): OpencodeModelSync {
 	const opencode = settings.opencodeProvider;
 
 	const { mutateAsync, isPending } = useMutation({
+		// Keyed so `useIsMutating` can surface a "Connecting…" state in the
+		// providers panel while any sync (this one or the app-start one) runs.
+		mutationKey: ["opencodeModelSync"],
 		mutationFn: async (forceReload: boolean) => {
 			const models = await listOpencodeModels(forceReload);
 			const cached: OpencodeCachedModel[] = models.map((m) => ({
@@ -61,6 +68,13 @@ export function useOpencodeModelSync(): OpencodeModelSync {
 			queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.agentModelSections,
 			});
+			// Flip opencode's flag in the login-status cache directly so its Ready
+			// badge updates the instant the sync lands — invalidating would re-run
+			// the slow claude/codex CLI checks bundled in the same command.
+			queryClient.setQueryData<AgentLoginStatusResult>(
+				helmorQueryKeys.agentLoginStatus,
+				(old) => (old ? { ...old, opencode: cached.length > 0 } : old),
+			);
 		},
 	});
 

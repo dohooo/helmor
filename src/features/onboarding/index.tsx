@@ -67,7 +67,9 @@ export function AppOnboarding({ onComplete }: AppOnboardingProps) {
 				setLoginItems(buildAgentLoginItems(status));
 			})
 			.catch(() => {
-				setLoginItems(buildAgentLoginItems());
+				// Check failed → treat as not-connected (show Log in), not stuck on
+				// "Connecting" (which `undefined` would render).
+				setLoginItems(buildAgentLoginItems(null));
 			});
 	}, []);
 

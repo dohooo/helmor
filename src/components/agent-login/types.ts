@@ -1,7 +1,7 @@
 import type { ClaudeIcon } from "@/components/icons";
 import type { AgentLoginProvider } from "@/lib/api";
 
-export type AgentLoginStatus = "ready" | "needsSetup";
+export type AgentLoginStatus = "ready" | "needsSetup" | "checking";
 
 export type AgentLoginItem = {
 	icon: typeof ClaudeIcon;

@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import type { AgentLoginProvider } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { ConnectingStatus } from "./connecting-status";
 import { ReadyStatus } from "./ready-status";
 import type { AgentLoginStatus } from "./types";
 
@@ -17,6 +18,10 @@ export function AgentStatusAction({
 	onPrimeLogin?: (provider: AgentLoginProvider) => void;
 	onStartLogin?: (provider: AgentLoginProvider) => void;
 }) {
+	if (status === "checking") {
+		return <ConnectingStatus />;
+	}
+
 	if (status === "ready") {
 		return <ReadyStatus />;
 	}

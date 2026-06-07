@@ -3,6 +3,7 @@ import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { AgentLoginProvider } from "@/lib/api";
 import { AgentStatusAction } from "../components/agent-status-action";
+import { ConnectingStatus } from "../components/connecting-status";
 import { CursorApiKeyAction } from "../components/cursor-api-key-action";
 import { LoginTerminalPreview } from "../components/login-terminal-preview";
 import { ReadyStatus } from "../components/ready-status";
@@ -126,7 +127,9 @@ export function AgentLoginStep({
 											</span>
 										</div>
 										{provider === "cursor" ? (
-											status === "ready" ? (
+											status === "checking" ? (
+												<ConnectingStatus />
+											) : status === "ready" ? (
 												<ReadyStatus />
 											) : (
 												<CursorApiKeyAction
