@@ -428,6 +428,32 @@ fn opencode_reasoning_carries_thought_duration() {
     assert_yaml_snapshot!(run_normalized(msgs));
 }
 
+// opencode write/edit/apply_patch carry opencode's per-file unified diff
+// (`fileDiffs`), which the adapter reshapes into the shared apply_patch
+// `changes:[{path,diff}]` view so a colored diff renders on reload too.
+#[test]
+fn opencode_write_tool_renders_unified_diff() {
+    let assistant = json!({
+        "type": "opencode_message",
+        "session_id": "ses_1",
+        "role": "assistant",
+        "parts": [{
+            "type": "tool", "callID": "c1", "tool": "write", "status": "completed",
+            "input": { "filePath": "/tmp/a.txt", "content": "hi" },
+            "output": "Wrote file successfully.",
+            "fileDiffs": [
+                { "path": "a.txt", "diff": "--- a.txt\n+++ a.txt\n@@ -0,0 +1 @@\n+hi\n" },
+            ],
+        }],
+    });
+    let msgs = vec![make_record(
+        "om1",
+        "assistant",
+        &serde_json::to_string(&assistant).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
 // ============================================================================
 // 4. Edge cases
 // ============================================================================

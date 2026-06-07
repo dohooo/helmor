@@ -1,7 +1,7 @@
 //! Render opencode's native `opencode_message` into universal `MessagePart`s.
 //! Shared by the live-stream path and historical reload.
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use super::super::types::{
     ExtendedMessagePart, ImageSource, MessagePart, NoticeSeverity, StreamingStatus, TodoItem,
@@ -178,7 +178,17 @@ fn render_tool(part: &Value) -> MessagePart {
         .get("input")
         .cloned()
         .unwrap_or_else(|| Value::Object(Default::default()));
-    let (tool_name, args) = canonical_tool(native_tool, &native_input);
+    // opencode surfaced per-file unified diffs (edit/write/apply_patch) → render
+    // through the shared apply_patch diff view (`changes: [{path, diff}]`); the
+    // frontend already draws this (green +/red -). Else use the name mapping.
+    let file_diffs = part
+        .get("fileDiffs")
+        .and_then(Value::as_array)
+        .filter(|c| !c.is_empty());
+    let (tool_name, args) = match file_diffs {
+        Some(changes) => ("apply_patch".to_string(), json!({ "changes": changes })),
+        None => canonical_tool(native_tool, &native_input),
+    };
     let args_text = serde_json::to_string(&args).unwrap_or_default();
     let status = part
         .get("status")
@@ -188,10 +198,16 @@ fn render_tool(part: &Value) -> MessagePart {
         .get("isError")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let result = part
-        .get("output")
-        .and_then(Value::as_str)
-        .map(|o| Value::String(o.to_string()));
+    let result = part.get("output").and_then(Value::as_str).and_then(|o| {
+        // With a rendered diff the success summary ("Wrote file…", the M-file
+        // list) is redundant — drop it, but keep output that carries extra
+        // feedback (e.g. LSP errors).
+        if file_diffs.is_some() && !o.contains("LSP") {
+            None
+        } else {
+            Some(Value::String(o.to_string()))
+        }
+    });
     let streaming_status = match status {
         "pending" => Some(StreamingStatus::Pending),
         "running" => Some(StreamingStatus::Running),
@@ -327,6 +343,61 @@ mod tests {
         match &render_parts(&open, "m1", false)[0] {
             MessagePart::Reasoning { duration_ms, .. } => assert_eq!(*duration_ms, None),
             other => panic!("expected reasoning, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn write_tool_with_file_diffs_renders_as_apply_patch() {
+        let msg = json!({
+            "type": "opencode_message",
+            "parts": [{
+                "type": "tool", "callID": "c1", "tool": "write", "status": "completed",
+                "input": { "filePath": "/tmp/a.txt", "content": "hi" },
+                "output": "Wrote file successfully.",
+                "fileDiffs": [{ "path": "a.txt", "diff": "--- a.txt\n+++ a.txt\n@@\n+hi\n" }],
+            }],
+        });
+        match &render_parts(&msg, "m1", false)[0] {
+            MessagePart::ToolCall {
+                tool_name,
+                args,
+                result,
+                ..
+            } => {
+                assert_eq!(tool_name, "apply_patch");
+                let changes = args["changes"].as_array().unwrap();
+                assert_eq!(changes[0]["path"], "a.txt");
+                assert!(changes[0]["diff"].as_str().unwrap().contains("+hi"));
+                // Redundant success summary dropped — the diff conveys it.
+                assert!(result.is_none());
+            }
+            other => panic!("expected tool-call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn diff_tool_keeps_lsp_feedback_in_result() {
+        let msg = json!({
+            "type": "opencode_message",
+            "parts": [{
+                "type": "tool", "callID": "c1", "tool": "edit", "status": "completed",
+                "input": { "filePath": "/tmp/a.txt" },
+                "output": "Edit applied successfully.\n\nLSP errors detected in this file:\nfoo",
+                "fileDiffs": [{ "path": "a.txt", "diff": "--- a.txt\n+++ a.txt\n@@\n-x\n+y\n" }],
+            }],
+        });
+        match &render_parts(&msg, "m1", false)[0] {
+            MessagePart::ToolCall {
+                tool_name, result, ..
+            } => {
+                assert_eq!(tool_name, "apply_patch");
+                assert!(result
+                    .as_ref()
+                    .and_then(|r| r.as_str())
+                    .unwrap()
+                    .contains("LSP errors"));
+            }
+            other => panic!("expected tool-call, got {other:?}"),
         }
     }
 

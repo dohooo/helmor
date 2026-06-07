@@ -298,6 +298,49 @@ fn render_text_or_reasoning(kind: &str, part: &Value) -> Value {
     out
 }
 
+// Pull per-file unified diffs out of a write-tool's `state.metadata` so the
+// adapter can render them through the shared diff view. apply_patch carries
+// `metadata.files[].patch` (multi-file); edit/write carry a single
+// `metadata.diff`. Empty diffs (or non-write tools) yield nothing.
+fn opencode_file_diffs(state: Option<&Value>, title: Option<&str>) -> Vec<Value> {
+    let Some(meta) = state.and_then(|s| s.get("metadata")) else {
+        return Vec::new();
+    };
+    if let Some(files) = meta.get("files").and_then(Value::as_array) {
+        let changes: Vec<Value> = files
+            .iter()
+            .filter_map(|f| {
+                let path = f
+                    .get("relativePath")
+                    .and_then(Value::as_str)
+                    .or_else(|| f.get("filePath").and_then(Value::as_str))?;
+                let diff = f
+                    .get("patch")
+                    .and_then(Value::as_str)
+                    .or_else(|| f.get("diff").and_then(Value::as_str))?;
+                (!diff.is_empty()).then(|| json!({ "path": path, "diff": diff }))
+            })
+            .collect();
+        if !changes.is_empty() {
+            return changes;
+        }
+    }
+    if let Some(diff) = meta.get("diff").and_then(Value::as_str) {
+        if !diff.is_empty() {
+            let path = title
+                .or_else(|| {
+                    state
+                        .and_then(|s| s.get("input"))
+                        .and_then(|i| i.get("filePath"))
+                        .and_then(Value::as_str)
+                })
+                .unwrap_or_default();
+            return vec![json!({ "path": path, "diff": diff })];
+        }
+    }
+    Vec::new()
+}
+
 fn render_tool_part(part: &Value) -> Value {
     let call_id = part
         .get("callID")
@@ -337,6 +380,10 @@ fn render_tool_part(part: &Value) -> Value {
             out["isError"] = json!(true);
         }
         _ => {}
+    }
+    let file_diffs = opencode_file_diffs(state, title);
+    if !file_diffs.is_empty() {
+        out["fileDiffs"] = json!(file_diffs);
     }
     out
 }
@@ -858,6 +905,71 @@ mod tests {
             .unwrap()
             .clone();
         assert!(parts.iter().all(|p| p["type"] != "step-finish"));
+    }
+
+    #[test]
+    fn edit_tool_surfaces_file_diff_from_metadata() {
+        let mut acc = StreamAccumulator::new("opencode", "");
+        assistant(&mut acc, "m1");
+        acc.push_event(
+            &json!({
+                "type": "opencode/message.part.updated", "session_id": "ses_1",
+                "part": {
+                    "type": "tool", "id": "p1", "messageID": "m1",
+                    "callID": "call_1", "tool": "edit",
+                    "state": {
+                        "status": "completed", "title": "a.txt",
+                        "input": { "filePath": "/tmp/a.txt", "oldString": "hi", "newString": "bye" },
+                        "output": "Edit applied successfully.",
+                        "metadata": { "diff": "--- a.txt\n+++ a.txt\n@@ -1 +1 @@\n-hi\n+bye\n" },
+                    },
+                },
+            }),
+            "",
+        );
+        acc.push_event(
+            &json!({ "type": "opencode/session.idle", "session_id": "ses_1" }),
+            "",
+        );
+        let tool = &acc.collected()[0].parsed.as_ref().unwrap()["parts"][0];
+        let diffs = tool["fileDiffs"].as_array().expect("fileDiffs present");
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0]["path"], "a.txt");
+        assert!(diffs[0]["diff"].as_str().unwrap().contains("+bye"));
+    }
+
+    #[test]
+    fn apply_patch_surfaces_per_file_diffs_from_metadata() {
+        let mut acc = StreamAccumulator::new("opencode", "");
+        assistant(&mut acc, "m1");
+        acc.push_event(
+            &json!({
+                "type": "opencode/message.part.updated", "session_id": "ses_1",
+                "part": {
+                    "type": "tool", "id": "p1", "messageID": "m1",
+                    "callID": "call_1", "tool": "apply_patch",
+                    "state": {
+                        "status": "completed",
+                        "input": { "patchText": "<patch>" },
+                        "output": "Success. Updated the following files:\nM a.txt\nM b.txt",
+                        "metadata": { "files": [
+                            { "relativePath": "a.txt", "patch": "--- a.txt\n+++ a.txt\n@@\n-1\n+2\n" },
+                            { "relativePath": "b.txt", "patch": "--- b.txt\n+++ b.txt\n@@\n-3\n+4\n" },
+                        ] },
+                    },
+                },
+            }),
+            "",
+        );
+        acc.push_event(
+            &json!({ "type": "opencode/session.idle", "session_id": "ses_1" }),
+            "",
+        );
+        let tool = &acc.collected()[0].parsed.as_ref().unwrap()["parts"][0];
+        let diffs = tool["fileDiffs"].as_array().expect("fileDiffs present");
+        assert_eq!(diffs.len(), 2);
+        assert_eq!(diffs[0]["path"], "a.txt");
+        assert_eq!(diffs[1]["path"], "b.txt");
     }
 
     #[test]
