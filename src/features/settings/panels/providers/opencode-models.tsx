@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCcw } from "lucide-react";
 import {
 	useCallback,
@@ -13,7 +13,7 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { listOpencodeModels } from "@/lib/api";
+import { getOpencodeCustomProviders, listOpencodeModels } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import {
 	OPENCODE_CACHE_VERSION,
@@ -29,18 +29,80 @@ export type OpencodeModelsHandle = {
 	refresh: (opts?: { forceReload?: boolean }) => void;
 };
 
-// Catalogs at/under this size enable every model by default; larger ones use the OpenCode Zen subset.
+// Catalogs at/under this size enable every model by default. Larger ones only
+// happen with env-injected models.dev keys (dev), so we trim to a curated set.
 const DEFAULT_ENABLE_ALL_CAP = 12;
 
-export function defaultEnabledSlugs(cached: OpencodeCachedModel[]): string[] {
+// Self-heal retry budget for the startup race (opencode connects config
+// providers a few seconds after the server is "listening").
+const SELF_HEAL_MAX_ATTEMPTS = 5;
+const SELF_HEAL_RETRY_MS = 1500;
+
+const providerOf = (slug: string): string => slug.split("/")[0] ?? "";
+
+/** A model is "intentional" if it's a free OpenCode Zen model or comes from a
+ *  provider the user configured in their opencode config (custom / preset). */
+function isIntentional(
+	slug: string,
+	configuredProviderIds: ReadonlySet<string>,
+): boolean {
+	const id = providerOf(slug);
+	return id === "opencode" || configuredProviderIds.has(id);
+}
+
+export function defaultEnabledSlugs(
+	cached: OpencodeCachedModel[],
+	configuredProviderIds: ReadonlySet<string> = new Set(),
+): string[] {
 	if (cached.length <= DEFAULT_ENABLE_ALL_CAP) {
 		return cached.map((m) => m.slug);
 	}
-	const zen = cached
-		.filter((m) => m.slug.startsWith("opencode/"))
-		.map((m) => m.slug);
-	if (zen.length > 0) return zen;
+	// Big catalog: keep Zen + every model from a provider the user configured,
+	// so custom providers are never excluded by default (the env-injected bulk is).
+	const curated = cached
+		.map((m) => m.slug)
+		.filter((slug) => isIntentional(slug, configuredProviderIds));
+	if (curated.length > 0) return curated;
 	return cached.slice(0, DEFAULT_ENABLE_ALL_CAP).map((m) => m.slug);
+}
+
+/** Decide which model slugs stay enabled after a refresh.
+ *  - `null` (first fetch) or all picks stale → fall back to defaults.
+ *  - `[]` (user cleared everything) → respected, stays empty.
+ *  - otherwise keep the user's picks AND auto-enable intentional models that
+ *    newly appeared since the last snapshot (e.g. a just-added custom provider). */
+export function reconcileEnabledModelIds(
+	prev: string[] | null,
+	cached: OpencodeCachedModel[],
+	prevCachedModels: OpencodeCachedModel[] | null,
+	configuredProviderIds: ReadonlySet<string> = new Set(),
+): string[] {
+	const cachedSlugs = new Set(cached.map((m) => m.slug));
+	const staleNonEmpty =
+		prev !== null && prev.length > 0 && !prev.some((s) => cachedSlugs.has(s));
+	if (prev === null || staleNonEmpty)
+		return defaultEnabledSlugs(cached, configuredProviderIds);
+	if (prev.length === 0) return prev;
+	const prevCached = new Set((prevCachedModels ?? []).map((m) => m.slug));
+	const newly = cached
+		.map((m) => m.slug)
+		.filter(
+			(s) =>
+				!prevCached.has(s) &&
+				!prev.includes(s) &&
+				isIntentional(s, configuredProviderIds),
+		);
+	return newly.length > 0 ? [...prev, ...newly] : prev;
+}
+
+/** Configured provider ids absent from the cached model list — a sign opencode
+ *  returned an incomplete list (custom providers not connected yet at fetch time). */
+export function missingConfiguredProviders(
+	cached: OpencodeCachedModel[],
+	configuredProviderIds: ReadonlySet<string>,
+): string[] {
+	const present = new Set(cached.map((m) => m.slug.split("/")[0] ?? m.slug));
+	return [...configuredProviderIds].filter((id) => !present.has(id));
 }
 
 export function OpencodeModels({
@@ -78,16 +140,16 @@ export function OpencodeModels({
 			const connected = [
 				...new Set(cached.map((m) => m.slug.split("/")[0] ?? m.slug)),
 			];
-			// `null` → first fetch, auto-pick defaults. Else keep user picks, unless all are
-			// stale (re-auth changed the set), then fall back to defaults. `[]` (user cleared) is kept.
-			const prev = opencode.enabledModelIds;
-			const cachedSlugs = new Set(cached.map((m) => m.slug));
-			const staleNonEmpty =
-				prev !== null &&
-				prev.length > 0 &&
-				!prev.some((s) => cachedSlugs.has(s));
-			const enabledModelIds =
-				prev === null || staleNonEmpty ? defaultEnabledSlugs(cached) : prev;
+			// Provider ids the user configured in their opencode config (custom +
+			// presets) — their models are intentional and default to enabled.
+			const configured = await getOpencodeCustomProviders().catch(() => []);
+			const configuredIds = new Set(configured.map((p) => p.id));
+			const enabledModelIds = reconcileEnabledModelIds(
+				opencode.enabledModelIds,
+				cached,
+				opencode.cachedModels,
+				configuredIds,
+			);
 			await persist({
 				status: cached.length > 0 ? "ready" : "unavailable",
 				connected,
@@ -117,6 +179,38 @@ export function OpencodeModels({
 			fetchMutation.mutate(false);
 		}
 	}, [opencode.cachedModels, cacheStale, fetchMutation]);
+
+	// Self-heal a startup race: opencode can return an incomplete model list
+	// before it finishes connecting the config's custom providers. If a
+	// configured provider is missing from the cache, refetch once (the server is
+	// warm by now). Runs against the persisted cache too, so existing installs
+	// heal as soon as this panel opens — no manual refresh needed.
+	const customProvidersQuery = useQuery({
+		queryKey: helmorQueryKeys.opencodeCustomProviders,
+		queryFn: getOpencodeCustomProviders,
+	});
+	const selfHealAttemptsRef = useRef(0);
+	useEffect(() => {
+		if (fetchMutation.isPending) return;
+		const cache = opencode.cachedModels;
+		const configured = customProvidersQuery.data;
+		if (!cache || !configured || configured.length === 0) return;
+		const configuredIds = new Set(configured.map((p) => p.id));
+		const missing = missingConfiguredProviders(cache, configuredIds).length > 0;
+		if (!missing) {
+			selfHealAttemptsRef.current = 0;
+			return;
+		}
+		// opencode's ready/connect lags a few seconds after startup, so retry a
+		// few times (warm — no server restart) until the providers show up.
+		if (selfHealAttemptsRef.current >= SELF_HEAL_MAX_ATTEMPTS) return;
+		selfHealAttemptsRef.current += 1;
+		const timer = setTimeout(
+			() => fetchMutation.mutate(false),
+			SELF_HEAL_RETRY_MS,
+		);
+		return () => clearTimeout(timer);
+	}, [opencode.cachedModels, customProvidersQuery.data, fetchMutation]);
 
 	const cached = opencode.cachedModels ?? [];
 	const available = useMemo(

@@ -8,7 +8,11 @@ import {
 } from "./builtin-opencode-providers";
 import { groupHeading } from "./model-multi-select";
 import { customSig, generateProviderId } from "./opencode-custom-providers";
-import { defaultEnabledSlugs } from "./opencode-models";
+import {
+	defaultEnabledSlugs,
+	missingConfiguredProviders,
+	reconcileEnabledModelIds,
+} from "./opencode-models";
 
 describe("customSig", () => {
 	const base = {
@@ -88,7 +92,7 @@ describe("defaultEnabledSlugs", () => {
 		expect(defaultEnabledSlugs(small)).toEqual(["a/1", "a/2", "b/3"]);
 	});
 
-	it("prefers the OpenCode Zen subset for a large catalog", () => {
+	it("trims env-injected bulk to Zen for a large catalog (no configured providers)", () => {
 		const big = models([
 			...Array.from({ length: 15 }, (_, i) => `vendor/m${i}`),
 			"opencode/zen-a",
@@ -100,11 +104,115 @@ describe("defaultEnabledSlugs", () => {
 		]);
 	});
 
+	it("keeps configured custom providers (+ Zen) in a large catalog", () => {
+		const big = models([
+			...Array.from({ length: 15 }, (_, i) => `vendor/m${i}`), // env bulk → trimmed
+			"opencode/zen-a",
+			"hundun/deepseek",
+			"hundun/chat",
+		]);
+		expect(defaultEnabledSlugs(big, new Set(["hundun"]))).toEqual([
+			"opencode/zen-a",
+			"hundun/deepseek",
+			"hundun/chat",
+		]);
+	});
+
 	it("falls back to the first 12 when a large catalog has no Zen models", () => {
 		const big = models(Array.from({ length: 20 }, (_, i) => `vendor/m${i}`));
 		expect(defaultEnabledSlugs(big)).toEqual(
 			Array.from({ length: 12 }, (_, i) => `vendor/m${i}`),
 		);
+	});
+});
+
+describe("reconcileEnabledModelIds", () => {
+	const models = (slugs: string[]): OpencodeCachedModel[] =>
+		slugs.map((slug) => ({ slug, label: slug }));
+
+	it("auto-picks defaults on first fetch (prev null)", () => {
+		const cached = models(["a/1", "a/2"]);
+		expect(reconcileEnabledModelIds(null, cached, null)).toEqual([
+			"a/1",
+			"a/2",
+		]);
+	});
+
+	it("respects an explicit empty list (user cleared all)", () => {
+		const cached = models(["a/1", "a/2"]);
+		expect(reconcileEnabledModelIds([], cached, models(["a/1"]))).toEqual([]);
+	});
+
+	it("auto-enables newly-appeared models from a just-added custom provider", () => {
+		// prev picks + prev cache = the zen models; refresh adds 2 custom models.
+		const prev = ["opencode/a", "opencode/b"];
+		const prevCache = models(["opencode/a", "opencode/b"]);
+		const cached = models([
+			"opencode/a",
+			"opencode/b",
+			"hundun/deepseek",
+			"hundun/chat",
+		]);
+		expect(
+			reconcileEnabledModelIds(prev, cached, prevCache, new Set(["hundun"])),
+		).toEqual(["opencode/a", "opencode/b", "hundun/deepseek", "hundun/chat"]);
+	});
+
+	it("does NOT auto-enable newly-appeared env-bulk (unconfigured) models", () => {
+		const prev = ["opencode/a"];
+		const prevCache = models(["opencode/a"]);
+		const cached = models(["opencode/a", "openai/gpt-x", "anthropic/claude-y"]);
+		// New models belong to providers the user never configured → stay off.
+		expect(
+			reconcileEnabledModelIds(prev, cached, prevCache, new Set()),
+		).toEqual(["opencode/a"]);
+	});
+
+	it("keeps user picks when nothing new appeared", () => {
+		const prev = ["opencode/a"];
+		const cache = models(["opencode/a", "opencode/b"]);
+		// prev cache already had both → b was deliberately left disabled, keep it off.
+		expect(reconcileEnabledModelIds(prev, cache, cache)).toEqual([
+			"opencode/a",
+		]);
+	});
+
+	it("falls back to defaults when every prior pick went stale", () => {
+		const prev = ["old/x"];
+		const cached = models(["a/1", "a/2"]);
+		expect(reconcileEnabledModelIds(prev, cached, models(["old/x"]))).toEqual([
+			"a/1",
+			"a/2",
+		]);
+	});
+});
+
+describe("missingConfiguredProviders", () => {
+	const models = (slugs: string[]): OpencodeCachedModel[] =>
+		slugs.map((slug) => ({ slug, label: slug }));
+
+	it("flags configured providers absent from the cached list (startup race)", () => {
+		// opencode returned only the free models; hundun + codex haven't connected.
+		const cached = models(["opencode/zen-a", "opencode/zen-b"]);
+		expect(
+			missingConfiguredProviders(cached, new Set(["hundun", "codex"])),
+		).toEqual(["hundun", "codex"]);
+	});
+
+	it("returns empty once every configured provider is present", () => {
+		const cached = models([
+			"opencode/zen-a",
+			"hundun/deepseek",
+			"codex/gpt-5.5",
+		]);
+		expect(
+			missingConfiguredProviders(cached, new Set(["hundun", "codex"])),
+		).toEqual([]);
+	});
+
+	it("returns empty when nothing is configured", () => {
+		const cached = models(["opencode/zen-a"]);
+		expect(missingConfiguredProviders(cached, new Set())).toEqual([]);
 	});
 });
 
