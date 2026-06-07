@@ -111,8 +111,15 @@ pub fn load_cursor_api_key() -> Option<String> {
 
 fn resolve_bundled_agent_paths_for_exe(exe: &std::path::Path) -> Option<BundledAgentPaths> {
     let exe_dir = exe.parent()?;
-    let contents_dir = exe_dir.parent()?;
-    let resources_dir = contents_dir.join("Resources");
+    // Resource layouts differ per platform: Windows (NSIS/MSI) installs
+    // resources next to the exe, while macOS puts them in
+    // `<bundle>/Contents/Resources`. Probe both roots so the same logic
+    // works everywhere (mirrors `forge::bundled`).
+    let mut resource_roots = vec![exe_dir.to_path_buf()];
+    if let Some(contents_dir) = exe_dir.parent() {
+        resource_roots.push(contents_dir.join("Resources"));
+    }
+
     let claude_bin_name = if cfg!(windows) {
         "claude.exe"
     } else {
@@ -125,14 +132,17 @@ fn resolve_bundled_agent_paths_for_exe(exe: &std::path::Path) -> Option<BundledA
         "opencode"
     };
 
-    let claude_bin = resources_dir.join(format!("vendor/claude-code/{claude_bin_name}"));
-    let codex_bin = resources_dir.join(format!("vendor/codex/{codex_bin_name}"));
-    let opencode_bin = resources_dir.join(format!("vendor/opencode/{opencode_bin_name}"));
+    let find = |relative: String| {
+        resource_roots
+            .iter()
+            .map(|root| root.join(&relative))
+            .find(|path| path.is_file())
+    };
 
     Some(BundledAgentPaths {
-        claude_bin: claude_bin.is_file().then_some(claude_bin),
-        codex_bin: codex_bin.is_file().then_some(codex_bin),
-        opencode_bin: opencode_bin.is_file().then_some(opencode_bin),
+        claude_bin: find(format!("vendor/claude-code/{claude_bin_name}")),
+        codex_bin: find(format!("vendor/codex/{codex_bin_name}")),
+        opencode_bin: find(format!("vendor/opencode/{opencode_bin_name}")),
     })
 }
 
