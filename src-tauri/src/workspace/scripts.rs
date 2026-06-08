@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::os::fd::AsRawFd;
-use std::os::unix::io::FromRawFd;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::{
@@ -298,22 +296,7 @@ impl ScriptProcessManager {
             return Ok(false);
         };
         let file = stdin.lock().expect("stdin mutex poisoned");
-        let ws = libc::winsize {
-            ws_row: rows,
-            ws_col: cols,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
-        let ret = unsafe {
-            libc::ioctl(
-                file.as_raw_fd(),
-                libc::TIOCSWINSZ as libc::c_ulong,
-                &ws as *const libc::winsize,
-            )
-        };
-        if ret != 0 {
-            bail!("TIOCSWINSZ failed: {}", std::io::Error::last_os_error());
-        }
+        crate::platform::pty::resize(&file, cols, rows)?;
         Ok(true)
     }
 }
@@ -581,42 +564,6 @@ pub struct ScriptContext {
     pub port_count: Option<u16>,
 }
 
-/// Allocate a PTY pair via `openpty`. Returns (master_fd, slave_fd).
-fn open_pty() -> Result<(libc::c_int, libc::c_int)> {
-    let mut master: libc::c_int = 0;
-    let mut slave: libc::c_int = 0;
-    let ws = libc::winsize {
-        ws_row: 30,
-        ws_col: 120,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    let ret = unsafe {
-        libc::openpty(
-            &mut master,
-            &mut slave,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &ws as *const libc::winsize as *mut libc::winsize,
-        )
-    };
-    if ret != 0 {
-        bail!("openpty failed: {}", std::io::Error::last_os_error());
-    }
-    Ok((master, slave))
-}
-
-fn set_nonblocking(fd: libc::c_int) -> Result<()> {
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags == -1 {
-        bail!("fcntl(F_GETFL) failed: {}", std::io::Error::last_os_error());
-    }
-    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
-        bail!("fcntl(F_SETFL) failed: {}", std::io::Error::last_os_error());
-    }
-    Ok(())
-}
-
 /// Escape a string for safe embedding inside single quotes.
 fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
@@ -762,26 +709,6 @@ pub(crate) fn run_script_with_shell(
         }
     }
 
-    let (master_fd, slave_fd) = open_pty()?;
-    set_nonblocking(master_fd)?;
-
-    // Dup master for stdin writing. Kept alive in `ProcessHandle` for the
-    // lifetime of the child so `write_stdin` / `resize` can reach the PTY.
-    let stdin_fd = unsafe { libc::dup(master_fd) };
-    if stdin_fd < 0 {
-        let err = std::io::Error::last_os_error();
-        unsafe {
-            libc::close(master_fd);
-            libc::close(slave_fd);
-        }
-        bail!("dup(master_fd) failed: {err}");
-    }
-    let stdin_file = unsafe { std::fs::File::from_raw_fd(stdin_fd) };
-    let stdin = Arc::new(Mutex::new(stdin_file));
-
-    // Dup slave for the pre_exec closure (Stdio::from_raw_fd takes ownership).
-    let slave_for_session = unsafe { libc::dup(slave_fd) };
-
     let mut cmd = Command::new(shell_path);
     cmd.args(shell_args)
         .current_dir(working_dir)
@@ -811,35 +738,18 @@ pub(crate) fn run_script_with_shell(
         cmd.env("HELMOR_PORT_COUNT", count.to_string());
     }
 
-    // Set up the child's session and controlling terminal before exec.
-    unsafe {
-        cmd.pre_exec(move || {
-            if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            if libc::ioctl(slave_for_session, libc::TIOCSCTTY as libc::c_ulong, 0) == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            libc::close(slave_for_session);
-            Ok(())
-        });
-    }
-
-    // Attach PTY slave as stdin/stdout/stderr.
-    let mut child = unsafe {
-        cmd.stdin(Stdio::from_raw_fd(slave_fd))
-            .stdout(Stdio::from_raw_fd(libc::dup(slave_fd)))
-            .stderr(Stdio::from_raw_fd(libc::dup(slave_fd)))
-            .spawn()
-            .with_context(|| format!("Failed to spawn {shell_path}"))?
-    };
-
-    // Drop cmd to close all parent copies of slave fds. Without this the
-    // master never sees EIO because the slave reference count stays > 0.
-    drop(cmd);
-
-    let pid = child.id() as libc::pid_t;
-    let pgid = unsafe { libc::getpgid(pid) };
+    // Open a PTY, make the child a session + controlling-terminal leader, and
+    // attach it. The OS-specific PTY mechanics live behind the
+    // `platform::pty` seam; macOS/Unix is the reference, Windows fills ConPTY.
+    let session = crate::platform::pty::spawn(cmd)
+        .with_context(|| format!("Failed to spawn {shell_path}"))?;
+    // Writable PTY master, kept alive in `ProcessHandle` for the lifetime of
+    // the child so `write_stdin` / `resize` can reach the PTY.
+    let stdin = Arc::new(Mutex::new(session.writer));
+    let reader_file = session.reader;
+    let mut child = session.child;
+    let pid = session.pid as libc::pid_t;
+    let pgid = session.pgid;
 
     let _ = channel.send(ScriptEvent::Started {
         pid: pid as u32,
@@ -894,39 +804,28 @@ pub(crate) fn run_script_with_shell(
     let reader = std::thread::Builder::new()
         .name("script-pty".into())
         .spawn(move || {
-            let mut master = unsafe { std::fs::File::from_raw_fd(master_fd) };
+            let mut master = reader_file;
             let mut buf = [0u8; 4096];
             // 100ms tick is just a stop-flag fallback — kill() also closes
             // the PTY which triggers EIO/POLLHUP and wakes us instantly.
-            const POLL_TIMEOUT_MS: libc::c_int = 100;
+            const POLL_TIMEOUT_MS: i32 = 100;
             loop {
                 if stop_reader_in_thread.load(Ordering::Relaxed) {
                     break;
                 }
 
-                let mut pfd = libc::pollfd {
-                    fd: master_fd,
-                    events: libc::POLLIN,
-                    revents: 0,
-                };
-                let ret = unsafe { libc::poll(&mut pfd, 1, POLL_TIMEOUT_MS) };
-                if ret < 0 {
-                    let err = std::io::Error::last_os_error();
-                    if err.kind() == std::io::ErrorKind::Interrupted {
-                        continue;
-                    }
-                    tracing::debug!(error = %err, "PTY poll failed");
-                    break;
-                }
-                if ret == 0 {
-                    // Timeout — re-check stop flag and re-poll.
-                    continue;
-                }
                 // POLLHUP / POLLERR fire when the slave fd is closed (child
                 // exited). We still try to read first so any pending bytes
                 // ahead of the hangup are delivered.
-                let revents = pfd.revents;
-                let hung_up = revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0;
+                let hung_up = match crate::platform::pty::poll_readable(&master, POLL_TIMEOUT_MS) {
+                    Ok(crate::platform::pty::PollResult::TimedOut)
+                    | Ok(crate::platform::pty::PollResult::Interrupted) => continue,
+                    Ok(crate::platform::pty::PollResult::Ready { hung_up }) => hung_up,
+                    Err(err) => {
+                        tracing::debug!(error = %err, "PTY poll failed");
+                        break;
+                    }
+                };
 
                 // Drain everything available in this wake cycle.
                 let mut should_exit = hung_up;
@@ -946,7 +845,7 @@ pub(crate) fn run_script_with_shell(
                         }
                         Err(e) => {
                             // EIO is expected when the child exits and slave closes.
-                            if e.raw_os_error() != Some(libc::EIO) {
+                            if !crate::platform::pty::is_session_disconnect(&e) {
                                 tracing::debug!(error = %e, "PTY read error");
                             }
                             should_exit = true;
