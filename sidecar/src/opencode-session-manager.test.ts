@@ -1,14 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import {
+	assemblePlanText,
 	buildContextUsageMeta,
 	buildImageParts,
 	buildPermissionRules,
 	buildPromptParts,
+	capturePlanPart,
 	extractTitleText,
 	flattenOpencodeModels,
 	mapQuestionAnswers,
+	newPlanCapture,
+	notePlanMessage,
 	parseModelSlug,
 	parseSlashCommand,
+	planMessageId,
+	resetPlanCapture,
 } from "./opencode-session-manager.js";
 
 describe("parseSlashCommand", () => {
@@ -197,6 +203,13 @@ describe("buildPermissionRules", () => {
 		);
 	});
 
+	test("plan mode is allow-all (matches t3code; plan agent blocks edits, reads don't prompt)", () => {
+		// No ask-all fallthrough — that was the bug (reads prompting in plan mode).
+		expect(buildPermissionRules("plan")).toEqual([
+			{ permission: "*", pattern: "*", action: "allow" },
+		]);
+	});
+
 	test("acceptEdits adds an edit allow on top of ask-all", () => {
 		const rules = buildPermissionRules("acceptEdits");
 		expect(rules).toHaveLength(3);
@@ -249,6 +262,112 @@ describe("mapQuestionAnswers", () => {
 
 	test("returns empty arrays when content is missing", () => {
 		expect(mapQuestionAnswers(questions, undefined)).toEqual([[], []]);
+	});
+});
+
+describe("plan capture (opencode plan mode → plan-review card)", () => {
+	const textUpdated = (messageID: string, id: string, text: string) => ({
+		type: "message.part.updated",
+		properties: { part: { type: "text", id, messageID, text } },
+	});
+
+	test("captures assistant text snapshots, latest snapshot wins per part", () => {
+		const cap = newPlanCapture();
+		notePlanMessage(cap, { role: "assistant", id: "m1" });
+		// Streamed snapshots for the same part — final one is authoritative.
+		expect(capturePlanPart(cap, textUpdated("m1", "p1", "## Pla"))).toBe(true);
+		expect(
+			capturePlanPart(cap, textUpdated("m1", "p1", "## Plan\n- step")),
+		).toBe(true);
+		expect(assemblePlanText(cap)).toBe("## Plan\n- step");
+		expect(planMessageId(cap)).toBe("m1");
+	});
+
+	test("captures text that arrives BEFORE its role event (the race)", () => {
+		const cap = newPlanCapture();
+		// opencode emits the text part first; role (message.updated) lands later.
+		expect(capturePlanPart(cap, textUpdated("m1", "p1", "the plan"))).toBe(
+			true,
+		);
+		// Before the role is known, the split is undecided → nothing assembled yet.
+		expect(assemblePlanText(cap)).toBe("");
+		// Role arrives at/by idle → the captured text is now attributed correctly.
+		notePlanMessage(cap, { role: "assistant", id: "m1" });
+		expect(assemblePlanText(cap)).toBe("the plan");
+		expect(planMessageId(cap)).toBe("m1");
+	});
+
+	test("joins multiple text parts in arrival order", () => {
+		const cap = newPlanCapture();
+		notePlanMessage(cap, { role: "assistant", id: "m1" });
+		capturePlanPart(cap, textUpdated("m1", "p1", "intro"));
+		capturePlanPart(cap, textUpdated("m1", "p2", "the plan"));
+		expect(assemblePlanText(cap)).toBe("intro\n\nthe plan");
+	});
+
+	test("drops all deltas (suppressed so partial prose never leaks)", () => {
+		const cap = newPlanCapture();
+		expect(
+			capturePlanPart(cap, {
+				type: "message.part.delta",
+				properties: { partID: "p1", field: "text", delta: "abc" },
+			}),
+		).toBe(true);
+		// Delta content is NOT captured — only full-text snapshots are.
+		expect(assemblePlanText(cap)).toBe("");
+	});
+
+	test("suppresses the user-prompt echo but excludes it from the plan", () => {
+		const cap = newPlanCapture();
+		notePlanMessage(cap, { role: "user", id: "u1" });
+		notePlanMessage(cap, { role: "assistant", id: "m1" });
+		// User echo text is suppressed (true) — the accumulator drops it anyway —
+		// but it must NOT end up in the plan.
+		expect(capturePlanPart(cap, textUpdated("u1", "pu", "my request"))).toBe(
+			true,
+		);
+		expect(capturePlanPart(cap, textUpdated("m1", "p1", "the plan"))).toBe(
+			true,
+		);
+		expect(assemblePlanText(cap)).toBe("the plan");
+		expect(planMessageId(cap)).toBe("m1");
+	});
+
+	test("passes through non-text parts and lifecycle events", () => {
+		const cap = newPlanCapture();
+		notePlanMessage(cap, { role: "assistant", id: "m1" });
+		expect(
+			capturePlanPart(cap, {
+				type: "message.part.updated",
+				properties: { part: { type: "tool", id: "t1", messageID: "m1" } },
+			}),
+		).toBe(false);
+		expect(
+			capturePlanPart(cap, {
+				type: "message.part.updated",
+				properties: { part: { type: "reasoning", id: "r1", messageID: "m1" } },
+			}),
+		).toBe(false);
+		expect(capturePlanPart(cap, { type: "session.idle" })).toBe(false);
+	});
+
+	test("notePlanMessage records both user and assistant roles", () => {
+		const cap = newPlanCapture();
+		notePlanMessage(cap, { role: "user", id: "u1" });
+		notePlanMessage(cap, { role: "assistant", id: "m1" });
+		notePlanMessage(cap, undefined);
+		expect(cap.roleByMessageId.get("u1")).toBe("user");
+		expect(cap.roleByMessageId.get("m1")).toBe("assistant");
+	});
+
+	test("resetPlanCapture clears state between turns", () => {
+		const cap = newPlanCapture();
+		notePlanMessage(cap, { role: "assistant", id: "m1" });
+		capturePlanPart(cap, textUpdated("m1", "p1", "old plan"));
+		resetPlanCapture(cap);
+		expect(assemblePlanText(cap)).toBe("");
+		expect(planMessageId(cap)).toBeNull();
+		expect(cap.roleByMessageId.size).toBe(0);
 	});
 });
 

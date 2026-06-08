@@ -47,6 +47,9 @@ interface SessionCtx {
 	 *  reused, so the next turn's pump subscribes with a live signal. */
 	abort: AbortController;
 	pumpStarted: boolean;
+	/** Client the live pump subscribed with. On `opencode serve` respawn a turn
+	 *  gets a new client; we rebind the pump when this no longer matches it. */
+	pumpClient?: OpencodeClient;
 	/** Last turn's model + effort variant, reused by `steer`. */
 	lastModel?: { providerID: string; modelID: string; variant?: string };
 	contextTokens: number;
@@ -59,6 +62,11 @@ interface SessionCtx {
 	};
 	/** childSessionId → parent `task` tool callID (subagent nesting). */
 	readonly subtaskParents: Map<string, string>;
+	/** This turn runs opencode's read-only `plan` agent — no ExitPlanMode signal,
+	 *  so we capture the assistant text and re-surface it as a plan-review card. */
+	planMode: boolean;
+	/** Per-turn plan text capture (reset at turn start). */
+	readonly planCapture: PlanCapture;
 }
 
 interface OpencodeProviderList {
@@ -105,6 +113,88 @@ export function flattenOpencodeModels(
 		}
 	}
 	return out.sort((a, b) => a.label.localeCompare(b.label));
+}
+
+// ── Plan-mode capture ────────────────────────────────────────────────────────
+// opencode's `plan` agent has no ExitPlanMode signal — the plan is just streamed
+// assistant text. Capture it and re-emit as `planCaptured` (Claude/Cursor's rail)
+// for the plan-review card, suppressing the now-duplicate prose from the stream.
+
+export interface PlanCapture {
+	/** messageID → role. opencode can emit a part before its role event, so the
+	 *  assistant-vs-user split is resolved at idle, not at part-arrival time. */
+	readonly roleByMessageId: Map<string, string>;
+	/** partID → text snapshot + owning messageID; insertion order = read order. */
+	readonly text: Map<string, { messageId: string; text: string }>;
+}
+
+export function newPlanCapture(): PlanCapture {
+	return { roleByMessageId: new Map(), text: new Map() };
+}
+
+export function resetPlanCapture(capture: PlanCapture): void {
+	capture.roleByMessageId.clear();
+	capture.text.clear();
+}
+
+/** Record a message's role (user or assistant) for the idle-time split. */
+export function notePlanMessage(
+	capture: PlanCapture,
+	info: { role?: string; id?: string } | undefined,
+): void {
+	if (typeof info?.id === "string" && typeof info.role === "string") {
+		capture.roleByMessageId.set(info.id, info.role);
+	}
+}
+
+/** Suppress all token deltas + text snapshots in plan mode (the user echo is
+ *  dropped by the accumulator anyway) and capture them. The assistant/user split
+ *  is deferred to assemblePlanText. Returns true when the event is consumed. */
+export function capturePlanPart(
+	capture: PlanCapture,
+	event: { type: string; properties?: Record<string, unknown> },
+): boolean {
+	// Drop token deltas; the later full-text snapshot is authoritative.
+	if (event.type === "message.part.delta") return true;
+	if (event.type !== "message.part.updated") return false;
+	const part = (
+		event.properties as
+			| {
+					part?: {
+						type?: string;
+						id?: string;
+						messageID?: string;
+						text?: string;
+					};
+			  }
+			| undefined
+	)?.part;
+	if (part?.type !== "text") return false;
+	if (typeof part.id === "string" && typeof part.messageID === "string") {
+		capture.text.set(part.id, {
+			messageId: part.messageID,
+			text: typeof part.text === "string" ? part.text : "",
+		});
+	}
+	return true;
+}
+
+/** Concatenate captured assistant text in arrival order (user echo excluded). */
+export function assemblePlanText(capture: PlanCapture): string {
+	const out: string[] = [];
+	for (const { messageId, text } of capture.text.values()) {
+		if (capture.roleByMessageId.get(messageId) === "assistant") out.push(text);
+	}
+	return out.join("\n\n").trim();
+}
+
+/** First assistant message id with plan text — seeds the synthetic tool-use id. */
+export function planMessageId(capture: PlanCapture): string | null {
+	for (const { messageId } of capture.text.values()) {
+		if (capture.roleByMessageId.get(messageId) === "assistant")
+			return messageId;
+	}
+	return null;
 }
 
 const IMAGE_MIME_BY_EXT: Record<string, string> = {
@@ -178,7 +268,12 @@ const OPENCODE_PERMISSION_PREFIX = "opencode-";
 export function buildPermissionRules(
 	mode: string | undefined,
 ): PermissionRuleset {
-	if (mode === "bypassPermissions" || mode === "dontAsk" || mode === "auto") {
+	if (
+		mode === "bypassPermissions" ||
+		mode === "dontAsk" ||
+		mode === "auto" ||
+		mode === "plan"
+	) {
 		return [{ permission: "*", pattern: "*", action: "allow" }];
 	}
 	const rules: PermissionRuleset = [
@@ -390,6 +485,8 @@ export class OpencodeSessionManager implements SessionManager {
 				abort: new AbortController(),
 				pumpStarted: false,
 				subtaskParents: new Map(),
+				planMode: false,
+				planCapture: newPlanCapture(),
 				contextTokens: 0,
 				contextParts: {
 					input: 0,
@@ -421,7 +518,22 @@ export class OpencodeSessionManager implements SessionManager {
 		ctx.activeRequestId = requestId;
 		ctx.activeEmitter = emitter;
 		ctx.aborted = false;
+		ctx.planMode = params.permissionMode === "plan";
+		resetPlanCapture(ctx.planCapture);
 		this.ensureSessionPump(client, ctx);
+
+		// opencode pins permission rules at session.create; re-apply every turn so a
+		// mode switch (plan → bypassPermissions on Implement) takes effect on a
+		// reused/resumed session instead of still prompting per tool call.
+		try {
+			await client.session.update({
+				sessionID: ctx.openCodeSessionId,
+				directory,
+				permission: buildPermissionRules(params.permissionMode),
+			});
+		} catch (error) {
+			logger.debug("opencode permission update failed", errorDetails(error));
+		}
 
 		const turnDone = new Promise<void>((resolve, reject) => {
 			ctx!.settle = { resolve, reject };
@@ -432,9 +544,9 @@ export class OpencodeSessionManager implements SessionManager {
 		const effort = params.effortLevel?.trim();
 		if (model && effort) model.variant = effort;
 		if (model) ctx.lastModel = model;
-		// Plan mode runs opencode's read-only `plan` agent; it ends by calling
-		// `plan_exit`, which asks (via the question flow) to switch to `build`.
-		const planAgent = params.permissionMode === "plan" ? "plan" : undefined;
+		// Plan mode runs opencode's read-only `plan` agent; its text is captured at
+		// idle and re-surfaced as a plan-review card (see ctx.planMode below).
+		const planAgent = ctx.planMode ? "plan" : undefined;
 		// `/compact` uses session.summarize (V2 compact is still a 503 stub in
 		// 1.16.x); it BLOCKS until idle and requires providerID/modelID.
 		const isCompact = params.prompt.trim() === "/compact";
@@ -513,6 +625,17 @@ export class OpencodeSessionManager implements SessionManager {
 			emitter.aborted(requestId, "user_requested");
 		} else if (turnError) {
 			emitter.error(requestId, `opencode: ${turnError.message}`);
+		} else if (ctx.planMode) {
+			// Re-surface the captured plan as a plan-review card (lands after the
+			// turn's prose, before `end`) so the Implement / Request-Changes CTA shows.
+			const planText = assemblePlanText(ctx.planCapture);
+			if (planText) {
+				emitter.planCaptured(
+					requestId,
+					`opencode-plan-${planMessageId(ctx.planCapture) ?? requestId}`,
+					planText,
+				);
+			}
 		}
 		// Emit BEFORE `end`: Rust's stream loop breaks on the terminal event.
 		await this.emitContextUsage(ctx, requestId, emitter);
@@ -520,11 +643,18 @@ export class OpencodeSessionManager implements SessionManager {
 	}
 
 	private ensureSessionPump(client: OpencodeClient, ctx: SessionCtx): void {
-		if (ctx.pumpStarted) return;
-		// A stopped session left `ctx.abort` aborted; swap in a fresh one so
-		// the reused turn's pump subscribes with a live signal.
+		// Already pumping on the SAME server → reuse it.
+		if (ctx.pumpStarted && ctx.pumpClient === client) return;
+		// Server respawned → new client; tear down the old pump (dead socket) first.
+		if (ctx.pumpStarted && ctx.pumpClient !== client) {
+			ctx.abort.abort();
+			ctx.pumpStarted = false;
+		}
+		// A stopped/torn-down session left `ctx.abort` aborted; swap in a fresh one
+		// so the reused turn's pump subscribes with a live signal.
 		if (ctx.abort.signal.aborted) ctx.abort = new AbortController();
 		ctx.pumpStarted = true;
+		ctx.pumpClient = client;
 		void this.runSessionPump(client, ctx);
 	}
 
@@ -572,6 +702,10 @@ export class OpencodeSessionManager implements SessionManager {
 	private handleServerExit(): void {
 		for (const ctx of this.sessions.values()) {
 			ctx.settle?.reject(new Error("opencode server exited unexpectedly"));
+			// Tear down the pump bound to the dead server (its SSE may hang, leaving
+			// `pumpStarted` stuck true); the next turn rebinds to the respawned one.
+			ctx.abort.abort();
+			ctx.pumpStarted = false;
 		}
 	}
 
@@ -599,8 +733,11 @@ export class OpencodeSessionManager implements SessionManager {
 		// Track context size for the usage ring (input+output+reasoning+cache).
 		if (event.type === "message.updated") {
 			const info = (
-				event.properties as { info?: OpencodeMessageInfo } | undefined
+				event.properties as
+					| { info?: OpencodeMessageInfo & { id?: string } }
+					| undefined
 			)?.info;
+			if (ctx.planMode) notePlanMessage(ctx.planCapture, info);
 			const t = info?.tokens;
 			if (info?.role === "assistant" && t && (t.output ?? 0) > 0) {
 				ctx.contextParts = {
@@ -635,6 +772,11 @@ export class OpencodeSessionManager implements SessionManager {
 			default:
 				break;
 		}
+
+		// Plan mode: capture the plan text and drop it from the live stream so it
+		// re-surfaces once as a plan-review card (planCaptured at idle) rather than
+		// duplicated as prose. Lifecycle events (session.idle) fall through.
+		if (ctx.planMode && capturePlanPart(ctx.planCapture, event)) return;
 
 		// Verbatim passthrough, namespaced. Skip `session.next.*`: it's the
 		// redundant raw form of the `message.part.*` the accumulator consumes.
