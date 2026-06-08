@@ -39,6 +39,15 @@ pub async fn list_forge_accounts(gitlab_hosts: Vec<String>) -> CmdResult<Vec<For
     run_blocking(move || Ok(accounts::list_forge_accounts(&gitlab_hosts))).await
 }
 
+/// Auth pre-check for create-PR / reopen. Frontend blocks + flips the
+/// Connect CTA only on `loggedOut`.
+#[tauri::command]
+pub async fn check_workspace_forge_auth(
+    workspace_id: String,
+) -> CmdResult<accounts::ForgeAuthState> {
+    run_blocking(move || accounts::workspace_forge_auth_state(&workspace_id)).await
+}
+
 /// One kind per call. Frontend must check `list_inbox_kind_labels`
 /// first — `(Gitlab, Discussions)` errors out (not supported).
 /// `cursor` is opaque; `limit` clamps to [1, 100].

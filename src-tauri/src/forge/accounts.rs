@@ -182,6 +182,43 @@ pub fn workspace_account_profile(workspace_id: &str) -> Result<Option<ForgeAccou
     Ok(Some(backend.fetch_profile(&target.host, login)?))
 }
 
+/// Auth verdict for a workspace's bound forge account. `NotApplicable` =
+/// no provider / no bound login (caller proceeds).
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ForgeAuthState {
+    LoggedIn,
+    LoggedOut,
+    Indeterminate,
+    NotApplicable,
+}
+
+/// One cached `check_auth` for the create-PR / reopen pre-check.
+pub fn workspace_forge_auth_state(workspace_id: &str) -> Result<ForgeAuthState> {
+    let Some(workspace) = crate::models::workspaces::load_workspace_record_by_id(workspace_id)?
+    else {
+        return Ok(ForgeAuthState::NotApplicable);
+    };
+    let login = match workspace.forge_login.as_deref() {
+        Some(value) if !value.trim().is_empty() => value.trim().to_string(),
+        _ => return Ok(ForgeAuthState::NotApplicable),
+    };
+    let Some(target) = forge_target_from(
+        workspace.forge_provider.as_deref(),
+        workspace.remote_url.as_deref(),
+    ) else {
+        return Ok(ForgeAuthState::NotApplicable);
+    };
+    let Some(backend) = backend_for(target.provider) else {
+        return Ok(ForgeAuthState::NotApplicable);
+    };
+    Ok(match backend.check_auth(&target.host, &login) {
+        AuthCheck::LoggedIn => ForgeAuthState::LoggedIn,
+        AuthCheck::LoggedOut => ForgeAuthState::LoggedOut,
+        AuthCheck::Indeterminate => ForgeAuthState::Indeterminate,
+    })
+}
+
 // ---------------- Auto-bind ----------------
 
 /// Resolved forge identity for a repo: provider, host, owner, name. The

@@ -110,12 +110,6 @@ export const helmorQueryKeys = {
 	forgeAccountsAll: ["forgeAccounts"] as const,
 	workspaceAccountProfile: (workspaceId: string) =>
 		["workspaceAccountProfile", workspaceId] as const,
-	/// Lightweight per-host login set probe (no profile fetch). Used as
-	/// the focus-driven auth liveness check: account / repo settings
-	/// surfaces refetch this on window focus, and a delta in the set
-	/// invalidates the heavyweight `forgeAccounts` cache.
-	forgeLogins: (provider: string, host: string) =>
-		["forgeLogins", provider, host] as const,
 	inboxItemDetail: (
 		provider: string,
 		login: string,

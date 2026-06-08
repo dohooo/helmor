@@ -630,6 +630,28 @@ export async function listForgeAccounts(
 	}
 }
 
+/** Auth verdict for a workspace's bound forge account. Action points gate
+ * on `"loggedOut"`; other states proceed. */
+export type ForgeAuthState =
+	| "loggedIn"
+	| "loggedOut"
+	| "indeterminate"
+	| "notApplicable";
+
+export async function checkWorkspaceForgeAuth(
+	workspaceId: string,
+): Promise<ForgeAuthState> {
+	try {
+		return await invoke<ForgeAuthState>("check_workspace_forge_auth", {
+			workspaceId,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to check forge authentication."),
+		);
+	}
+}
+
 /** Spot-fetch the gh/glab account bound to a workspace's parent repo,
  * with display profile (avatar / name / email). Returns null when the
  * repo has no resolvable forge account. Backed by the same per-process

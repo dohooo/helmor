@@ -615,6 +615,7 @@ pub fn run() {
             commands::system_commands::resize_agent_login_terminal,
             commands::forge_commands::get_workspace_forge,
             commands::forge_commands::list_forge_accounts,
+            commands::forge_commands::check_workspace_forge_auth,
             commands::forge_commands::list_inbox_items,
             commands::forge_commands::list_inbox_kind_labels,
             commands::forge_commands::list_forge_labels,

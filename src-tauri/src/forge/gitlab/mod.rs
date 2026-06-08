@@ -87,23 +87,8 @@ pub(super) fn lookup_workspace_mr_action_status(workspace_id: &str) -> Result<Fo
         }
     };
 
-    // Auth probe runs BEFORE the published short-circuit so an
-    // unpublished workspace whose bound login was logged out still
-    // surfaces Connect. Only `LoggedOut` (definitive) flips the CTA;
-    // `Indeterminate` falls through and lets the API call try.
-    if gitlab_login_definitely_logged_out(&context) {
-        tracing::warn!(
-            workspace_id,
-            host = %context.remote.host,
-            login = %context.login,
-            "glab account no longer logged in; reporting unauthenticated"
-        );
-        return Ok(ForgeActionStatus::unauthenticated(format!(
-            "Not connected to GitLab on {}",
-            context.remote.host
-        )));
-    }
-
+    // No auth probe — lazy. Published: API 401 below → `unauthenticated`.
+    // Unpublished: checked only on create-PR.
     if !context.published {
         return Ok(ForgeActionStatus::no_change_request());
     }
@@ -367,16 +352,4 @@ fn ensure_gitlab_cli_ready(context: &GitlabContext, operation: &str) -> Result<(
         );
     }
     Ok(())
-}
-
-/// Routes through `check_auth`; `Indeterminate` and `LoggedIn`
-/// preserve the binding.
-fn gitlab_login_definitely_logged_out(context: &GitlabContext) -> bool {
-    let Some(backend) = crate::forge::accounts::backend_for(crate::forge::ForgeProvider::Gitlab)
-    else {
-        return false;
-    };
-    backend
-        .check_auth(&context.remote.host, &context.login)
-        .is_definitely_logged_out()
 }

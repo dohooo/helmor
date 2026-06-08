@@ -2,9 +2,11 @@ import type { QueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	type ChangeRequestInfo,
+	checkWorkspaceForgeAuth,
 	closeWorkspaceChangeRequest,
 	createSession,
 	type ForgeActionStatus,
+	type ForgeAuthState,
 	type ForgeDetection,
 	hideSession,
 	loadAutoCloseActionKinds,
@@ -124,6 +126,56 @@ function getErrorMessage(error: unknown, fallback: string): string {
 	return error instanceof Error ? error.message : fallback;
 }
 
+/// Flip the inspector to the Connect CTA by marking forge action-status
+/// `unauthenticated`.
+function markWorkspaceForgeUnauthenticated(
+	queryClient: QueryClient,
+	workspaceId: string,
+) {
+	queryClient.setQueryData<ForgeActionStatus | undefined>(
+		helmorQueryKeys.workspaceForgeActionStatus(workspaceId),
+		(prev) => ({
+			changeRequest: prev?.changeRequest ?? null,
+			reviewDecision: prev?.reviewDecision ?? null,
+			mergeable: prev?.mergeable ?? null,
+			mergeStateStatus: prev?.mergeStateStatus ?? null,
+			deployments: prev?.deployments ?? [],
+			checks: prev?.checks ?? [],
+			remoteState: "unauthenticated",
+			message: "Account is not connected",
+		}),
+	);
+}
+
+/// Auth gate for forge action points. Only a definitive `loggedOut`
+/// blocks + flips the CTA; everything else proceeds.
+async function passesForgeAuthPrecheck({
+	workspaceId,
+	queryClient,
+	pushToast,
+	providerName,
+}: {
+	workspaceId: string;
+	queryClient: QueryClient;
+	pushToast?: PushWorkspaceToast;
+	providerName: string;
+}): Promise<boolean> {
+	let verdict: ForgeAuthState;
+	try {
+		verdict = await checkWorkspaceForgeAuth(workspaceId);
+	} catch {
+		return true;
+	}
+	if (verdict !== "loggedOut") return true;
+	markWorkspaceForgeUnauthenticated(queryClient, workspaceId);
+	pushToast?.(
+		`Reconnect your ${providerName} account and try again.`,
+		`${providerName} not connected`,
+		"destructive",
+	);
+	return false;
+}
+
 type CommitLifecycle = {
 	workspaceId: string;
 	trackedSessionId: string | null;
@@ -192,6 +244,7 @@ export function useWorkspaceCommitLifecycle({
 	const currentChangeRequest = changeRequest ?? null;
 	const currentForgeActionStatus = forgeActionStatus ?? null;
 	const changeRequestName = forgeDetection?.labels.changeRequestName ?? "PR";
+	const providerName = forgeDetection?.labels.providerName ?? "Forge";
 
 	// Keep a stable ref so the merge-validation guard in the callback can
 	// read the latest value without adding it to the dependency array.
@@ -242,6 +295,18 @@ export function useWorkspaceCommitLifecycle({
 				mode === "checks-running" ||
 				mode === "merge-blocked";
 			if (isMergeAction || mode === "closed") {
+				// merge / close hit the forge API — gate auth so logout
+				// surfaces Connect, not a raw API error.
+				if (
+					!(await passesForgeAuthPrecheck({
+						workspaceId,
+						queryClient,
+						pushToast,
+						providerName,
+					}))
+				) {
+					return;
+				}
 				// ── Merge pre-validation ─────────────────────────────────
 				if (isMergeAction) {
 					const currentStatus = forgeActionStatusRef.current;
@@ -387,6 +452,23 @@ export function useWorkspaceCommitLifecycle({
 				return;
 			}
 
+			// create-PR / open-PR (reopen) are agent-dispatched forge
+			// mutations — gate auth before spawning, else logout fails
+			// inside the agent. (commit-and-push / fix / resolve-conflicts
+			// are git-only.)
+			if (mode === "create-pr" || mode === "open-pr") {
+				if (
+					!(await passesForgeAuthPrecheck({
+						workspaceId,
+						queryClient,
+						pushToast,
+						providerName,
+					}))
+				) {
+					return;
+				}
+			}
+
 			setCommitLifecycle({
 				workspaceId,
 				trackedSessionId: null,
@@ -473,6 +555,7 @@ export function useWorkspaceCommitLifecycle({
 			onSelectSession,
 			pushToast,
 			changeRequestName,
+			providerName,
 			queryClient,
 			selectedRepoId,
 			selectedWorkspaceTargetBranch,

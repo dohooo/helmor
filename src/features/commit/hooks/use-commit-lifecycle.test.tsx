@@ -13,6 +13,7 @@ import { helmorQueryKeys } from "@/lib/query-client";
 import { useWorkspaceCommitLifecycle } from "./use-commit-lifecycle";
 
 const apiMocks = vi.hoisted(() => ({
+	checkWorkspaceForgeAuth: vi.fn(),
 	closeWorkspaceChangeRequest: vi.fn(),
 	createSession: vi.fn(),
 	hideSession: vi.fn(),
@@ -28,6 +29,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 	return {
 		...actual,
+		checkWorkspaceForgeAuth: apiMocks.checkWorkspaceForgeAuth,
 		closeWorkspaceChangeRequest: apiMocks.closeWorkspaceChangeRequest,
 		createSession: apiMocks.createSession,
 		hideSession: apiMocks.hideSession,
@@ -87,6 +89,8 @@ function getConfirmDialogProps(node: ReactNode): ConfirmDialogProbe {
 
 describe("useWorkspaceCommitLifecycle", () => {
 	beforeEach(() => {
+		apiMocks.checkWorkspaceForgeAuth.mockReset();
+		apiMocks.checkWorkspaceForgeAuth.mockResolvedValue("loggedIn");
 		apiMocks.closeWorkspaceChangeRequest.mockReset();
 		apiMocks.createSession.mockReset();
 		apiMocks.hideSession.mockReset();
@@ -116,6 +120,57 @@ describe("useWorkspaceCommitLifecycle", () => {
 	afterEach(() => {
 		vi.clearAllMocks();
 		vi.restoreAllMocks();
+	});
+
+	// Both forge-mutating agent actions (create + reopen) gate on auth.
+	it.each([
+		"create-pr",
+		"open-pr",
+	] as const)("blocks %s and flips the Connect CTA when the account is logged out", async (mode) => {
+		apiMocks.checkWorkspaceForgeAuth.mockResolvedValue("loggedOut");
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const pushToast = vi.fn();
+		const onSelectSession = vi.fn();
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					getSelectedWorkspaceId: () => "workspace-1",
+					selectedRepoId: "repo-1",
+					selectedWorkspaceTargetBranch: "main",
+					changeRequest: null,
+					forgeActionStatus: EMPTY_FORGE_ACTION_STATUS,
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
+					onSelectSession,
+					pushToast,
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await act(async () => {
+			await result.current.handleInspectorCommitAction(mode);
+		});
+
+		expect(apiMocks.checkWorkspaceForgeAuth).toHaveBeenCalledWith(
+			"workspace-1",
+		);
+		// Logged out → never spawns the agent session.
+		expect(apiMocks.createSession).not.toHaveBeenCalled();
+		expect(onSelectSession).not.toHaveBeenCalled();
+		expect(pushToast).toHaveBeenCalled();
+		// CTA flips: forge action status is marked unauthenticated.
+		expect(
+			queryClient.getQueryData<ForgeActionStatus>(
+				helmorQueryKeys.workspaceForgeActionStatus("workspace-1"),
+			)?.remoteState,
+		).toBe("unauthenticated");
 	});
 
 	it("verifies and auto-closes an action session once it has completed", async () => {

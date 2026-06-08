@@ -9,11 +9,9 @@
 //! - Multi-account: every API call routes through
 //!   `accounts::run_cli_with_login`, which sets `GH_TOKEN` per-spawn so
 //!   we never mutate gh's "active account" pointer.
-//! - Logout detection: the action-status path runs a `list_logins`
-//!   probe BEFORE the published-branch short-circuit, mirroring the
-//!   GitLab pre-flight. That way an unpublished workspace whose bound
-//!   account has been logged out still surfaces the inspector
-//!   "Connect" CTA — instead of getting stuck at `no_change_request`.
+//! - Logout detection is lazy: no background `gh auth status` probe.
+//!   Published workspaces surface "Connect" via the API call's 401
+//!   (`GraphqlOutcome::Auth`); unpublished ones only on create-PR.
 
 use anyhow::{bail, Context, Result};
 
@@ -33,7 +31,7 @@ mod types;
 use self::actions::{
     build_check_insert_text, query_check_run_detail, query_workspace_pr_action_status,
 };
-use self::context::{load_github_context, GithubContext, GithubResolution, HostAuthCheck};
+use self::context::{load_github_context, GithubContext, GithubResolution};
 use self::pull_request::{
     close_pull_request, fetch_open_pr_node_id, find_workspace_pr, merge_pull_request,
 };
@@ -49,7 +47,7 @@ use self::pull_request::{
 ///   - `Err(_)` only for unexpected transport / parse failures (so the
 ///     caller can surface a distinct "something went wrong" state).
 pub fn lookup_workspace_pr(workspace_id: &str) -> Result<Option<ChangeRequestInfo>> {
-    let context = match load_github_context(workspace_id, HostAuthCheck::Skip)? {
+    let context = match load_github_context(workspace_id)? {
         GithubResolution::Ready(ctx) if ctx.has_remote_tracking => ctx,
         // Anything else short-circuits to "no PR linked":
         //   - Initializing / unavailable / unauthenticated / no
@@ -70,7 +68,7 @@ pub fn lookup_workspace_pr(workspace_id: &str) -> Result<Option<ChangeRequestInf
 /// keeps the local Git rows usable even when remote status cannot be
 /// queried.
 pub fn lookup_workspace_pr_action_status(workspace_id: &str) -> Result<ForgeActionStatus> {
-    let resolution = load_github_context(workspace_id, HostAuthCheck::Probe)?;
+    let resolution = load_github_context(workspace_id)?;
     let context = match resolution {
         GithubResolution::Ready(ctx) => ctx,
         GithubResolution::Initializing => {
@@ -97,7 +95,7 @@ pub fn lookup_workspace_pr_action_status(workspace_id: &str) -> Result<ForgeActi
 }
 
 pub fn lookup_workspace_pr_check_insert_text(workspace_id: &str, item_id: &str) -> Result<String> {
-    let resolution = load_github_context(workspace_id, HostAuthCheck::Probe)?;
+    let resolution = load_github_context(workspace_id)?;
     let context = match resolution {
         GithubResolution::Ready(ctx) if ctx.has_remote_tracking => ctx,
         GithubResolution::Ready(_) | GithubResolution::Initializing => {
@@ -183,7 +181,7 @@ pub fn close_workspace_pr(workspace_id: &str) -> Result<Option<ChangeRequestInfo
 /// call wrapping these has already returned a PR, which means a token
 /// just worked.
 fn mutation_context(workspace_id: &str) -> Result<Option<GithubContext>> {
-    match load_github_context(workspace_id, HostAuthCheck::Skip)? {
+    match load_github_context(workspace_id)? {
         GithubResolution::Ready(ctx) if ctx.has_remote_tracking => Ok(Some(ctx)),
         _ => Ok(None),
     }
