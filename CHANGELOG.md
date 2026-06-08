@@ -7,6 +7,8 @@
 - [#738](https://github.com/dohooo/helmor/pull/738) [`e50a005`](https://github.com/dohooo/helmor/commit/e50a005cd54bbc115c1e99c922fef6e7fa60a98a) Thanks [@natllian](https://github.com/natllian)! - Improve the Cursor agent:
   - Add Plan mode for Cursor — it drafts a read-only plan first and shows a plan-review card you can approve with "Implement" or send back with "Request changes", matching Claude.
   - Fix Cursor dropping image attachments, so it can now see images you paste or attach to a message.
+  - 
+- [#739](https://github.com/dohooo/helmor/pull/739) [`6cea31b`](https://github.com/dohooo/helmor/commit/6cea31b094c3363879c3efdde66fdff8ea69f7f0) Thanks [@JRBusiness](https://github.com/JRBusiness)! - Add Windows (x64) support, so Helmor now installs and runs on Windows with its agents, terminals, and bundled CLIs.
 
 ### Patch Changes
 
