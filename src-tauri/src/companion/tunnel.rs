@@ -169,8 +169,10 @@ pub fn sign_in_cloudflare() -> Result<()> {
 /// `~/.cloudflared/<uuid>.json`.
 pub fn create_named_tunnel(name: &str) -> Result<(String, String)> {
     let bin = resolve_cloudflared();
-    let output = Command::new(&bin)
-        .args(["tunnel", "create", name])
+    let mut command = Command::new(&bin);
+    command.args(["tunnel", "create", name]);
+    crate::platform::process::configure_background_cli(&mut command);
+    let output = command
         .output()
         .with_context(|| format!("failed to run cloudflared ({})", bin.display()))?;
     let combined = format!(
@@ -194,9 +196,10 @@ pub fn create_named_tunnel(name: &str) -> Result<(String, String)> {
 /// Delete a named tunnel. Best-effort: a missing tunnel is treated as success.
 pub fn delete_named_tunnel(tunnel_uuid: &str) -> Result<()> {
     let bin = resolve_cloudflared();
-    let _ = Command::new(&bin)
-        .args(["tunnel", "delete", tunnel_uuid])
-        .output();
+    let mut command = Command::new(&bin);
+    command.args(["tunnel", "delete", tunnel_uuid]);
+    crate::platform::process::configure_background_cli(&mut command);
+    let _ = command.output();
     Ok(())
 }
 

@@ -89,6 +89,7 @@ where
     if let Some(current_dir) = current_dir {
         command.current_dir(current_dir);
     }
+    crate::platform::process::configure_background_cli(&mut command);
 
     let output = command.output().context("Failed to run git")?;
     handle_git_output(output)
@@ -115,6 +116,7 @@ where
     if let Some(current_dir) = current_dir {
         command.current_dir(current_dir);
     }
+    crate::platform::process::configure_background_cli(&mut command);
 
     let output = command.output().context("Failed to run git")?;
     handle_git_output_raw(output)
@@ -1403,8 +1405,10 @@ pub fn stash_push_include_untracked(workspace_dir: &Path, message: &str) -> Resu
 /// entry intact (git's default), so the caller / agent can retry.
 pub fn stash_pop(workspace_dir: &Path) -> Result<StashPopOutcome> {
     let workspace_dir_arg = workspace_dir.display().to_string();
-    let output = Command::new("git")
-        .args(["-C", workspace_dir_arg.as_str(), "stash", "pop"])
+    let mut command = Command::new("git");
+    command.args(["-C", workspace_dir_arg.as_str(), "stash", "pop"]);
+    crate::platform::process::configure_background_cli(&mut command);
+    let output = command
         .output()
         .with_context(|| format!("Failed to git stash pop in {}", workspace_dir.display()))?;
     if output.status.success() {
