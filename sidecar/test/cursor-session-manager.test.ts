@@ -1,11 +1,89 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { __CURSOR_INTERNAL } from "../src/cursor-session-manager.js";
 import type { CursorModelParameter } from "../src/session-manager.js";
 
-const { computeModelParameterValues, modelInfoToProviderInfo } =
-	__CURSOR_INTERNAL;
+const {
+	computeModelParameterValues,
+	modelInfoToProviderInfo,
+	buildCursorMessage,
+	extToMimeType,
+	toCursorMode,
+	extractCreatePlanText,
+} = __CURSOR_INTERNAL;
+
+describe("plan mode", () => {
+	test("toCursorMode: only 'plan' maps to plan; everything else → agent", () => {
+		expect(toCursorMode("plan")).toBe("plan");
+		expect(toCursorMode("default")).toBe("agent");
+		expect(toCursorMode("bypassPermissions")).toBe("agent");
+		expect(toCursorMode("acceptEdits")).toBe("agent");
+		expect(toCursorMode(undefined)).toBe("agent");
+		expect(toCursorMode("")).toBe("agent");
+	});
+
+	test("extractCreatePlanText: reads args.plan, null when blank/missing", () => {
+		expect(extractCreatePlanText({ args: { plan: "## Plan\n- step 1" } })).toBe(
+			"## Plan\n- step 1",
+		);
+		expect(extractCreatePlanText({ args: { plan: "   " } })).toBeNull();
+		expect(extractCreatePlanText({ args: {} })).toBeNull();
+		expect(extractCreatePlanText({})).toBeNull();
+		expect(extractCreatePlanText({ args: { plan: 42 } })).toBeNull();
+	});
+});
+
+// 1x1 transparent PNG.
+const PNG_1X1 = Buffer.from(
+	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+	"base64",
+);
+
+describe("buildCursorMessage — image attachments", () => {
+	test("no images → returns plain string (cheapest path)", async () => {
+		const msg = await buildCursorMessage("hello world", []);
+		expect(msg).toBe("hello world");
+	});
+
+	test("image path → SDKUserMessage with base64 data + mimeType", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "cursor-img-test-"));
+		try {
+			const imgPath = join(dir, "shot.png");
+			writeFileSync(imgPath, PNG_1X1);
+			const msg = await buildCursorMessage("look at this", [imgPath]);
+			expect(typeof msg).toBe("object");
+			if (typeof msg === "string") throw new Error("expected SDKUserMessage");
+			expect(msg.text).toBe("look at this");
+			expect(msg.images).toHaveLength(1);
+			const img = msg.images?.[0];
+			if (!img || !("data" in img)) throw new Error("expected base64 image");
+			expect(img.mimeType).toBe("image/png");
+			expect(img.data).toBe(PNG_1X1.toString("base64"));
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("unreadable image → degrades to text note, turn still sent", async () => {
+		const msg = await buildCursorMessage("see attached", [
+			"/nope/does-not-exist.png",
+		]);
+		expect(typeof msg).toBe("string");
+		expect(msg).toContain("see attached");
+		expect(msg).toContain("[Image not found:");
+	});
+
+	test("extToMimeType maps known extensions, defaults to png", () => {
+		expect(extToMimeType("a.jpg")).toBe("image/jpeg");
+		expect(extToMimeType("a.JPEG")).toBe("image/jpeg");
+		expect(extToMimeType("a.png")).toBe("image/png");
+		expect(extToMimeType("a.gif")).toBe("image/gif");
+		expect(extToMimeType("a.webp")).toBe("image/webp");
+		expect(extToMimeType("a.bmp")).toBe("image/png");
+	});
+});
 
 // Real `Cursor.models.list` snapshot — pin behavior against actual
 // upstream parameter shapes so future API drift surfaces here.

@@ -13,6 +13,7 @@ import { helmorQueryKeys } from "@/lib/query-client";
 import { useWorkspaceCommitLifecycle } from "./use-commit-lifecycle";
 
 const apiMocks = vi.hoisted(() => ({
+	checkWorkspaceForgeAuth: vi.fn(),
 	closeWorkspaceChangeRequest: vi.fn(),
 	createSession: vi.fn(),
 	hideSession: vi.fn(),
@@ -21,6 +22,7 @@ const apiMocks = vi.hoisted(() => ({
 	refreshWorkspaceChangeRequest: vi.fn(),
 	mergeWorkspaceChangeRequest: vi.fn(),
 	pushWorkspaceToRemote: vi.fn(),
+	stopAgentStream: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -28,6 +30,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 	return {
 		...actual,
+		checkWorkspaceForgeAuth: apiMocks.checkWorkspaceForgeAuth,
 		closeWorkspaceChangeRequest: apiMocks.closeWorkspaceChangeRequest,
 		createSession: apiMocks.createSession,
 		hideSession: apiMocks.hideSession,
@@ -36,6 +39,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		refreshWorkspaceChangeRequest: apiMocks.refreshWorkspaceChangeRequest,
 		mergeWorkspaceChangeRequest: apiMocks.mergeWorkspaceChangeRequest,
 		pushWorkspaceToRemote: apiMocks.pushWorkspaceToRemote,
+		stopAgentStream: apiMocks.stopAgentStream,
 	};
 });
 
@@ -87,6 +91,8 @@ function getConfirmDialogProps(node: ReactNode): ConfirmDialogProbe {
 
 describe("useWorkspaceCommitLifecycle", () => {
 	beforeEach(() => {
+		apiMocks.checkWorkspaceForgeAuth.mockReset();
+		apiMocks.checkWorkspaceForgeAuth.mockResolvedValue("loggedIn");
 		apiMocks.closeWorkspaceChangeRequest.mockReset();
 		apiMocks.createSession.mockReset();
 		apiMocks.hideSession.mockReset();
@@ -95,6 +101,8 @@ describe("useWorkspaceCommitLifecycle", () => {
 		apiMocks.refreshWorkspaceChangeRequest.mockReset();
 		apiMocks.mergeWorkspaceChangeRequest.mockReset();
 		apiMocks.pushWorkspaceToRemote.mockReset();
+		apiMocks.stopAgentStream.mockReset();
+		apiMocks.stopAgentStream.mockResolvedValue(undefined);
 
 		apiMocks.createSession.mockResolvedValue({ sessionId: "session-action" });
 		apiMocks.loadRepoPreferences.mockResolvedValue({});
@@ -116,6 +124,60 @@ describe("useWorkspaceCommitLifecycle", () => {
 	afterEach(() => {
 		vi.clearAllMocks();
 		vi.restoreAllMocks();
+	});
+
+	// Both forge-mutating agent actions (create + reopen) dispatch
+	// immediately, then abort in the background if the account is logged out.
+	it.each([
+		"create-pr",
+		"open-pr",
+	] as const)("dispatches %s immediately, then aborts the turn when logged out", async (mode) => {
+		apiMocks.checkWorkspaceForgeAuth.mockResolvedValue("loggedOut");
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const pushToast = vi.fn();
+		const onSelectSession = vi.fn();
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					getSelectedWorkspaceId: () => "workspace-1",
+					selectedRepoId: "repo-1",
+					selectedWorkspaceTargetBranch: "main",
+					changeRequest: null,
+					forgeActionStatus: EMPTY_FORGE_ACTION_STATUS,
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
+					onSelectSession,
+					pushToast,
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await act(async () => {
+			await result.current.handleInspectorCommitAction(mode);
+		});
+
+		// Dispatched with zero delay — session created + selected up front.
+		expect(apiMocks.createSession).toHaveBeenCalled();
+		expect(onSelectSession).toHaveBeenCalledWith("session-action");
+		expect(apiMocks.checkWorkspaceForgeAuth).toHaveBeenCalledWith(
+			"workspace-1",
+		);
+
+		// Background guard aborts the just-started turn but KEEPS the session
+		// (no hide, stays selected).
+		await waitFor(() => {
+			expect(apiMocks.stopAgentStream).toHaveBeenCalledWith("session-action");
+		});
+		expect(apiMocks.hideSession).not.toHaveBeenCalled();
+		expect(onSelectSession).not.toHaveBeenCalledWith(null);
+		expect(pushToast).toHaveBeenCalled();
 	});
 
 	it("verifies and auto-closes an action session once it has completed", async () => {

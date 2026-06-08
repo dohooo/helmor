@@ -196,14 +196,9 @@ export type AgentModelSection = {
 	options: AgentModelOption[];
 };
 
-/** Wire strings the sidecars accept for permission mode. The composer's
- *  permission-mode dropdown reads {@link ProviderCapabilities.permissionModes}
- *  to decide which entries to render — every provider supports `default`. */
-export type PermissionModeLiteral =
-	| "default"
-	| "acceptEdits"
-	| "plan"
-	| "bypassPermissions";
+/** Wire strings the sidecars accept for permission mode. Helmor models
+ *  permission as a binary: `plan` (read-only) or full access. */
+export type PermissionModeLiteral = "plan" | "bypassPermissions";
 
 /** Static capability table for a single provider. Mirrors the Rust
  *  `agents::provider_capabilities::ProviderCapabilities` shape so a
@@ -218,7 +213,6 @@ export type ProviderCapabilities = {
 	supportsSteer: boolean;
 	supportsSlashCommands: boolean;
 	requiresApiKey: boolean;
-	permissionModes: PermissionModeLiteral[];
 };
 
 export type AgentSendRequest = {
@@ -626,6 +620,28 @@ export async function listForgeAccounts(
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to list forge accounts."),
+		);
+	}
+}
+
+/** Auth verdict for a workspace's bound forge account. Action points gate
+ * on `"loggedOut"`; other states proceed. */
+export type ForgeAuthState =
+	| "loggedIn"
+	| "loggedOut"
+	| "indeterminate"
+	| "notApplicable";
+
+export async function checkWorkspaceForgeAuth(
+	workspaceId: string,
+): Promise<ForgeAuthState> {
+	try {
+		return await invoke<ForgeAuthState>("check_workspace_forge_auth", {
+			workspaceId,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to check forge authentication."),
 		);
 	}
 }
@@ -1111,7 +1127,6 @@ export const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities[] = [
 		supportsSteer: true,
 		supportsSlashCommands: true,
 		requiresApiKey: false,
-		permissionModes: ["default", "acceptEdits", "plan", "bypassPermissions"],
 	},
 	{
 		provider: "codex",
@@ -1122,18 +1137,16 @@ export const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities[] = [
 		supportsSteer: true,
 		supportsSlashCommands: true,
 		requiresApiKey: false,
-		permissionModes: ["default", "bypassPermissions"],
 	},
 	{
 		provider: "cursor",
 		displayName: "Cursor",
-		supportsPlanMode: false,
+		supportsPlanMode: true,
 		supportsActiveGoal: false,
 		supportsContextUsage: false,
 		supportsSteer: false,
 		supportsSlashCommands: true,
 		requiresApiKey: true,
-		permissionModes: ["default"],
 	},
 	{
 		provider: "opencode",
@@ -1144,7 +1157,6 @@ export const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities[] = [
 		supportsSteer: true,
 		supportsSlashCommands: true,
 		requiresApiKey: false,
-		permissionModes: ["default", "acceptEdits", "plan", "bypassPermissions"],
 	},
 ];
 

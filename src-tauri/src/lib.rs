@@ -19,6 +19,7 @@ pub mod maintenance;
 pub mod mcp;
 pub mod models;
 pub mod pipeline;
+pub(crate) mod platform;
 pub mod rate_limits;
 pub mod schema;
 pub mod service;
@@ -614,6 +615,7 @@ pub fn run() {
             commands::system_commands::resize_agent_login_terminal,
             commands::forge_commands::get_workspace_forge,
             commands::forge_commands::list_forge_accounts,
+            commands::forge_commands::check_workspace_forge_auth,
             commands::forge_commands::list_inbox_items,
             commands::forge_commands::list_inbox_kind_labels,
             commands::forge_commands::list_forge_labels,
@@ -880,8 +882,11 @@ fn emit_quit_requested(app_handle: &tauri::AppHandle) {
     }
 }
 
+#[cfg(target_os = "macos")]
 const HELMOR_QUIT_MENU_ID: &str = "helmor-quit";
+#[cfg(target_os = "macos")]
 const HELMOR_CLOSE_CURRENT_SESSION_MENU_ID: &str = "helmor-close-current-session";
+#[cfg(target_os = "macos")]
 const HELMOR_ALWAYS_ON_TOP_MENU_ID: &str = "helmor-always-on-top";
 
 #[cfg(target_os = "macos")]
@@ -969,6 +974,7 @@ fn install_macos_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn emit_close_current_session_requested(app_handle: &tauri::AppHandle) {
     if let Err(e) = app_handle.emit("helmor://close-current-session", ()) {
         tracing::warn!(error = %e, "Failed to emit close-current-session event");

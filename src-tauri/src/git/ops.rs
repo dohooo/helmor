@@ -89,6 +89,7 @@ where
     if let Some(current_dir) = current_dir {
         command.current_dir(current_dir);
     }
+    crate::platform::process::configure_background_cli(&mut command);
 
     let output = command.output().context("Failed to run git")?;
     handle_git_output(output)
@@ -115,6 +116,7 @@ where
     if let Some(current_dir) = current_dir {
         command.current_dir(current_dir);
     }
+    crate::platform::process::configure_background_cli(&mut command);
 
     let output = command.output().context("Failed to run git")?;
     handle_git_output_raw(output)
@@ -127,9 +129,8 @@ where
 /// thread forever, eventually saturating Tokio's blocking pool and freezing
 /// the entire app.
 ///
-/// On timeout the child is killed via `SIGKILL` (Unix) — matching the
-/// existing pattern in `sidecar.rs::send_sigterm` — and a "git command
-/// timed out" error is returned to the caller.
+/// On timeout the child tree is killed and a "git command timed out" error is
+/// returned to the caller.
 pub fn run_git_with_timeout<I, S>(
     args: I,
     current_dir: Option<&Path>,
@@ -171,8 +172,7 @@ where
     );
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
-    use std::os::unix::process::CommandExt;
-    command.process_group(0);
+    crate::platform::process::configure_tree_root(&mut command);
 
     let child = command.spawn().context("Failed to spawn git")?;
     let child_pid = child.id();
@@ -202,18 +202,12 @@ where
             Err(anyhow::Error::from(io_err).context("Failed to wait for git"))
         }
         Err(mpsc::RecvTimeoutError::Timeout) => {
-            // Kill the child's entire process group so the waiter thread
+            // Kill the child's entire process tree so the waiter thread
             // observes the death and exits — otherwise we'd leak the OS
-            // thread until git decided to give up on its own. Using the
-            // negative PGID (== child PID because we set process_group(0)
-            // at spawn) ensures child processes like ssh are also killed.
-            //
-            // SAFETY: `child_pid` == PGID (we set process_group(0) at
-            // spawn). Negative PID targets the whole group. If the group
-            // has already exited, `libc::kill` returns ESRCH harmlessly.
-            unsafe {
-                libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
-            }
+            // thread until git decided to give up on its own.
+            crate::platform::process::kill_tree(
+                crate::platform::process::ProcessTree::from_child_pid(child_pid),
+            );
             let _ = waiter.join();
             bail!(
                 "git command timed out after {timeout:?} (likely a stalled remote or credential prompt)"
@@ -1411,8 +1405,10 @@ pub fn stash_push_include_untracked(workspace_dir: &Path, message: &str) -> Resu
 /// entry intact (git's default), so the caller / agent can retry.
 pub fn stash_pop(workspace_dir: &Path) -> Result<StashPopOutcome> {
     let workspace_dir_arg = workspace_dir.display().to_string();
-    let output = Command::new("git")
-        .args(["-C", workspace_dir_arg.as_str(), "stash", "pop"])
+    let mut command = Command::new("git");
+    command.args(["-C", workspace_dir_arg.as_str(), "stash", "pop"]);
+    crate::platform::process::configure_background_cli(&mut command);
+    let output = command
         .output()
         .with_context(|| format!("Failed to git stash pop in {}", workspace_dir.display()))?;
     if output.status.success() {

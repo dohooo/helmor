@@ -15,7 +15,6 @@ const claudeCaps: ProviderCapabilities = {
 	supportsSteer: true,
 	supportsSlashCommands: true,
 	requiresApiKey: false,
-	permissionModes: ["default", "acceptEdits", "plan", "bypassPermissions"],
 };
 
 const codexCaps: ProviderCapabilities = {
@@ -27,19 +26,17 @@ const codexCaps: ProviderCapabilities = {
 	supportsSteer: true,
 	supportsSlashCommands: true,
 	requiresApiKey: false,
-	permissionModes: ["default", "bypassPermissions"],
 };
 
 const cursorCaps: ProviderCapabilities = {
 	provider: "cursor",
 	displayName: "Cursor",
-	supportsPlanMode: false,
+	supportsPlanMode: true,
 	supportsActiveGoal: false,
 	supportsContextUsage: false,
 	supportsSteer: false,
 	supportsSlashCommands: true,
 	requiresApiKey: true,
-	permissionModes: ["default"],
 };
 
 const table: ProviderCapabilities[] = [claudeCaps, codexCaps, cursorCaps];
@@ -136,7 +133,6 @@ describe("DEFAULT_PROVIDER_CAPABILITIES (cold-start initialData)", () => {
 			"codex",
 		);
 		expect(codex?.displayName).toBe("Codex");
-		expect(codex?.permissionModes).toEqual(["default", "bypassPermissions"]);
 		const cursor = findProviderCapabilities(
 			DEFAULT_PROVIDER_CAPABILITIES,
 			"cursor",

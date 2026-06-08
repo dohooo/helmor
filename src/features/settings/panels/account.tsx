@@ -8,59 +8,14 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
-import type {
-	ForgeAccount,
-	ForgeProvider,
-	RepositoryCreateOption,
-} from "@/lib/api";
+import type { ForgeAccount } from "@/lib/api";
 import { initialsFor } from "@/lib/initials";
 import { useForgeAccountsAll } from "@/lib/use-forge-accounts";
-import { useForgeLoginsHealth } from "@/lib/use-forge-logins-health";
 import { SettingsGroup } from "../components/settings-row";
-import { gitlabHostsForRepositories } from "./cli-install-gitlab-hosts";
 
 const GITHUB_DEFAULT_HOST = "github.com";
-const GITLAB_DEFAULT_HOST = "gitlab.com";
 
-/// Health probe targets — one per (provider, host) we want to keep
-/// fresh on focus. Always probes GitHub + gitlab.com plus any
-/// self-hosted GitLab hosts known from the repo list, plus any host
-/// we already have an account on (covers stale accounts after the
-/// user removes the source repo).
-function buildHealthTargets(
-	gitlabHosts: string[],
-	accounts: ForgeAccount[],
-): Array<{ provider: ForgeProvider; host: string }> {
-	const seen = new Map<string, { provider: ForgeProvider; host: string }>();
-	seen.set(`github::${GITHUB_DEFAULT_HOST}`, {
-		provider: "github",
-		host: GITHUB_DEFAULT_HOST,
-	});
-	const orderedGitlab = [
-		GITLAB_DEFAULT_HOST,
-		...gitlabHosts.filter((h) => h !== GITLAB_DEFAULT_HOST),
-	];
-	for (const host of orderedGitlab) {
-		seen.set(`gitlab::${host}`, { provider: "gitlab", host });
-	}
-	for (const account of accounts) {
-		const key = `${account.provider}::${account.host}`;
-		if (!seen.has(key)) {
-			seen.set(key, { provider: account.provider, host: account.host });
-		}
-	}
-	return [...seen.values()];
-}
-
-export function AccountPanel({
-	repositories,
-}: {
-	repositories: RepositoryCreateOption[];
-}) {
-	const gitlabHosts = useMemo(
-		() => gitlabHostsForRepositories(repositories),
-		[repositories],
-	);
+export function AccountPanel() {
 	// Shared cache key with onboarding + repo settings — see
 	// `useForgeAccountsAll` for why this matters (one cache entry,
 	// not three).
@@ -78,23 +33,11 @@ export function AccountPanel({
 		});
 	}, [accounts]);
 
-	const healthTargets = useMemo(
-		() => buildHealthTargets(gitlabHosts, accounts),
-		[gitlabHosts, accounts],
-	);
-
 	const errorMessage =
 		accountsQuery.error instanceof Error ? accountsQuery.error.message : null;
 
 	return (
 		<TooltipProvider delayDuration={150}>
-			{healthTargets.map((target) => (
-				<HealthProbe
-					key={`${target.provider}::${target.host}`}
-					provider={target.provider}
-					host={target.host}
-				/>
-			))}
 			{errorMessage ? (
 				<div className="flex justify-end pt-3">
 					<Tooltip>
@@ -137,20 +80,6 @@ export function AccountPanel({
 			</SettingsGroup>
 		</TooltipProvider>
 	);
-}
-
-/// Tiny per-target wrapper around `useForgeLoginsHealth`. The hook
-/// itself does the focus-driven auth liveness check + cache
-/// invalidation; we just need one instance per unique (provider, host).
-function HealthProbe({
-	provider,
-	host,
-}: {
-	provider: ForgeProvider;
-	host: string;
-}) {
-	useForgeLoginsHealth(provider, host);
-	return null;
 }
 
 function AccountRow({ account }: { account: ForgeAccount }) {

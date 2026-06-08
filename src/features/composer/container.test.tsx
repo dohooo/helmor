@@ -1159,7 +1159,6 @@ describe("WorkspaceComposerContainer", () => {
 						supportsSteer: true,
 						supportsSlashCommands: true,
 						requiresApiKey: false,
-						permissionModes: ["default", "bypassPermissions"],
 					},
 				]);
 			}

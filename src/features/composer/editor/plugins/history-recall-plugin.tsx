@@ -223,6 +223,9 @@ export function HistoryRecallPlugin({ getHistory, scopeKey }: Props) {
 			editor.update(
 				() => {
 					$setEditorContent("", [], [], []);
+					// Re-place the caret — rebuilding the root drops the selection,
+					// which leaves the composer with no visible cursor.
+					$getRoot().selectEnd();
 				},
 				{ tag: HISTORY_RECALL_RESTORE_TAG },
 			);

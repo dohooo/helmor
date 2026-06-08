@@ -2,6 +2,14 @@
 	"_readme": "AUTO-GENERATED from .announcements during `bun run release:version`. Each item is one released version's in-app announcement. Do not edit released entries by hand.",
 	"items": [
 		{
+			"releaseVersion": "0.33.0",
+			"items": [
+				{
+					"text": "Cursor now supports Plan mode — it drafts a read-only plan first, then lets you approve it or request changes before it touches your code."
+				}
+			]
+		},
+		{
 			"releaseVersion": "0.32.0",
 			"items": [
 				{

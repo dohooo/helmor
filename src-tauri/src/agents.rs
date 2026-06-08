@@ -903,7 +903,7 @@ mod tests {
         let db_path = setup_test_db(dir.path());
         let conn = rusqlite::Connection::open(&db_path).unwrap();
         conn.execute(
-            "INSERT INTO sessions (id, workspace_id, status, effort_level, permission_mode) VALUES ('s1', 'w1', 'idle', 'high', 'acceptEdits')",
+            "INSERT INTO sessions (id, workspace_id, status, effort_level, permission_mode) VALUES ('s1', 'w1', 'idle', 'high', 'bypassPermissions')",
             [],
         ).unwrap();
 
@@ -921,7 +921,7 @@ mod tests {
             "opus",
             "Reply",
             None, // effort_level = None → should keep 'high'
-            None, // permission_mode = None → should keep 'acceptEdits'
+            None, // permission_mode = None → should keep 'bypassPermissions'
             &AgentUsage {
                 input_tokens: None,
                 output_tokens: None,
@@ -945,7 +945,7 @@ mod tests {
             "effort_level should be preserved when None passed"
         );
         assert_eq!(
-            perm, "acceptEdits",
+            perm, "bypassPermissions",
             "permission_mode should be preserved when None passed"
         );
 

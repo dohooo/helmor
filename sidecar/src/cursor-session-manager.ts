@@ -2,6 +2,7 @@
  * stream events forwarded with `type` namespaced as `cursor/<original>`
  * so Rust dispatch doesn't collide with claude/codex event types. */
 
+import { basename, extname } from "node:path";
 import {
 	Agent,
 	Cursor,
@@ -9,10 +10,15 @@ import {
 	type ModelParameterValue,
 	type Run,
 	type SDKAgent,
+	type SDKImage,
 	type SDKMessage,
+	type SDKUserMessage,
 } from "@cursor/sdk";
+import { ActiveTurnRegistry } from "./active-turn-registry.js";
 import { scanCursorSkills } from "./cursor-skill-scanner.js";
 import type { SidecarEmitter } from "./emitter.js";
+import { readImageWithResize } from "./image-resize.js";
+import { parseImageRefs } from "./images.js";
 import { errorDetails, logger } from "./logger.js";
 import { listProviderModels } from "./model-catalog.js";
 import type {
@@ -40,11 +46,11 @@ interface LiveSession {
 	modelId: string;
 	currentRun: Run | null;
 	currentRequestId: string | null;
-	aborted: boolean;
 }
 
 export class CursorSessionManager implements SessionManager {
 	private readonly sessions = new Map<string, LiveSession>();
+	private readonly turns = new ActiveTurnRegistry();
 	/// Per-wire-id parameters[] cache. Populated by listModels(), read
 	/// by sendMessage() to build ModelParameterValue[].
 	private readonly modelParameters = new Map<
@@ -66,11 +72,8 @@ export class CursorSessionManager implements SessionManager {
 		this.apiKeyHostManaged = true;
 		// Drop existing sessions — they were minted with the old key.
 		// In-flight cursor turns abort; claude/codex unaffected.
-		for (const [, session] of this.sessions) {
-			session.aborted = true;
-			void session.currentRun?.cancel().catch(() => {
-				/* ignored — session may have already finished */
-			});
+		for (const [sessionId, session] of this.sessions) {
+			this.turns.requestStop(sessionId);
 			try {
 				session.agent.close();
 			} catch {
@@ -114,6 +117,16 @@ export class CursorSessionManager implements SessionManager {
 			return;
 		}
 
+		// Register the turn before any startup await so a Stop pressed during
+		// Agent.create / agent.send aborts instantly. Teardown reads the run
+		// lazily — it's null until agent.send resolves.
+		this.turns.begin(params.sessionId, requestId, emitter, () => {
+			void this.sessions
+				.get(params.sessionId)
+				?.currentRun?.cancel()
+				.catch(() => {});
+		});
+
 		const modelId = params.model ?? "composer-2";
 		const cwd = params.cwd ?? process.cwd();
 
@@ -126,13 +139,13 @@ export class CursorSessionManager implements SessionManager {
 							apiKey,
 							model: { id: modelId },
 							local: { cwd },
+							mode: toCursorMode(params.permissionMode),
 						});
 				session = {
 					agent,
 					modelId,
 					currentRun: null,
 					currentRequestId: null,
-					aborted: false,
 				};
 				this.sessions.set(params.sessionId, session);
 				// Synthetic event — Rust persists agentId as provider_session_id.
@@ -152,6 +165,13 @@ export class CursorSessionManager implements SessionManager {
 			}
 		}
 
+		// Stop pressed during Agent.create — `requestStop` already emitted
+		// `aborted`. Keep the freshly-minted agent for reuse; just bail.
+		if (this.turns.isAbortRequested(params.sessionId)) {
+			this.turns.end(params.sessionId);
+			return;
+		}
+
 		// Use this turn's modelId, not the agent's create-time pick —
 		// composer can switch models mid-conversation. `thinking` is
 		// auto-enabled inside buildSendModelParams when present.
@@ -162,9 +182,18 @@ export class CursorSessionManager implements SessionManager {
 			params.fastMode,
 			apiKey,
 		);
+		// Lift `@<path>` image markers out of the prompt and materialize
+		// them as base64 attachments. Local agents only accept the
+		// `{ data, mimeType }` SDKImage variant (`url` throws).
+		const { text, imagePaths } = parseImageRefs(params.prompt, params.images);
+		const message = await buildCursorMessage(text, imagePaths);
 		let run: Run;
 		try {
-			run = await session.agent.send(params.prompt, {
+			run = await session.agent.send(message, {
+				// Pass mode every turn — Cursor sticks with the create-time
+				// mode otherwise, so toggling Plan on/off mid-conversation
+				// (incl. "Implement" → back to agent) wouldn't take effect.
+				mode: toCursorMode(params.permissionMode),
 				model: {
 					id: modelId,
 					...(modelParams.length > 0 ? { params: modelParams } : {}),
@@ -181,21 +210,51 @@ export class CursorSessionManager implements SessionManager {
 		}
 		session.currentRun = run;
 		session.currentRequestId = requestId;
-		session.aborted = false;
 
+		// Stop pressed during agent.send — the run now exists, so cancel it.
+		if (this.turns.isAbortRequested(params.sessionId)) {
+			void run.cancel().catch(() => {});
+			this.turns.end(params.sessionId);
+			return;
+		}
+
+		// Plan mode ends by calling the `createPlan` tool, whose `args.plan`
+		// is the finished plan markdown. We suppress the raw tool_call (so it
+		// doesn't render inline) and re-surface it on the same rail as Claude's
+		// ExitPlanMode (`planCaptured`) — but only AFTER the terminal FINISHED
+		// has flushed the assistant text, so the plan-review card lands after
+		// the turn's prose rather than racing ahead of it.
+		let pendingPlan: { callId: string; text: string | null } | null = null;
 		try {
 			for await (const event of run.stream()) {
 				const e = event as unknown as Record<string, unknown>;
+				if (e.type === "tool_call" && e.name === "createPlan") {
+					if (e.status === "completed") {
+						pendingPlan = {
+							callId: typeof e.call_id === "string" ? e.call_id : "",
+							text: extractCreatePlanText(e),
+						};
+					}
+					continue;
+				}
 				emitter.passthrough(requestId, namespaceEvent(event));
 				// Cursor SDK stream may not close on its own after FINISHED;
 				// break explicitly so emitter.end() is called promptly.
 				if (e.type === "status" && e.status === "FINISHED") {
+					if (pendingPlan) {
+						emitter.planCaptured(
+							requestId,
+							pendingPlan.callId,
+							pendingPlan.text,
+						);
+						pendingPlan = null;
+					}
 					break;
 				}
 			}
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
-			if (session.aborted) {
+			if (this.turns.isAbortRequested(params.sessionId)) {
 				// run.cancel() throws inside stream() — clean abort, not failure.
 				logger.debug(`[${requestId}] Cursor stream aborted by user`);
 			} else {
@@ -209,10 +268,12 @@ export class CursorSessionManager implements SessionManager {
 			session.currentRequestId = null;
 		}
 
-		if (session.aborted) {
-			emitter.aborted(requestId, "user_requested");
+		// `aborted` is terminal — `requestStop` already emitted it. Only emit
+		// `end` on natural completion, then clear the turn.
+		if (!this.turns.isAbortRequested(params.sessionId)) {
+			emitter.end(requestId);
 		}
-		emitter.end(requestId);
+		this.turns.end(params.sessionId);
 	}
 
 	async generateTitle(
@@ -348,18 +409,9 @@ export class CursorSessionManager implements SessionManager {
 	}
 
 	async stopSession(sessionId: string): Promise<void> {
-		const session = this.sessions.get(sessionId);
-		if (!session) return;
-		session.aborted = true;
-		if (session.currentRun) {
-			try {
-				await session.currentRun.cancel();
-			} catch (error) {
-				logger.debug(
-					`[cursor] cancel rejected: ${error instanceof Error ? error.message : String(error)}`,
-				);
-			}
-		}
+		// Emits `aborted` instantly + cancels the run via teardown — works at
+		// any point, including during the first turn's Agent.create startup.
+		this.turns.requestStop(sessionId);
 	}
 
 	async steer(
@@ -373,18 +425,9 @@ export class CursorSessionManager implements SessionManager {
 	}
 
 	async shutdown(): Promise<void> {
-		const tasks: Promise<void>[] = [];
-		for (const [, session] of this.sessions) {
-			session.aborted = true;
-			if (session.currentRun) {
-				tasks.push(
-					session.currentRun.cancel().catch(() => {
-						/* swallow during shutdown */
-					}),
-				);
-			}
+		for (const [sessionId] of this.sessions) {
+			this.turns.requestStop(sessionId);
 		}
-		await Promise.all(tasks);
 		for (const [, session] of this.sessions) {
 			try {
 				session.agent.close();
@@ -394,6 +437,68 @@ export class CursorSessionManager implements SessionManager {
 		}
 		this.sessions.clear();
 	}
+}
+
+/// Map Helmor's permissionMode to Cursor's conversation mode. Plan mode
+/// runs Cursor read-only; everything else is the normal agent mode.
+function toCursorMode(permissionMode: string | undefined): "agent" | "plan" {
+	return permissionMode === "plan" ? "plan" : "agent";
+}
+
+/// Pull the plan markdown out of a `createPlan` tool_call event
+/// (`args.plan`). Returns null when absent/blank so `planCaptured` falls
+/// back to a bare marker rather than an empty plan card.
+function extractCreatePlanText(e: Record<string, unknown>): string | null {
+	const args = e.args as Record<string, unknown> | undefined;
+	const plan = args?.plan;
+	return typeof plan === "string" && plan.trim() !== "" ? plan : null;
+}
+
+function extToMimeType(filePath: string): string {
+	switch (extname(filePath).toLowerCase()) {
+		case ".jpg":
+		case ".jpeg":
+			return "image/jpeg";
+		case ".png":
+			return "image/png";
+		case ".gif":
+			return "image/gif";
+		case ".webp":
+			return "image/webp";
+		default:
+			return "image/png";
+	}
+}
+
+/// Build the `agent.send` payload. Returns a plain string when there are
+/// no attachments (cheapest path); otherwise an SDKUserMessage carrying
+/// base64 images. Unreadable files degrade to a `[Image not found]` note
+/// appended to the text so the turn still goes through.
+async function buildCursorMessage(
+	text: string,
+	imagePaths: readonly string[],
+): Promise<string | SDKUserMessage> {
+	if (imagePaths.length === 0) return text;
+	const images: SDKImage[] = [];
+	const notes: string[] = [];
+	for (const imgPath of imagePaths) {
+		try {
+			const { buffer } = await readImageWithResize(imgPath);
+			images.push({
+				data: buffer.toString("base64"),
+				mimeType: extToMimeType(imgPath),
+			});
+		} catch (err) {
+			logger.error("Failed to read Cursor image attachment", {
+				imageName: basename(imgPath),
+				...errorDetails(err),
+			});
+			notes.push(`[Image not found: ${imgPath}]`);
+		}
+	}
+	const finalText = [text, ...notes].filter(Boolean).join("\n");
+	if (images.length === 0) return finalText;
+	return { text: finalText, images };
 }
 
 /// Prefix `type` with `cursor/` so Rust dispatch doesn't collide with
@@ -496,6 +601,10 @@ export const __CURSOR_INTERNAL = {
 	namespaceEvent,
 	modelInfoToProviderInfo,
 	computeModelParameterValues,
+	buildCursorMessage,
+	extToMimeType,
+	toCursorMode,
+	extractCreatePlanText,
 };
 
 // Keep `Agent` import live under verbatimModuleSyntax.

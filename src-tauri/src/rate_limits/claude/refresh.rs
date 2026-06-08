@@ -46,6 +46,7 @@ pub(super) fn run_claude_auth_status() -> Result<()> {
     // the human-readable mode would still produce parseable JSON here.
     let mut cmd = Command::new("claude");
     cmd.args(["auth", "status", "--json"]);
+    crate::platform::process::configure_background_cli(&mut cmd);
 
     let status = wait_with_timeout(&mut cmd, DELEGATED_REFRESH_TIMEOUT)
         .ok_or_else(|| anyhow!("`claude auth status` timed out or failed to spawn"))?;

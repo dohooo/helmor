@@ -28,8 +28,7 @@ struct CliStatusPayload {
 }
 
 pub fn cli_status(cli: &Cli) -> Result<()> {
-    let install_path =
-        std::path::PathBuf::from(format!("/usr/local/bin/{}", super::installed_cli_name()));
+    let install_path = crate::platform::cli_install::install_target(super::installed_cli_name());
     let installed = install_path.exists();
     let current = std::env::current_exe()
         .ok()

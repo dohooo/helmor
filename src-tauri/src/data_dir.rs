@@ -205,7 +205,7 @@ fn resolve_data_dir() -> Result<PathBuf> {
 }
 
 fn dirs_home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+    crate::platform::paths::home_dir()
 }
 
 /// Ensure all required subdirectories exist.

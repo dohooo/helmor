@@ -418,14 +418,14 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const supportsEffort = availableEffortLevels.length > 0;
 	const supportsFastMode = selectedModel?.supportsFastMode === true;
 	const supportsContextUsage = selectedModel?.supportsContextUsage !== false;
-	// Plan toggle is capability-driven (Cursor auto-handles plans internally;
-	// OpenCode runs the plan agent). Falls back to "anything but cursor" while
-	// the table loads or for an unknown provider.
+	// Plan toggle is capability-driven. Every shipping provider supports a
+	// plan mode today, so while the table loads (or for an unknown provider)
+	// we optimistically show the toggle; the table corrects it once hydrated.
 	const supportsPlanMode =
 		findProviderCapabilities(
 			providerCapabilities ?? [],
 			selectedModel?.provider ?? "",
-		)?.supportsPlanMode ?? selectedModel?.provider !== "cursor";
+		)?.supportsPlanMode ?? true;
 	const effectiveEffort = useMemo(
 		() => clampEffort(effortLevel, availableEffortLevels),
 		[effortLevel, availableEffortLevels],
@@ -695,7 +695,12 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			) {
 				event.preventDefault();
 				event.stopPropagation();
-				onChangePermissionMode(permissionMode === "plan" ? "default" : "plan");
+				// Exit plan into bypassPermissions, matching the Plan button and
+				// handlePlanImplement. "default" left Codex prompting for MCP
+				// tool calls despite full-access sandbox (#733).
+				onChangePermissionMode(
+					permissionMode === "plan" ? "bypassPermissions" : "plan",
+				);
 			}
 		},
 		[

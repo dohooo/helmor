@@ -171,7 +171,11 @@ mod tests {
         assert!(item.get("result").is_none());
 
         let saved_path = item.get("saved_path").and_then(Value::as_str).unwrap();
-        assert!(saved_path.contains("generated-images/session_1/ig_1.png"));
+        // Normalize separators: the persisted path is a native filesystem path
+        // (backslashes on Windows).
+        assert!(saved_path
+            .replace('\\', "/")
+            .contains("generated-images/session_1/ig_1.png"));
         assert_eq!(fs::read(saved_path).unwrap(), b"png-bytes");
 
         std::env::remove_var("HELMOR_DATA_DIR");

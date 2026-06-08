@@ -247,11 +247,11 @@ mod tests {
             session_id: "s".into(),
             prompt: "hello".into(),
             model_id: Some("claude-sonnet-4-5".into()),
-            permission_mode: Some("acceptEdits".into()),
+            permission_mode: Some("bypassPermissions".into()),
         };
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["modelId"], "claude-sonnet-4-5");
-        assert_eq!(json["permissionMode"], "acceptEdits");
+        assert_eq!(json["permissionMode"], "bypassPermissions");
         assert_eq!(json["workspaceId"], "w");
         assert_eq!(json["sessionId"], "s");
         assert_eq!(json["prompt"], "hello");

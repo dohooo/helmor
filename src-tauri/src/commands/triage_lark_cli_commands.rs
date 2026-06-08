@@ -53,15 +53,9 @@ pub async fn spawn_lark_cli_auth_terminal(
     instance_id: String,
     channel: Channel<ScriptEvent>,
 ) -> CmdResult<()> {
-    let working_dir = std::env::var("HOME")
-        .ok()
-        .filter(|home| !home.trim().is_empty())
-        .or_else(|| {
-            std::env::current_dir()
-                .ok()
-                .map(|path| path.display().to_string())
-        })
-        .unwrap_or_else(|| "/".to_string());
+    let working_dir = crate::platform::paths::home_dir_or_current_or_root()
+        .display()
+        .to_string();
     let context = ScriptContext {
         root_path: working_dir.clone(),
         workspace_path: None,
@@ -72,7 +66,7 @@ pub async fn spawn_lark_cli_auth_terminal(
     };
     let mgr = manager.inner().clone();
     let script_type = action.script_type(&instance_id);
-    let boot_input = format!("{}; exit\n", action.boot_command());
+    let boot_input = crate::platform::shell::boot_input(action.boot_command());
 
     tauri::async_runtime::spawn_blocking(move || {
         if let Err(error) = crate::workspace::scripts::run_terminal_session(

@@ -70,7 +70,11 @@ pub(super) fn wait_with_timeout(
     }
 }
 
-#[cfg(test)]
+// These exercise the timeout/kill plumbing against real Unix binaries
+// (`/bin/echo`, `/usr/bin/false`, `/bin/sleep`); the logic itself is
+// platform-agnostic, so gating to Unix keeps them meaningful without
+// porting to Windows-specific command names.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

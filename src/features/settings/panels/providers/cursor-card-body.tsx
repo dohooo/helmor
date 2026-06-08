@@ -105,6 +105,10 @@ export function CursorCardBody() {
 		});
 	}
 
+	function clearAll() {
+		void persist({ enabledModelIds: [] });
+	}
+
 	return (
 		<div className="flex w-full flex-col gap-2">
 			<div className="flex w-full items-center gap-2">
@@ -138,7 +142,9 @@ export function CursorCardBody() {
 							enabledSet={enabledSet}
 							available={available}
 							onToggle={toggle}
+							onClear={clearAll}
 							loading={fetchMutation.isPending}
+							grouped={false}
 							triggerClassName="min-w-0 flex-1"
 						/>
 						<Tooltip>

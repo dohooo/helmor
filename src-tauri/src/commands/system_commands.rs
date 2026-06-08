@@ -140,17 +140,20 @@ pub struct ComponentsUpdateCheck {
     pub skills_error: Option<String>,
 }
 
-/// Where Helmor installs its managed CLI entrypoint on macOS.
+/// Where Helmor installs its managed CLI entrypoint. The OS-specific target
+/// path lives behind the `platform::cli_install` seam.
 fn cli_install_target() -> std::path::PathBuf {
-    std::path::PathBuf::from(format!(
-        "/usr/local/bin/{}",
-        crate::cli::installed_cli_name()
-    ))
+    crate::platform::cli_install::install_target(crate::cli::installed_cli_name())
 }
 
 /// Name of the compiled CLI binary produced by `cargo build --bin helmor-cli`.
+/// Windows appends the `.exe` extension that cargo emits.
 fn cli_source_binary_name() -> &'static str {
-    "helmor-cli"
+    if cfg!(windows) {
+        "helmor-cli.exe"
+    } else {
+        "helmor-cli"
+    }
 }
 
 fn bundled_cli_binary(app_exe: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
@@ -169,48 +172,22 @@ fn cli_install_remediation(cli_binary: &std::path::Path, install_path: &std::pat
 }
 
 fn shell_quote(path: &std::path::Path) -> String {
-    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+    crate::platform::shell::quote_path(path)
 }
 
 fn shell_quote_arg(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
+    crate::platform::shell::quote_posix_arg(value)
 }
 
 fn classify_cli_install(
     install_path: &std::path::Path,
     bundled_cli: &std::path::Path,
 ) -> CliInstallState {
-    let metadata = match std::fs::symlink_metadata(install_path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return CliInstallState::Missing;
-        }
-        Err(_) => return CliInstallState::Stale,
-    };
-
-    if !metadata.file_type().is_symlink() {
-        return CliInstallState::Stale;
-    }
-
-    let target = match std::fs::read_link(install_path) {
-        Ok(target) => target,
-        Err(_) => return CliInstallState::Stale,
-    };
-    let resolved_target = if target.is_absolute() {
-        target
-    } else {
-        install_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("/"))
-            .join(target)
-    };
-
-    match (
-        std::fs::canonicalize(resolved_target),
-        std::fs::canonicalize(bundled_cli),
-    ) {
-        (Ok(installed), Ok(expected)) if installed == expected => CliInstallState::Managed,
-        _ => CliInstallState::Stale,
+    use crate::platform::cli_install::ManagedCliStatus;
+    match crate::platform::cli_install::classify(install_path, bundled_cli) {
+        ManagedCliStatus::Managed => CliInstallState::Managed,
+        ManagedCliStatus::Stale => CliInstallState::Stale,
+        ManagedCliStatus::Missing => CliInstallState::Missing,
     }
 }
 
@@ -302,18 +279,9 @@ fn try_install_symlink_unprivileged(
         }
     }
 
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(bundled_cli, install_path)
-            .with_context(|| format!("Failed to install CLI at {}", install_path.display()))?;
-        Ok(())
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = bundled_cli;
-        anyhow::bail!("CLI installation via symlink is only supported on Unix.")
-    }
+    crate::platform::cli_install::create_managed_link(bundled_cli, install_path)
+        .with_context(|| format!("Failed to install CLI at {}", install_path.display()))?;
+    Ok(())
 }
 
 fn is_permission_denied(error: &anyhow::Error) -> bool {
@@ -378,6 +346,7 @@ fn build_elevated_install_script(
 
 /// Quote a path so it survives both `do shell script "..."` (AppleScript string
 /// literal) and the shell that AppleScript hands the script to.
+#[cfg(target_os = "macos")]
 fn applescript_shell_arg(path: &std::path::Path) -> String {
     let raw = path.display().to_string();
     // 1. Single-quote for the shell, escaping embedded single quotes via `'\''`.
@@ -387,9 +356,7 @@ fn applescript_shell_arg(path: &std::path::Path) -> String {
 }
 
 fn home_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
+    crate::platform::paths::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
 fn claude_skills_dir() -> PathBuf {
@@ -437,6 +404,17 @@ fn helmor_skills_install_args(agents: &[&str]) -> Vec<String> {
         args.push((*agent).to_string());
     }
     args
+}
+
+/// A `Command` that runs `npx` cross-platform. `resolve_for_spawn` finds the
+/// real executable (on Windows `npx` is a `.cmd`/`.ps1` shim that
+/// `CreateProcess` can't resolve from the bare name), and
+/// `configure_background_cli` keeps it from flashing a console window — this
+/// runs during the silent startup check.
+fn npx_command() -> Command {
+    let mut cmd = Command::new(crate::platform::executable::resolve_for_spawn("npx"));
+    crate::platform::process::configure_background_cli(&mut cmd);
+    cmd
 }
 
 fn helmor_skills_install_command(agents: &[&str]) -> String {
@@ -614,7 +592,7 @@ pub async fn install_helmor_skills() -> CmdResult<HelmorSkillsStatus> {
             );
         }
 
-        let output = Command::new("npx")
+        let output = npx_command()
             .args(helmor_skills_install_args(&agents))
             .output()
             .with_context(|| format!("Failed to start skills installer. Try:\n  {command}"))?;
@@ -847,7 +825,7 @@ fn run_components_check_inner(force: bool) -> ComponentsUpdateCheck {
 
 fn install_skills_silent(agents: &[&str]) -> anyhow::Result<()> {
     let command = helmor_skills_install_command(agents);
-    let output = Command::new("npx")
+    let output = npx_command()
         .args(helmor_skills_install_args(agents))
         .output()
         .with_context(|| format!("Failed to start skills installer. Try:\n  {command}"))?;
@@ -1185,10 +1163,9 @@ pub async fn get_agent_versions() -> CmdResult<AgentVersions> {
 }
 
 fn agent_cli_version(provider: &str) -> Option<String> {
-    let output = std::process::Command::new(resolve_agent_binary(provider))
-        .arg("--version")
-        .output()
-        .ok()?;
+    let mut command = std::process::Command::new(resolve_agent_binary(provider));
+    crate::platform::process::configure_background_cli(&mut command);
+    let output = command.arg("--version").output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -1254,7 +1231,7 @@ fn resolve_agent_binary(provider: &str) -> PathBuf {
         "opencode" => bundled.opencode_bin,
         _ => None,
     };
-    bundled_path.unwrap_or_else(|| PathBuf::from(provider))
+    bundled_path.unwrap_or_else(|| crate::platform::executable::resolve_for_spawn(provider))
 }
 
 // Read from the sidecar-computed settings row, NOT `auth.json` (which misses env/config/Zen providers).
@@ -1284,10 +1261,9 @@ fn opencode_login_ready() -> bool {
 }
 
 fn claude_login_ready() -> bool {
-    match std::process::Command::new(resolve_agent_binary("claude"))
-        .args(["auth", "status"])
-        .output()
-    {
+    let mut command = std::process::Command::new(resolve_agent_binary("claude"));
+    crate::platform::process::configure_background_cli(&mut command);
+    match command.args(["auth", "status"]).output() {
         Ok(output) if output.status.success() => parse_claude_login_status(&output.stdout),
         Ok(output) => {
             // Claude exits non-zero when the user isn't authenticated —
@@ -1338,10 +1314,9 @@ fn codex_auth_status() -> CodexAuthStatus {
 }
 
 fn codex_login_ready() -> bool {
-    match std::process::Command::new(resolve_agent_binary("codex"))
-        .args(["login", "status"])
-        .output()
-    {
+    let mut command = std::process::Command::new(resolve_agent_binary("codex"));
+    crate::platform::process::configure_background_cli(&mut command);
+    match command.args(["login", "status"]).output() {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1440,15 +1415,9 @@ pub async fn spawn_agent_login_terminal(
         let _ = window.set_focus();
     }
 
-    let working_dir = std::env::var("HOME")
-        .ok()
-        .filter(|home| !home.trim().is_empty())
-        .or_else(|| {
-            std::env::current_dir()
-                .ok()
-                .map(|path| path.display().to_string())
-        })
-        .unwrap_or_else(|| "/".to_string());
+    let working_dir = crate::platform::paths::home_dir_or_current_or_root()
+        .display()
+        .to_string();
     let context = ScriptContext {
         root_path: working_dir.clone(),
         workspace_path: None,
@@ -1466,11 +1435,12 @@ pub async fn spawn_agent_login_terminal(
             instance_id = %instance_id,
             "spawn_agent_login_terminal: entering run_terminal_session"
         );
-        // Auto-type the login command via the run_terminal_session boot
+        // Auto-type the login command via the run_terminal_session boot input,
+        // in the active shell's syntax (PowerShell needs the call operator).
         // input — written synchronously to the PTY master right after
         // the shell registers, so a frontend re-render-driven
         // cleanup→respawn can't drop the bytes.
-        let boot_input = format!("{command}; exit\n");
+        let boot_input = crate::platform::shell::boot_input(&command);
         if let Err(error) = crate::workspace::scripts::run_terminal_session(
             &mgr,
             AGENT_LOGIN_REPO_ID,
@@ -1786,6 +1756,7 @@ fn copy_image_file_to_clipboard(_path: &std::path::Path) -> anyhow::Result<()> {
     anyhow::bail!("Copying images is only supported on macOS")
 }
 
+#[cfg(target_os = "macos")]
 fn applescript_escape(input: &str) -> String {
     input.replace('\\', "\\\\").replace('"', "\\\"")
 }
@@ -2028,6 +1999,28 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn classify_cli_install_reports_managed_for_matching_shim() {
+        let tmp = tempdir().unwrap();
+        let bundled_cli = tmp.path().join("Helmor/helmor-cli.exe");
+        let install_path = tmp.path().join("bin/helmor.cmd");
+        fs::create_dir_all(bundled_cli.parent().unwrap()).unwrap();
+        fs::create_dir_all(install_path.parent().unwrap()).unwrap();
+        fs::write(&bundled_cli, "").unwrap();
+        fs::write(
+            &install_path,
+            format!("@echo off\r\n\"{}\" %*\r\n", bundled_cli.display()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            classify_cli_install(&install_path, &bundled_cli),
+            CliInstallState::Managed
+        );
+    }
+
+    #[cfg(unix)]
     #[test]
     fn classify_cli_install_reports_managed_for_matching_symlink() {
         let tmp = tempdir().unwrap();
@@ -2060,6 +2053,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn install_cli_symlink_replaces_stale_copy_with_managed_symlink() {
         let tmp = tempdir().unwrap();
@@ -2078,6 +2072,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn check_and_heal_cli_symlink_repoints_a_stale_link() {
         let tmp = tempdir().unwrap();
@@ -2124,6 +2119,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn applescript_shell_arg_quotes_plain_path() {
         assert_eq!(
@@ -2132,6 +2128,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn applescript_shell_arg_escapes_single_quote_for_shell_then_applescript() {
         // Shell-quote turns `'` into `'\''`; the embedded backslash then needs
@@ -2142,6 +2139,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn applescript_shell_arg_escapes_double_quote_and_backslash() {
         assert_eq!(
@@ -2230,6 +2228,11 @@ mod tests {
         );
     }
 
+    // macOS-only: exercises the `/usr/local/bin` sudo-elevation install path and
+    // asserts the macOS "administrator access / Retry" message. Windows installs
+    // a `.cmd` shim under %LOCALAPPDATA% with no elevation flow, so this scenario
+    // doesn't apply there.
+    #[cfg(target_os = "macos")]
     #[test]
     fn try_install_cli_silent_at_bails_with_friendly_message_on_permission_denied() {
         // Pick a parent that almost certainly isn't writable to the test

@@ -54,12 +54,12 @@ pub async fn detect_all() -> Vec<SourceHealth> {
 
 async fn detect_lark() -> SourceHealth {
     // Phase 1: PATH probe.
-    let spawn = Command::new("lark-cli")
-        .arg("--version")
+    let mut cmd = Command::new("lark-cli");
+    cmd.arg("--version")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
+        .stderr(std::process::Stdio::null());
+    let spawn = crate::platform::process::configure_background_cli_tokio(&mut cmd).spawn();
     let mut child = match spawn {
         Ok(c) => c,
         Err(e) if e.kind() == ErrorKind::NotFound => {

@@ -2,9 +2,11 @@ import type { QueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	type ChangeRequestInfo,
+	checkWorkspaceForgeAuth,
 	closeWorkspaceChangeRequest,
 	createSession,
 	type ForgeActionStatus,
+	type ForgeAuthState,
 	type ForgeDetection,
 	hideSession,
 	loadAutoCloseActionKinds,
@@ -12,6 +14,7 @@ import {
 	mergeWorkspaceChangeRequest,
 	pushWorkspaceToRemote,
 	refreshWorkspaceChangeRequest,
+	stopAgentStream,
 	type WorkspaceDetail,
 	type WorkspaceGitActionStatus,
 	type WorkspaceGroup,
@@ -192,6 +195,7 @@ export function useWorkspaceCommitLifecycle({
 	const currentChangeRequest = changeRequest ?? null;
 	const currentForgeActionStatus = forgeActionStatus ?? null;
 	const changeRequestName = forgeDetection?.labels.changeRequestName ?? "PR";
+	const providerName = forgeDetection?.labels.providerName ?? "Forge";
 
 	// Keep a stable ref so the merge-validation guard in the callback can
 	// read the latest value without adding it to the dependency array.
@@ -371,6 +375,13 @@ export function useWorkspaceCommitLifecycle({
 							cachedChangeRequest,
 						);
 						restoreWorkspaceStatus();
+						// If the failure was auth-related, the published
+						// workspace's action-status refetch returns
+						// `unauthenticated` (401) and flips the Connect CTA — no
+						// extra precheck round-trip on the happy path.
+						void queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspaceForgeActionStatus(workspaceId),
+						});
 						setCommitLifecycle((prev) =>
 							prev
 								? {
@@ -420,6 +431,18 @@ export function useWorkspaceCommitLifecycle({
 				return;
 			}
 			try {
+				// create-PR / open-PR (reopen) run `gh pr` / `glab mr` in the
+				// agent. Fire the auth check in the BACKGROUND — never block
+				// dispatch on it — so the session opens instantly; a logged-out
+				// result aborts the turn below. (commit-and-push / fix /
+				// resolve-conflicts are git-only — no check.)
+				const authVerdict =
+					mode === "create-pr" || mode === "open-pr"
+						? checkWorkspaceForgeAuth(workspaceId).catch(
+								() => "indeterminate" as ForgeAuthState,
+							)
+						: null;
+
 				// Pin the inspector helper's configured model/effort/fast-mode
 				// onto the new session row at creation time. The composer reads
 				// these off `currentSession` via the normal fallback chain, so
@@ -457,6 +480,30 @@ export function useWorkspaceCommitLifecycle({
 
 				setPendingPromptForSession({ sessionId, prompt });
 				onSelectSession(sessionId);
+
+				// Background auth guard (never blocks dispatch): if the account
+				// is logged out, abort the just-started turn — but KEEP the
+				// session — then Toast and let the recorded backend verdict
+				// surface the Connect CTA via a refetch.
+				if (authVerdict) {
+					void authVerdict.then((verdict) => {
+						if (verdict !== "loggedOut") return;
+						void stopAgentStream(sessionId).catch(() => {});
+						pushToast?.(
+							`Reconnect your ${providerName} account and try again.`,
+							`${providerName} not connected`,
+							"destructive",
+						);
+						// Every workspace on this account shares the backend
+						// verdict — refetch them ALL (incl. inactive siblings)
+						// so the CTA is consistent on switch, not just refocus.
+						void queryClient.invalidateQueries({
+							predicate: (q) => q.queryKey[0] === "workspaceForgeActionStatus",
+							refetchType: "all",
+						});
+						setCommitLifecycle(null);
+					});
+				}
 			} catch (error) {
 				console.error("[commitButton] Failed to start session:", error);
 				pushToast?.(
@@ -473,6 +520,7 @@ export function useWorkspaceCommitLifecycle({
 			onSelectSession,
 			pushToast,
 			changeRequestName,
+			providerName,
 			queryClient,
 			selectedRepoId,
 			selectedWorkspaceTargetBranch,

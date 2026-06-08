@@ -157,19 +157,14 @@ fn xdg_glab_dir() -> Option<PathBuf> {
             return Some(PathBuf::from(value).join("glab-cli"));
         }
     }
-    let home = std::env::var_os("HOME")?;
-    let mut path = PathBuf::from(home);
-    path.push(".config");
-    path.push("glab-cli");
-    Some(path)
+    crate::platform::paths::xdg_config_dir("glab-cli")
 }
 
 fn macos_glab_dir() -> Option<PathBuf> {
     if !cfg!(target_os = "macos") {
         return None;
     }
-    let home = std::env::var_os("HOME")?;
-    let mut path = PathBuf::from(home);
+    let mut path = crate::platform::paths::home_dir()?;
     path.push("Library");
     path.push("Application Support");
     path.push("glab-cli");

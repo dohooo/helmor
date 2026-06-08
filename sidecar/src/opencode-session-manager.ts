@@ -11,6 +11,7 @@ import type {
 	PermissionRuleset,
 	TextPartInput,
 } from "@opencode-ai/sdk/v2";
+import { ActiveTurnRegistry } from "./active-turn-registry.js";
 import type { SidecarEmitter } from "./emitter.js";
 import { prependLinkedDirectoriesContext } from "./linked-directories-context.js";
 import { errorDetails, logger } from "./logger.js";
@@ -42,11 +43,13 @@ interface SessionCtx {
 	activeRequestId: string | null;
 	activeEmitter: SidecarEmitter | null;
 	settle: TurnSettle | null;
-	aborted: boolean;
 	/** Mutable: replaced with a fresh controller when a stopped session is
 	 *  reused, so the next turn's pump subscribes with a live signal. */
 	abort: AbortController;
 	pumpStarted: boolean;
+	/** Client the live pump subscribed with. On `opencode serve` respawn a turn
+	 *  gets a new client; we rebind the pump when this no longer matches it. */
+	pumpClient?: OpencodeClient;
 	/** Last turn's model + effort variant, reused by `steer`. */
 	lastModel?: { providerID: string; modelID: string; variant?: string };
 	contextTokens: number;
@@ -59,6 +62,11 @@ interface SessionCtx {
 	};
 	/** childSessionId → parent `task` tool callID (subagent nesting). */
 	readonly subtaskParents: Map<string, string>;
+	/** This turn runs opencode's read-only `plan` agent — no ExitPlanMode signal,
+	 *  so we capture the assistant text and re-surface it as a plan-review card. */
+	planMode: boolean;
+	/** Per-turn plan text capture (reset at turn start). */
+	readonly planCapture: PlanCapture;
 }
 
 interface OpencodeProviderList {
@@ -105,6 +113,88 @@ export function flattenOpencodeModels(
 		}
 	}
 	return out.sort((a, b) => a.label.localeCompare(b.label));
+}
+
+// ── Plan-mode capture ────────────────────────────────────────────────────────
+// opencode's `plan` agent has no ExitPlanMode signal — the plan is just streamed
+// assistant text. Capture it and re-emit as `planCaptured` (Claude/Cursor's rail)
+// for the plan-review card, suppressing the now-duplicate prose from the stream.
+
+export interface PlanCapture {
+	/** messageID → role. opencode can emit a part before its role event, so the
+	 *  assistant-vs-user split is resolved at idle, not at part-arrival time. */
+	readonly roleByMessageId: Map<string, string>;
+	/** partID → text snapshot + owning messageID; insertion order = read order. */
+	readonly text: Map<string, { messageId: string; text: string }>;
+}
+
+export function newPlanCapture(): PlanCapture {
+	return { roleByMessageId: new Map(), text: new Map() };
+}
+
+export function resetPlanCapture(capture: PlanCapture): void {
+	capture.roleByMessageId.clear();
+	capture.text.clear();
+}
+
+/** Record a message's role (user or assistant) for the idle-time split. */
+export function notePlanMessage(
+	capture: PlanCapture,
+	info: { role?: string; id?: string } | undefined,
+): void {
+	if (typeof info?.id === "string" && typeof info.role === "string") {
+		capture.roleByMessageId.set(info.id, info.role);
+	}
+}
+
+/** Suppress all token deltas + text snapshots in plan mode (the user echo is
+ *  dropped by the accumulator anyway) and capture them. The assistant/user split
+ *  is deferred to assemblePlanText. Returns true when the event is consumed. */
+export function capturePlanPart(
+	capture: PlanCapture,
+	event: { type: string; properties?: Record<string, unknown> },
+): boolean {
+	// Drop token deltas; the later full-text snapshot is authoritative.
+	if (event.type === "message.part.delta") return true;
+	if (event.type !== "message.part.updated") return false;
+	const part = (
+		event.properties as
+			| {
+					part?: {
+						type?: string;
+						id?: string;
+						messageID?: string;
+						text?: string;
+					};
+			  }
+			| undefined
+	)?.part;
+	if (part?.type !== "text") return false;
+	if (typeof part.id === "string" && typeof part.messageID === "string") {
+		capture.text.set(part.id, {
+			messageId: part.messageID,
+			text: typeof part.text === "string" ? part.text : "",
+		});
+	}
+	return true;
+}
+
+/** Concatenate captured assistant text in arrival order (user echo excluded). */
+export function assemblePlanText(capture: PlanCapture): string {
+	const out: string[] = [];
+	for (const { messageId, text } of capture.text.values()) {
+		if (capture.roleByMessageId.get(messageId) === "assistant") out.push(text);
+	}
+	return out.join("\n\n").trim();
+}
+
+/** First assistant message id with plan text — seeds the synthetic tool-use id. */
+export function planMessageId(capture: PlanCapture): string | null {
+	for (const { messageId } of capture.text.values()) {
+		if (capture.roleByMessageId.get(messageId) === "assistant")
+			return messageId;
+	}
+	return null;
 }
 
 const IMAGE_MIME_BY_EXT: Record<string, string> = {
@@ -173,22 +263,30 @@ export function parseModelSlug(
 
 const OPENCODE_PERMISSION_PREFIX = "opencode-";
 
-// opencode resolves rules last-match-wins, so catch-all goes first. `question`
-// is always allowed so the AUQ flow isn't self-gated.
-export function buildPermissionRules(
-	mode: string | undefined,
-): PermissionRuleset {
-	if (mode === "bypassPermissions" || mode === "dontAsk" || mode === "auto") {
-		return [{ permission: "*", pattern: "*", action: "allow" }];
+// opencode always runs full-access at the permission layer; plan mode's
+// read-only behavior comes entirely from selecting the `plan` agent.
+export function buildPermissionRules(): PermissionRuleset {
+	return [{ permission: "*", pattern: "*", action: "allow" }];
+}
+
+// opencode pins permission rules on the session at creation. A session created
+// by an older Helmor (default/acceptEdits → ask rules) keeps them on resume, so
+// full access wouldn't take effect. Reassert the current rules when reusing an
+// existing session. Best-effort — a failed update must not block the turn.
+export async function reapplySessionPermission(
+	client: OpencodeClient,
+	sessionID: string,
+	directory: string,
+): Promise<void> {
+	try {
+		await client.session.update({
+			sessionID,
+			directory,
+			permission: buildPermissionRules(),
+		});
+	} catch (error) {
+		logger.debug("opencode permission reapply failed", errorDetails(error));
 	}
-	const rules: PermissionRuleset = [
-		{ permission: "*", pattern: "*", action: "ask" },
-		{ permission: "question", pattern: "*", action: "allow" },
-	];
-	if (mode === "acceptEdits") {
-		rules.push({ permission: "edit", pattern: "*", action: "allow" });
-	}
-	return rules;
 }
 
 // `percentage` is 0 when the model's context limit is unknown; zero buckets dropped.
@@ -231,8 +329,7 @@ export class OpencodeSessionManager implements SessionManager {
 	private readonly server = new OpencodeServer(() => this.handleServerExit());
 	private readonly sessions = new Map<string, SessionCtx>();
 	private readonly byOpencodeId = new Map<string, SessionCtx>();
-	/** Stop pressed while sendMessage was still in startup (no ctx yet). */
-	private readonly pendingAborts = new Set<string>();
+	private readonly turns = new ActiveTurnRegistry();
 	/** `provider/model` slug → context-window size, for the usage ring. */
 	private readonly modelContextLimits = new Map<string, number>();
 	private readonly pendingPermissions = new Map<
@@ -329,21 +426,29 @@ export class OpencodeSessionManager implements SessionManager {
 		params: SendMessageParams,
 		emitter: SidecarEmitter,
 	): Promise<void> {
+		// Register before startup (server.start + session.create) so a Stop
+		// pressed mid-startup emits `aborted` instantly via `tearDownTurn`.
+		this.turns.begin(params.sessionId, requestId, emitter, () =>
+			this.tearDownTurn(params.sessionId),
+		);
 		let handle: Awaited<ReturnType<OpencodeServer["start"]>>;
 		try {
 			handle = await this.server.start(process.env);
 		} catch (error) {
-			emitter.error(requestId, `opencode: ${errorMessage(error)}`);
-			emitter.end(requestId);
+			if (!this.turns.isAbortRequested(params.sessionId)) {
+				emitter.error(requestId, `opencode: ${errorMessage(error)}`);
+				emitter.end(requestId);
+			}
+			this.turns.end(params.sessionId);
 			return;
 		}
 		const { client } = handle;
 		const directory = params.cwd ?? process.cwd();
 
-		// Stop pressed during server startup → bail before creating a session.
-		if (this.pendingAborts.delete(params.sessionId)) {
-			emitter.aborted(requestId, "user_requested");
-			emitter.end(requestId);
+		// Stop pressed during server startup — `requestStop` already emitted
+		// `aborted`; clear the turn and bail before creating a session.
+		if (this.turns.isAbortRequested(params.sessionId)) {
+			this.turns.end(params.sessionId);
 			return;
 		}
 
@@ -354,6 +459,9 @@ export class OpencodeSessionManager implements SessionManager {
 			const resumeId = params.resume?.trim();
 			if (resumeId && (await this.sessionExists(client, resumeId, directory))) {
 				openCodeSessionId = resumeId;
+				// A resumed session may carry stale (older-version) permission
+				// rules — reassert full access so non-plan turns aren't gated.
+				await reapplySessionPermission(client, resumeId, directory);
 			} else {
 				// Stale/absent id → create fresh so old chats recover.
 				if (resumeId) {
@@ -365,18 +473,24 @@ export class OpencodeSessionManager implements SessionManager {
 					const created = await client.session.create({
 						directory,
 						title: `Helmor ${params.sessionId}`,
-						permission: buildPermissionRules(params.permissionMode),
+						permission: buildPermissionRules(),
 					});
 					openCodeSessionId = created.data?.id ?? null;
 				} catch (error) {
-					emitter.error(requestId, `opencode: ${errorMessage(error)}`);
-					emitter.end(requestId);
+					if (!this.turns.isAbortRequested(params.sessionId)) {
+						emitter.error(requestId, `opencode: ${errorMessage(error)}`);
+						emitter.end(requestId);
+					}
+					this.turns.end(params.sessionId);
 					return;
 				}
 			}
 			if (!openCodeSessionId) {
-				emitter.error(requestId, "opencode: session.create returned no id");
-				emitter.end(requestId);
+				if (!this.turns.isAbortRequested(params.sessionId)) {
+					emitter.error(requestId, "opencode: session.create returned no id");
+					emitter.end(requestId);
+				}
+				this.turns.end(params.sessionId);
 				return;
 			}
 			ctx = {
@@ -386,10 +500,11 @@ export class OpencodeSessionManager implements SessionManager {
 				activeRequestId: null,
 				activeEmitter: null,
 				settle: null,
-				aborted: false,
 				abort: new AbortController(),
 				pumpStarted: false,
 				subtaskParents: new Map(),
+				planMode: false,
+				planCapture: newPlanCapture(),
 				contextTokens: 0,
 				contextParts: {
 					input: 0,
@@ -409,18 +524,18 @@ export class OpencodeSessionManager implements SessionManager {
 			});
 		}
 
-		// Stop pressed during session create/resume (after the startup check) →
-		// honor it now instead of running the turn.
-		if (this.pendingAborts.delete(params.sessionId)) {
-			emitter.aborted(requestId, "user_requested");
-			emitter.end(requestId);
+		// Stop pressed during session create/resume — `requestStop` already
+		// emitted `aborted`; clear the turn and bail.
+		if (this.turns.isAbortRequested(params.sessionId)) {
+			this.turns.end(params.sessionId);
 			return;
 		}
 
 		ctx.directory = directory;
 		ctx.activeRequestId = requestId;
 		ctx.activeEmitter = emitter;
-		ctx.aborted = false;
+		ctx.planMode = params.permissionMode === "plan";
+		resetPlanCapture(ctx.planCapture);
 		this.ensureSessionPump(client, ctx);
 
 		const turnDone = new Promise<void>((resolve, reject) => {
@@ -432,9 +547,9 @@ export class OpencodeSessionManager implements SessionManager {
 		const effort = params.effortLevel?.trim();
 		if (model && effort) model.variant = effort;
 		if (model) ctx.lastModel = model;
-		// Plan mode runs opencode's read-only `plan` agent; it ends by calling
-		// `plan_exit`, which asks (via the question flow) to switch to `build`.
-		const planAgent = params.permissionMode === "plan" ? "plan" : undefined;
+		// Plan mode runs opencode's read-only `plan` agent; its text is captured at
+		// idle and re-surfaced as a plan-review card (see ctx.planMode below).
+		const planAgent = ctx.planMode ? "plan" : undefined;
 		// `/compact` uses session.summarize (V2 compact is still a 503 stub in
 		// 1.16.x); it BLOCKS until idle and requires providerID/modelID.
 		const isCompact = params.prompt.trim() === "/compact";
@@ -493,8 +608,11 @@ export class OpencodeSessionManager implements SessionManager {
 			ctx.settle = null;
 			ctx.activeRequestId = null;
 			ctx.activeEmitter = null;
-			emitter.error(requestId, `opencode: ${errorMessage(error)}`);
-			emitter.end(requestId);
+			if (!this.turns.isAbortRequested(params.sessionId)) {
+				emitter.error(requestId, `opencode: ${errorMessage(error)}`);
+				emitter.end(requestId);
+			}
+			this.turns.end(params.sessionId);
 			return;
 		}
 
@@ -509,22 +627,49 @@ export class OpencodeSessionManager implements SessionManager {
 			ctx.activeEmitter = null;
 		}
 
-		if (ctx.aborted) {
-			emitter.aborted(requestId, "user_requested");
-		} else if (turnError) {
+		// Stop pressed — `requestStop` already emitted the terminal `aborted`.
+		if (this.turns.isAbortRequested(params.sessionId)) {
+			this.turns.end(params.sessionId);
+			return;
+		}
+
+		if (turnError) {
 			emitter.error(requestId, `opencode: ${turnError.message}`);
+		} else if (ctx.planMode) {
+			// Re-surface the captured plan as a plan-review card (lands after the
+			// turn's prose, before `end`) so the Implement / Request-Changes CTA shows.
+			const planText = assemblePlanText(ctx.planCapture);
+			if (planText) {
+				emitter.planCaptured(
+					requestId,
+					`opencode-plan-${planMessageId(ctx.planCapture) ?? requestId}`,
+					planText,
+				);
+			}
 		}
 		// Emit BEFORE `end`: Rust's stream loop breaks on the terminal event.
 		await this.emitContextUsage(ctx, requestId, emitter);
-		emitter.end(requestId);
+		// Re-check: a Stop landing during the await above already emitted the
+		// terminal `aborted`, so skip `end` to avoid a double terminal.
+		if (!this.turns.isAbortRequested(params.sessionId)) {
+			emitter.end(requestId);
+		}
+		this.turns.end(params.sessionId);
 	}
 
 	private ensureSessionPump(client: OpencodeClient, ctx: SessionCtx): void {
-		if (ctx.pumpStarted) return;
-		// A stopped session left `ctx.abort` aborted; swap in a fresh one so
-		// the reused turn's pump subscribes with a live signal.
+		// Already pumping on the SAME server → reuse it.
+		if (ctx.pumpStarted && ctx.pumpClient === client) return;
+		// Server respawned → new client; tear down the old pump (dead socket) first.
+		if (ctx.pumpStarted && ctx.pumpClient !== client) {
+			ctx.abort.abort();
+			ctx.pumpStarted = false;
+		}
+		// A stopped/torn-down session left `ctx.abort` aborted; swap in a fresh one
+		// so the reused turn's pump subscribes with a live signal.
 		if (ctx.abort.signal.aborted) ctx.abort = new AbortController();
 		ctx.pumpStarted = true;
+		ctx.pumpClient = client;
 		void this.runSessionPump(client, ctx);
 	}
 
@@ -572,6 +717,10 @@ export class OpencodeSessionManager implements SessionManager {
 	private handleServerExit(): void {
 		for (const ctx of this.sessions.values()) {
 			ctx.settle?.reject(new Error("opencode server exited unexpectedly"));
+			// Tear down the pump bound to the dead server (its SSE may hang, leaving
+			// `pumpStarted` stuck true); the next turn rebinds to the respawned one.
+			ctx.abort.abort();
+			ctx.pumpStarted = false;
 		}
 	}
 
@@ -599,8 +748,11 @@ export class OpencodeSessionManager implements SessionManager {
 		// Track context size for the usage ring (input+output+reasoning+cache).
 		if (event.type === "message.updated") {
 			const info = (
-				event.properties as { info?: OpencodeMessageInfo } | undefined
+				event.properties as
+					| { info?: OpencodeMessageInfo & { id?: string } }
+					| undefined
 			)?.info;
+			if (ctx.planMode) notePlanMessage(ctx.planCapture, info);
 			const t = info?.tokens;
 			if (info?.role === "assistant" && t && (t.output ?? 0) > 0) {
 				ctx.contextParts = {
@@ -635,6 +787,11 @@ export class OpencodeSessionManager implements SessionManager {
 			default:
 				break;
 		}
+
+		// Plan mode: capture the plan text and drop it from the live stream so it
+		// re-surfaces once as a plan-review card (planCaptured at idle) rather than
+		// duplicated as prose. Lifecycle events (session.idle) fall through.
+		if (ctx.planMode && capturePlanPart(ctx.planCapture, event)) return;
 
 		// Verbatim passthrough, namespaced. Skip `session.next.*`: it's the
 		// redundant raw form of the `message.part.*` the accumulator consumes.
@@ -978,25 +1135,21 @@ export class OpencodeSessionManager implements SessionManager {
 		}
 	}
 
-	async stopSession(sessionId: string): Promise<void> {
+	/** Tear down the active turn: unblock `await turnDone`, abort the pump, and
+	 *  fire a best-effort remote abort. No-op if no ctx is registered yet
+	 *  (mid-startup) — the post-startup abort checks bail instead. */
+	private tearDownTurn(sessionId: string): void {
 		const ctx = this.sessions.get(sessionId);
-		if (!ctx) {
-			// Mid-startup: sendMessage hasn't registered a ctx yet. Record the
-			// intent so it's honored once startup lands, not dropped.
-			this.pendingAborts.add(sessionId);
-			return;
-		}
-		this.pendingAborts.delete(sessionId);
-		ctx.aborted = true;
+		if (!ctx) return;
 		this.clearPending(ctx);
 		// Unblock the local turn FIRST — never gate it behind the remote abort
 		// RPC, which can hang against a wedged server and strand `await
-		// turnDone` forever (the bug this fixes). Stop the pump too so we don't
-		// leak the SSE subscription; reuse swaps in a fresh controller.
+		// turnDone` forever. Stop the pump too so we don't leak the SSE
+		// subscription; reuse swaps in a fresh controller.
 		ctx.settle?.resolve();
 		ctx.abort.abort();
 		ctx.pumpStarted = false;
-		// Best-effort remote abort, fire-and-forget: it tells opencode to stop
+		// Best-effort remote abort, fire-and-forget: tells opencode to stop
 		// server-side work but must not block (or fail) the local teardown.
 		void this.server
 			.start(process.env)
@@ -1009,6 +1162,12 @@ export class OpencodeSessionManager implements SessionManager {
 			.catch((error) =>
 				logger.debug("opencode abort failed", errorDetails(error)),
 			);
+	}
+
+	async stopSession(sessionId: string): Promise<void> {
+		// Emits `aborted` instantly + runs `tearDownTurn` — works at any point,
+		// including during the first turn's startup (server.start + create).
+		this.turns.requestStop(sessionId);
 	}
 
 	// Mid-turn steer via a second promptAsync on the busy session. RPC-first:
@@ -1059,15 +1218,12 @@ export class OpencodeSessionManager implements SessionManager {
 
 	async shutdown(): Promise<void> {
 		for (const ctx of this.byOpencodeId.values()) {
-			ctx.aborted = true;
-			ctx.settle?.resolve();
-			ctx.abort.abort();
+			this.turns.requestStop(ctx.helmorSessionId);
 		}
 		this.sessions.clear();
 		this.byOpencodeId.clear();
 		this.pendingPermissions.clear();
 		this.pendingQuestions.clear();
-		this.pendingAborts.clear();
 		this.server.kill();
 	}
 }

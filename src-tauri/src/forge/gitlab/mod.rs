@@ -87,17 +87,10 @@ pub(super) fn lookup_workspace_mr_action_status(workspace_id: &str) -> Result<Fo
         }
     };
 
-    // Auth probe runs BEFORE the published short-circuit so an
-    // unpublished workspace whose bound login was logged out still
-    // surfaces Connect. Only `LoggedOut` (definitive) flips the CTA;
-    // `Indeterminate` falls through and lets the API call try.
-    if gitlab_login_definitely_logged_out(&context) {
-        tracing::warn!(
-            workspace_id,
-            host = %context.remote.host,
-            login = %context.login,
-            "glab account no longer logged in; reporting unauthenticated"
-        );
+    // Persistent logout: a prior real signal said this account is logged
+    // out → keep surfacing Connect without re-probing (covers unpublished
+    // + sibling workspaces + refocus).
+    if crate::forge::accounts::forge_auth_known_logged_out(&context.remote.host, &context.login) {
         return Ok(ForgeActionStatus::unauthenticated(format!(
             "Not connected to GitLab on {}",
             context.remote.host
@@ -109,11 +102,30 @@ pub(super) fn lookup_workspace_mr_action_status(workspace_id: &str) -> Result<Fo
     }
 
     let mr = match find_workspace_mr(&context) {
-        Ok(Some(mr)) => mr,
-        Ok(None) => return Ok(ForgeActionStatus::no_change_request()),
+        Ok(Some(mr)) => {
+            crate::forge::accounts::note_forge_auth(
+                &context.remote.host,
+                &context.login,
+                crate::forge::accounts::AuthCheck::LoggedIn,
+            );
+            mr
+        }
+        Ok(None) => {
+            crate::forge::accounts::note_forge_auth(
+                &context.remote.host,
+                &context.login,
+                crate::forge::accounts::AuthCheck::LoggedIn,
+            );
+            return Ok(ForgeActionStatus::no_change_request());
+        }
         Err(error) => {
             let message = format!("{error:#}");
             if looks_like_auth_error(&message) {
+                crate::forge::accounts::note_forge_auth(
+                    &context.remote.host,
+                    &context.login,
+                    crate::forge::accounts::AuthCheck::LoggedOut,
+                );
                 tracing::warn!(
                     workspace_id,
                     host = %context.remote.host,
@@ -367,16 +379,4 @@ fn ensure_gitlab_cli_ready(context: &GitlabContext, operation: &str) -> Result<(
         );
     }
     Ok(())
-}
-
-/// Routes through `check_auth`; `Indeterminate` and `LoggedIn`
-/// preserve the binding.
-fn gitlab_login_definitely_logged_out(context: &GitlabContext) -> bool {
-    let Some(backend) = crate::forge::accounts::backend_for(crate::forge::ForgeProvider::Gitlab)
-    else {
-        return false;
-    };
-    backend
-        .check_auth(&context.remote.host, &context.login)
-        .is_definitely_logged_out()
 }

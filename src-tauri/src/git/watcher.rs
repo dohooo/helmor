@@ -823,9 +823,9 @@ mod tests {
     use std::process::Command;
 
     fn git(repo: &Path, args: &[&str]) {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(repo)
+        let mut cmd = Command::new("git");
+        cmd.args(args).current_dir(repo);
+        let output = crate::platform::process::configure_background_cli(&mut cmd)
             .output()
             .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
         assert!(

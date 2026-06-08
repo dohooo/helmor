@@ -1,6 +1,5 @@
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { type ComponentType, useState } from "react";
-import { ForgeAccountsHealthSentinel } from "@/components/forge-accounts-health-sentinel";
 import { QuitConfirmDialog } from "@/components/quit-confirm-dialog";
 import { SplashScreen } from "@/components/splash-screen";
 import { AppOnboarding } from "@/features/onboarding";
@@ -66,28 +65,14 @@ export function AppProviders({
 						<QuitConfirmDialog sessionRunStates={EMPTY_SESSION_RUN_STATES} />
 					</>
 				) : (
-					<>
-						{/* Renderless: focus-driven health probes for every
-						 *  (provider, host) we know about. Without this the
-						 *  reconciliation only ran while Settings → Accounts
-						 *  was open, so a `gh auth login` outside Helmor
-						 *  wouldn't trigger a re-bind until the user opened
-						 *  that panel — leaving every workspace's chip
-						 *  stuck on "Connect" indefinitely. */}
-						<ForgeAccountsHealthSentinel />
-						<AppShell
-							onOpenSettings={(
-								workspaceId,
-								workspaceRepoId,
-								initialSection,
-							) => {
-								setSettingsInitialSection(initialSection);
-								setSettingsWorkspaceId(workspaceId);
-								setSettingsWorkspaceRepoId(workspaceRepoId);
-								setSettingsOpen(true);
-							}}
-						/>
-					</>
+					<AppShell
+						onOpenSettings={(workspaceId, workspaceRepoId, initialSection) => {
+							setSettingsInitialSection(initialSection);
+							setSettingsWorkspaceId(workspaceId);
+							setSettingsWorkspaceRepoId(workspaceRepoId);
+							setSettingsOpen(true);
+						}}
+					/>
 				)}
 				{splashMounted && <SplashScreen visible={splashVisible} />}
 				<SettingsDialog

@@ -208,13 +208,6 @@ export function ForgeConnectDialog({
 			host,
 			baselineRef.current,
 		);
-		// Always invalidate the per-host login set so the lightweight
-		// `useForgeLoginsHealth` probes in the inspector / settings
-		// pick up the change immediately, no focus required.
-		void queryClient.invalidateQueries({
-			queryKey: helmorQueryKeys.forgeLogins(provider, host),
-		});
-
 		let connectedLogin = probe.login;
 		if (probe.login) {
 			// Resolve the repo to rebind: explicit prop wins, otherwise
@@ -247,14 +240,23 @@ export function ForgeConnectDialog({
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.forgeAccountsAll,
 			});
-			// Match BOTH `workspaceForge` (detection) and
-			// `workspaceForgeActionStatus` (the inspector header's
-			// remote-state source).
+			// Refresh the workspace-scoped identity views: `workspaceForge`
+			// (detection), `workspaceForgeActionStatus` (remote-state), and
+			// `workspaceAccountProfile` (chip avatar/login, staleTime:Infinity
+			// — without this the chip keeps the old account until next focus).
 			void queryClient.invalidateQueries({
 				predicate: (q) => {
 					const head = q.queryKey[0];
-					return typeof head === "string" && head.startsWith("workspaceForge");
+					return (
+						typeof head === "string" &&
+						(head.startsWith("workspaceForge") ||
+							head === "workspaceAccountProfile")
+					);
 				},
+				// Refetch inactive siblings too: otherwise switching to another
+				// same-account workspace after login flashes the stale Connect
+				// CTA before the refetch settles it to the normal button.
+				refetchType: "all",
 			});
 			if (workspaceId) {
 				void queryClient.invalidateQueries({

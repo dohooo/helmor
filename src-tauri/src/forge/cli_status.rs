@@ -54,17 +54,7 @@ fn bundled_program_token(program: &str) -> Result<String> {
 
 /// `'foo'\''bar'`-style single quoting safe for /bin/sh.
 fn shell_single_quote(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() + 2);
-    out.push('\'');
-    for ch in value.chars() {
-        if ch == '\'' {
-            out.push_str("'\\''");
-        } else {
-            out.push(ch);
-        }
-    }
-    out.push('\'');
-    out
+    crate::platform::shell::quote_posix_arg(value)
 }
 
 pub(crate) fn labels_for(provider: ForgeProvider) -> ForgeLabels {
