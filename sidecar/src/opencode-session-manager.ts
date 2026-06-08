@@ -1112,7 +1112,7 @@ export class OpencodeSessionManager implements SessionManager {
 		forceReload?: boolean;
 	}): Promise<readonly ProviderModelInfo[]> {
 		// Restart to re-read global config (its cache TTL is infinity).
-		if (opts?.forceReload) this.server.kill();
+		if (opts?.forceReload) void this.server.kill();
 		let handle: Awaited<ReturnType<OpencodeServer["start"]>>;
 		try {
 			handle = await this.server.start(process.env);
@@ -1224,7 +1224,7 @@ export class OpencodeSessionManager implements SessionManager {
 		this.byOpencodeId.clear();
 		this.pendingPermissions.clear();
 		this.pendingQuestions.clear();
-		this.server.kill();
+		await this.server.kill();
 	}
 }
 
