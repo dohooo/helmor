@@ -1,142 +1,80 @@
 //! PTY (pseudo-terminal) session seam for interactive script / terminal runs.
 //!
-//! The macOS/Unix implementation is the reference behavior: a `openpty` master
-//! / slave pair, the child made a session + controlling-terminal leader
-//! (`setsid` + `TIOCSCTTY`), a non-blocking master read via `poll(2)`, and
-//! `TIOCSWINSZ` resizes. Windows support (ConPTY) fills the stubbed arms here
-//! WITHOUT touching the shared run/terminal orchestration in
-//! `workspace::scripts`.
+//! The seam exposes OS-agnostic trait objects — [`PtyChild`], [`PtyReader`],
+//! and [`PtyWriter`] — so a Windows ConPTY (or `portable_pty`) adapter can
+//! supply its own handle types without the shared run/terminal orchestration
+//! in `workspace::scripts` touching `std::fs::File`, `libc`, or `poll(2)`
+//! directly.
+//!
+//! The macOS/Unix implementation is the reference behavior: an `openpty`
+//! master/slave pair, the child made a session + controlling-terminal leader
+//! (`setsid` + `TIOCSCTTY`), a non-blocking master read driven by `poll(2)`,
+//! and `TIOCSWINSZ` resizes — all kept inside the Unix adapter below. A
+//! non-blocking master (drained after each poll wake) is deliberate: it lets
+//! `write_stdin` get `WouldBlock` instead of blocking the IPC thread, and lets
+//! the reader honor its stop flag via the poll timeout instead of waiting on an
+//! EOF that a backgrounded grandchild could withhold.
 
-use std::fs::File;
-use std::process::{Child, Command};
+use std::io::{self, Read, Write};
+use std::process::{Command, ExitStatus};
 
 use anyhow::Result;
 
-/// Default PTY window size used when opening a new session. The frontend
-/// issues a `resize` with the real terminal dimensions immediately after.
-const DEFAULT_ROWS: u16 = 30;
-const DEFAULT_COLS: u16 = 120;
-
-/// A spawned child attached to a freshly-allocated PTY.
-///
-/// `writer` and `reader` are independent handles onto the same PTY master:
-/// `writer` is used for user input (typing, paste, Ctrl+C) and resizes,
-/// `reader` is drained by the single reader thread that merges stdout+stderr.
-pub struct PtySession {
-    pub child: Child,
-    /// OS process id of the spawned child.
-    pub pid: u32,
-    /// Process-group id of the child (it is made a group leader).
-    pub pgid: crate::platform::process::Pid,
-    /// Write side of the PTY master.
-    pub writer: File,
-    /// Read side of the PTY master (merged stdout + stderr).
-    pub reader: File,
+/// The spawned child, reduced to what the run orchestration needs: `id()` for
+/// the registry / `Started` event and `wait()` to reap. Unix wraps
+/// `std::process::Child`; a Windows adapter wraps its ConPTY child.
+pub trait PtyChild: Send {
+    fn id(&self) -> u32;
+    fn wait(&mut self) -> io::Result<ExitStatus>;
 }
 
-/// Result of polling the PTY master for readability.
+/// Write side of the PTY master: user input (typing / paste / Ctrl+C) and
+/// window resize. Unix wraps the non-blocking master dup; a Windows adapter
+/// wraps the ConPTY input handle.
+pub trait PtyWriter: Write + Send {
+    /// Resize the terminal so the kernel delivers `SIGWINCH` to the foreground
+    /// process group and TUIs re-layout.
+    fn resize(&self, cols: u16, rows: u16) -> io::Result<()>;
+}
+
+/// Read side of the PTY master (merged stdout + stderr). The orchestration runs
+/// one reader thread that waits via [`PtyReader::poll_readable`] (so it can
+/// honor its stop flag on the poll timeout) and drains via [`Read`]. Unix uses
+/// `poll(2)` on the master; a Windows adapter supplies an equivalent readiness
+/// check on its ConPTY output handle.
+pub trait PtyReader: Read + Send {
+    fn poll_readable(&self, timeout_ms: i32) -> io::Result<PollResult>;
+}
+
+/// Outcome of waiting for the PTY master to become readable.
 pub enum PollResult {
-    /// The poll timed out with nothing ready.
+    /// Timed out with nothing ready — the caller re-checks its stop flag.
     TimedOut,
-    /// The poll was interrupted (`EINTR`); the caller should retry.
+    /// Interrupted (`EINTR`) — the caller should retry.
     Interrupted,
-    /// The master is readable (and/or the slave hung up).
+    /// Readable, and/or the slave hung up.
     Ready {
         /// The slave end closed (child exited); drain remaining bytes, then stop.
         hung_up: bool,
     },
 }
 
-/// Spawn `cmd` attached to a new PTY. The caller is responsible for the rest
-/// of the orchestration (registering the handle, the reader thread, feeding
-/// the initial command, and reaping via `child.wait()`).
-pub fn spawn(cmd: Command) -> Result<PtySession> {
-    #[cfg(unix)]
-    {
-        spawn_unix(cmd)
-    }
-
-    #[cfg(not(unix))]
-    {
-        // Windows adapter: allocate a ConPTY and attach `cmd` to it. Until
-        // then, fail loudly rather than silently degrade — the macOS/Unix
-        // path above is unaffected.
-        let _ = cmd;
-        anyhow::bail!("PTY sessions are not yet implemented on this platform")
-    }
-}
-
-/// Resize the PTY behind `master` to `cols` x `rows`. The kernel delivers
-/// `SIGWINCH` to the foreground process group so TUIs re-layout.
-pub fn resize(master: &File, cols: u16, rows: u16) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::fd::AsRawFd;
-        let ws = libc::winsize {
-            ws_row: rows,
-            ws_col: cols,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
-        let ret = unsafe {
-            libc::ioctl(
-                master.as_raw_fd(),
-                libc::TIOCSWINSZ as libc::c_ulong,
-                &ws as *const libc::winsize,
-            )
-        };
-        if ret != 0 {
-            anyhow::bail!("TIOCSWINSZ failed: {}", std::io::Error::last_os_error());
-        }
-        Ok(())
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = (master, cols, rows);
-        anyhow::bail!("PTY resize is not yet implemented on this platform")
-    }
-}
-
-/// Wait up to `timeout_ms` for the PTY `master` to become readable.
-pub fn poll_readable(master: &File, timeout_ms: i32) -> std::io::Result<PollResult> {
-    #[cfg(unix)]
-    {
-        use std::os::fd::AsRawFd;
-        let mut pfd = libc::pollfd {
-            fd: master.as_raw_fd(),
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        let ret = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
-        if ret < 0 {
-            let err = std::io::Error::last_os_error();
-            if err.kind() == std::io::ErrorKind::Interrupted {
-                return Ok(PollResult::Interrupted);
-            }
-            return Err(err);
-        }
-        if ret == 0 {
-            return Ok(PollResult::TimedOut);
-        }
-        let hung_up = pfd.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0;
-        Ok(PollResult::Ready { hung_up })
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = (master, timeout_ms);
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "PTY poll is not yet implemented on this platform",
-        ))
-    }
+/// A spawned child attached to a freshly-allocated PTY.
+pub struct PtySession {
+    pub child: Box<dyn PtyChild>,
+    /// Process-group id of the child (it is made a group leader). The pid
+    /// itself is available via `child.id()`.
+    pub pgid: crate::platform::process::Pid,
+    /// Write side of the PTY master.
+    pub writer: Box<dyn PtyWriter>,
+    /// Read side of the PTY master (merged stdout + stderr).
+    pub reader: Box<dyn PtyReader>,
 }
 
 /// True when a read error is the benign end-of-session disconnect (`EIO` on
 /// Unix when the child exits and the slave closes) rather than a real error
 /// worth logging.
-pub fn is_session_disconnect(err: &std::io::Error) -> bool {
+pub fn is_session_disconnect(err: &io::Error) -> bool {
     #[cfg(unix)]
     {
         err.raw_os_error() == Some(libc::EIO)
@@ -149,8 +87,117 @@ pub fn is_session_disconnect(err: &std::io::Error) -> bool {
     }
 }
 
+/// Spawn `cmd` attached to a new PTY. The caller owns the rest of the
+/// orchestration (registering the handle, the reader thread, feeding the
+/// initial command, and reaping via `child.wait()`).
+pub fn spawn(cmd: Command) -> Result<PtySession> {
+    #[cfg(unix)]
+    {
+        spawn_unix(cmd)
+    }
+
+    #[cfg(not(unix))]
+    {
+        // Windows adapter: allocate a ConPTY (or use `portable_pty`) and
+        // implement PtyChild / PtyReader / PtyWriter for its handles. Until
+        // then, fail loudly — the macOS/Unix path above is unaffected.
+        let _ = cmd;
+        anyhow::bail!("PTY sessions are not yet implemented on this platform")
+    }
+}
+
+#[cfg(unix)]
+const DEFAULT_ROWS: u16 = 30;
+#[cfg(unix)]
+const DEFAULT_COLS: u16 = 120;
+
+#[cfg(unix)]
+impl PtyChild for std::process::Child {
+    fn id(&self) -> u32 {
+        std::process::Child::id(self)
+    }
+    fn wait(&mut self) -> io::Result<ExitStatus> {
+        std::process::Child::wait(self)
+    }
+}
+
+/// Unix write side: the non-blocking master dup.
+#[cfg(unix)]
+pub struct UnixPtyWriter(pub std::fs::File);
+
+#[cfg(unix)]
+impl Write for UnixPtyWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.write(buf)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()
+    }
+}
+
+#[cfg(unix)]
+impl PtyWriter for UnixPtyWriter {
+    fn resize(&self, cols: u16, rows: u16) -> io::Result<()> {
+        use std::os::fd::AsRawFd;
+        let ws = libc::winsize {
+            ws_row: rows,
+            ws_col: cols,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        let ret = unsafe {
+            libc::ioctl(
+                self.0.as_raw_fd(),
+                libc::TIOCSWINSZ as libc::c_ulong,
+                &ws as *const libc::winsize,
+            )
+        };
+        if ret != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
+/// Unix read side: the master fd, drained after a `poll(2)` wake.
+#[cfg(unix)]
+pub struct UnixPtyReader(pub std::fs::File);
+
+#[cfg(unix)]
+impl Read for UnixPtyReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.0.read(buf)
+    }
+}
+
+#[cfg(unix)]
+impl PtyReader for UnixPtyReader {
+    fn poll_readable(&self, timeout_ms: i32) -> io::Result<PollResult> {
+        use std::os::fd::AsRawFd;
+        let mut pfd = libc::pollfd {
+            fd: self.0.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ret = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
+        if ret < 0 {
+            let err = io::Error::last_os_error();
+            if err.kind() == io::ErrorKind::Interrupted {
+                return Ok(PollResult::Interrupted);
+            }
+            return Err(err);
+        }
+        if ret == 0 {
+            return Ok(PollResult::TimedOut);
+        }
+        let hung_up = pfd.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0;
+        Ok(PollResult::Ready { hung_up })
+    }
+}
+
 #[cfg(unix)]
 fn spawn_unix(mut cmd: Command) -> Result<PtySession> {
+    use std::fs::File;
     use std::os::fd::FromRawFd;
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
@@ -158,19 +205,19 @@ fn spawn_unix(mut cmd: Command) -> Result<PtySession> {
     let (master_fd, slave_fd) = open_pty()?;
     set_nonblocking(master_fd)?;
 
-    // Dup master for the write side. Kept alive by the caller (in the process
-    // handle) for the lifetime of the child so input / resize can reach the
-    // PTY. `O_NONBLOCK` is shared with the read side via the dup.
+    // Dup master for the write side. `O_NONBLOCK` is shared with the read side
+    // via the dup, so `write_stdin` gets `WouldBlock` (not a blocked IPC
+    // thread) when the PTY input buffer is full.
     let writer_fd = unsafe { libc::dup(master_fd) };
     if writer_fd < 0 {
-        let err = std::io::Error::last_os_error();
+        let err = io::Error::last_os_error();
         unsafe {
             libc::close(master_fd);
             libc::close(slave_fd);
         }
         anyhow::bail!("dup(master_fd) failed: {err}");
     }
-    let writer = unsafe { File::from_raw_fd(writer_fd) };
+    let writer = UnixPtyWriter(unsafe { File::from_raw_fd(writer_fd) });
 
     // Dup slave for the pre_exec closure (`Stdio::from_raw_fd` takes ownership
     // of the fds attached below).
@@ -180,10 +227,10 @@ fn spawn_unix(mut cmd: Command) -> Result<PtySession> {
     unsafe {
         cmd.pre_exec(move || {
             if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
+                return Err(io::Error::last_os_error());
             }
             if libc::ioctl(slave_for_session, libc::TIOCSCTTY as libc::c_ulong, 0) == -1 {
-                return Err(std::io::Error::last_os_error());
+                return Err(io::Error::last_os_error());
             }
             libc::close(slave_for_session);
             Ok(())
@@ -198,20 +245,19 @@ fn spawn_unix(mut cmd: Command) -> Result<PtySession> {
             .spawn()?
     };
 
-    // Drop cmd to close all parent copies of the slave fds. Without this the
+    // Drop cmd to close the parent's copies of the slave fds. Without this the
     // master never sees EIO because the slave reference count stays > 0.
     drop(cmd);
 
     let pid = child.id();
     let pgid = unsafe { libc::getpgid(pid as libc::pid_t) };
-    let reader = unsafe { File::from_raw_fd(master_fd) };
+    let reader = UnixPtyReader(unsafe { File::from_raw_fd(master_fd) });
 
     Ok(PtySession {
-        child,
-        pid,
+        child: Box::new(child),
         pgid,
-        writer,
-        reader,
+        writer: Box::new(writer),
+        reader: Box::new(reader),
     })
 }
 
@@ -236,7 +282,7 @@ fn open_pty() -> Result<(libc::c_int, libc::c_int)> {
         )
     };
     if ret != 0 {
-        anyhow::bail!("openpty failed: {}", std::io::Error::last_os_error());
+        anyhow::bail!("openpty failed: {}", io::Error::last_os_error());
     }
     Ok((master, slave))
 }
@@ -245,10 +291,10 @@ fn open_pty() -> Result<(libc::c_int, libc::c_int)> {
 fn set_nonblocking(fd: libc::c_int) -> Result<()> {
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     if flags == -1 {
-        anyhow::bail!("fcntl(F_GETFL) failed: {}", std::io::Error::last_os_error());
+        anyhow::bail!("fcntl(F_GETFL) failed: {}", io::Error::last_os_error());
     }
     if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
-        anyhow::bail!("fcntl(F_SETFL) failed: {}", std::io::Error::last_os_error());
+        anyhow::bail!("fcntl(F_SETFL) failed: {}", io::Error::last_os_error());
     }
     Ok(())
 }
@@ -256,7 +302,6 @@ fn set_nonblocking(fd: libc::c_int) -> Result<()> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::io::Read;
 
     #[test]
     fn spawn_runs_a_command_and_streams_pty_output() {
@@ -264,11 +309,12 @@ mod tests {
         cmd.arg("-c").arg("printf hello; exit 0");
         let mut session = spawn(cmd).expect("spawn pty");
 
-        // Drain the merged PTY output until the child exits / slave closes.
+        // Drain the merged PTY output until the child exits / slave closes,
+        // exactly like the orchestration's reader thread.
         let mut out = Vec::new();
         let mut buf = [0u8; 256];
         loop {
-            match poll_readable(&session.reader, 1000).expect("poll") {
+            match session.reader.poll_readable(1000).expect("poll") {
                 PollResult::TimedOut => break,
                 PollResult::Interrupted => continue,
                 PollResult::Ready { hung_up } => {
@@ -280,7 +326,7 @@ mod tests {
                                 break;
                             }
                             Ok(n) => out.extend_from_slice(&buf[..n]),
-                            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                            Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                             Err(_) => {
                                 drained_eof = true;
                                 break;
@@ -297,6 +343,6 @@ mod tests {
 
         let text = String::from_utf8_lossy(&out);
         assert!(text.contains("hello"), "PTY output was {text:?}");
-        assert!(session.pid > 0);
+        assert!(session.child.id() > 0);
     }
 }

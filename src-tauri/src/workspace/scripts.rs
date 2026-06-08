@@ -12,6 +12,8 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use tauri::ipc::Channel;
 
+use crate::platform::pty::PtyWriter;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ScriptEvent {
@@ -78,7 +80,7 @@ struct ProcessHandle {
     /// `&mut self`; actual contention is negligible (one writer per keypress
     /// burst). Keeping this alive is what makes Ctrl+C and typing work —
     /// without it, the PTY master would close right after the initial command.
-    stdin: Arc<Mutex<std::fs::File>>,
+    stdin: Arc<Mutex<Box<dyn PtyWriter>>>,
     /// Per-action graceful-stop config. `None` keeps today's behavior:
     /// SIGTERM → 200ms → SIGKILL with no detour through stop.command.
     stop: Option<Arc<ScriptStop>>,
@@ -124,7 +126,7 @@ impl ScriptProcessManager {
         key: ProcessKey,
         pid: libc::pid_t,
         pgid: libc::pid_t,
-        stdin: Arc<Mutex<std::fs::File>>,
+        stdin: Arc<Mutex<Box<dyn PtyWriter>>>,
         stop: Option<ScriptStop>,
     ) -> Arc<AtomicBool> {
         let killed = Arc::new(AtomicBool::new(false));
@@ -296,7 +298,7 @@ impl ScriptProcessManager {
             return Ok(false);
         };
         let file = stdin.lock().expect("stdin mutex poisoned");
-        crate::platform::pty::resize(&file, cols, rows)?;
+        file.resize(cols, rows)?;
         Ok(true)
     }
 }
@@ -748,7 +750,7 @@ pub(crate) fn run_script_with_shell(
     let stdin = Arc::new(Mutex::new(session.writer));
     let reader_file = session.reader;
     let mut child = session.child;
-    let pid = session.pid as libc::pid_t;
+    let pid = child.id() as libc::pid_t;
     let pgid = session.pgid;
 
     let _ = channel.send(ScriptEvent::Started {
@@ -817,7 +819,7 @@ pub(crate) fn run_script_with_shell(
                 // POLLHUP / POLLERR fire when the slave fd is closed (child
                 // exited). We still try to read first so any pending bytes
                 // ahead of the hangup are delivered.
-                let hung_up = match crate::platform::pty::poll_readable(&master, POLL_TIMEOUT_MS) {
+                let hung_up = match master.poll_readable(POLL_TIMEOUT_MS) {
                     Ok(crate::platform::pty::PollResult::TimedOut)
                     | Ok(crate::platform::pty::PollResult::Interrupted) => continue,
                     Ok(crate::platform::pty::PollResult::Ready { hung_up }) => hung_up,
@@ -991,7 +993,9 @@ mod tests {
             .write(true)
             .open("/dev/null")
             .expect("open /dev/null");
-        let stdin_arc = Arc::new(Mutex::new(stdin));
+        let stdin_arc: Arc<Mutex<Box<dyn crate::platform::pty::PtyWriter>>> = Arc::new(Mutex::new(
+            Box::new(crate::platform::pty::UnixPtyWriter(stdin)),
+        ));
         let killed = mgr.register(key, pid, pgid, stdin_arc, None);
         (child, pid, pgid, killed)
     }
