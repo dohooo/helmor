@@ -22,6 +22,7 @@ const apiMocks = vi.hoisted(() => ({
 	refreshWorkspaceChangeRequest: vi.fn(),
 	mergeWorkspaceChangeRequest: vi.fn(),
 	pushWorkspaceToRemote: vi.fn(),
+	stopAgentStream: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -38,6 +39,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		refreshWorkspaceChangeRequest: apiMocks.refreshWorkspaceChangeRequest,
 		mergeWorkspaceChangeRequest: apiMocks.mergeWorkspaceChangeRequest,
 		pushWorkspaceToRemote: apiMocks.pushWorkspaceToRemote,
+		stopAgentStream: apiMocks.stopAgentStream,
 	};
 });
 
@@ -99,6 +101,8 @@ describe("useWorkspaceCommitLifecycle", () => {
 		apiMocks.refreshWorkspaceChangeRequest.mockReset();
 		apiMocks.mergeWorkspaceChangeRequest.mockReset();
 		apiMocks.pushWorkspaceToRemote.mockReset();
+		apiMocks.stopAgentStream.mockReset();
+		apiMocks.stopAgentStream.mockResolvedValue(undefined);
 
 		apiMocks.createSession.mockResolvedValue({ sessionId: "session-action" });
 		apiMocks.loadRepoPreferences.mockResolvedValue({});
@@ -122,11 +126,12 @@ describe("useWorkspaceCommitLifecycle", () => {
 		vi.restoreAllMocks();
 	});
 
-	// Both forge-mutating agent actions (create + reopen) gate on auth.
+	// Both forge-mutating agent actions (create + reopen) dispatch
+	// immediately, then abort in the background if the account is logged out.
 	it.each([
 		"create-pr",
 		"open-pr",
-	] as const)("blocks %s and flips the Connect CTA when the account is logged out", async (mode) => {
+	] as const)("dispatches %s immediately, then aborts the turn when logged out", async (mode) => {
 		apiMocks.checkWorkspaceForgeAuth.mockResolvedValue("loggedOut");
 		const queryClient = new QueryClient({
 			defaultOptions: { queries: { retry: false } },
@@ -158,19 +163,21 @@ describe("useWorkspaceCommitLifecycle", () => {
 			await result.current.handleInspectorCommitAction(mode);
 		});
 
+		// Dispatched with zero delay — session created + selected up front.
+		expect(apiMocks.createSession).toHaveBeenCalled();
+		expect(onSelectSession).toHaveBeenCalledWith("session-action");
 		expect(apiMocks.checkWorkspaceForgeAuth).toHaveBeenCalledWith(
 			"workspace-1",
 		);
-		// Logged out → never spawns the agent session.
-		expect(apiMocks.createSession).not.toHaveBeenCalled();
-		expect(onSelectSession).not.toHaveBeenCalled();
+
+		// Background guard aborts the just-started turn but KEEPS the session
+		// (no hide, stays selected).
+		await waitFor(() => {
+			expect(apiMocks.stopAgentStream).toHaveBeenCalledWith("session-action");
+		});
+		expect(apiMocks.hideSession).not.toHaveBeenCalled();
+		expect(onSelectSession).not.toHaveBeenCalledWith(null);
 		expect(pushToast).toHaveBeenCalled();
-		// CTA flips: forge action status is marked unauthenticated.
-		expect(
-			queryClient.getQueryData<ForgeActionStatus>(
-				helmorQueryKeys.workspaceForgeActionStatus("workspace-1"),
-			)?.remoteState,
-		).toBe("unauthenticated");
 	});
 
 	it("verifies and auto-closes an action session once it has completed", async () => {

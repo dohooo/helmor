@@ -87,18 +87,45 @@ pub(super) fn lookup_workspace_mr_action_status(workspace_id: &str) -> Result<Fo
         }
     };
 
-    // No auth probe — lazy. Published: API 401 below → `unauthenticated`.
-    // Unpublished: checked only on create-PR.
+    // Persistent logout: a prior real signal said this account is logged
+    // out → keep surfacing Connect without re-probing (covers unpublished
+    // + sibling workspaces + refocus).
+    if crate::forge::accounts::forge_auth_known_logged_out(&context.remote.host, &context.login) {
+        return Ok(ForgeActionStatus::unauthenticated(format!(
+            "Not connected to GitLab on {}",
+            context.remote.host
+        )));
+    }
+
     if !context.published {
         return Ok(ForgeActionStatus::no_change_request());
     }
 
     let mr = match find_workspace_mr(&context) {
-        Ok(Some(mr)) => mr,
-        Ok(None) => return Ok(ForgeActionStatus::no_change_request()),
+        Ok(Some(mr)) => {
+            crate::forge::accounts::note_forge_auth(
+                &context.remote.host,
+                &context.login,
+                crate::forge::accounts::AuthCheck::LoggedIn,
+            );
+            mr
+        }
+        Ok(None) => {
+            crate::forge::accounts::note_forge_auth(
+                &context.remote.host,
+                &context.login,
+                crate::forge::accounts::AuthCheck::LoggedIn,
+            );
+            return Ok(ForgeActionStatus::no_change_request());
+        }
         Err(error) => {
             let message = format!("{error:#}");
             if looks_like_auth_error(&message) {
+                crate::forge::accounts::note_forge_auth(
+                    &context.remote.host,
+                    &context.login,
+                    crate::forge::accounts::AuthCheck::LoggedOut,
+                );
                 tracing::warn!(
                     workspace_id,
                     host = %context.remote.host,
