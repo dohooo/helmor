@@ -610,9 +610,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 
 							{activeSection === "developer" && <DevToolsPanel />}
 
-							{activeSection === "account" && (
-								<AccountPanel repositories={repositories} />
-							)}
+							{activeSection === "account" && <AccountPanel />}
 
 							{activeSection === "inbox" && (
 								<InboxSettingsPanel

@@ -132,6 +132,7 @@ async fn dispatch(
         "list_cursor_models" => to_value(crate::agents::list_cursor_models(app.state::<crate::sidecar::ManagedSidecar>(), arg_opt_string(&args, "apiKey")).await?),
         "list_editor_files" => to_value(crate::commands::editor_commands::list_editor_files(arg_string(&args, "workspaceRootPath")?).await?),
         "list_forge_accounts" => to_value(crate::commands::forge_commands::list_forge_accounts(arg_json(&args, "gitlabHosts")?).await?),
+        "check_workspace_forge_auth" => to_value(crate::commands::forge_commands::check_workspace_forge_auth(arg_string(&args, "workspaceId")?).await?),
         "list_forge_labels" => to_value(crate::commands::forge_commands::list_forge_labels(arg_json(&args, "provider")?, arg_string(&args, "login")?, arg_opt_string(&args, "host"), arg_json(&args, "repos")?).await?),
         "list_forge_logins" => to_value(crate::commands::forge_commands::list_forge_logins(arg_json(&args, "provider")?, arg_string(&args, "host")?, arg_opt_bool(&args, "forceRefresh")).await?),
         "list_hidden_sessions" => to_value(crate::commands::session_commands::list_hidden_sessions(arg_string(&args, "workspaceId")?).await?),
