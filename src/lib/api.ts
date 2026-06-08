@@ -196,14 +196,9 @@ export type AgentModelSection = {
 	options: AgentModelOption[];
 };
 
-/** Wire strings the sidecars accept for permission mode. The composer's
- *  permission-mode dropdown reads {@link ProviderCapabilities.permissionModes}
- *  to decide which entries to render — every provider supports `default`. */
-export type PermissionModeLiteral =
-	| "default"
-	| "acceptEdits"
-	| "plan"
-	| "bypassPermissions";
+/** Wire strings the sidecars accept for permission mode. Helmor models
+ *  permission as a binary: `plan` (read-only) or full access. */
+export type PermissionModeLiteral = "plan" | "bypassPermissions";
 
 /** Static capability table for a single provider. Mirrors the Rust
  *  `agents::provider_capabilities::ProviderCapabilities` shape so a
@@ -218,7 +213,6 @@ export type ProviderCapabilities = {
 	supportsSteer: boolean;
 	supportsSlashCommands: boolean;
 	requiresApiKey: boolean;
-	permissionModes: PermissionModeLiteral[];
 };
 
 export type AgentSendRequest = {
@@ -1133,7 +1127,6 @@ export const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities[] = [
 		supportsSteer: true,
 		supportsSlashCommands: true,
 		requiresApiKey: false,
-		permissionModes: ["default", "acceptEdits", "plan", "bypassPermissions"],
 	},
 	{
 		provider: "codex",
@@ -1144,7 +1137,6 @@ export const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities[] = [
 		supportsSteer: true,
 		supportsSlashCommands: true,
 		requiresApiKey: false,
-		permissionModes: ["default", "bypassPermissions"],
 	},
 	{
 		provider: "cursor",
@@ -1155,7 +1147,6 @@ export const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities[] = [
 		supportsSteer: false,
 		supportsSlashCommands: true,
 		requiresApiKey: true,
-		permissionModes: ["default", "plan"],
 	},
 	{
 		provider: "opencode",
@@ -1166,7 +1157,6 @@ export const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities[] = [
 		supportsSteer: true,
 		supportsSlashCommands: true,
 		requiresApiKey: false,
-		permissionModes: ["default", "acceptEdits", "plan", "bypassPermissions"],
 	},
 ];
 

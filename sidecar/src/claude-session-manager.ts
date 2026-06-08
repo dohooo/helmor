@@ -154,14 +154,8 @@ interface LiveSession {
 	abortEmitted?: boolean;
 }
 
-const VALID_PERMISSION_MODES = [
-	"default",
-	"plan",
-	"bypassPermissions",
-	"acceptEdits",
-	"dontAsk",
-	"auto",
-] as const;
+// Helmor models permission as a binary: `plan` (read-only) or full access.
+const VALID_PERMISSION_MODES = ["plan", "bypassPermissions"] as const;
 type ClaudePermissionMode = (typeof VALID_PERMISSION_MODES)[number];
 
 const VALID_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
@@ -206,13 +200,7 @@ interface PermissionResolution {
 }
 
 function parsePermissionMode(value: string | undefined): ClaudePermissionMode {
-	if (
-		value !== undefined &&
-		(VALID_PERMISSION_MODES as readonly string[]).includes(value)
-	) {
-		return value as ClaudePermissionMode;
-	}
-	return "bypassPermissions";
+	return value === "plan" ? "plan" : "bypassPermissions";
 }
 
 function extractSessionPermissionMode(
