@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { initialPanesState, panesReducer } from "./provider";
+import { act, renderHook } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { initialPanesState, panesReducer, PanesProvider, usePanes } from "./provider";
 
 describe("panesReducer", () => {
 	it("seeds with a single default pane targeting main", () => {
@@ -51,5 +53,37 @@ describe("panesReducer", () => {
 			sessionId: null,
 		});
 		expect(next).toBe(state);
+	});
+});
+
+describe("PanesProvider", () => {
+	const wrapper = ({ children }: { children: ReactNode }) => (
+		<PanesProvider>{children}</PanesProvider>
+	);
+
+	it("exposes the seeded single pane", () => {
+		const { result } = renderHook(() => usePanes(), { wrapper });
+		expect(result.current.panes).toHaveLength(1);
+		expect(result.current.focusedPaneId).toBe("default");
+	});
+
+	it("replaceTarget swaps the pane's workspace + session", () => {
+		const { result } = renderHook(() => usePanes(), { wrapper });
+		act(() => {
+			result.current.replaceTarget("default", {
+				workspaceId: "ws-a",
+				sessionId: "s-x",
+			});
+		});
+		expect(result.current.panes[0]).toMatchObject({
+			workspaceId: "ws-a",
+			sessionId: "s-x",
+		});
+	});
+
+	it("usePanes throws when used outside the provider", () => {
+		expect(() => renderHook(() => usePanes())).toThrowError(
+			/usePanes must be used inside <PanesProvider>/,
+		);
 	});
 });
