@@ -52,7 +52,7 @@
 	},
 	"bundle": {
 		"active": true,
-		"createUpdaterArtifacts": false,
+		"createUpdaterArtifacts": true,
 		"targets": "all",
 		"externalBin": [
 			"../sidecar/dist/helmor-sidecar",
