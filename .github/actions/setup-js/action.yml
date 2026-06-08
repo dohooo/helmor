@@ -6,6 +6,14 @@ inputs:
     description: Bun version to install
     required: false
     default: "1.3.2"
+  install-sccache:
+    description: >-
+      Install sccache. Only the macOS Rust jobs use it (via setup-rust-tauri's
+      RUSTC_WRAPPER); the Windows jobs don't, and taiki-e/install-action's
+      sccache install is flaky on Windows runners (bash startup failure,
+      actions/partner-runner-images#169), so they opt out.
+    required: false
+    default: "true"
 
 runs:
   using: composite
@@ -16,6 +24,7 @@ runs:
         bun-version: ${{ inputs.bun-version }}
 
     - name: Install sccache
+      if: inputs.install-sccache == 'true'
       uses: taiki-e/install-action@sccache
 
     # Cache bun's package store and every node_modules produced by

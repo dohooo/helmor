@@ -49,8 +49,12 @@ pub trait PtyReader: Read + Send {
 /// Outcome of waiting for the PTY master to become readable.
 pub enum PollResult {
     /// Timed out with nothing ready — the caller re-checks its stop flag.
+    /// Constructed by the Unix `poll(2)` arm only; the Windows ConPTY reader
+    /// is blocking and always reports `Ready`.
+    #[cfg_attr(not(unix), allow(dead_code))]
     TimedOut,
-    /// Interrupted (`EINTR`) — the caller should retry.
+    /// Interrupted (`EINTR`) — the caller should retry. Unix-arm only.
+    #[cfg_attr(not(unix), allow(dead_code))]
     Interrupted,
     /// Readable, and/or the slave hung up.
     Ready {
@@ -96,13 +100,144 @@ pub fn spawn(cmd: Command) -> Result<PtySession> {
         spawn_unix(cmd)
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        // Windows adapter: allocate a ConPTY (or use `portable_pty`) and
-        // implement PtyChild / PtyReader / PtyWriter for its handles. Until
-        // then, fail loudly — the macOS/Unix path above is unaffected.
+        spawn_windows(cmd)
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
         let _ = cmd;
         anyhow::bail!("PTY sessions are not yet implemented on this platform")
+    }
+}
+
+// Windows ConPTY adapter, backed by `portable_pty`. ConPTY children can't be
+// std `Child`s and their pipes aren't poll(2)-able fds, so each handle gets a
+// trait wrapper. The reader is blocking: `poll_readable` reports ready and the
+// drain loop relies on a 0-byte read (the pipe closing when the child exits)
+// to stop, which is what the orchestration already treats as `hung_up`.
+#[cfg(windows)]
+fn spawn_windows(cmd: Command) -> Result<PtySession> {
+    use std::sync::{Arc, Mutex};
+
+    use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 30,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| anyhow::anyhow!("ConPTY openpty failed: {e}"))?;
+
+    let mut builder = CommandBuilder::new(cmd.get_program());
+    for arg in cmd.get_args() {
+        builder.arg(arg);
+    }
+    if let Some(dir) = cmd.get_current_dir() {
+        builder.cwd(dir);
+    }
+    for (key, value) in cmd.get_envs() {
+        match value {
+            Some(value) => builder.env(key, value),
+            None => builder.env_remove(key),
+        }
+    }
+
+    let child = pair
+        .slave
+        .spawn_command(builder)
+        .map_err(|e| anyhow::anyhow!("ConPTY spawn failed: {e}"))?;
+    drop(pair.slave);
+
+    let reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|e| anyhow::anyhow!("ConPTY reader clone failed: {e}"))?;
+    let writer = pair
+        .master
+        .take_writer()
+        .map_err(|e| anyhow::anyhow!("ConPTY writer failed: {e}"))?;
+
+    // No process groups on Windows; the kill path keys off the pid.
+    let pid = child.process_id().unwrap_or(0);
+
+    Ok(PtySession {
+        child: Box::new(WindowsPtyChild(child)),
+        pgid: pid,
+        writer: Box::new(WindowsPtyWriter {
+            writer,
+            master: Arc::new(Mutex::new(pair.master)),
+        }),
+        reader: Box::new(WindowsPtyReader(reader)),
+    })
+}
+
+#[cfg(windows)]
+struct WindowsPtyChild(Box<dyn portable_pty::Child + Send + Sync>);
+
+#[cfg(windows)]
+impl PtyChild for WindowsPtyChild {
+    fn id(&self) -> u32 {
+        self.0.process_id().unwrap_or(0)
+    }
+    fn wait(&mut self) -> io::Result<ExitStatus> {
+        use std::os::windows::process::ExitStatusExt;
+        let status = self.0.wait()?;
+        Ok(ExitStatus::from_raw(status.exit_code()))
+    }
+}
+
+#[cfg(windows)]
+struct WindowsPtyWriter {
+    writer: Box<dyn Write + Send>,
+    master: std::sync::Arc<std::sync::Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
+}
+
+#[cfg(windows)]
+impl Write for WindowsPtyWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.writer.write(buf)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
+    }
+}
+
+#[cfg(windows)]
+impl PtyWriter for WindowsPtyWriter {
+    fn resize(&self, cols: u16, rows: u16) -> io::Result<()> {
+        let master = self
+            .master
+            .lock()
+            .map_err(|_| io::Error::other("ConPTY master lock poisoned"))?;
+        master
+            .resize(portable_pty::PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| io::Error::other(e.to_string()))
+    }
+}
+
+#[cfg(windows)]
+struct WindowsPtyReader(Box<dyn Read + Send>);
+
+#[cfg(windows)]
+impl Read for WindowsPtyReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.0.read(buf)
+    }
+}
+
+#[cfg(windows)]
+impl PtyReader for WindowsPtyReader {
+    fn poll_readable(&self, _timeout_ms: i32) -> io::Result<PollResult> {
+        Ok(PollResult::Ready { hung_up: false })
     }
 }
 

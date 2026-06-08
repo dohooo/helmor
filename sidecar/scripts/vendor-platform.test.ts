@@ -14,6 +14,7 @@ import {
 describe("vendor platform boundary", () => {
 	test("keeps current macOS target metadata unchanged", () => {
 		expect(targetInfoForArch("arm64")).toEqual({
+			os: "darwin",
 			arch: "arm64",
 			claudeCodePkg: "@anthropic-ai/claude-code-darwin-arm64",
 			claudeCodeNpmSuffix: "darwin-arm64",
@@ -27,6 +28,7 @@ describe("vendor platform boundary", () => {
 			cloudflaredArch: "arm64",
 		});
 		expect(targetInfoForArch("x64")).toEqual({
+			os: "darwin",
 			arch: "x64",
 			claudeCodePkg: "@anthropic-ai/claude-code-darwin-x64",
 			claudeCodeNpmSuffix: "darwin-x64",
@@ -69,6 +71,39 @@ describe("vendor platform boundary", () => {
 				env: { TAURI_TARGET_TRIPLE: "x86_64-pc-windows-msvc" },
 			}),
 		).toThrow("unsupported TAURI_TARGET_TRIPLE for macOS");
+	});
+
+	test("resolves Windows x64 to the win32 vendor target", () => {
+		const target = resolveVendorTarget({
+			hostPlatform: "win32",
+			hostArch: "x64",
+			env: {},
+		});
+		expect(target.os).toBe("windows");
+		expect(target.arch).toBe("x64");
+		expect(target.claudeCodePkg).toBe("@anthropic-ai/claude-code-win32-x64");
+		expect(target.codexPkg).toBe("@openai/codex-win32-x64");
+		expect(target.codexTriple).toBe("x86_64-pc-windows-msvc");
+		expect(target.opencodePkg).toBe("opencode-windows-x64");
+		expect(ghArchivePlan(target).archiveName).toBe(
+			"gh_2.91.0_windows_amd64.zip",
+		);
+		expect(glabArchivePlan(target).archiveName).toBe(
+			"glab_1.93.0_windows_amd64.zip",
+		);
+		expect(cloudflaredArchivePlan(target).archiveName).toBe(
+			"cloudflared-2026.5.2-windows-amd64.exe",
+		);
+		expect(llamaArchivePlan(target).archiveName).toBe(
+			"llama-b9496-bin-win-cpu-x64.zip",
+		);
+		expect(() =>
+			resolveVendorTarget({
+				hostPlatform: "win32",
+				hostArch: "arm64",
+				env: {},
+			}),
+		).toThrow("unsupported Windows host arch");
 	});
 
 	test("keeps current arm64 vendor archive plans unchanged", () => {

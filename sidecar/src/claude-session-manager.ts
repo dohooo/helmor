@@ -64,8 +64,15 @@ const CONTEXT_USAGE_TIMEOUT_MS = 30_000;
  * Prefers `HELMOR_CLAUDE_CODE_BIN_PATH` (release), then the platform
  * sub-package (dev/test); falls back to the wrapper bin for `--omit=optional`.
  * Mirrors the codex resolver in `codex-app-server-manager.ts`.
+ *
+ * MUST NOT throw: this runs at module load (before the ready signal), and
+ * inside a `bun build --compile` binary `require.resolve` always fails —
+ * if the host didn't pass the env override, an exception here kills the
+ * whole sidecar with "Invalid sidecar ready signal". Returning `undefined`
+ * lets the SDK attempt its own resolution lazily, scoping any failure to
+ * the individual Claude session instead of the entire process.
  */
-function resolveClaudeBinPath(): string {
+function resolveClaudeBinPath(): string | undefined {
 	const override = process.env.HELMOR_CLAUDE_CODE_BIN_PATH;
 	if (override) {
 		return override;
@@ -77,8 +84,16 @@ function resolveClaudeBinPath(): string {
 		const pkgJson = require.resolve(`${platformPkg}/package.json`);
 		return join(dirname(pkgJson), binName);
 	} catch {
+		// Platform sub-package missing — try the wrapper package below.
+	}
+	try {
 		const pkgJson = require.resolve("@anthropic-ai/claude-code/package.json");
 		return join(dirname(pkgJson), "bin", "claude.exe");
+	} catch {
+		logger.info(
+			"Claude Code binary not resolved (no HELMOR_CLAUDE_CODE_BIN_PATH and no resolvable package); deferring to SDK default resolution",
+		);
+		return undefined;
 	}
 }
 

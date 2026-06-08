@@ -13,125 +13,100 @@ pub fn socket_path() -> Result<PathBuf> {
 }
 
 pub fn start_listener<R: Runtime>(app: AppHandle<R>) -> Result<()> {
-    #[cfg(unix)]
-    {
-        let socket_path = socket_path()?;
-        if socket_path.exists() {
-            let _ = std::fs::remove_file(&socket_path);
-        }
-
-        let listener = crate::platform::ipc::bind_listener(&socket_path)
-            .with_context(|| format!("Failed to bind UI sync socket {}", socket_path.display()))?;
-        listener
-            .set_nonblocking(false)
-            .context("Failed to configure UI sync socket")?;
-
-        std::thread::Builder::new()
-            .name("ui-sync-listener".into())
-            .spawn(move || {
-                for stream in listener.incoming() {
-                    let Ok(mut stream) = stream else {
-                        continue;
-                    };
-
-                    let mut line = String::new();
-                    let read_result = {
-                        let mut reader = BufReader::new(&mut stream);
-                        reader.read_line(&mut line)
-                    };
-
-                    let response = match read_result {
-                        Ok(0) => br#"{"ok":false,"error":"empty request"}"#.as_slice(),
-                        Ok(_) => match serde_json::from_str::<UiMutationEnvelope>(&line) {
-                            Ok(envelope) if envelope.version == UiMutationEnvelope::VERSION => {
-                                let manager = app.state::<UiSyncManager>();
-                                manager.publish(envelope.event);
-                                br#"{"ok":true}"#.as_slice()
-                            }
-                            Ok(_) => br#"{"ok":false,"error":"unsupported version"}"#.as_slice(),
-                            Err(_) => br#"{"ok":false,"error":"invalid payload"}"#.as_slice(),
-                        },
-                        Err(_) => br#"{"ok":false,"error":"read failed"}"#.as_slice(),
-                    };
-
-                    let _ = stream.write_all(response);
-                    let _ = stream.write_all(b"\n");
-                    let _ = stream.flush();
-                }
-            })
-            .context("Failed to spawn UI sync socket listener")?;
-
-        Ok(())
+    let socket_path = socket_path()?;
+    if socket_path.exists() {
+        let _ = std::fs::remove_file(&socket_path);
     }
 
-    #[cfg(not(unix))]
-    {
-        let _ = app;
-        Ok(())
-    }
+    // AF_UNIX stream socket: native on Unix, Win10 1803+ via `uds_windows`.
+    let listener = crate::platform::ipc::LocalListener::bind(&socket_path)
+        .with_context(|| format!("Failed to bind UI sync socket {}", socket_path.display()))?;
+    listener
+        .set_nonblocking(false)
+        .context("Failed to configure UI sync socket")?;
+
+    std::thread::Builder::new()
+        .name("ui-sync-listener".into())
+        .spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else {
+                    continue;
+                };
+
+                let mut line = String::new();
+                let read_result = {
+                    let mut reader = BufReader::new(&mut stream);
+                    reader.read_line(&mut line)
+                };
+
+                let response = match read_result {
+                    Ok(0) => br#"{"ok":false,"error":"empty request"}"#.as_slice(),
+                    Ok(_) => match serde_json::from_str::<UiMutationEnvelope>(&line) {
+                        Ok(envelope) if envelope.version == UiMutationEnvelope::VERSION => {
+                            let manager = app.state::<UiSyncManager>();
+                            manager.publish(envelope.event);
+                            br#"{"ok":true}"#.as_slice()
+                        }
+                        Ok(_) => br#"{"ok":false,"error":"unsupported version"}"#.as_slice(),
+                        Err(_) => br#"{"ok":false,"error":"invalid payload"}"#.as_slice(),
+                    },
+                    Err(_) => br#"{"ok":false,"error":"read failed"}"#.as_slice(),
+                };
+
+                let _ = stream.write_all(response);
+                let _ = stream.write_all(b"\n");
+                let _ = stream.flush();
+            }
+        })
+        .context("Failed to spawn UI sync socket listener")?;
+
+    Ok(())
 }
 
 pub fn notify_running_app(event: super::events::UiMutationEvent) -> Result<bool> {
-    #[cfg(unix)]
-    {
-        let socket_path = socket_path()?;
-        if !socket_path.exists() {
-            return Ok(false);
-        }
-
-        let mut stream = match crate::platform::ipc::connect(&socket_path) {
-            Ok(stream) => stream,
-            Err(_) => return Ok(false),
-        };
-
-        let payload = serde_json::to_string(&UiMutationEnvelope::new(event))
-            .context("Failed to serialize UI mutation envelope")?;
-        stream
-            .write_all(payload.as_bytes())
-            .context("Failed to write UI sync payload")?;
-        stream
-            .write_all(b"\n")
-            .context("Failed to terminate UI sync payload")?;
-        stream.flush().context("Failed to flush UI sync payload")?;
-
-        let mut reader = BufReader::new(stream);
-        let mut response = String::new();
-        reader
-            .read_line(&mut response)
-            .context("Failed to read UI sync response")?;
-
-        let ok = serde_json::from_str::<serde_json::Value>(&response)
-            .ok()
-            .and_then(|value| value.get("ok").and_then(|ok| ok.as_bool()))
-            .unwrap_or(false);
-
-        Ok(ok)
+    let socket_path = socket_path()?;
+    if !socket_path.exists() {
+        return Ok(false);
     }
 
-    #[cfg(not(unix))]
-    {
-        let _ = event;
-        Ok(false)
-    }
+    let mut stream = match crate::platform::ipc::LocalStream::connect(&socket_path) {
+        Ok(stream) => stream,
+        Err(_) => return Ok(false),
+    };
+
+    let payload = serde_json::to_string(&UiMutationEnvelope::new(event))
+        .context("Failed to serialize UI mutation envelope")?;
+    stream
+        .write_all(payload.as_bytes())
+        .context("Failed to write UI sync payload")?;
+    stream
+        .write_all(b"\n")
+        .context("Failed to terminate UI sync payload")?;
+    stream.flush().context("Failed to flush UI sync payload")?;
+
+    let mut reader = BufReader::new(stream);
+    let mut response = String::new();
+    reader
+        .read_line(&mut response)
+        .context("Failed to read UI sync response")?;
+
+    let ok = serde_json::from_str::<serde_json::Value>(&response)
+        .ok()
+        .and_then(|value| value.get("ok").and_then(|ok| ok.as_bool()))
+        .unwrap_or(false);
+
+    Ok(ok)
 }
 
 pub fn is_listener_running() -> bool {
-    #[cfg(unix)]
-    {
-        let Ok(socket_path) = socket_path() else {
-            return false;
-        };
-        if !socket_path.exists() {
-            return false;
-        }
-
-        crate::platform::ipc::connect(&socket_path).is_ok()
+    let Ok(socket_path) = socket_path() else {
+        return false;
+    };
+    if !socket_path.exists() {
+        return false;
     }
 
-    #[cfg(not(unix))]
-    {
-        false
-    }
+    crate::platform::ipc::LocalStream::connect(socket_path).is_ok()
 }
 
 #[cfg(test)]

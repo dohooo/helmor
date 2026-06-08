@@ -13,11 +13,11 @@ pub fn resolve_on_path(program: &str) -> Option<PathBuf> {
     {
         let path = std::env::var_os("PATH")?;
         let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT".to_string());
-        return resolve_on_windows_path(
+        resolve_on_windows_path(
             program,
             std::env::split_paths(&path).collect::<Vec<_>>(),
             &pathext,
-        );
+        )
     }
 
     #[cfg(not(windows))]

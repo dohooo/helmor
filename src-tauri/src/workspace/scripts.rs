@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -12,6 +11,7 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use tauri::ipc::Channel;
 
+use crate::platform::process::Pid;
 use crate::platform::pty::PtyWriter;
 
 #[derive(Debug, Clone, Serialize)]
@@ -70,8 +70,8 @@ pub struct ScriptStop {
 /// point of this split. `kill()` only signals; reaping stays with `run_script`.
 #[derive(Clone)]
 struct ProcessHandle {
-    pid: libc::pid_t,
-    pgid: libc::pid_t,
+    pid: Pid,
+    pgid: Pid,
     /// Shared with `run_script`'s local handle; set by `kill()` or by a
     /// concurrent `register()` that replaces us. `run_script` reads this
     /// after wait() to decide whether to report a real exit code or None.
@@ -96,7 +96,7 @@ struct ProcessHandle {
     /// `killpg(SIGKILL)` it so the cleanup process doesn't outlive the
     /// user's intent — otherwise restarting a workspace or quitting
     /// Helmor would leak the background sleep / docker compose down.
-    stop_pgid: Arc<Mutex<Option<libc::pid_t>>>,
+    stop_pgid: Arc<Mutex<Option<Pid>>>,
 }
 
 #[derive(Clone, Default)]
@@ -124,8 +124,8 @@ impl ScriptProcessManager {
     fn register(
         &self,
         key: ProcessKey,
-        pid: libc::pid_t,
-        pgid: libc::pid_t,
+        pid: Pid,
+        pgid: Pid,
         stdin: Arc<Mutex<Box<dyn PtyWriter>>>,
         stop: Option<ScriptStop>,
     ) -> Arc<AtomicBool> {
@@ -150,7 +150,7 @@ impl ScriptProcessManager {
 
     /// Remove our handle from the map once `child.wait()` has returned.
     /// No-op if we were already replaced by a rerun.
-    fn unregister(&self, key: &ProcessKey, pid: libc::pid_t) {
+    fn unregister(&self, key: &ProcessKey, pid: Pid) {
         let mut map = self.processes.lock().expect("process map poisoned");
         if let Some(h) = map.get(key) {
             if h.pid == pid {
@@ -309,7 +309,7 @@ impl ScriptProcessManager {
 /// a separate thread. When the script owns a separate process group, also wait
 /// for that group to disappear so a fast leader exit cannot leave descendants
 /// running after Stop returns.
-fn escalating_kill(pid: libc::pid_t, pgid: libc::pid_t) {
+fn escalating_kill(pid: Pid, pgid: Pid) {
     let tree = crate::platform::process::ProcessTree::new(pid, pgid);
     crate::platform::process::terminate_tree(tree);
 
@@ -328,7 +328,7 @@ fn escalating_kill(pid: libc::pid_t, pgid: libc::pid_t) {
 /// not leak one that's already in flight from a prior Stop click. No-op
 /// when no cleanup is running. Mirrors the Force Stop short-circuit at
 /// the top of `graceful_kill`.
-fn kill_in_flight_stop_command(pgid_slot: &Mutex<Option<libc::pid_t>>) {
+fn kill_in_flight_stop_command(pgid_slot: &Mutex<Option<Pid>>) {
     let stop_pgid = *pgid_slot.lock().expect("stop_pgid mutex poisoned");
     if let Some(pgid) = stop_pgid.filter(|pgid| *pgid > 0) {
         crate::platform::process::kill_tree(crate::platform::process::ProcessTree::new(pgid, pgid));
@@ -366,12 +366,10 @@ fn run_stop_command(
     working_dir: &str,
     ctx: &ScriptContext,
     event_tx: &Channel<ScriptEvent>,
-    pgid_slot: &Mutex<Option<libc::pid_t>>,
+    pgid_slot: &Mutex<Option<Pid>>,
 ) -> StopOutcome {
-    let mut cmd = Command::new("/bin/sh");
-    cmd.arg("-c")
-        .arg(command)
-        .current_dir(working_dir)
+    let mut cmd = shell_command_for(command);
+    cmd.current_dir(working_dir)
         .env("TERM", "xterm-256color")
         .env("FORCE_COLOR", "1")
         .env("CLICOLOR_FORCE", "1")
@@ -394,25 +392,28 @@ fn run_stop_command(
         cmd.env("HELMOR_PORT_COUNT", count.to_string());
     }
 
-    unsafe {
-        cmd.pre_exec(|| {
-            if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    // Own process group (Unix) so a concurrent Force Stop can SIGKILL the whole
+    // cleanup tree; on Windows `taskkill /T` reaches the tree by PID. The
+    // OS-specific spawn flags live behind the `platform::process` seam.
+    crate::platform::process::configure_tree_root(&mut cmd);
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => return StopOutcome::SpawnFailed(format!("{e}")),
     };
-    let pid = child.id() as libc::pid_t;
+    let pid = child.id() as Pid;
+    // Process-group id of the cleanup tree's root. On Unix the child is its own
+    // session leader (`configure_tree_root` → `setsid`), so pgid == pid; we read
+    // it back to be robust. On Windows there is no pgid concept — `taskkill /T`
+    // walks the tree by PID — so the pid is the tree-root key.
+    #[cfg(unix)]
     let pgid = unsafe { libc::getpgid(pid) };
+    #[cfg(windows)]
+    let pgid = pid;
 
-    // Publish pgid so a concurrent Force Stop can SIGKILL the cleanup
-    // tree. Always cleared before return (deferred via the `outcome`
-    // binding below).
+    // Publish the tree-root id so a concurrent Force Stop can kill the cleanup
+    // tree. Always cleared before return (deferred via the `outcome` binding
+    // below).
     *pgid_slot.lock().expect("stop_pgid mutex poisoned") = Some(pgid);
 
     // Pipe stdout / stderr through dedicated reader threads so the user
@@ -583,19 +584,83 @@ fn fish_shell_escape(s: &str) -> String {
 fn wrapped_script_for_shell(shell_path: &str, script: &str) -> String {
     let shell_name = std::path::Path::new(shell_path)
         .file_name()
-        .and_then(|name| name.to_str());
+        .and_then(|name| name.to_str())
+        .map(|n| n.trim_end_matches(".exe"));
 
-    if shell_name == Some("fish") {
-        return format!(
+    match shell_name {
+        Some("fish") => format!(
             "eval {}; set __helmor_ec $status; printf '\\r\\n\\033[2m[Completed with exit code %d]\\033[0m\\r\\n' $__helmor_ec; exit $__helmor_ec\n",
             fish_shell_escape(script),
-        );
+        ),
+        Some("powershell") | Some("pwsh") => format!(
+            // Run the user's command, then capture the exit code. $LASTEXITCODE
+            // is set by native executables; for pure-PowerShell statements it
+            // stays null, so fall back to 0 on success ($?), 1 otherwise.
+            "{script}\r\n$__helmor_ec = if ($null -ne $LASTEXITCODE) {{ $LASTEXITCODE }} elseif ($?) {{ 0 }} else {{ 1 }}; Write-Host (\"`r`n{esc}[2m[Completed with exit code {{0}}]{esc}[0m`r`n\" -f $__helmor_ec); exit $__helmor_ec\r\n",
+            script = script,
+            esc = "$([char]27)"
+        ),
+        _ => format!(
+            "eval {}; __helmor_ec=$?; printf '\\r\\n\\033[2m[Completed with exit code %d]\\033[0m\\r\\n' $__helmor_ec; exit $__helmor_ec\n",
+            shell_escape(script),
+        ),
     }
+}
 
-    format!(
-        "eval {}; __helmor_ec=$?; printf '\\r\\n\\033[2m[Completed with exit code %d]\\033[0m\\r\\n' $__helmor_ec; exit $__helmor_ec\n",
-        shell_escape(script),
-    )
+/// Build the platform shell command that runs an arbitrary `command` string:
+/// `/bin/sh -c` on Unix, PowerShell `-Command` on Windows.
+fn shell_command_for(command: &str) -> Command {
+    #[cfg(unix)]
+    {
+        let mut cmd = Command::new("/bin/sh");
+        cmd.arg("-c").arg(command);
+        cmd
+    }
+    #[cfg(windows)]
+    {
+        let mut cmd = Command::new(powershell_path());
+        cmd.args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            command,
+        ]);
+        cmd
+    }
+}
+
+/// Locate PowerShell on Windows: prefer PowerShell 7 (`pwsh`), fall back to the
+/// in-box Windows PowerShell.
+#[cfg(windows)]
+fn powershell_path() -> String {
+    if which_in_path("pwsh.exe") {
+        "pwsh.exe".to_string()
+    } else {
+        "powershell.exe".to_string()
+    }
+}
+
+#[cfg(windows)]
+fn which_in_path(exe: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(exe).is_file()))
+        .unwrap_or(false)
+}
+
+/// The platform default interactive shell and its arguments.
+/// Unix: the user's `$SHELL` as an interactive login shell.
+/// Windows: PowerShell (no logo/profile banner; reads commands from the PTY).
+fn default_shell() -> (String, Vec<String>) {
+    #[cfg(unix)]
+    {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        (shell, vec!["-i".to_string(), "-l".to_string()])
+    }
+    #[cfg(windows)]
+    {
+        (powershell_path(), vec!["-NoLogo".to_string()])
+    }
 }
 
 /// Spawn an interactive login shell on a PTY and feed it `script`.
@@ -620,7 +685,8 @@ pub fn run_script(
     channel: Channel<ScriptEvent>,
     stop: Option<ScriptStop>,
 ) -> Result<Option<i32>> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let (shell, args) = default_shell();
+    let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
     run_script_with_shell(
         manager,
         repo_id,
@@ -631,7 +697,7 @@ pub fn run_script(
         context,
         channel,
         &shell,
-        &["-i", "-l"],
+        &args_ref,
         None,
         stop,
     )
@@ -659,7 +725,8 @@ pub fn run_terminal_session(
     channel: Channel<ScriptEvent>,
     boot_input: Option<&str>,
 ) -> Result<Option<i32>> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let (shell, args) = default_shell();
+    let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
     run_script_with_shell(
         manager,
         repo_id,
@@ -670,7 +737,7 @@ pub fn run_terminal_session(
         context,
         channel,
         &shell,
-        &["-i", "-l"],
+        &args_ref,
         boot_input,
         None,
     )
@@ -717,11 +784,16 @@ pub(crate) fn run_script_with_shell(
         .env("TERM", "xterm-256color")
         .env("FORCE_COLOR", "1")
         .env("CLICOLOR_FORCE", "1")
-        // Prevent history pollution from the interactive shell.
-        .env("HISTFILE", "/dev/null")
-        .env("SAVEHIST", "0")
-        .env("HISTSIZE", "0")
         .env("HELMOR_ROOT_PATH", &context.root_path);
+
+    // Prevent history pollution from the interactive shell (Unix shells only;
+    // these variables are POSIX-shell concepts and the value is a Unix path).
+    #[cfg(unix)]
+    {
+        cmd.env("HISTFILE", "/dev/null")
+            .env("SAVEHIST", "0")
+            .env("HISTSIZE", "0");
+    }
 
     if let Some(wp) = &context.workspace_path {
         cmd.env("HELMOR_WORKSPACE_PATH", wp);
@@ -750,7 +822,7 @@ pub(crate) fn run_script_with_shell(
     let stdin = Arc::new(Mutex::new(session.writer));
     let reader_file = session.reader;
     let mut child = session.child;
-    let pid = child.id() as libc::pid_t;
+    let pid = child.id() as Pid;
     let pgid = session.pgid;
 
     let _ = channel.send(ScriptEvent::Started {
@@ -775,12 +847,20 @@ pub(crate) fn run_script_with_shell(
     // failure must NOT block the actual script run, so we log and
     // continue. Returns `None` on failure; `record_ended` no-ops
     // when the id is missing.
+    // The registry stores PIDs as i32 (Unix `pid_t`). On Unix `Pid` is already
+    // i32; on Windows it is u32, so reinterpret the bits. Crash recovery only
+    // compares this against live PIDs read back through the same path. The
+    // cfg-gated rebinds keep the cast a no-op on Unix (no `unnecessary_cast`).
+    #[cfg(unix)]
+    let (pid_i32, pgid_i32): (i32, i32) = (pid, pgid);
+    #[cfg(windows)]
+    let (pid_i32, pgid_i32): (i32, i32) = (pid as i32, pgid as i32);
     let registry_id = match super::runtime_registry::record_started(
         repo_id,
         workspace_id,
         script_type,
-        pid,
-        pgid,
+        pid_i32,
+        pgid_i32,
     ) {
         Ok(id) => Some(id),
         Err(error) => {
@@ -925,7 +1005,12 @@ pub(crate) fn run_script_with_shell(
     Ok(exit_code)
 }
 
-#[cfg(test)]
+// Unix-only test suite: these exercise the PTY/process-group lifecycle through
+// libc primitives (`setsid`, `getpgid`, `kill`), `/bin/sh`, and the Unix PTY
+// writer, so they only compile and run on Unix. The cross-platform pure-logic
+// tests (shell escaping, wrapper selection, unknown-key no-ops) live in the
+// `cross_platform_tests` module below and run on every target.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::process::CommandExt;
@@ -933,33 +1018,9 @@ mod tests {
     use std::sync::mpsc;
     use tempfile::NamedTempFile;
 
-    // ── shell_escape ───────────────────────────────────────────────────────
-
-    #[test]
-    fn shell_escape_plain() {
-        assert_eq!(shell_escape("echo hello"), "'echo hello'");
-    }
-
-    #[test]
-    fn shell_escape_single_quotes() {
-        assert_eq!(shell_escape("it's"), "'it'\\''s'");
-    }
-
-    #[test]
-    fn fish_shell_escape_handles_fish_expansion_chars() {
-        assert_eq!(
-            fish_shell_escape("printf \"%s\" '$value' \\ done"),
-            "\"printf \\\"%s\\\" '\\$value' \\\\ done\"",
-        );
-    }
-
-    #[test]
-    fn wrapped_script_uses_fish_status_for_fish_shell() {
-        assert_eq!(
-            wrapped_script_for_shell("/opt/homebrew/bin/fish", "echo \"it's\""),
-            "eval \"echo \\\"it's\\\"\"; set __helmor_ec $status; printf '\\r\\n\\033[2m[Completed with exit code %d]\\033[0m\\r\\n' $__helmor_ec; exit $__helmor_ec\n",
-        );
-    }
+    // Pure string-logic tests (shell_escape, fish/powershell wrapping) and the
+    // unknown-key no-op tests live in `cross_platform_tests` below so they run
+    // on every target; this module keeps only the Unix PTY/process-group tests.
 
     // ── Test helpers ───────────────────────────────────────────────────────
 
@@ -1743,53 +1804,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn run_script_rejects_empty() {
-        let mgr = ScriptProcessManager::new();
-        let ctx = ScriptContext {
-            root_path: "/tmp".into(),
-            workspace_path: None,
-            workspace_name: None,
-            default_branch: None,
-            port_base: None,
-            port_count: None,
-        };
-        let result = run_script(
-            &mgr,
-            "r",
-            "s",
-            None,
-            "  ",
-            "/tmp",
-            &ctx,
-            make_channel(),
-            None,
-        );
-        assert!(result.is_err());
-    }
-
-    // ── write_stdin/resize on unknown key silently succeed ─────────────────
-
-    #[test]
-    fn write_stdin_unknown_key_is_noop() {
-        let mgr = ScriptProcessManager::new();
-        let key: ProcessKey = ("nope".into(), "run".into(), None);
-        assert!(!mgr.write_stdin(&key, b"x").unwrap());
-    }
-
-    #[test]
-    fn resize_unknown_key_is_noop() {
-        let mgr = ScriptProcessManager::new();
-        let key: ProcessKey = ("nope".into(), "run".into(), None);
-        assert!(!mgr.resize(&key, 80, 24).unwrap());
-    }
-
-    #[test]
-    fn kill_unknown_key_returns_false() {
-        let mgr = ScriptProcessManager::new();
-        let key: ProcessKey = ("nope".into(), "run".into(), None);
-        assert!(!mgr.kill(&key));
-    }
+    // `run_script_rejects_empty` and the unknown-key no-op tests are
+    // cross-platform and live in `cross_platform_tests` below.
 
     // ── graceful_kill (stop.command) ───────────────────────────────────────
 
@@ -2012,5 +2028,91 @@ mod tests {
         );
 
         let _ = handle.join();
+    }
+}
+
+/// Cross-platform pure-logic tests. These run on every target — they don't
+/// spawn a PTY or touch any OS process primitives, so they validate the shell
+/// escaping / wrapper selection and the manager's unknown-key no-op behavior
+/// on both Unix and Windows.
+#[cfg(test)]
+mod cross_platform_tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    fn make_channel() -> Channel<ScriptEvent> {
+        let (tx, _rx) = mpsc::channel::<()>();
+        Channel::<ScriptEvent>::new(move |_| {
+            let _ = tx.send(());
+            Ok(())
+        })
+    }
+
+    // ── shell_escape / wrapper selection (string logic) ────────────────────
+
+    #[test]
+    fn shell_escape_plain() {
+        assert_eq!(shell_escape("echo hello"), "'echo hello'");
+    }
+
+    #[test]
+    fn shell_escape_single_quotes() {
+        assert_eq!(shell_escape("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn fish_shell_escape_handles_fish_expansion_chars() {
+        assert_eq!(
+            fish_shell_escape("printf \"%s\" '$value' \\ done"),
+            "\"printf \\\"%s\\\" '\\$value' \\\\ done\"",
+        );
+    }
+
+    #[test]
+    fn wrapped_script_uses_fish_status_for_fish_shell() {
+        assert_eq!(
+            wrapped_script_for_shell("/opt/homebrew/bin/fish", "echo \"it's\""),
+            "eval \"echo \\\"it's\\\"\"; set __helmor_ec $status; printf '\\r\\n\\033[2m[Completed with exit code %d]\\033[0m\\r\\n' $__helmor_ec; exit $__helmor_ec\n",
+        );
+    }
+
+    #[test]
+    fn wrapped_script_uses_powershell_form_for_pwsh() {
+        let w = wrapped_script_for_shell("C:/Program Files/PowerShell/7/pwsh.exe", "echo hi");
+        assert!(w.starts_with("echo hi"));
+        assert!(w.contains("$LASTEXITCODE"));
+        assert!(w.contains("exit $__helmor_ec"));
+    }
+
+    // ── unknown-key operations are silent no-ops ───────────────────────────
+
+    #[test]
+    fn write_stdin_unknown_key_is_noop() {
+        let mgr = ScriptProcessManager::new();
+        let key: ProcessKey = ("nope".into(), "run".into(), None);
+        assert!(!mgr.write_stdin(&key, b"x").unwrap());
+    }
+
+    #[test]
+    fn resize_unknown_key_is_noop() {
+        let mgr = ScriptProcessManager::new();
+        let key: ProcessKey = ("nope".into(), "run".into(), None);
+        assert!(!mgr.resize(&key, 80, 24).unwrap());
+    }
+
+    #[test]
+    fn kill_unknown_key_returns_false() {
+        let mgr = ScriptProcessManager::new();
+        let key: ProcessKey = ("nope".into(), "run".into(), None);
+        assert!(!mgr.kill(&key));
+    }
+
+    #[test]
+    fn run_script_rejects_empty() {
+        let mgr = ScriptProcessManager::new();
+        let ctx = ScriptContext::default();
+        let dir = std::env::temp_dir().display().to_string();
+        let result = run_script(&mgr, "r", "s", None, "  ", &dir, &ctx, make_channel(), None);
+        assert!(result.is_err());
     }
 }

@@ -70,8 +70,8 @@ pub fn record_started(
     repo_id: &str,
     workspace_id: Option<&str>,
     script_type: &str,
-    pid: libc::pid_t,
-    pgid: libc::pid_t,
+    pid: i32,
+    pgid: i32,
 ) -> Result<String> {
     let id = uuid::Uuid::new_v4().to_string();
     let conn = db::write_conn()
@@ -176,7 +176,7 @@ pub fn classify_stale_processes_in(conn: &mut Connection) -> Result<Vec<StaleRun
         .transaction()
         .context("Failed to start runtime registry classify transaction")?;
     for row in candidates {
-        let alive = probe_pid_alive(row.pid as libc::pid_t);
+        let alive = probe_pid_alive(row.pid);
         if alive {
             maybe_alive.push(StaleRuntimeProcess {
                 id: row.id,
@@ -256,12 +256,16 @@ struct RawRuntimeRow {
     started_at: String,
 }
 
-/// `kill(pid, 0)` returns 0 if the PID is alive (or `EPERM` if it
-/// exists but is owned by another user) and `-1` with `errno = ESRCH`
-/// if it doesn't. We treat `EPERM` as alive too — it means the kernel
-/// has a process by that PID, even if we can't signal it.
-fn probe_pid_alive(pid: libc::pid_t) -> bool {
-    crate::platform::process::pid_alive(pid)
+/// Conservative liveness probe used by the stale-process sweep. Delegates to
+/// the cross-platform [`crate::platform::process::pid_alive`], which on Unix
+/// treats `EPERM` (process exists but owned by another user) as alive — matching
+/// the "only auto-kill when ownership is proven" rule — and on Windows queries
+/// the process exit code. Non-positive PIDs are never live.
+fn probe_pid_alive(pid: i32) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    crate::platform::process::pid_alive(pid as crate::platform::process::Pid)
 }
 
 #[cfg(test)]
@@ -269,13 +273,7 @@ mod tests {
     use super::*;
     use crate::testkit::TestEnv;
 
-    fn seed_row(
-        conn: &Connection,
-        id: &str,
-        pid: libc::pid_t,
-        pgid: libc::pid_t,
-        ended_at: Option<&str>,
-    ) {
+    fn seed_row(conn: &Connection, id: &str, pid: i32, pgid: i32, ended_at: Option<&str>) {
         conn.execute(
             "INSERT INTO runtime_processes (id, repo_id, workspace_id, script_type, pid, pgid, ended_at)
              VALUES (?1, 'r1', 'w1', 'run', ?2, ?3, ?4)",
@@ -359,19 +357,18 @@ mod tests {
 
     // ── classify_stale_processes ──────────────────────────────────────
 
-    /// PIDs in the [0, 1] range are guaranteed to either be invalid
-    /// (`0`) or `init` (`1`). `init` is owned by root, so a
-    /// non-privileged test runner gets `EPERM` from `kill(1, 0)` —
-    /// which we classify as `MaybeAlive`. We use it as the "alive"
-    /// sentinel so the test is deterministic without spawning a
-    /// real child.
-    const ALIVE_SENTINEL_PID: libc::pid_t = 1;
+    /// The test process itself is always alive on every platform, so it is a
+    /// deterministic "alive" sentinel without spawning a child. (On Unix the
+    /// previous sentinel was `init`/PID 1 via `EPERM`; PID 1 does not exist on
+    /// Windows, so we use the current PID, which works identically on both.)
+    fn alive_sentinel_pid() -> i32 {
+        std::process::id() as i32
+    }
 
-    /// `kill(pid, 0)` on a PID we just chose at random from far
-    /// outside the OS's reuse window returns `ESRCH`. Picking the
-    /// max valid 32-bit PID maximises the chance the OS never
-    /// allocated it.
-    const DEAD_SENTINEL_PID: libc::pid_t = i32::MAX;
+    /// The max 32-bit PID is far outside any OS's reuse window, so a liveness
+    /// probe returns "dead" on both Unix (`ESRCH`) and Windows (`OpenProcess`
+    /// fails).
+    const DEAD_SENTINEL_PID: i32 = i32::MAX;
 
     #[test]
     fn classify_marks_dead_rows_ended_and_reports_maybe_alive() {
@@ -386,8 +383,8 @@ mod tests {
         seed_row(
             &conn,
             "alive-row",
-            ALIVE_SENTINEL_PID,
-            ALIVE_SENTINEL_PID,
+            alive_sentinel_pid(),
+            alive_sentinel_pid(),
             None,
         );
 
@@ -430,8 +427,8 @@ mod tests {
         seed_row(
             &conn,
             "old-ended",
-            ALIVE_SENTINEL_PID,
-            ALIVE_SENTINEL_PID,
+            alive_sentinel_pid(),
+            alive_sentinel_pid(),
             Some("2026-01-01T00:00:00Z"),
         );
 
@@ -458,7 +455,7 @@ mod tests {
         // init / launchd always exists, and we don't have signal
         // permission on it — `EPERM` is what makes it useful as a
         // deterministic "maybe alive" sentinel.
-        assert!(probe_pid_alive(ALIVE_SENTINEL_PID));
+        assert!(probe_pid_alive(alive_sentinel_pid()));
     }
 
     #[test]

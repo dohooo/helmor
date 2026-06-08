@@ -155,11 +155,10 @@ pub(crate) fn command_detail(output: &CommandOutput) -> String {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     #[test]
     fn run_command_with_timeout_kills_stalled_command() {
         let started_at = std::time::Instant::now();

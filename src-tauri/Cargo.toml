@@ -22,6 +22,10 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 aes = "0.8"
 anyhow = "1"
+# Canonicalize without Windows `\\?\` verbatim prefixes so repo identity /
+# dedup keys stay consistent between store and lookup. On Unix this is a thin
+# wrapper around `std::fs::canonicalize`, so output is unchanged there.
+dunce = "1"
 # Mobile-companion HTTP surface: a localhost-bound axum server that mirrors
 # the Tauri IPC commands over HTTP/SSE so the same responsive frontend can be
 # served to a phone browser. See `src/companion/`.
@@ -86,6 +90,9 @@ tokio = { version = "1", features = [
 ] }
 notify = "7"
 notify-debouncer-full = "0.4"
+# Cross-platform PTY (openpty on Unix, ConPTY on Windows) for the embedded
+# terminal and interactive run-action scripts. See `workspace/scripts.rs`.
+portable-pty = "0.8"
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = [
@@ -96,15 +103,31 @@ tracing-subscriber = { version = "0.3", features = [
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 
-# libc backs Unix process groups, signals, and PTY handling.
-# Windows support will need platform-specific replacements before this can be gated.
-[dependencies.libc]
-version = "0.2"
+# libc backs Unix process groups, signals, and resource limits. Windows uses
+# the `windows` crate equivalents (Job Objects, DPAPI, sysinfo) — see
+# `src/platform/`. Each is gated to its target so neither pulls the other in.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
 security-framework = "3"
 security-framework-sys = "2"
+
+[target.'cfg(windows)'.dependencies]
+uds_windows = "1"
+winreg = "0.52"
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_System_JobObjects",
+    "Win32_System_Console",
+    "Win32_System_SystemInformation",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
+    "Win32_System_Memory",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [[bin]]
 name = "helmor-cli"
@@ -136,6 +159,15 @@ incremental = false          # required for sccache compatibility
 debug = false       # deps don't need debug info at all
 opt-level = 0
 codegen-units = 256
+
+# boring-sys2 vendors and compiles BoringSSL (C/C++) via cmake. cmake-rs picks
+# the CMake build type from OPT_LEVEL: at 0 it builds Debug, which on MSVC uses
+# the debug CRT (/MDd) and pulls iterator-debug symbols like `__imp__CrtDbgReport`.
+# Rust's *-windows-msvc target always links the release CRT (msvcrt), so a debug
+# BoringSSL fails to link (LNK2019). Bumping opt-level off 0 makes cmake build a
+# Release-type BoringSSL (/MD), matching Rust's CRT. Only affects the C/C++ glue.
+[profile.dev.package.boring-sys2]
+opt-level = 1
 
 [profile.dev.build-override]
 debug = false       # build scripts & proc-macros: fastest possible

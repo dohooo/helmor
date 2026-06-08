@@ -13,6 +13,7 @@
 //  @openai/codex-darwin-{arm64,x64}/.../codex).
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	chmodSync,
 	cpSync,
@@ -37,6 +38,23 @@ import {
 	resolveVendorTarget,
 	type TargetInfo,
 } from "./vendor-platform.ts";
+
+/** Host platform flag: Windows needs `.exe` suffixes, zip extraction via
+ *  `tar -xf`, no codesign, and different release/package naming. */
+const IS_WINDOWS = process.platform === "win32";
+/** Executable suffix for staged binaries on the target. */
+const EXE = IS_WINDOWS ? ".exe" : "";
+/**
+ * Archiver to shell out to. Both bsdtar (Windows 10+ in-box, macOS) handle
+ * zip + tar.gz. On Windows we MUST use the System32 bsdtar by absolute path:
+ * under a bash shell (CI) a bare `tar` resolves to Git's GNU tar, which reads
+ * the `D:` in an archive path like `D:\…\gh.zip` as an `rsh` host spec and
+ * fails with "Cannot connect to D: resolve failed". bsdtar treats it as a
+ * local path.
+ */
+const TAR_BIN = IS_WINDOWS
+	? `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\tar.exe`
+	: "tar";
 
 const SIDECAR_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const NODE_MODULES = join(SIDECAR_ROOT, "node_modules");
@@ -116,12 +134,16 @@ function ensureCacheDir(): void {
 }
 
 function sha256OfFile(path: string): string {
-	const out = execFileSync("shasum", ["-a", "256", path], {
-		encoding: "utf8",
-	});
-	const digest = out.split(/\s+/)[0];
-	if (!digest) throw new Error(`[stage-vendor] empty shasum for ${path}`);
-	return digest;
+	// Node crypto is cross-platform — avoids depending on a `shasum` binary
+	// (absent on Windows).
+	return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+/// Extract a `.zip` or `.tar.gz` archive into `destDir`. Uses bsdtar (`tar`),
+/// which ships in-box on Windows 10+ and macOS and transparently handles both
+/// formats — so we don't need a separate `unzip`.
+function extractArchive(archive: string, destDir: string): void {
+	execFileSync(TAR_BIN, ["-xf", archive, "-C", destDir], { stdio: "inherit" });
 }
 
 function downloadAndVerify(
@@ -204,18 +226,21 @@ function locateExtractedBin(extractDir: string, name: string): string {
 
 function stageGhBinary(target: TargetInfo): string {
 	ensureCacheDir();
+	// gh ships macOS as `gh_<ver>_macOS_<arch>.zip` and Windows as
+	// `gh_<ver>_windows_<arch>.zip`; both nest `bin/gh[.exe]`. The Windows plan
+	// carries no pinned sha256 (soft-verify); macOS stays strict.
 	const plan = ghArchivePlan(target);
 	const archive = join(BUNDLE_CACHE, plan.archiveName);
-	downloadAndVerify(plan.url, archive, plan.sha256);
+	// downloadMaybeVerify is strict when a sha256 is pinned (macOS) and trusts
+	// HTTPS when it's empty (Windows soft-verify).
+	downloadMaybeVerify(plan.url, archive, plan.sha256);
 
 	const extractDir = join(BUNDLE_CACHE, plan.slug);
 	freshExtractDir(extractDir);
-	execFileSync("unzip", ["-q", "-o", archive, "-d", extractDir], {
-		stdio: "inherit",
-	});
+	extractArchive(archive, extractDir);
 
-	const binSrc = locateExtractedBin(extractDir, "gh");
-	const binDest = join(DIST_VENDOR, "gh", "gh");
+	const binSrc = locateExtractedBin(extractDir, `gh${EXE}`);
+	const binDest = join(DIST_VENDOR, "gh", `gh${EXE}`);
 	copyFile(binSrc, binDest);
 	chmodSync(binDest, 0o755);
 	maybeSignMacBinary(binDest, false);
@@ -224,23 +249,24 @@ function stageGhBinary(target: TargetInfo): string {
 
 function stageGlabBinary(target: TargetInfo): string {
 	ensureCacheDir();
+	// macOS: `glab_<ver>_darwin_<arch>.tar.gz`; Windows: `..._windows_<arch>.zip`.
+	// `extractArchive` (bsdtar) transparently handles both formats. Windows plan
+	// carries no pinned sha256 (soft-verify); macOS stays strict.
 	const plan = glabArchivePlan(target);
 	const archive = join(BUNDLE_CACHE, plan.archiveName);
-	downloadAndVerify(plan.url, archive, plan.sha256);
+	downloadMaybeVerify(plan.url, archive, plan.sha256);
 
 	const extractDir = join(BUNDLE_CACHE, plan.slug);
 	freshExtractDir(extractDir);
-	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
-		stdio: "inherit",
-	});
+	extractArchive(archive, extractDir);
 
-	const binSrc = join(extractDir, "bin", "glab");
+	const binSrc = join(extractDir, "bin", `glab${EXE}`);
 	if (!existsSync(binSrc)) {
 		throw new Error(
 			`[stage-vendor] glab binary missing after extract: ${binSrc}`,
 		);
 	}
-	const binDest = join(DIST_VENDOR, "glab", "glab");
+	const binDest = join(DIST_VENDOR, "glab", `glab${EXE}`);
 	copyFile(binSrc, binDest);
 	chmodSync(binDest, 0o755);
 	maybeSignMacBinary(binDest, false);
@@ -254,13 +280,24 @@ function stageGlabBinary(target: TargetInfo): string {
 
 function stageCloudflaredBinary(target: TargetInfo): string {
 	ensureCacheDir();
+	const binDest = join(DIST_VENDOR, "cloudflared", `cloudflared${EXE}`);
 	const plan = cloudflaredArchivePlan(target);
 	const archive = join(BUNDLE_CACHE, plan.archiveName);
+
+	// Windows: upstream publishes a bare `cloudflared-windows-<arch>.exe` (no
+	// archive), so download it straight to the destination (no extraction).
+	// No pinned sha256 (soft-verify).
+	if (target.os === "windows") {
+		downloadMaybeVerify(plan.url, archive, plan.sha256);
+		copyFile(archive, binDest);
+		return binDest;
+	}
+
 	downloadAndVerify(plan.url, archive, plan.sha256);
 
 	const extractDir = join(BUNDLE_CACHE, plan.slug);
 	freshExtractDir(extractDir);
-	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
+	execFileSync(TAR_BIN, ["-xzf", archive, "-C", extractDir], {
 		stdio: "inherit",
 	});
 
@@ -270,7 +307,6 @@ function stageCloudflaredBinary(target: TargetInfo): string {
 			`[stage-vendor] cloudflared binary missing after extract: ${binSrc}`,
 		);
 	}
-	const binDest = join(DIST_VENDOR, "cloudflared", "cloudflared");
 	copyFile(binSrc, binDest);
 	chmodSync(binDest, 0o755);
 	maybeSignMacBinary(binDest, false);
@@ -308,7 +344,7 @@ function readClaudeCodeVersion(): string {
 }
 
 function copyClaudeCodeBin(src: string): string {
-	const dest = join(DIST_VENDOR, "claude-code", "claude");
+	const dest = join(DIST_VENDOR, "claude-code", `claude${EXE}`);
 	copyFile(src, dest);
 	chmodSync(dest, 0o755);
 	maybeSignMacBinary(dest, true);
@@ -316,7 +352,7 @@ function copyClaudeCodeBin(src: string): string {
 }
 
 function stageClaudeCodeBinary(target: TargetInfo): string {
-	const installed = join(NODE_MODULES, target.claudeCodePkg, "claude");
+	const installed = join(NODE_MODULES, target.claudeCodePkg, `claude${EXE}`);
 	if (existsSync(installed)) {
 		return copyClaudeCodeBin(installed);
 	}
@@ -330,12 +366,12 @@ function stageClaudeCodeBinary(target: TargetInfo): string {
 
 	const extractDir = join(BUNDLE_CACHE, plan.slug);
 	freshExtractDir(extractDir);
-	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
+	execFileSync(TAR_BIN, ["-xzf", archive, "-C", extractDir], {
 		stdio: "inherit",
 	});
 
 	// npm tarballs nest everything under `package/`.
-	const binSrc = join(extractDir, "package", "claude");
+	const binSrc = join(extractDir, "package", `claude${EXE}`);
 	if (!existsSync(binSrc)) {
 		throw new Error(
 			`[stage-vendor] claude-code binary missing after extract: ${binSrc}`,
@@ -385,23 +421,28 @@ function stageCodexFromVendorRoot(archRoot: string): void {
 	// from `codex/codex` to `bin/codex` and ripgrep's dir from `path` to
 	// `codex-path`. Read the descriptor when present (forward-compatible) and
 	// fall back to the pre-0.134 fixed layout otherwise.
-	let entrypoint = "codex/codex";
+	let entrypoint = IS_WINDOWS ? "bin/codex.exe" : "codex/codex";
 	let pathDir = "path";
+	let resourcesDir: string | undefined;
 	const descriptor = join(archRoot, "codex-package.json");
 	if (existsSync(descriptor)) {
 		const meta = JSON.parse(readFileSync(descriptor, "utf8")) as {
 			entrypoint?: string;
 			pathDir?: string;
+			resourcesDir?: string;
 		};
 		if (meta.entrypoint) entrypoint = meta.entrypoint;
 		if (meta.pathDir) pathDir = meta.pathDir;
+		if (meta.resourcesDir) resourcesDir = meta.resourcesDir;
 	}
 
 	const binSrc = join(archRoot, entrypoint);
 	if (!existsSync(binSrc)) {
 		throw new Error(`[stage-vendor] codex binary missing at ${binSrc}`);
 	}
-	const binDest = join(DIST_VENDOR, "codex", "codex");
+	// Flatten the binary to vendor/codex/codex[.exe] — the Rust side resolves it
+	// there (see resolve_bundled_agent_paths).
+	const binDest = join(DIST_VENDOR, "codex", `codex${EXE}`);
 	copyFile(binSrc, binDest);
 	chmodSync(binDest, 0o755);
 	maybeSignMacBinary(binDest, false);
@@ -415,6 +456,24 @@ function stageCodexFromVendorRoot(archRoot: string): void {
 			if (statSync(file).isFile()) {
 				chmodSync(file, 0o755);
 				maybeSignMacBinary(file, false);
+			}
+		}
+	}
+
+	// Windows codex (layoutVersion 1) ships a `codex-resources/` dir
+	// (command-runner + sandbox helpers) that the flattened binary expects
+	// adjacent to itself. Copy it next to codex.exe.
+	if (resourcesDir) {
+		const resSrc = join(archRoot, resourcesDir);
+		if (existsSync(resSrc)) {
+			const resDest = join(DIST_VENDOR, "codex", resourcesDir);
+			cpSync(resSrc, resDest, { recursive: true });
+			for (const entry of readdirSync(resDest)) {
+				const file = join(resDest, entry);
+				if (statSync(file).isFile()) {
+					chmodSync(file, 0o755);
+					maybeSignMacBinary(file, false);
+				}
 			}
 		}
 	}
@@ -448,7 +507,7 @@ function stageCodexBinary(target: TargetInfo): void {
 
 	const extractDir = join(BUNDLE_CACHE, plan.slug);
 	freshExtractDir(extractDir);
-	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
+	execFileSync(TAR_BIN, ["-xzf", archive, "-C", extractDir], {
 		stdio: "inherit",
 	});
 
@@ -480,7 +539,7 @@ function readOpencodeVersion(): string {
 }
 
 function copyOpencodeBin(src: string): string {
-	const dest = join(DIST_VENDOR, "opencode", "opencode");
+	const dest = join(DIST_VENDOR, "opencode", `opencode${EXE}`);
 	copyFile(src, dest);
 	chmodSync(dest, 0o755);
 	maybeSignMacBinary(dest, true);
@@ -488,7 +547,12 @@ function copyOpencodeBin(src: string): string {
 }
 
 function stageOpencodeBinary(target: TargetInfo): string {
-	const installed = join(NODE_MODULES, target.opencodePkg, "bin", "opencode");
+	const installed = join(
+		NODE_MODULES,
+		target.opencodePkg,
+		"bin",
+		`opencode${EXE}`,
+	);
 	if (existsSync(installed)) {
 		return copyOpencodeBin(installed);
 	}
@@ -502,12 +566,12 @@ function stageOpencodeBinary(target: TargetInfo): string {
 
 	const extractDir = join(BUNDLE_CACHE, plan.slug);
 	freshExtractDir(extractDir);
-	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
+	execFileSync(TAR_BIN, ["-xzf", archive, "-C", extractDir], {
 		stdio: "inherit",
 	});
 
 	// npm tarballs nest everything under `package/`.
-	const binSrc = join(extractDir, "package", "bin", "opencode");
+	const binSrc = join(extractDir, "package", "bin", `opencode${EXE}`);
 	if (!existsSync(binSrc)) {
 		throw new Error(
 			`[stage-vendor] opencode binary missing after extract: ${binSrc}`,
@@ -528,7 +592,7 @@ function stageOpencodeBinary(target: TargetInfo): string {
 /// in we treat mismatches as fatal (release-build hardening); when it's
 /// empty we print the computed digest and trust HTTPS so dev runs
 /// aren't blocked by a missing pinned hash.
-function downloadAndVerifyLlama(
+function downloadMaybeVerify(
 	url: string,
 	dest: string,
 	expectedSha256: string,
@@ -549,8 +613,8 @@ function downloadAndVerifyLlama(
 	const actual = sha256OfFile(dest);
 	if (!expectedSha256) {
 		console.warn(
-			`[stage-vendor] LLAMA_SHA256 is blank for this arch — got ${actual}. ` +
-				"Fill it in to lock the version for CI / release builds.",
+			`[stage-vendor] no pinned sha256 — got ${actual} for ${url}. ` +
+				"Pin it to lock the version for CI / release builds.",
 		);
 		return;
 	}
@@ -565,15 +629,50 @@ function downloadAndVerifyLlama(
 function stageLlamaCppBinaries(target: TargetInfo): string {
 	ensureCacheDir();
 	const plan = llamaArchivePlan(target);
+	const archive = join(BUNDLE_CACHE, plan.archiveName);
+
+	// Windows: upstream ships `llama-<ver>-bin-win-cpu-x64.zip` (server + CLIs +
+	// their `.dll`s, no `bin/` wrapper). Stage the whole tree as a unit (the
+	// DLLs must sit beside llama-server.exe) — no dylib pruning/signing dance.
+	// No pinned sha256 (soft-verify).
+	if (target.os === "windows") {
+		downloadMaybeVerify(plan.url, archive, plan.sha256);
+
+		const extractDir = join(BUNDLE_CACHE, plan.slug);
+		freshExtractDir(extractDir);
+		extractArchive(archive, extractDir);
+
+		const candidates: string[] = [
+			extractDir,
+			join(extractDir, "build", "bin"),
+			...readdirSync(extractDir).flatMap((entry) => [
+				join(extractDir, entry),
+				join(extractDir, entry, "build", "bin"),
+			]),
+		];
+		const binDir = candidates.find(
+			(p) => existsSync(p) && existsSync(join(p, "llama-server.exe")),
+		);
+		if (!binDir) {
+			throw new Error(
+				`[stage-vendor] llama-server.exe missing under ${extractDir}`,
+			);
+		}
+		const dest = join(DIST_VENDOR, "llama-cpp");
+		freshExtractDir(dest);
+		cpSync(binDir, dest, { recursive: true });
+		return dest;
+	}
+
 	// Upstream ships macOS builds as `.tar.gz` (not `.zip` like the
 	// Windows artefacts) — extension matters for both the cache file
-	// name and the extract command below.
-	const archive = join(BUNDLE_CACHE, plan.archiveName);
-	downloadAndVerifyLlama(plan.url, archive, plan.sha256);
+	// name and the extract command below. macOS keeps strict sha256 when
+	// pinned (soft-verify when the LLAMA_SHA256 entry is blank for dev).
+	downloadMaybeVerify(plan.url, archive, plan.sha256);
 
 	const extractDir = join(BUNDLE_CACHE, plan.slug);
 	freshExtractDir(extractDir);
-	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
+	execFileSync(TAR_BIN, ["-xzf", archive, "-C", extractDir], {
 		stdio: "inherit",
 	});
 
@@ -672,8 +771,25 @@ function stageLlamaCppBinaries(target: TargetInfo): string {
 const target = resolveVendorTarget();
 
 console.log(
-	`[stage-vendor] host=darwin/${process.arch} target=darwin/${target.arch} (${target.codexTriple})`,
+	`[stage-vendor] host=${process.platform}/${process.arch} target=${target.os}/${target.arch} (${target.codexTriple})`,
 );
+
+/// Run an optional stager: on Windows a failure (e.g. an upstream artifact that
+/// isn't published for win-x64) is downgraded to a warning so it doesn't abort
+/// the whole prepare; on macOS staging stays strict.
+function stageOptional(label: string, fn: () => void): void {
+	try {
+		fn();
+	} catch (e) {
+		if (IS_WINDOWS) {
+			console.warn(
+				`[stage-vendor] ${label} not staged on Windows (${(e as Error).message}) — feature falls back to a PATH-installed binary if present`,
+			);
+		} else {
+			throw e;
+		}
+	}
+}
 
 // Clean
 rmSync(DIST_VENDOR, { recursive: true, force: true });
@@ -686,17 +802,19 @@ stageClaudeCodeBinary(target);
 stageCodexBinary(target);
 
 // ----- opencode -----
-stageOpencodeBinary(target);
+stageOptional("opencode", () => stageOpencodeBinary(target));
 
 // ----- gh + glab (forge CLIs) -----
-stageGhBinary(target);
-stageGlabBinary(target);
+// Wrapped in stageOptional so a missing/unpublished Windows artifact downgrades
+// to a warning; on macOS stageOptional re-throws, keeping staging strict.
+stageOptional("gh", () => stageGhBinary(target));
+stageOptional("glab", () => stageGlabBinary(target));
 
 // ----- cloudflared (mobile-companion tunnel) -----
-stageCloudflaredBinary(target);
+stageOptional("cloudflared", () => stageCloudflaredBinary(target));
 
 // ----- llama.cpp (local LLM server for auto-rename / Local AI) -----
-stageLlamaCppBinaries(target);
+stageOptional("llama-cpp", () => stageLlamaCppBinaries(target));
 
 // ----- Summary -----
 console.log(`[stage-vendor] ✓ staged → ${DIST_VENDOR}`);

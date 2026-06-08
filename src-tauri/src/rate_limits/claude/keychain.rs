@@ -10,6 +10,7 @@ use anyhow::{anyhow, Result};
 
 use super::credentials::{now_ms, parse_credentials, sort_credentials, ClaudeOAuthCredentials};
 
+#[cfg(target_os = "macos")]
 pub(super) const CLAUDE_KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 
 #[cfg(target_os = "macos")]
@@ -63,11 +64,34 @@ fn load_keychain_credentials() -> Result<Vec<ClaudeOAuthCredentials>> {
     Ok(credentials)
 }
 
+/// Non-macOS: Claude Code persists OAuth credentials as a plaintext JSON file
+/// (`~/.claude/.credentials.json`) rather than an OS keychain, so we read and
+/// parse that directly. Returns an empty vec when the file is absent (the user
+/// hasn't run `claude login` yet) — identical "no credentials" semantics to the
+/// macOS keychain-miss path.
 #[cfg(not(target_os = "macos"))]
 fn load_keychain_credentials() -> Result<Vec<ClaudeOAuthCredentials>> {
-    Ok(Vec::new())
+    let Some(home) = claude_home_dir() else {
+        return Ok(Vec::new());
+    };
+    let path = home.join(".claude").join(".credentials.json");
+    let Ok(raw) = std::fs::read(&path) else {
+        return Ok(Vec::new());
+    };
+    Ok(parse_credentials(&raw).into_iter().collect())
 }
 
+/// User home directory for locating `~/.claude/.credentials.json`.
+/// Windows uses `USERPROFILE`; Unix uses `HOME`.
+#[cfg(not(target_os = "macos"))]
+fn claude_home_dir() -> Option<std::path::PathBuf> {
+    let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    std::env::var_os(var)
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+}
+
+#[cfg(target_os = "macos")]
 fn keychain_account_candidates() -> Vec<String> {
     // The metadata probe lists every account name actually present in
     // the keychain for our service — when it succeeds we know exactly
@@ -133,11 +157,7 @@ fn keychain_accounts_without_prompt() -> Vec<String> {
         .collect()
 }
 
-#[cfg(not(target_os = "macos"))]
-fn keychain_accounts_without_prompt() -> Vec<String> {
-    Vec::new()
-}
-
+#[cfg(target_os = "macos")]
 fn push_unique_account(accounts: &mut Vec<String>, account: String) {
     let trimmed = account.trim();
     if trimmed.is_empty() || accounts.iter().any(|existing| existing == trimmed) {
