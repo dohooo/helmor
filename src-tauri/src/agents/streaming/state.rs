@@ -1194,7 +1194,7 @@ mod tests {
     #[test]
     fn handle_permission_mode_changed_clears_when_field_missing() {
         let mut session = TurnSession::new(test_ctx());
-        session.ctx.permission_mode = Some("acceptEdits".into());
+        session.ctx.permission_mode = Some("bypassPermissions".into());
 
         let actions = session.handle_permission_mode_changed(&json!({})).unwrap();
 

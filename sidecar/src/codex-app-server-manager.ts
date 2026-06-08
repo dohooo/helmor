@@ -2005,38 +2005,22 @@ function buildAgentProxyKey(agentProxy?: AgentProxySettings): string {
 }
 
 /**
- * Map Helmor's permissionMode to Codex's collaborationMode.
- * Returns undefined when no override is needed (i.e. default mode).
+ * Map Helmor's binary permissionMode to Codex's collaborationMode: `plan`
+ * (read-only) or full access. Always sent explicitly — Codex stays in plan mode
+ * across turns unless told otherwise.
  */
 function toCodexCollaborationMode(
 	permissionMode: string | undefined,
 	model: string | undefined,
 	effortLevel: string | undefined,
-): Record<string, unknown> | undefined {
-	if (permissionMode === "plan") {
-		return {
-			mode: "plan",
-			settings: {
-				...(model ? { model } : {}),
-				...(effortLevel ? { reasoning_effort: effortLevel } : {}),
-			},
-		};
-	}
-	// Explicitly switch to default mode — Codex stays in plan mode
-	// across turns unless told otherwise.
-	if (
-		permissionMode === "bypassPermissions" ||
-		permissionMode === "acceptEdits"
-	) {
-		return {
-			mode: "default",
-			settings: {
-				...(model ? { model } : {}),
-				...(effortLevel ? { reasoning_effort: effortLevel } : {}),
-			},
-		};
-	}
-	return undefined;
+): Record<string, unknown> {
+	return {
+		mode: permissionMode === "plan" ? "plan" : "default",
+		settings: {
+			...(model ? { model } : {}),
+			...(effortLevel ? { reasoning_effort: effortLevel } : {}),
+		},
+	};
 }
 
 // `bypassPermissions` uses `Granular` (not `"never"`) because Codex's
@@ -2066,10 +2050,10 @@ const BYPASS_GRANULAR_POLICY: CodexApprovalPolicy = {
 function toCodexApprovalPolicy(
 	permissionMode: string | undefined,
 ): CodexApprovalPolicy | undefined {
-	if (permissionMode === "bypassPermissions") return BYPASS_GRANULAR_POLICY;
-	if (permissionMode === "acceptEdits") return "untrusted";
-	// plan mode is read-only by design — leave to Codex default
-	return undefined;
+	// plan mode is read-only by design — leave to Codex default; everything else
+	// runs full access.
+	if (permissionMode === "plan") return undefined;
+	return BYPASS_GRANULAR_POLICY;
 }
 
 async function mergeAdditionalDirectories(

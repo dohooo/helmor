@@ -263,27 +263,30 @@ export function parseModelSlug(
 
 const OPENCODE_PERMISSION_PREFIX = "opencode-";
 
-// opencode resolves rules last-match-wins, so catch-all goes first. `question`
-// is always allowed so the AUQ flow isn't self-gated.
-export function buildPermissionRules(
-	mode: string | undefined,
-): PermissionRuleset {
-	if (
-		mode === "bypassPermissions" ||
-		mode === "dontAsk" ||
-		mode === "auto" ||
-		mode === "plan"
-	) {
-		return [{ permission: "*", pattern: "*", action: "allow" }];
+// opencode always runs full-access at the permission layer; plan mode's
+// read-only behavior comes entirely from selecting the `plan` agent.
+export function buildPermissionRules(): PermissionRuleset {
+	return [{ permission: "*", pattern: "*", action: "allow" }];
+}
+
+// opencode pins permission rules on the session at creation. A session created
+// by an older Helmor (default/acceptEdits → ask rules) keeps them on resume, so
+// full access wouldn't take effect. Reassert the current rules when reusing an
+// existing session. Best-effort — a failed update must not block the turn.
+export async function reapplySessionPermission(
+	client: OpencodeClient,
+	sessionID: string,
+	directory: string,
+): Promise<void> {
+	try {
+		await client.session.update({
+			sessionID,
+			directory,
+			permission: buildPermissionRules(),
+		});
+	} catch (error) {
+		logger.debug("opencode permission reapply failed", errorDetails(error));
 	}
-	const rules: PermissionRuleset = [
-		{ permission: "*", pattern: "*", action: "ask" },
-		{ permission: "question", pattern: "*", action: "allow" },
-	];
-	if (mode === "acceptEdits") {
-		rules.push({ permission: "edit", pattern: "*", action: "allow" });
-	}
-	return rules;
 }
 
 // `percentage` is 0 when the model's context limit is unknown; zero buckets dropped.
@@ -449,6 +452,9 @@ export class OpencodeSessionManager implements SessionManager {
 			const resumeId = params.resume?.trim();
 			if (resumeId && (await this.sessionExists(client, resumeId, directory))) {
 				openCodeSessionId = resumeId;
+				// A resumed session may carry stale (older-version) permission
+				// rules — reassert full access so non-plan turns aren't gated.
+				await reapplySessionPermission(client, resumeId, directory);
 			} else {
 				// Stale/absent id → create fresh so old chats recover.
 				if (resumeId) {
@@ -460,7 +466,7 @@ export class OpencodeSessionManager implements SessionManager {
 					const created = await client.session.create({
 						directory,
 						title: `Helmor ${params.sessionId}`,
-						permission: buildPermissionRules(params.permissionMode),
+						permission: buildPermissionRules(),
 					});
 					openCodeSessionId = created.data?.id ?? null;
 				} catch (error) {
@@ -521,19 +527,6 @@ export class OpencodeSessionManager implements SessionManager {
 		ctx.planMode = params.permissionMode === "plan";
 		resetPlanCapture(ctx.planCapture);
 		this.ensureSessionPump(client, ctx);
-
-		// opencode pins permission rules at session.create; re-apply every turn so a
-		// mode switch (plan → bypassPermissions on Implement) takes effect on a
-		// reused/resumed session instead of still prompting per tool call.
-		try {
-			await client.session.update({
-				sessionID: ctx.openCodeSessionId,
-				directory,
-				permission: buildPermissionRules(params.permissionMode),
-			});
-		} catch (error) {
-			logger.debug("opencode permission update failed", errorDetails(error));
-		}
 
 		const turnDone = new Promise<void>((resolve, reject) => {
 			ctx!.settle = { resolve, reject };
