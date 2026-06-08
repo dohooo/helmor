@@ -136,9 +136,34 @@ export const CodeBlock = ({
 			}
 		};
 
-		void render();
+		// Defer the shiki highlight (Oniguruma WASM init + grammar compile +
+		// double tokenization) off the urgent render frame. The plain-text
+		// fallback set in `useState` stays visible until this resolves, then
+		// `render()` swaps in the highlighted HTML — byte-identical to running
+		// eagerly, only later. Mirrors the preloadStreamdown idle pattern in
+		// features/panel/index.tsx (idle when available, short setTimeout as a
+		// fallback in environments without requestIdleCallback, e.g. jsdom).
+		const idleCallbackId =
+			typeof window !== "undefined" && "requestIdleCallback" in window
+				? window.requestIdleCallback(() => void render(), { timeout: 1000 })
+				: null;
+		const timeoutId =
+			idleCallbackId === null
+				? (setTimeout(() => void render(), 0) as unknown as number)
+				: null;
+
 		return () => {
 			cancelled = true;
+			if (
+				idleCallbackId !== null &&
+				typeof window !== "undefined" &&
+				"cancelIdleCallback" in window
+			) {
+				window.cancelIdleCallback(idleCallbackId);
+			}
+			if (timeoutId !== null) {
+				clearTimeout(timeoutId);
+			}
 		};
 	}, [code, resolvedLanguage, showLineNumbers]);
 

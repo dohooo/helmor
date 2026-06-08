@@ -92,6 +92,14 @@ export function AppUpdatesPanel() {
 		void listenAppUpdateStatus((nextStatus) => {
 			if (mounted) setStatus(nextStatus);
 		}).then((unlisten) => {
+			// If the panel unmounted before listen() resolved, the cleanup
+			// below already ran with cleanup still undefined, so detach this
+			// unlisten now instead of leaking a backend listener. Mirrors
+			// use-ui-sync-bridge.ts.
+			if (!mounted) {
+				unlisten();
+				return;
+			}
 			cleanup = unlisten;
 		});
 

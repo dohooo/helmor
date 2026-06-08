@@ -176,24 +176,26 @@ export function useConversationStreaming({
 	// selectors below; mutations go through `streamingStore.<action>()`.
 	const streamingStore = useStreamingStore;
 	// Cross-context slices the interaction-tracking effect / queue / steer
-	// fallback read off; `useShallow` keeps these stable for the deps lists.
-	const pendingPermissionsByContext = useStreamingStore(
-		(state) => state.pendingPermissionsByContext,
-	);
-	const pendingUserInputByContext = useStreamingStore(
-		(state) => state.pendingUserInputByContext,
-	);
-	const planReviewByContext = useStreamingStore(
-		(state) => state.planReviewByContext,
-	);
-	const interactionWorkspaceByContext = useStreamingStore(
-		(state) => state.interactionWorkspaceByContext,
-	);
-	const sendingContextKeys = useStreamingStore(
-		(state) => state.sendingContextKeys,
-	);
-	const activeFastPreludes = useStreamingStore(
-		(state) => state.activeFastPreludes,
+	// fallback read off. Coalesced into a single `useShallow` subscription
+	// (was 6 separate store subscriptions): each field is a stable map/set
+	// reference, so a shallow compare of the bundle is identity-equivalent
+	// to the per-field reads while cutting the subscription count 6 → 1.
+	const {
+		pendingPermissionsByContext,
+		pendingUserInputByContext,
+		planReviewByContext,
+		interactionWorkspaceByContext,
+		sendingContextKeys,
+		activeFastPreludes,
+	} = useStreamingStore(
+		useShallow((state) => ({
+			pendingPermissionsByContext: state.pendingPermissionsByContext,
+			pendingUserInputByContext: state.pendingUserInputByContext,
+			planReviewByContext: state.planReviewByContext,
+			interactionWorkspaceByContext: state.interactionWorkspaceByContext,
+			sendingContextKeys: state.sendingContextKeys,
+			activeFastPreludes: state.activeFastPreludes,
+		})),
 	);
 	const activeSendError = useStreamingStore(
 		(state) => state.sendErrorsByContext[composerContextKey] ?? null,
@@ -885,6 +887,9 @@ export function useConversationStreaming({
 				clearFastPrelude(contextKey);
 			}
 
+			// Hoisted so the catch below can run cleanup() on an RPC reject
+			// (the stream's terminal-event path never fires in that case).
+			let cleanup: (() => void) | undefined;
 			try {
 				if (targetSessionId) {
 					void generateSessionTitle(
@@ -936,15 +941,16 @@ export function useConversationStreaming({
 					});
 				}, 3_000);
 
-				const { flushStreamMessages, scheduleFlush, cleanup } =
-					createStreamFlushers({
-						accumulator,
-						queryClient,
-						cacheSessionId,
-						userMessageId,
-						optimisticUserMessage,
-						changesRefreshInterval,
-					});
+				const flushers = createStreamFlushers({
+					accumulator,
+					queryClient,
+					cacheSessionId,
+					userMessageId,
+					optimisticUserMessage,
+					changesRefreshInterval,
+				});
+				const { flushStreamMessages, scheduleFlush } = flushers;
+				cleanup = flushers.cleanup;
 
 				await startAgentMessageStream(
 					{
@@ -1003,6 +1009,15 @@ export function useConversationStreaming({
 					}),
 				);
 			} catch (error) {
+				// LEAK FIX: the stream RPC rejected before the dispatcher's
+				// terminal event (done/error) could run cleanup(). cleanup()
+				// is the only thing that clears `changesRefreshInterval` (the
+				// 3s setInterval started above) and cancels the pending flush
+				// frame — without this call each failed send orphans a forever
+				// interval. `cleanup` is hoisted above the try so it's reachable
+				// here; it's idempotent (a later terminal event calling it again
+				// is a no-op).
+				cleanup?.();
 				console.error("[conversation] invoke error:", error);
 				const { code, message: errorMsg } = extractError(
 					error,
