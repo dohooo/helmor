@@ -16,6 +16,11 @@
         var dark = t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme:dark)').matches)
         if (dark) root.classList.add('dark')
         root.style.colorScheme = dark ? 'dark' : 'light'
+        // Tauri injects __TAURI__/__TAURI_INTERNALS__ before any script runs.
+        // Tag the root so CSS can opt out of the browser-companion peek mode
+        // (max-[960px]) — the desktop window should always render the
+        // desktop layout regardless of its current width.
+        if (window.__TAURI__ || window.__TAURI_INTERNALS__) root.setAttribute('data-tauri-shell', '')
         var ct = ls.getItem(dark ? 'helmor-dark-theme' : 'helmor-light-theme') || 'default'
         if (ct !== 'default') root.classList.add(`theme-${ct}`)
         // User font overrides

@@ -1077,6 +1077,65 @@ html.no-pointer-cursors .conversation-streamdown :where(a) {
 	margin: 0;
 }
 
+/*
+ * The shell's sidebar + inspector flip into a browser-companion peek mode
+ * at `max-[960px]` (Tailwind variant). It is designed for tablets/phones
+ * loading the companion URL in a regular browser, where the panes need to
+ * collapse to a slim peek and slide open on hover/swipe. The Tauri desktop
+ * window can drop into the same width range (snap, drag, smaller laptops)
+ * and inherits the peek mode by accident — the inner panel translates
+ * `-translate-x-full` and the aside switches to `overflow-visible`, so the
+ * sidebar's content slides off the left edge of the window.
+ *
+ * Inside Tauri we always want the desktop layout regardless of viewport
+ * width. The inline script in index.html sets `data-tauri-shell` on
+ * <html> as soon as Tauri's runtime globals are available, before the
+ * first paint. Neutralize the peek mode for the shell panes inside that
+ * scope. !important is needed to beat Tailwind's `!w-6` / `!translate-x`
+ * arbitrary values, which themselves use !important.
+ */
+@media (max-width: 960px) {
+	[data-tauri-shell] [data-helmor-sidebar-root],
+	[data-tauri-shell] [data-shell-pane="inspector"] {
+		position: relative !important;
+		inset: auto !important;
+		height: 100% !important;
+		max-width: none !important;
+		overflow: hidden !important;
+		border: 0 !important;
+		border-radius: 0 !important;
+		box-shadow: none !important;
+		z-index: auto !important;
+		pointer-events: auto !important;
+	}
+	[data-tauri-shell] [data-helmor-sidebar-root] {
+		background-color: var(--sidebar) !important;
+	}
+	[data-tauri-shell] [data-shell-pane="inspector"] {
+		background-color: var(--inspector-bg) !important;
+	}
+	[data-tauri-shell] [data-shell-pane-hover="sidebar"],
+	[data-tauri-shell] [data-shell-pane-hover="inspector"] {
+		position: static !important;
+		inset: auto !important;
+		display: contents !important;
+		overflow: visible !important;
+		width: auto !important;
+	}
+	[data-tauri-shell] [data-shell-pane-inner="sidebar"],
+	[data-tauri-shell] [data-shell-pane-inner="inspector"] {
+		margin: 0 !important;
+		max-width: none !important;
+		border: 0 !important;
+		border-radius: 0 !important;
+		background: transparent !important;
+		box-shadow: none !important;
+		transform: none !important;
+		translate: 0 0 !important;
+		opacity: 1 !important;
+	}
+}
+
 /* Accessibility: respect prefers-reduced-motion (WCAG 2.3.3).
    Suppresses animations and transitions for users with vestibular
    disorders, motion sensitivity, or migraine triggers. Smooth
