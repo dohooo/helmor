@@ -33,13 +33,13 @@ const codexCaps: ProviderCapabilities = {
 const cursorCaps: ProviderCapabilities = {
 	provider: "cursor",
 	displayName: "Cursor",
-	supportsPlanMode: false,
+	supportsPlanMode: true,
 	supportsActiveGoal: false,
 	supportsContextUsage: false,
 	supportsSteer: false,
 	supportsSlashCommands: true,
 	requiresApiKey: true,
-	permissionModes: ["default"],
+	permissionModes: ["default", "plan"],
 };
 
 const table: ProviderCapabilities[] = [claudeCaps, codexCaps, cursorCaps];

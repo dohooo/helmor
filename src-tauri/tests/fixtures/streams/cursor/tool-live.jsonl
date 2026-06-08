@@ -1,0 +1,9 @@
+{"type":"cursor/agent_init","session_id":"agent-live","model":"composer-2","id":"test-request"}
+{"type":"cursor/status","agent_id":"agent-live","run_id":"run-live","status":"RUNNING","id":"test-request"}
+{"type":"cursor/tool_call_start","agent_id":"agent-live","run_id":"run-live","call_id":"tool_a","name":"shell","status":"running","args":{"command":"ls /tmp","timeout":30000},"id":"test-request"}
+{"type":"cursor/assistant","agent_id":"agent-live","run_id":"run-live","message":{"role":"assistant","content":[{"type":"text","text":"Checking"}]},"id":"test-request"}
+{"type":"cursor/tool_call_end","agent_id":"agent-live","run_id":"run-live","call_id":"tool_a","name":"shell","status":"completed","args":{"command":"ls /tmp","timeout":30000},"result":{"status":"success","value":{"exitCode":0,"signal":"","stdout":"file.txt\n","stderr":"","executionTime":10}},"id":"test-request"}
+{"type":"cursor/tool_call_start","agent_id":"agent-live","run_id":"run-live","call_id":"tool_b","name":"read","status":"running","args":{"path":"/tmp/file.txt"},"id":"test-request"}
+{"type":"cursor/tool_call_end","agent_id":"agent-live","run_id":"run-live","call_id":"tool_b","name":"read","status":"completed","args":{"path":"/tmp/file.txt"},"result":{"status":"success","value":{"content":"hello\n","totalLines":1,"fileSize":6}},"id":"test-request"}
+{"type":"cursor/assistant","agent_id":"agent-live","run_id":"run-live","message":{"role":"assistant","content":[{"type":"text","text":" — done."}]},"id":"test-request"}
+{"type":"cursor/status","agent_id":"agent-live","run_id":"run-live","status":"FINISHED","id":"test-request"}
