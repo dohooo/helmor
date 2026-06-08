@@ -1,6 +1,7 @@
 import { ChevronDown, X } from "lucide-react";
 import { useMemo } from "react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
 	Command,
 	CommandEmpty,
@@ -27,19 +28,38 @@ export function groupHeading(option: MultiSelectOption): string {
 	return option.id.split("/")[0] ?? "Models";
 }
 
+// Plain substring match: every whitespace-separated token must appear in the
+// model's label or id. Replaces cmdk's default fuzzy (subsequence) scorer, which
+// let "opencode go" match unrelated models. Returns 0 to hide the item.
+export function scoreModel(value: string, search: string): number {
+	const query = search.trim().toLowerCase();
+	if (!query) return 1;
+	const haystack = value.toLowerCase();
+	for (const token of query.split(/\s+/)) {
+		if (!haystack.includes(token)) return 0;
+	}
+	return 1;
+}
+
 export function ModelMultiSelect({
 	enabledIds,
 	enabledSet,
 	available,
 	onToggle,
+	onClear,
 	loading,
+	grouped = true,
 	triggerClassName,
 }: {
 	enabledIds: string[];
 	enabledSet: Set<string>;
 	available: MultiSelectOption[];
 	onToggle: (id: string) => void;
+	/** Unselect all — clears the entire selection, ignoring the search. */
+	onClear: () => void;
 	loading: boolean;
+	/** Group by sub-provider (OpenCode). Off → flat list (Cursor has no groups). */
+	grouped?: boolean;
 	triggerClassName?: string;
 }) {
 	// Render picks in user-saved order; popup list keeps catalog order.
@@ -51,6 +71,7 @@ export function ModelMultiSelect({
 
 	// Group the catalog by sub-provider so many models stay navigable.
 	const groups = useMemo(() => {
+		if (!grouped) return null;
 		const map = new Map<string, MultiSelectOption[]>();
 		for (const model of available) {
 			const heading = groupHeading(model);
@@ -59,7 +80,24 @@ export function ModelMultiSelect({
 			else map.set(heading, [model]);
 		}
 		return [...map.entries()];
-	}, [available]);
+	}, [available, grouped]);
+
+	const renderItem = (model: MultiSelectOption) => (
+		<CommandItem
+			key={model.id}
+			value={`${model.label} ${model.id}`}
+			data-checked={enabledSet.has(model.id)}
+			onSelect={() => onToggle(model.id)}
+			className="items-start"
+		>
+			<div className="flex min-w-0 flex-1 flex-col gap-0.5">
+				<span className="text-ui leading-tight">{model.label}</span>
+				<span className="font-mono text-micro leading-tight text-muted-foreground">
+					{model.id}
+				</span>
+			</div>
+		</CommandItem>
+	);
 
 	return (
 		<Popover>
@@ -117,8 +155,18 @@ export function ModelMultiSelect({
 				</div>
 			</PopoverTrigger>
 			<PopoverContent align="end" className="w-[440px] max-w-[90vw] p-1.5">
-				<Command>
+				<Command filter={scoreModel}>
 					<CommandInput placeholder="Search models" />
+					{enabledIds.length > 0 ? (
+						<div className="flex items-center justify-between gap-2 px-2 pt-0.5 pb-1">
+							<span className="text-mini text-muted-foreground">
+								{enabledIds.length} selected
+							</span>
+							<Button type="button" variant="ghost" size="xs" onClick={onClear}>
+								Unselect all
+							</Button>
+						</div>
+					) : null}
 					<CommandList className="max-h-[min(60vh,420px)]">
 						<CommandEmpty>
 							{available.length === 0
@@ -127,31 +175,15 @@ export function ModelMultiSelect({
 									: "No cached models yet — click Refresh."
 								: "No models found."}
 						</CommandEmpty>
-						{groups.map(([heading, models]) => (
-							<CommandGroup key={heading} heading={heading}>
-								{models.map((model) => {
-									const checked = enabledSet.has(model.id);
-									return (
-										<CommandItem
-											key={model.id}
-											value={`${model.label} ${model.id}`}
-											data-checked={checked}
-											onSelect={() => onToggle(model.id)}
-											className="items-start"
-										>
-											<div className="flex min-w-0 flex-1 flex-col gap-0.5">
-												<span className="text-ui leading-tight">
-													{model.label}
-												</span>
-												<span className="font-mono text-micro leading-tight text-muted-foreground">
-													{model.id}
-												</span>
-											</div>
-										</CommandItem>
-									);
-								})}
-							</CommandGroup>
-						))}
+						{groups ? (
+							groups.map(([heading, models]) => (
+								<CommandGroup key={heading} heading={heading}>
+									{models.map(renderItem)}
+								</CommandGroup>
+							))
+						) : (
+							<CommandGroup>{available.map(renderItem)}</CommandGroup>
+						)}
 					</CommandList>
 				</Command>
 			</PopoverContent>

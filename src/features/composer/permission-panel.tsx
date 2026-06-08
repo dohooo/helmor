@@ -35,6 +35,7 @@ export function PermissionPanel({
 		<ToolApprovalCard
 			toolName={permission.toolName}
 			toolInput={permission.toolInput}
+			description={permission.description}
 			disabled={disabled}
 			onResponse={handleResponse}
 		/>

@@ -16,6 +16,9 @@ import { UserInputCard } from "./shared";
 export type ToolApprovalCardProps = {
 	toolName: string;
 	toolInput: Record<string, unknown>;
+	/** Fallback resource label when `toolInput` is empty (e.g. OpenCode's
+	 *  `patterns` — the file path / command being approved). */
+	description?: string | null;
 	disabled?: boolean;
 	onResponse: (behavior: "allow" | "deny") => void;
 };
@@ -35,6 +38,7 @@ function looksLikeCommand(
 function getCodePreview(
 	toolName: string,
 	toolInput: Record<string, unknown>,
+	description?: string | null,
 ): { code: string; language: string } {
 	const command = toolInput?.command;
 	if (
@@ -43,6 +47,13 @@ function getCodePreview(
 		looksLikeCommand(toolName, toolInput)
 	) {
 		return { code: command, language: "bash" };
+	}
+	// Some agents (OpenCode read/skill/todo/shell) send an empty input object
+	// and carry the target resource in `description` (its `patterns`). Show
+	// that instead of a useless `{}`.
+	if (toolInput == null || Object.keys(toolInput).length === 0) {
+		const fallback = description?.trim();
+		if (fallback) return { code: fallback, language: "text" };
 	}
 	return {
 		code: JSON.stringify(toolInput, null, 2),
@@ -53,12 +64,13 @@ function getCodePreview(
 export function ToolApprovalCard({
 	toolName,
 	toolInput,
+	description,
 	disabled,
 	onResponse,
 }: ToolApprovalCardProps) {
 	const preview = useMemo(
-		() => getCodePreview(toolName, toolInput),
-		[toolName, toolInput],
+		() => getCodePreview(toolName, toolInput, description),
+		[toolName, toolInput, description],
 	);
 
 	return (
