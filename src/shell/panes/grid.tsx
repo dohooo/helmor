@@ -12,11 +12,7 @@ export function PanesGrid({ children }: PanesGridProps) {
 	const mainPanes = panes.filter((pane) => pane.target === "main");
 
 	return (
-		<div
-			data-panes-layout="1x1"
-			className="grid h-full w-full"
-			style={{ gridTemplateColumns: "1fr" }}
-		>
+		<div data-panes-layout="1x1" style={{ display: "contents" }}>
 			{mainPanes.map((pane) => (
 				<PaneShell key={pane.id} pane={pane}>
 					{children(pane)}
