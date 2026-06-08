@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PanesProvider } from "@/shell/panes";
 import type { ComposerSubmitPayload } from "./hooks/use-streaming";
 
 const streamingMocks = vi.hoisted(() => ({
@@ -78,37 +79,39 @@ function renderContainer(
 	});
 
 	render(
-		<QueryClientProvider client={queryClient}>
-			<WorkspaceConversationContainer
-				selectedWorkspaceId="workspace-1"
-				displayedWorkspaceId={options.displayedWorkspaceId ?? "workspace-1"}
-				selectedSessionId="session-1"
-				displayedSessionId={options.displayedSessionId ?? "session-1"}
-				repoId="repo-1"
-				activeStreams={[]}
-				onSelectSession={vi.fn()}
-				onResolveDisplayedSession={vi.fn()}
-				pendingCreatedWorkspaceSubmit={{
-					id: "pending-1",
-					workspaceId: "workspace-1",
-					sessionId: "session-1",
-					payload: pendingPayload,
-					finalized: options.finalized ?? true,
-					...(options.pendingRepoId !== undefined
-						? { repoId: options.pendingRepoId }
-						: {}),
-				}}
-				onPendingCreatedWorkspaceSubmitConsumed={onConsumed}
-				busySessionIds={options.busySessionIds}
-				stoppableSessionIds={options.stoppableSessionIds}
-				workspaceRootPath={
-					options.workspaceRootPath === undefined
-						? "/tmp/new-workspace"
-						: options.workspaceRootPath
-				}
-				composerOnly
-			/>
-		</QueryClientProvider>,
+		<PanesProvider>
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceConversationContainer
+					selectedWorkspaceId="workspace-1"
+					displayedWorkspaceId={options.displayedWorkspaceId ?? "workspace-1"}
+					selectedSessionId="session-1"
+					displayedSessionId={options.displayedSessionId ?? "session-1"}
+					repoId="repo-1"
+					activeStreams={[]}
+					onSelectSession={vi.fn()}
+					onResolveDisplayedSession={vi.fn()}
+					pendingCreatedWorkspaceSubmit={{
+						id: "pending-1",
+						workspaceId: "workspace-1",
+						sessionId: "session-1",
+						payload: pendingPayload,
+						finalized: options.finalized ?? true,
+						...(options.pendingRepoId !== undefined
+							? { repoId: options.pendingRepoId }
+							: {}),
+					}}
+					onPendingCreatedWorkspaceSubmitConsumed={onConsumed}
+					busySessionIds={options.busySessionIds}
+					stoppableSessionIds={options.stoppableSessionIds}
+					workspaceRootPath={
+						options.workspaceRootPath === undefined
+							? "/tmp/new-workspace"
+							: options.workspaceRootPath
+					}
+					composerOnly
+				/>
+			</QueryClientProvider>
+		</PanesProvider>,
 	);
 }
 

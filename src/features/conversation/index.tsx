@@ -33,6 +33,7 @@ import {
 	getComposerContextKey,
 	parseSessionIdFromContextKey,
 } from "@/lib/workspace-helpers";
+import { PanesGrid, useSyncDefaultPaneToSelection } from "@/shell/panes";
 import {
 	type ComposerSubmitPayload,
 	useConversationStreaming,
@@ -251,6 +252,11 @@ export const WorkspaceConversationContainer = memo(
 		const selectionPending =
 			selectedWorkspaceId !== displayedWorkspaceId ||
 			selectedSessionId !== displayedSessionId;
+
+		useSyncDefaultPaneToSelection({
+			workspaceId: selectedWorkspaceId,
+			sessionId: selectedSessionId,
+		});
 
 		// Submit queue is a module-level Zustand singleton — survives this
 		// container's unmount (the start-page ↔ workspace toggle renders two
@@ -570,39 +576,43 @@ export const WorkspaceConversationContainer = memo(
 		return (
 			<FileLinkProvider value={fileLinkValue}>
 				{composerOnly ? null : (
-					<WorkspacePanelContainer
-						selectedWorkspaceId={selectedWorkspaceId}
-						displayedWorkspaceId={displayedWorkspaceId}
-						selectedSessionId={selectedSessionId}
-						displayedSessionId={displayedSessionId}
-						sessionSelectionHistory={sessionSelectionHistory}
-						sending={sendingForPanel}
-						busySessionIds={panelBusySessionIds}
-						interactionRequiredSessionIds={interactionRequiredSessionIds}
-						modelSelections={composerModelSelections}
-						workspaceChangeRequest={workspaceChangeRequest}
-						onSelectSession={onSelectSession}
-						onSelectWorkspace={onSelectWorkspace}
-						onResolveDisplayedSession={onResolveDisplayedSession}
-						onQueuePendingPromptForSession={onQueuePendingPromptForSession}
-						onRequestCloseSession={onRequestCloseSession}
-						contextPreviewCard={contextPreviewCard}
-						contextPreviewActive={contextPreviewActive}
-						onSelectContextPreview={onSelectContextPreview}
-						onCloseContextPreview={onCloseContextPreview}
-						headerActions={headerActions}
-						headerLeading={headerLeading}
-						optimisticPendingSubmit={
-							pendingCreatedWorkspaceSubmit
-								? {
-										id: pendingCreatedWorkspaceSubmit.id,
-										workspaceId: pendingCreatedWorkspaceSubmit.workspaceId,
-										sessionId: pendingCreatedWorkspaceSubmit.sessionId,
-										prompt: pendingCreatedWorkspaceSubmit.payload.prompt,
-									}
-								: null
-						}
-					/>
+					<PanesGrid>
+						{() => (
+							<WorkspacePanelContainer
+								selectedWorkspaceId={selectedWorkspaceId}
+								displayedWorkspaceId={displayedWorkspaceId}
+								selectedSessionId={selectedSessionId}
+								displayedSessionId={displayedSessionId}
+								sessionSelectionHistory={sessionSelectionHistory}
+								sending={sendingForPanel}
+								busySessionIds={panelBusySessionIds}
+								interactionRequiredSessionIds={interactionRequiredSessionIds}
+								modelSelections={composerModelSelections}
+								workspaceChangeRequest={workspaceChangeRequest}
+								onSelectSession={onSelectSession}
+								onSelectWorkspace={onSelectWorkspace}
+								onResolveDisplayedSession={onResolveDisplayedSession}
+								onQueuePendingPromptForSession={onQueuePendingPromptForSession}
+								onRequestCloseSession={onRequestCloseSession}
+								contextPreviewCard={contextPreviewCard}
+								contextPreviewActive={contextPreviewActive}
+								onSelectContextPreview={onSelectContextPreview}
+								onCloseContextPreview={onCloseContextPreview}
+								headerActions={headerActions}
+								headerLeading={headerLeading}
+								optimisticPendingSubmit={
+									pendingCreatedWorkspaceSubmit
+										? {
+												id: pendingCreatedWorkspaceSubmit.id,
+												workspaceId: pendingCreatedWorkspaceSubmit.workspaceId,
+												sessionId: pendingCreatedWorkspaceSubmit.sessionId,
+												prompt: pendingCreatedWorkspaceSubmit.payload.prompt,
+											}
+										: null
+								}
+							/>
+						)}
+					</PanesGrid>
 				)}
 
 				<div
