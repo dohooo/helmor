@@ -60,9 +60,14 @@ vi.mock("./lib/api", async (importOriginal) => {
 });
 
 import App from "./App";
+import { router } from "./router";
 
 describe("App unread lifecycle", () => {
 	beforeEach(() => {
+		// Stage 3b: reset the module-scope router (now owns the selected
+		// workspace/session) between renders so a stale location from a prior
+		// test doesn't leak into boot auto-select.
+		router.history.replace("/");
 		unreadRuntime.workspaceUnread = 0;
 		unreadRuntime.unreadSessionCount = 1;
 		unreadRuntime.sessionUnreadCount = 2;

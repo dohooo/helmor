@@ -21,6 +21,7 @@ import type { PendingCreatedWorkspaceSubmit } from "@/features/conversation";
 import type { WorkspaceGroup, WorkspaceRow } from "@/lib/api";
 import type { AppSettings } from "@/lib/settings";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
+import { useRouterSelection } from "@/router/use-router-selection";
 import {
 	type ContextPanelActions,
 	type ContextPanelState,
@@ -73,6 +74,9 @@ export function useSelectionControllers({
 	workspaceGroups: WorkspaceGroup[];
 	archivedRows: WorkspaceRow[];
 }): SelectionControllers {
+	// `viewMode` is router-owned now (Stage 3b). The start-surface controller
+	// needs it reactively to clear its one-shot mode override on exit.
+	const routerViewMode = useRouterSelection().viewMode;
 	const {
 		state: selection,
 		actions: selectionActions,
@@ -109,7 +113,7 @@ export function useSelectionControllers({
 			repositories,
 			pushToast: pushWorkspaceToast,
 			getViewMode: () => selectionActions.getSnapshot().viewMode,
-			viewMode: selection.viewMode,
+			viewMode: routerViewMode,
 			openWorkspaceStart: () => selectionActions.openStart(),
 			setViewMode: (mode) => selectionActions.setViewMode(mode),
 			selectWorkspace: (id) => handleSelectWorkspace(id),

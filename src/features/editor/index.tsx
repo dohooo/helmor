@@ -20,7 +20,6 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { useStore } from "zustand";
 import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
 import { LazyStreamdown } from "@/components/streamdown-loader";
 import { Button } from "@/components/ui/button";
@@ -43,7 +42,7 @@ import {
 } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
 import { describeUnknownError } from "@/lib/workspace-helpers";
-import { useSelectionStore } from "@/shell/controllers/selection-store-context";
+import { useRouterSelectedWorkspaceId } from "@/router/use-router-selection";
 
 // Refined segmented-tab look: no tray, soft glassy pill on the active state.
 // Hover only changes text color (no bg) — otherwise hover-on-inactive sits next
@@ -426,14 +425,10 @@ export function WorkspaceEditorSurface({
 	onError,
 }: WorkspaceEditorSurfaceProps) {
 	const queryClient = useQueryClient();
-	// Subscribe to the selection store directly instead of receiving the
-	// workspace id as a flattened prop from AppShell. `selectedWorkspaceId` is
-	// the same store field AppShell read; this just moves the delivery channel
-	// so an unrelated selection-field change doesn't re-render via prop churn.
-	const workspaceId = useStore(
-		useSelectionStore(),
-		(s) => s.selectedWorkspaceId,
-	);
+	// Read the workspace id from the ROUTER (Stage 3b: navigation intent is
+	// router-owned). Same value AppShell used to read off the store's
+	// `selectedWorkspaceId`; the delivery channel moved to the router.
+	const workspaceId = useRouterSelectedWorkspaceId();
 	const surfaceRef = useRef<HTMLElement>(null);
 	const editorHostRef = useRef<HTMLDivElement>(null);
 	const fileControllerRef = useRef<FileController | null>(null);

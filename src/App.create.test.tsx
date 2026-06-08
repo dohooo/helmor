@@ -85,6 +85,7 @@ vi.mock("./lib/api", async (importOriginal) => {
 });
 
 import App from "./App";
+import { router } from "./router";
 
 function commitComposerText(editor: HTMLElement, text: string) {
 	const paragraph = editor.querySelector("p");
@@ -110,6 +111,9 @@ function commitComposerText(editor: HTMLElement, text: string) {
 
 describe("App create workspace flow", () => {
 	beforeEach(() => {
+		// Stage 3b: reset the module-scope router (now the selection source of
+		// truth) between renders so a stale location can't leak across tests.
+		router.history.replace("/");
 		createRuntime.created = false;
 		createRuntime.workspaceId = null;
 		createRuntime.sessionId = null;
