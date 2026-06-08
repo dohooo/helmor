@@ -1588,4 +1588,48 @@ describe("WorkspaceComposer", () => {
 		await userEvent.click(planButton);
 		expect(onChangePermissionMode).toHaveBeenCalledWith("bypassPermissions");
 	});
+
+	it("plan keyboard shortcut exits plan into bypassPermissions (matches the button), not default (#733)", () => {
+		const queryClient = createHelmorQueryClient();
+		const onChangePermissionMode = vi.fn();
+
+		const { container } = render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="codex"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="plan"
+					onChangePermissionMode={onChangePermissionMode}
+					togglePlanShortcut="Mod+Shift+P"
+					focusScope="workspace-composer"
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+				/>
+			</QueryClientProvider>,
+		);
+
+		const root = container.querySelector(
+			'[data-focus-scope="workspace-composer"]',
+		);
+		expect(root).not.toBeNull();
+		fireEvent.keyDown(root as Element, {
+			code: "KeyP",
+			key: "p",
+			metaKey: true,
+			shiftKey: true,
+		});
+
+		expect(onChangePermissionMode).toHaveBeenCalledWith("bypassPermissions");
+		expect(onChangePermissionMode).not.toHaveBeenCalledWith("default");
+	});
 });

@@ -695,7 +695,12 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			) {
 				event.preventDefault();
 				event.stopPropagation();
-				onChangePermissionMode(permissionMode === "plan" ? "default" : "plan");
+				// Exit plan into bypassPermissions, matching the Plan button and
+				// handlePlanImplement. "default" left Codex prompting for MCP
+				// tool calls despite full-access sandbox (#733).
+				onChangePermissionMode(
+					permissionMode === "plan" ? "bypassPermissions" : "plan",
+				);
 			}
 		},
 		[
