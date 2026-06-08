@@ -83,12 +83,18 @@ pub(crate) fn agent_invocation_path() -> String {
         return installed_cli_name().to_string();
     }
 
+    // The compiled CLI is `helmor-cli.exe` on Windows, `helmor-cli` elsewhere.
+    let cli_name = if cfg!(windows) {
+        "helmor-cli.exe"
+    } else {
+        "helmor-cli"
+    };
     match std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("helmor-cli")))
+        .and_then(|exe| exe.parent().map(|dir| dir.join(cli_name)))
     {
         Some(path) => path.display().to_string(),
-        None => "helmor-cli".to_string(),
+        None => cli_name.to_string(),
     }
 }
 
@@ -181,10 +187,16 @@ mod tests {
     #[test]
     fn agent_invocation_path_returns_absolute_helmor_cli_in_dev() {
         let path = agent_invocation_path();
-        // Either an absolute path ending in `/helmor-cli`, or the
-        // bare-name fallback when `current_exe()` is unavailable.
+        // Either an absolute path ending in the platform CLI file name
+        // (`helmor-cli` on Unix, `helmor-cli.exe` on Windows), or that bare
+        // name as the fallback when `current_exe()` is unavailable.
+        let cli_name = if cfg!(windows) {
+            "helmor-cli.exe"
+        } else {
+            "helmor-cli"
+        };
         assert!(
-            path.ends_with("/helmor-cli") || path == "helmor-cli",
+            path.ends_with(cli_name),
             "unexpected dev invocation path: {path}"
         );
         // Never the bare `helmor-dev` symlink name — that's the

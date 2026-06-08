@@ -84,12 +84,38 @@ pub fn lookup_workspace_pr_action_status(workspace_id: &str) -> Result<ForgeActi
         }
     };
 
+    // Persistent logout: a prior real signal said this account is logged
+    // out → keep surfacing Connect without re-probing (covers unpublished
+    // + sibling workspaces + refocus).
+    if crate::forge::accounts::forge_auth_known_logged_out(api::GITHUB_HOST, &context.login) {
+        return Ok(ForgeActionStatus::unauthenticated(
+            "GitHub account is not connected for this repository",
+        ));
+    }
+
     if !context.has_remote_tracking {
         return Ok(ForgeActionStatus::no_change_request());
     }
 
     let status = query_workspace_pr_action_status(&context)
         .unwrap_or_else(|error| ForgeActionStatus::error(format!("{error:#}")));
+    // Feed the live API verdict back into the cache so siblings + refocus
+    // stay consistent.
+    match status.remote_state {
+        crate::forge::RemoteState::Unauthenticated => crate::forge::accounts::note_forge_auth(
+            api::GITHUB_HOST,
+            &context.login,
+            crate::forge::accounts::AuthCheck::LoggedOut,
+        ),
+        crate::forge::RemoteState::Ok | crate::forge::RemoteState::NoPr => {
+            crate::forge::accounts::note_forge_auth(
+                api::GITHUB_HOST,
+                &context.login,
+                crate::forge::accounts::AuthCheck::LoggedIn,
+            )
+        }
+        crate::forge::RemoteState::Unavailable | crate::forge::RemoteState::Error => {}
+    }
 
     Ok(status)
 }

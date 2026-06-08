@@ -57,6 +57,9 @@ export function resolveBundleArtifacts(options) {
 	const platform = options.platform ?? process.platform;
 	const sidecarDir = resolve(repoRoot, "sidecar");
 	const srcTauriDir = resolve(repoRoot, "src-tauri");
+	// Bun's `--compile` and cargo both append `.exe` on Windows, and Tauri's
+	// `externalBin` resolution expects the `-<triple>` artifacts to carry it too.
+	const exe = platform === "win32" ? ".exe" : "";
 	const cliBinaryName = cliBinaryNameForPlatform(platform);
 	const cliSource =
 		profile === "release"
@@ -66,18 +69,18 @@ export function resolveBundleArtifacts(options) {
 	return {
 		targetTriple,
 		profile,
-		sidecarSource: resolve(sidecarDir, "dist", "helmor-sidecar"),
+		sidecarSource: resolve(sidecarDir, "dist", `helmor-sidecar${exe}`),
 		sidecarExternalBin: resolve(
 			sidecarDir,
 			"dist",
-			`helmor-sidecar-${targetTriple}`,
+			`helmor-sidecar-${targetTriple}${exe}`,
 		),
 		cliSource,
 		cliExternalBin: resolve(
 			srcTauriDir,
 			"target",
 			"bundled",
-			`helmor-cli-${targetTriple}`,
+			`helmor-cli-${targetTriple}${exe}`,
 		),
 	};
 }

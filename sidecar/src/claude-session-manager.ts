@@ -15,6 +15,7 @@ import {
 	type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { isAbortError, isQueryClosedTransient } from "./abort.js";
+import { ActiveTurnRegistry } from "./active-turn-registry.js";
 import { buildAgentProxyEnv } from "./agent-proxy.js";
 import { loadProjectMcpServers } from "./claude-project-mcp.js";
 import { buildClaudeRichMeta, buildClaudeStoredMeta } from "./context-usage.js";
@@ -64,8 +65,15 @@ const CONTEXT_USAGE_TIMEOUT_MS = 30_000;
  * Prefers `HELMOR_CLAUDE_CODE_BIN_PATH` (release), then the platform
  * sub-package (dev/test); falls back to the wrapper bin for `--omit=optional`.
  * Mirrors the codex resolver in `codex-app-server-manager.ts`.
+ *
+ * MUST NOT throw: this runs at module load (before the ready signal), and
+ * inside a `bun build --compile` binary `require.resolve` always fails —
+ * if the host didn't pass the env override, an exception here kills the
+ * whole sidecar with "Invalid sidecar ready signal". Returning `undefined`
+ * lets the SDK attempt its own resolution lazily, scoping any failure to
+ * the individual Claude session instead of the entire process.
  */
-function resolveClaudeBinPath(): string {
+function resolveClaudeBinPath(): string | undefined {
 	const override = process.env.HELMOR_CLAUDE_CODE_BIN_PATH;
 	if (override) {
 		return override;
@@ -77,8 +85,16 @@ function resolveClaudeBinPath(): string {
 		const pkgJson = require.resolve(`${platformPkg}/package.json`);
 		return join(dirname(pkgJson), binName);
 	} catch {
+		// Platform sub-package missing — try the wrapper package below.
+	}
+	try {
 		const pkgJson = require.resolve("@anthropic-ai/claude-code/package.json");
 		return join(dirname(pkgJson), "bin", "claude.exe");
+	} catch {
+		logger.info(
+			"Claude Code binary not resolved (no HELMOR_CLAUDE_CODE_BIN_PATH and no resolvable package); deferring to SDK default resolution",
+		);
+		return undefined;
 	}
 }
 
@@ -148,20 +164,10 @@ interface LiveSession {
 	 *  synthetic user event to the pipeline so the UI renders the mid-turn
 	 *  bubble at the correct position instead of tacking it onto the end. */
 	readonly emitter: SidecarEmitter;
-	/** Set by `stopSession` once it has emitted `aborted` up front, so the
-	 *  for-await catch doesn't emit a duplicate when the SDK iterator finally
-	 *  unwinds (its child teardown defers SIGTERM by ~2s). */
-	abortEmitted?: boolean;
 }
 
-const VALID_PERMISSION_MODES = [
-	"default",
-	"plan",
-	"bypassPermissions",
-	"acceptEdits",
-	"dontAsk",
-	"auto",
-] as const;
+// Helmor models permission as a binary: `plan` (read-only) or full access.
+const VALID_PERMISSION_MODES = ["plan", "bypassPermissions"] as const;
 type ClaudePermissionMode = (typeof VALID_PERMISSION_MODES)[number];
 
 const VALID_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
@@ -206,13 +212,7 @@ interface PermissionResolution {
 }
 
 function parsePermissionMode(value: string | undefined): ClaudePermissionMode {
-	if (
-		value !== undefined &&
-		(VALID_PERMISSION_MODES as readonly string[]).includes(value)
-	) {
-		return value as ClaudePermissionMode;
-	}
-	return "bypassPermissions";
+	return value === "plan" ? "plan" : "bypassPermissions";
 }
 
 function extractSessionPermissionMode(
@@ -317,6 +317,9 @@ async function buildUserMessageWithImages(
 
 export class ClaudeSessionManager implements SessionManager {
 	private readonly sessions = new Map<string, LiveSession>();
+	/** Shared Stop handling: instant `aborted` emit at any point (see
+	 *  ActiveTurnRegistry). Identical across all four providers. */
+	private readonly turns = new ActiveTurnRegistry();
 	private readonly pendingPermissions = new Map<
 		string,
 		(resolution: PermissionResolution) => void
@@ -381,6 +384,11 @@ export class ClaudeSessionManager implements SessionManager {
 			sourceRepoPath,
 		} = params;
 		const abortController = new AbortController();
+		// Register the turn before any await so a Stop during SDK startup
+		// emits `aborted` instantly + aborts the query.
+		this.turns.begin(sessionId, requestId, emitter, () =>
+			abortController.abort(),
+		);
 		const additionalDirectories = [...(params.additionalDirectories ?? [])];
 		logger.info(`[${requestId}] claude additionalDirectories resolved`, {
 			directories: additionalDirectories,
@@ -675,7 +683,7 @@ export class ClaudeSessionManager implements SessionManager {
 				// so the iterator can still drain buffered events — even a natural
 				// `result`. Drop them and return: passing them through or emitting
 				// `end` here would violate the "exactly one terminal event" contract.
-				if (live.abortEmitted) return;
+				if (this.turns.isAbortRequested(sessionId)) return;
 				logger.sdkEvent(requestId, message);
 				if (message.type === "rate_limit_event") {
 					lastRateLimitInfo = (
@@ -729,12 +737,13 @@ export class ClaudeSessionManager implements SessionManager {
 					return;
 				}
 			}
-			if (!live.abortEmitted) emitter.end(requestId);
+			if (!this.turns.isAbortRequested(sessionId)) emitter.end(requestId);
 		} catch (err) {
 			if (isAbortError(err)) {
 				// stopSession already emitted `aborted` up front (see below) —
 				// don't double-emit when the iterator finally unwinds.
-				if (!live.abortEmitted) emitter.aborted(requestId, "user_requested");
+				if (!this.turns.isAbortRequested(sessionId))
+					emitter.aborted(requestId, "user_requested");
 				return;
 			}
 			throw err;
@@ -755,6 +764,7 @@ export class ClaudeSessionManager implements SessionManager {
 			}
 			promptSource.close();
 			this.sessions.delete(sessionId);
+			this.turns.end(sessionId);
 			// Only cancel waiters belonging to THIS session — `pendingUserInputs`
 			// is manager-wide and other sessions may have parked AUQs / MCP
 			// elicitations on it.
@@ -1204,18 +1214,11 @@ export class ClaudeSessionManager implements SessionManager {
 	}
 
 	async stopSession(sessionId: string): Promise<void> {
-		const session = this.sessions.get(sessionId);
-		if (session) {
-			// Emit `aborted` now instead of waiting for the SDK's async iterator
-			// to unwind — its child teardown defers SIGTERM by ~2s, which is what
-			// made Claude's Stop button feel laggy (1–2s at any point in a turn).
-			// The abort controller still tears the query down in the background;
-			// the for-await catch skips the duplicate emit via `abortEmitted`.
-			session.abortEmitted = true;
-			session.abortController.abort();
-			session.emitter.aborted(session.requestId, "user_requested");
-			this.sessions.delete(sessionId);
-		}
+		// Instant `aborted` + abort the query (teardown) at any point in the
+		// turn, including SDK startup. The for-await/catch dedupe via the
+		// registry; the finally hard-closes the query in the background.
+		this.turns.requestStop(sessionId);
+		this.sessions.delete(sessionId);
 	}
 
 	async shutdown(): Promise<void> {

@@ -1479,9 +1479,13 @@ pub fn clone_repository_from_url(
 }
 
 fn infer_repo_name_from_url(url: &str) -> Option<String> {
-    let trimmed = url.trim().trim_end_matches('/');
+    // Trim either separator: remote URLs use `/`, but a local filesystem path
+    // used as the clone source on Windows uses `\` (e.g. `C:\…\repo`). Splitting
+    // only on `/` and `:` would otherwise treat the entire `\…\repo` tail as the
+    // repo name and corrupt the derived clone target.
+    let trimmed = url.trim().trim_end_matches(['/', '\\']);
     let without_git = trimmed.strip_suffix(".git").unwrap_or(trimmed);
-    let last = without_git.rsplit(['/', ':']).next()?;
+    let last = without_git.rsplit(['/', '\\', ':']).next()?;
     let cleaned = last.trim();
     if cleaned.is_empty() {
         None
@@ -1604,7 +1608,15 @@ fn resolve_git_root_path(folder_path: &str) -> Result<String> {
     )
     .map_err(|error| anyhow::anyhow!("Failed to resolve Git repository root: {error}"))?;
 
-    Ok(root.trim().to_string())
+    let root = root.trim();
+    // git emits forward-slash paths even on Windows (`C:/Users/…`). Run the
+    // result through the same canonicalizer the dedup lookup uses so the stored
+    // `repos.root_path` and every later lookup key are byte-for-byte identical
+    // (no `\\?\` prefix, OS-native separators). On Unix this is the existing
+    // behaviour. Fall back to the raw git output if canonicalize fails (e.g. the
+    // path was deleted between git and this call) so we never regress to bailing.
+    let normalized = normalize_filesystem_path(Path::new(root)).unwrap_or_else(|| root.to_string());
+    Ok(normalized)
 }
 
 // ---- Git remote / branch resolution helpers ----
@@ -1715,10 +1727,39 @@ fn resolve_head_from_ls_remote(repo_root: &Path, remote: &str) -> Result<String>
     bail!("Remote \"{remote}\" did not advertise a HEAD branch")
 }
 
+/// Canonicalize a filesystem path into the single string form used as a repo
+/// identity / dedup key.
+///
+/// We use `dunce::canonicalize` instead of `std::fs::canonicalize` so Windows
+/// does not hand back a verbatim extended-length path (the `\\?\C:\…` /
+/// `\\?\UNC\…` prefix). Those prefixes leak into `repos.root_path` and break
+/// equality: the same logical directory can be stored as `C:\…` (or git's
+/// forward-slash `C:/…`) yet looked up as `\\?\C:\…`, so dedup and the clone
+/// target-exists check silently miss. `dunce` returns the ordinary `C:\…` form
+/// whenever it is valid and only falls back to the verbatim form for paths that
+/// genuinely require it.
+///
+/// On Unix `dunce::canonicalize` is a direct passthrough to
+/// `std::fs::canonicalize`, so the output is byte-for-byte identical to before.
 pub(crate) fn normalize_filesystem_path(path: &Path) -> Option<String> {
-    fs::canonicalize(path)
+    dunce::canonicalize(path)
         .ok()
-        .map(|canonicalized| canonicalized.display().to_string())
+        .map(|canonicalized| normalize_path_separators(canonicalized.display().to_string()))
+}
+
+/// Force OS-native separators on a path string.
+///
+/// Git's `rev-parse --show-toplevel` emits forward slashes even on Windows
+/// (`C:/Users/…`), whereas `dunce::canonicalize` emits backslashes (`C:\Users\…`).
+/// Storing one form and looking up via the other would never compare equal, so
+/// we collapse both onto the platform separator before they become dedup keys.
+/// On Unix `MAIN_SEPARATOR` is `/`, so this is a no-op.
+fn normalize_path_separators(path: String) -> String {
+    if std::path::MAIN_SEPARATOR == '\\' {
+        path.replace('/', "\\")
+    } else {
+        path
+    }
 }
 
 #[cfg(test)]

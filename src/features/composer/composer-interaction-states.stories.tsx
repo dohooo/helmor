@@ -183,7 +183,7 @@ function baseComposerProps(contextKey: string): ComposerProps {
 		provider: "claude",
 		effortLevel: "high",
 		onSelectEffort: () => {},
-		permissionMode: "acceptEdits",
+		permissionMode: "bypassPermissions",
 		onChangePermissionMode: () => {},
 		fastMode: false,
 		onChangeFastMode: () => {},

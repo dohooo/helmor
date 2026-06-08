@@ -46,8 +46,17 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn boot_input_preserves_unix_command_shape() {
         assert_eq!(boot_input("codex login"), "codex login; exit\n");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn boot_input_uses_powershell_call_operator() {
+        // PowerShell needs the call operator (`&`) to run a command stored in
+        // a string; without it the login command is treated as a path literal.
+        assert_eq!(boot_input("codex login"), "& codex login; exit\n");
     }
 }

@@ -33,17 +33,7 @@ pub fn install_target(cli_name: &str) -> PathBuf {
 
     #[cfg(windows)]
     {
-        // Windows adapter: a user-writable launcher dir (no elevation needed).
-        // The actual install mechanism (a `.cmd`/`.exe` shim) is filled in
-        // `create_managed_link`; refine this path alongside it.
-        let base = std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .or_else(crate::platform::paths::home_dir)
-            .unwrap_or_else(|| PathBuf::from("."));
-        base.join("Programs")
-            .join("Helmor")
-            .join("bin")
-            .join(format!("{cli_name}.exe"))
+        windows_impl::install_target(cli_name)
     }
 }
 
@@ -53,6 +43,18 @@ pub fn install_target(cli_name: &str) -> PathBuf {
 /// Reference behavior treats the launcher as a symlink to the bundled binary;
 /// a regular file, a wrong target, or a broken link all read as `Stale`.
 pub fn classify(install_path: &Path, expected_target: &Path) -> ManagedCliStatus {
+    #[cfg(windows)]
+    {
+        windows_impl::classify(install_path, expected_target)
+    }
+    #[cfg(not(windows))]
+    {
+        classify_symlink(install_path, expected_target)
+    }
+}
+
+#[cfg(not(windows))]
+fn classify_symlink(install_path: &Path, expected_target: &Path) -> ManagedCliStatus {
     let metadata = match std::fs::symlink_metadata(install_path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -99,13 +101,143 @@ pub fn create_managed_link(src: &Path, dst: &Path) -> io::Result<()> {
         std::os::unix::fs::symlink(src, dst)
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows_impl::create_managed_link(src, dst)
+    }
+
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (src, dst);
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "managed CLI launcher install is not yet implemented on this platform",
         ))
+    }
+}
+
+// Windows can't symlink without elevation, so the managed launcher is a `.cmd`
+// shim that forwards to the bundled CLI, plus a one-time registration of the
+// shim directory on the user `PATH` (`/usr/local/bin` has no Windows analog).
+// `classify` parses the shim's forwarding target instead of `read_link`.
+#[cfg(windows)]
+mod windows_impl {
+    use super::ManagedCliStatus;
+    use std::io;
+    use std::path::{Path, PathBuf};
+
+    pub(super) fn install_target(cli_name: &str) -> PathBuf {
+        shim_dir().join(format!("{cli_name}.cmd"))
+    }
+
+    /// `%LOCALAPPDATA%\Helmor\bin` — beside the NSIS per-user install root, so a
+    /// user-scope uninstall that clears `%LOCALAPPDATA%\Helmor` removes it too.
+    fn shim_dir() -> PathBuf {
+        std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .or_else(crate::platform::paths::home_dir)
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("Helmor")
+            .join("bin")
+    }
+
+    pub(super) fn classify(install_path: &Path, expected_target: &Path) -> ManagedCliStatus {
+        if std::fs::symlink_metadata(install_path).is_err() {
+            return ManagedCliStatus::Missing;
+        }
+        let Some(target) = read_shim_target(install_path) else {
+            return ManagedCliStatus::Stale;
+        };
+        match (
+            std::fs::canonicalize(target),
+            std::fs::canonicalize(expected_target),
+        ) {
+            (Ok(installed), Ok(expected)) if installed == expected => ManagedCliStatus::Managed,
+            _ => ManagedCliStatus::Stale,
+        }
+    }
+
+    pub(super) fn create_managed_link(src: &Path, dst: &Path) -> io::Result<()> {
+        // `%*` forwards all args; the quoted target tolerates spaces in the path.
+        let content = format!("@echo off\r\n\"{}\" %*\r\n", src.display());
+        std::fs::write(dst, content)?;
+        if let Some(dir) = dst.parent() {
+            ensure_user_path_contains(dir)?;
+        }
+        Ok(())
+    }
+
+    /// Extract the forwarding target from a Helmor `.cmd` shim, if it is one.
+    fn read_shim_target(install_path: &Path) -> Option<PathBuf> {
+        let content = std::fs::read_to_string(install_path).ok()?;
+        for line in content.lines() {
+            if let Some(rest) = line.trim().strip_prefix('"') {
+                if let Some(end) = rest.find('"') {
+                    return Some(PathBuf::from(&rest[..end]));
+                }
+            }
+        }
+        None
+    }
+
+    /// Append `dir` to the user `PATH` (`HKCU\Environment`) if absent, preserving
+    /// `REG_EXPAND_SZ` semantics, then broadcast `WM_SETTINGCHANGE` so new shells
+    /// pick it up. Existing shells keep their environment (inherent to Windows).
+    fn ensure_user_path_contains(dir: &Path) -> io::Result<()> {
+        use winreg::enums::{RegType, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
+        use winreg::{RegKey, RegValue};
+
+        let env = RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey_with_flags("Environment", KEY_READ | KEY_WRITE)?;
+        let current: String = env.get_value("Path").unwrap_or_default();
+
+        let already = std::env::split_paths(&std::ffi::OsString::from(&current))
+            .any(|entry| entry.as_os_str().eq_ignore_ascii_case(dir.as_os_str()));
+        if already {
+            return Ok(());
+        }
+
+        let dir = dir.display();
+        let next = if current.is_empty() {
+            dir.to_string()
+        } else {
+            format!("{};{dir}", current.trim_end_matches(';'))
+        };
+        // REG_EXPAND_SZ: user PATH conventionally holds %VAR% references that a
+        // plain REG_SZ write would stop expanding.
+        let bytes: Vec<u8> = next
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        env.set_raw_value(
+            "Path",
+            &RegValue {
+                bytes,
+                vtype: RegType::REG_EXPAND_SZ,
+            },
+        )?;
+        broadcast_environment_change();
+        Ok(())
+    }
+
+    fn broadcast_environment_change() {
+        use windows::Win32::Foundation::{LPARAM, WPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
+        };
+        let payload: Vec<u16> = "Environment\0".encode_utf16().collect();
+        unsafe {
+            SendMessageTimeoutW(
+                HWND_BROADCAST,
+                WM_SETTINGCHANGE,
+                WPARAM(0),
+                LPARAM(payload.as_ptr() as isize),
+                SMTO_ABORTIFHUNG,
+                2000,
+                None,
+            );
+        }
     }
 }
 
@@ -141,5 +273,33 @@ mod tests {
         std::fs::remove_file(&install_path).unwrap();
         std::fs::write(&install_path, b"copy").unwrap();
         assert_eq!(classify(&install_path, &bundled), ManagedCliStatus::Stale);
+    }
+
+    // Windows launcher is a `.cmd` shim; classify parses its forwarding target.
+    // (Built by hand here so the test doesn't touch the user PATH registry the
+    // way `create_managed_link` does.)
+    #[cfg(windows)]
+    #[test]
+    fn classify_reads_cmd_shim_target() {
+        assert!(install_target("helmor")
+            .to_string_lossy()
+            .ends_with("helmor.cmd"));
+
+        let dir = tempfile::tempdir().unwrap();
+        let bundled = dir.path().join("helmor-cli.exe");
+        std::fs::write(&bundled, b"bin").unwrap();
+        let shim = dir.path().join("helmor.cmd");
+
+        assert_eq!(classify(&shim, &bundled), ManagedCliStatus::Missing);
+
+        std::fs::write(
+            &shim,
+            format!("@echo off\r\n\"{}\" %*\r\n", bundled.display()),
+        )
+        .unwrap();
+        assert_eq!(classify(&shim, &bundled), ManagedCliStatus::Managed);
+
+        std::fs::write(&shim, b"echo not-a-shim").unwrap();
+        assert_eq!(classify(&shim, &bundled), ManagedCliStatus::Stale);
     }
 }

@@ -1238,7 +1238,11 @@ mod candidate_directories_tests {
             assert_eq!(row.repo_name, "alpha");
             // repo_initials are derived from the repo name at display time.
             assert!(!row.repo_initials.is_empty());
-            assert!(row.absolute_path.ends_with("/alpha/feat-x"));
+            // Native filesystem path — backslash separators on Windows.
+            assert!(row
+                .absolute_path
+                .replace('\\', "/")
+                .ends_with("/alpha/feat-x"));
         });
     }
 }

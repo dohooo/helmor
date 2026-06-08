@@ -239,10 +239,15 @@ fn prepare_local_workspace_keeps_current_branch_when_source_is_none() {
     assert_eq!(response.directory_name, "");
     // Local mode: prepare returns the cwd immediately so the start-page
     // submit flow can pin it onto the pending payload without waiting for
-    // the workspaceDetail React Query to settle.
+    // the workspaceDetail React Query to settle. Compare against the
+    // canonicalized form: the harness stores repos.root_path through
+    // normalize_filesystem_path (matching production) and macOS resolves
+    // /var → /private/var in canonicalize.
+    let expected_root = crate::models::repos::normalize_filesystem_path(&harness.source_repo_root)
+        .unwrap_or_else(|| harness.source_repo_root.to_string_lossy().into_owned());
     assert_eq!(
         response.working_directory.as_deref(),
-        Some(harness.source_repo_root.display().to_string()).as_deref(),
+        Some(expected_root.as_str()),
     );
 
     let connection = Connection::open(harness.db_path()).unwrap();
@@ -754,11 +759,12 @@ fn finalize_workspace_from_repo_no_ops_for_local_workspace() {
     assert_eq!(finalized.final_state, WorkspaceState::Ready);
     // Local short-circuit still returns the cwd (== repo root). Without
     // this, the frontend submit flow couldn't reuse the same payload-patch
-    // path for both modes.
-    assert_eq!(
-        finalized.working_directory,
-        harness.source_repo_root.display().to_string(),
-    );
+    // path for both modes. Compare against the canonicalized form (the
+    // harness stores it that way; on macOS canonicalize resolves
+    // /var → /private/var).
+    let expected_root = crate::models::repos::normalize_filesystem_path(&harness.source_repo_root)
+        .unwrap_or_else(|| harness.source_repo_root.to_string_lossy().into_owned());
+    assert_eq!(finalized.working_directory, expected_root);
     let _ = WorkspaceMode::Worktree; // sanity: enum is in scope
 }
 

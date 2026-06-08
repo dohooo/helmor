@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.33.0
+
+### Minor Changes
+
+- [#738](https://github.com/dohooo/helmor/pull/738) [`e50a005`](https://github.com/dohooo/helmor/commit/e50a005cd54bbc115c1e99c922fef6e7fa60a98a) Thanks [@natllian](https://github.com/natllian)! - Improve the Cursor agent:
+  - Add Plan mode for Cursor — it drafts a read-only plan first and shows a plan-review card you can approve with "Implement" or send back with "Request changes", matching Claude.
+  - Fix Cursor dropping image attachments, so it can now see images you paste or attach to a message.
+  - 
+- [#739](https://github.com/dohooo/helmor/pull/739) [`6cea31b`](https://github.com/dohooo/helmor/commit/6cea31b094c3363879c3efdde66fdff8ea69f7f0) Thanks [@JRBusiness](https://github.com/JRBusiness)! - Add Windows (x64) support, so Helmor now installs and runs on Windows with its agents, terminals, and bundled CLIs.
+
+### Patch Changes
+
+- [#751](https://github.com/dohooo/helmor/pull/751) [`e15011a`](https://github.com/dohooo/helmor/commit/e15011aa081531e24be2ed169d576e2d0e2df651) Thanks [@natllian](https://github.com/natllian)! - Make the Plan toggle a simple read-only / full-access switch — outside plan mode, agents now run with full access instead of asking before each tool call.
+
+- [#753](https://github.com/dohooo/helmor/pull/753) [`46e0c38`](https://github.com/dohooo/helmor/commit/46e0c3850121befce1b9c10e246fb09d8bc27fd0) Thanks [@natllian](https://github.com/natllian)! - Keep the GitHub/GitLab Connect prompt stable once an account signs out: it now stays shown across workspace switches and window focus until you reconnect, and create / reopen surface it without spawning a doomed agent turn.
+
+- [#754](https://github.com/dohooo/helmor/pull/754) [`52fb928`](https://github.com/dohooo/helmor/commit/52fb92860c03dcad02a2d4ea2ef00c5a77a5d9b2) Thanks [@natllian](https://github.com/natllian)! - Fix the Stop button lagging on the first message of a new Codex, Cursor, or OpenCode session — pressing Stop now cancels the turn instantly instead of waiting for the agent to finish starting up.
+
+- [#750](https://github.com/dohooo/helmor/pull/750) [`570f42c`](https://github.com/dohooo/helmor/commit/570f42c62e4d5a1089bda403bc819cdeb9647c2e) Thanks [@natllian](https://github.com/natllian)! - Make GitHub/GitLab sign-in checks lazy to cut background CLI churn:
+
+  - Helmor no longer runs `gh` / `glab auth status` in the background on window focus and inspector refreshes.
+  - Forge sign-in is now verified when you create, reopen, merge, or close a PR/MR; a signed-out account surfaces a Connect prompt at that point instead of failing silently.
+
+- [#749](https://github.com/dohooo/helmor/pull/749) [`65e0dde`](https://github.com/dohooo/helmor/commit/65e0dde5828a52f62d8329d1660601c53794493e) Thanks [@natllian](https://github.com/natllian)! - Bring Helmor's plan review flow to OpenCode — plan mode now drafts a read-only plan you can Implement or request changes on, just like Claude and Codex.
+
+- [#748](https://github.com/dohooo/helmor/pull/748) [`851d1a5`](https://github.com/dohooo/helmor/commit/851d1a52f3577b278b10412fc00d3c42ad54cfc3) Thanks [@natllian](https://github.com/natllian)! - Fix the plan-mode keyboard shortcut so leaving plan mode returns to full-access mode (matching the Plan button), instead of switching to a mode that re-prompted for tool and MCP approvals.
+
+- [#746](https://github.com/dohooo/helmor/pull/746) [`83f546f`](https://github.com/dohooo/helmor/commit/83f546f8b036ab8da82fbc1b446a9cbd871afc20) Thanks [@natllian](https://github.com/natllian)! - Fix OpenCode tool-approval cards showing an empty `{}` instead of the file or resource being approved, so read/skill/todo/shell approvals now display what the tool is about to act on.
+
+- [#744](https://github.com/dohooo/helmor/pull/744) [`78df02b`](https://github.com/dohooo/helmor/commit/78df02b388d2bd4fbadfd715db87902dd071a72a) Thanks [@natllian](https://github.com/natllian)! - Polish the model picker in Providers settings:
+  - Model search now uses plain text matching instead of fuzzy matching, so multi-word queries like "opencode go" return the models you expect.
+  - Add an "Unselect all" button to clear every picked model at once.
+  - Fix the Cursor model picker incorrectly showing each model as its own group.
+
 ## 0.32.0
 
 ### Minor Changes

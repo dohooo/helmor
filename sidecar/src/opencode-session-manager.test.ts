@@ -14,8 +14,11 @@ import {
 	parseModelSlug,
 	parseSlashCommand,
 	planMessageId,
+	reapplySessionPermission,
 	resetPlanCapture,
 } from "./opencode-session-manager.js";
+
+type ReapplyClient = Parameters<typeof reapplySessionPermission>[0];
 
 describe("parseSlashCommand", () => {
 	test("bare command → name + empty args", () => {
@@ -185,41 +188,48 @@ describe("flattenOpencodeModels", () => {
 });
 
 describe("buildPermissionRules", () => {
-	test("bypass-style modes grant a single allow-all rule", () => {
-		for (const mode of ["bypassPermissions", "dontAsk", "auto"]) {
-			expect(buildPermissionRules(mode)).toEqual([
-				{ permission: "*", pattern: "*", action: "allow" },
-			]);
-		}
-	});
-
-	test("default mode asks for everything but pre-allows questions", () => {
-		expect(buildPermissionRules(undefined)).toEqual([
-			{ permission: "*", pattern: "*", action: "ask" },
-			{ permission: "question", pattern: "*", action: "allow" },
-		]);
-		expect(buildPermissionRules("default")).toEqual(
-			buildPermissionRules(undefined),
-		);
-	});
-
-	test("plan mode is allow-all (matches t3code; plan agent blocks edits, reads don't prompt)", () => {
-		// No ask-all fallthrough — that was the bug (reads prompting in plan mode).
-		expect(buildPermissionRules("plan")).toEqual([
+	test("always grants a single allow-all rule (plan read-only rides the agent)", () => {
+		expect(buildPermissionRules()).toEqual([
 			{ permission: "*", pattern: "*", action: "allow" },
 		]);
 	});
+});
 
-	test("acceptEdits adds an edit allow on top of ask-all", () => {
-		const rules = buildPermissionRules("acceptEdits");
-		expect(rules).toHaveLength(3);
-		// Last-match-wins: the edit allow must come after the catch-all ask.
-		expect(rules[0]).toEqual({ permission: "*", pattern: "*", action: "ask" });
-		expect(rules[2]).toEqual({
-			permission: "edit",
-			pattern: "*",
-			action: "allow",
-		});
+describe("reapplySessionPermission", () => {
+	test("reasserts allow-all on a resumed session (old session may hold ask rules)", async () => {
+		const calls: unknown[] = [];
+		const client = {
+			session: {
+				update: async (params: unknown) => {
+					calls.push(params);
+				},
+			},
+		} as unknown as ReapplyClient;
+
+		await reapplySessionPermission(client, "ses_old", "/work/dir");
+
+		expect(calls).toEqual([
+			{
+				sessionID: "ses_old",
+				directory: "/work/dir",
+				permission: [{ permission: "*", pattern: "*", action: "allow" }],
+			},
+		]);
+	});
+
+	test("swallows update failures — a stale-permission resume must not block the turn", async () => {
+		const client = {
+			session: {
+				update: async () => {
+					throw new Error("session.update boom");
+				},
+			},
+		} as unknown as ReapplyClient;
+
+		// Must resolve, not reject.
+		await expect(
+			reapplySessionPermission(client, "ses_x", "/w"),
+		).resolves.toBeUndefined();
 	});
 });
 

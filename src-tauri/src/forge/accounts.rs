@@ -150,6 +150,7 @@ pub(crate) fn list_forge_accounts(gitlab_hosts: &[String]) -> Vec<ForgeAccount> 
 /// terminal exits — without this the short TTL can still hold the
 /// pre-login state and the post-auth poll would spin until expiry.
 pub(crate) fn invalidate_caches_for_host(provider: ForgeProvider, host: &str) {
+    clear_forge_auth_host(host);
     match provider {
         ForgeProvider::Github => crate::forge::github::accounts::invalidate_caches_for_host(host),
         ForgeProvider::Gitlab => crate::forge::gitlab::accounts::invalidate_caches_for_host(host),
@@ -212,11 +213,73 @@ pub fn workspace_forge_auth_state(workspace_id: &str) -> Result<ForgeAuthState> 
     let Some(backend) = backend_for(target.provider) else {
         return Ok(ForgeAuthState::NotApplicable);
     };
-    Ok(match backend.check_auth(&target.host, &login) {
+    let verdict = backend.check_auth(&target.host, &login);
+    note_forge_auth(&target.host, &login, verdict);
+    Ok(match verdict {
         AuthCheck::LoggedIn => ForgeAuthState::LoggedIn,
         AuthCheck::LoggedOut => ForgeAuthState::LoggedOut,
         AuthCheck::Indeterminate => ForgeAuthState::Indeterminate,
     })
+}
+
+/// Per-(host, login) "last known logged-out" set, consulted by the
+/// action-status path so a logout detected at an action point (or a
+/// published 401) keeps surfacing Connect across workspaces + focus
+/// without any background CLI probing. In-memory; reset on restart.
+/// A host belongs to exactly one provider, so the key needs none.
+mod auth_verdict {
+    use std::collections::HashSet;
+    use std::sync::{LazyLock, Mutex};
+
+    use super::AuthCheck;
+
+    static LOGGED_OUT: LazyLock<Mutex<HashSet<(String, String)>>> =
+        LazyLock::new(|| Mutex::new(HashSet::new()));
+
+    pub(super) fn note(host: &str, login: &str, verdict: AuthCheck) {
+        let Ok(mut set) = LOGGED_OUT.lock() else {
+            return;
+        };
+        let key = (host.to_string(), login.to_string());
+        match verdict {
+            AuthCheck::LoggedOut => {
+                set.insert(key);
+            }
+            AuthCheck::LoggedIn => {
+                set.remove(&key);
+            }
+            AuthCheck::Indeterminate => {}
+        }
+    }
+
+    pub(super) fn is_logged_out(host: &str, login: &str) -> bool {
+        LOGGED_OUT
+            .lock()
+            .map(|set| set.contains(&(host.to_string(), login.to_string())))
+            .unwrap_or(false)
+    }
+
+    pub(super) fn clear_host(host: &str) {
+        if let Ok(mut set) = LOGGED_OUT.lock() {
+            set.retain(|(h, _)| h != host);
+        }
+    }
+}
+
+/// Record a fresh auth verdict for `(host, login)`. `Indeterminate`
+/// leaves the prior verdict untouched.
+pub(crate) fn note_forge_auth(host: &str, login: &str, verdict: AuthCheck) {
+    auth_verdict::note(host, login, verdict);
+}
+
+/// Whether `(host, login)` is known logged-out from the last real signal.
+pub(crate) fn forge_auth_known_logged_out(host: &str, login: &str) -> bool {
+    auth_verdict::is_logged_out(host, login)
+}
+
+/// Forget cached verdicts for every login on `host` (post-connect).
+pub(crate) fn clear_forge_auth_host(host: &str) {
+    auth_verdict::clear_host(host);
 }
 
 // ---------------- Auto-bind ----------------

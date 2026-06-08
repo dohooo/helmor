@@ -14,6 +14,7 @@ import {
 	type SDKMessage,
 	type SDKUserMessage,
 } from "@cursor/sdk";
+import { ActiveTurnRegistry } from "./active-turn-registry.js";
 import { scanCursorSkills } from "./cursor-skill-scanner.js";
 import type { SidecarEmitter } from "./emitter.js";
 import { readImageWithResize } from "./image-resize.js";
@@ -45,11 +46,11 @@ interface LiveSession {
 	modelId: string;
 	currentRun: Run | null;
 	currentRequestId: string | null;
-	aborted: boolean;
 }
 
 export class CursorSessionManager implements SessionManager {
 	private readonly sessions = new Map<string, LiveSession>();
+	private readonly turns = new ActiveTurnRegistry();
 	/// Per-wire-id parameters[] cache. Populated by listModels(), read
 	/// by sendMessage() to build ModelParameterValue[].
 	private readonly modelParameters = new Map<
@@ -71,11 +72,8 @@ export class CursorSessionManager implements SessionManager {
 		this.apiKeyHostManaged = true;
 		// Drop existing sessions — they were minted with the old key.
 		// In-flight cursor turns abort; claude/codex unaffected.
-		for (const [, session] of this.sessions) {
-			session.aborted = true;
-			void session.currentRun?.cancel().catch(() => {
-				/* ignored — session may have already finished */
-			});
+		for (const [sessionId, session] of this.sessions) {
+			this.turns.requestStop(sessionId);
 			try {
 				session.agent.close();
 			} catch {
@@ -119,6 +117,16 @@ export class CursorSessionManager implements SessionManager {
 			return;
 		}
 
+		// Register the turn before any startup await so a Stop pressed during
+		// Agent.create / agent.send aborts instantly. Teardown reads the run
+		// lazily — it's null until agent.send resolves.
+		this.turns.begin(params.sessionId, requestId, emitter, () => {
+			void this.sessions
+				.get(params.sessionId)
+				?.currentRun?.cancel()
+				.catch(() => {});
+		});
+
 		const modelId = params.model ?? "composer-2";
 		const cwd = params.cwd ?? process.cwd();
 
@@ -138,7 +146,6 @@ export class CursorSessionManager implements SessionManager {
 					modelId,
 					currentRun: null,
 					currentRequestId: null,
-					aborted: false,
 				};
 				this.sessions.set(params.sessionId, session);
 				// Synthetic event — Rust persists agentId as provider_session_id.
@@ -156,6 +163,13 @@ export class CursorSessionManager implements SessionManager {
 				emitter.end(requestId);
 				return;
 			}
+		}
+
+		// Stop pressed during Agent.create — `requestStop` already emitted
+		// `aborted`. Keep the freshly-minted agent for reuse; just bail.
+		if (this.turns.isAbortRequested(params.sessionId)) {
+			this.turns.end(params.sessionId);
+			return;
 		}
 
 		// Use this turn's modelId, not the agent's create-time pick —
@@ -196,7 +210,13 @@ export class CursorSessionManager implements SessionManager {
 		}
 		session.currentRun = run;
 		session.currentRequestId = requestId;
-		session.aborted = false;
+
+		// Stop pressed during agent.send — the run now exists, so cancel it.
+		if (this.turns.isAbortRequested(params.sessionId)) {
+			void run.cancel().catch(() => {});
+			this.turns.end(params.sessionId);
+			return;
+		}
 
 		// Plan mode ends by calling the `createPlan` tool, whose `args.plan`
 		// is the finished plan markdown. We suppress the raw tool_call (so it
@@ -234,7 +254,7 @@ export class CursorSessionManager implements SessionManager {
 			}
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
-			if (session.aborted) {
+			if (this.turns.isAbortRequested(params.sessionId)) {
 				// run.cancel() throws inside stream() — clean abort, not failure.
 				logger.debug(`[${requestId}] Cursor stream aborted by user`);
 			} else {
@@ -248,10 +268,12 @@ export class CursorSessionManager implements SessionManager {
 			session.currentRequestId = null;
 		}
 
-		if (session.aborted) {
-			emitter.aborted(requestId, "user_requested");
+		// `aborted` is terminal — `requestStop` already emitted it. Only emit
+		// `end` on natural completion, then clear the turn.
+		if (!this.turns.isAbortRequested(params.sessionId)) {
+			emitter.end(requestId);
 		}
-		emitter.end(requestId);
+		this.turns.end(params.sessionId);
 	}
 
 	async generateTitle(
@@ -387,18 +409,9 @@ export class CursorSessionManager implements SessionManager {
 	}
 
 	async stopSession(sessionId: string): Promise<void> {
-		const session = this.sessions.get(sessionId);
-		if (!session) return;
-		session.aborted = true;
-		if (session.currentRun) {
-			try {
-				await session.currentRun.cancel();
-			} catch (error) {
-				logger.debug(
-					`[cursor] cancel rejected: ${error instanceof Error ? error.message : String(error)}`,
-				);
-			}
-		}
+		// Emits `aborted` instantly + cancels the run via teardown — works at
+		// any point, including during the first turn's Agent.create startup.
+		this.turns.requestStop(sessionId);
 	}
 
 	async steer(
@@ -412,18 +425,9 @@ export class CursorSessionManager implements SessionManager {
 	}
 
 	async shutdown(): Promise<void> {
-		const tasks: Promise<void>[] = [];
-		for (const [, session] of this.sessions) {
-			session.aborted = true;
-			if (session.currentRun) {
-				tasks.push(
-					session.currentRun.cancel().catch(() => {
-						/* swallow during shutdown */
-					}),
-				);
-			}
+		for (const [sessionId] of this.sessions) {
+			this.turns.requestStop(sessionId);
 		}
-		await Promise.all(tasks);
 		for (const [, session] of this.sessions) {
 			try {
 				session.agent.close();

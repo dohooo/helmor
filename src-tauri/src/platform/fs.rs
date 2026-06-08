@@ -71,6 +71,11 @@ mod tests {
         assert_eq!(std::fs::read(&dst).unwrap(), b"hello");
     }
 
+    // Unix symlink semantics: the copied link must still be a symlink whose
+    // `read_link` returns the exact relative target. On Windows `symlink_to`
+    // intentionally falls back to copying when symlink privilege is absent, so
+    // this exact-target invariant doesn't hold there.
+    #[cfg(unix)]
     #[test]
     fn copy_symlink_preserves_relative_target() {
         let dir = tempfile::tempdir().unwrap();

@@ -4,6 +4,8 @@ export type DarwinArch = "arm64" | "x64";
 export type ReleaseArch = "arm64" | "amd64";
 
 export interface TargetInfo {
+	/** Target OS — Windows changes archive formats, `.exe` suffixes, and naming. */
+	os: "darwin" | "windows";
 	arch: DarwinArch;
 	/** `@anthropic-ai/claude-code-darwin-<arch>` is the platform sub-package. */
 	claudeCodePkg: string;
@@ -95,6 +97,7 @@ export const LLAMA_SHA256: Readonly<{ arm64: string; x64: string }> = {
 
 const TARGETS: Readonly<Record<DarwinArch, TargetInfo>> = {
 	arm64: {
+		os: "darwin",
 		arch: "arm64",
 		claudeCodePkg: "@anthropic-ai/claude-code-darwin-arm64",
 		claudeCodeNpmSuffix: "darwin-arm64",
@@ -108,6 +111,7 @@ const TARGETS: Readonly<Record<DarwinArch, TargetInfo>> = {
 		cloudflaredArch: "arm64",
 	},
 	x64: {
+		os: "darwin",
 		arch: "x64",
 		claudeCodePkg: "@anthropic-ai/claude-code-darwin-x64",
 		claudeCodeNpmSuffix: "darwin-x64",
@@ -122,6 +126,25 @@ const TARGETS: Readonly<Record<DarwinArch, TargetInfo>> = {
 	},
 };
 
+/** Windows x64 target. Only x64 is supported (no ARM64 Windows). Pulls the
+ *  platform sub-packages bun already installed into node_modules. */
+const WINDOWS_X64_TARGET: TargetInfo = {
+	os: "windows",
+	arch: "x64",
+	claudeCodePkg: "@anthropic-ai/claude-code-win32-x64",
+	claudeCodeNpmSuffix: "win32-x64",
+	// On Windows the codex binary lives in the platform sub-package, not the
+	// umbrella @openai/codex package (whose vendor dir is empty).
+	codexPkg: "@openai/codex-win32-x64",
+	codexTriple: "x86_64-pc-windows-msvc",
+	codexNpmSuffix: "win32-x64",
+	opencodePkg: "opencode-windows-x64",
+	opencodeNpmSuffix: "windows-x64",
+	ghArch: "amd64",
+	glabArch: "amd64",
+	cloudflaredArch: "amd64",
+};
+
 export function targetInfoForArch(arch: DarwinArch): TargetInfo {
 	return TARGETS[arch];
 }
@@ -132,9 +155,23 @@ export function resolveVendorTarget(options?: {
 	env?: Record<string, string | undefined>;
 }): TargetInfo {
 	const hostPlatform = options?.hostPlatform ?? process.platform;
+
+	// Windows: stage the x64 sub-packages bun installed into node_modules. No
+	// cross-arch matrix (TAURI_TARGET_TRIPLE is a macOS-CI concern), so the host
+	// arch is the target.
+	if (hostPlatform === "win32") {
+		const hostArch = options?.hostArch ?? process.arch;
+		if (hostArch !== "x64") {
+			throw new Error(
+				`[stage-vendor] unsupported Windows host arch: ${hostArch} (only x64)`,
+			);
+		}
+		return WINDOWS_X64_TARGET;
+	}
+
 	if (hostPlatform !== "darwin") {
 		throw new Error(
-			`[stage-vendor] Helmor only builds on macOS; host platform is ${hostPlatform}`,
+			`[stage-vendor] Helmor only builds on macOS and Windows; host platform is ${hostPlatform}`,
 		);
 	}
 
@@ -155,6 +192,18 @@ export function resolveVendorTarget(options?: {
 
 export function ghArchivePlan(target: TargetInfo): ArchivePlan {
 	const arch = target.ghArch;
+	// gh ships macOS as `gh_<ver>_macOS_<arch>.zip` and Windows as
+	// `gh_<ver>_windows_<arch>.zip`; both nest `bin/gh[.exe]`. Windows has no
+	// pinned sha256 (soft-verify), so leave it empty.
+	if (target.os === "windows") {
+		const slug = `gh_${GH_VERSION}_windows_${arch}`;
+		return {
+			slug,
+			archiveName: `${slug}.zip`,
+			url: `https://github.com/cli/cli/releases/download/v${GH_VERSION}/${slug}.zip`,
+			sha256: "",
+		};
+	}
 	const slug = `gh_${GH_VERSION}_macOS_${arch}`;
 	return {
 		slug,
@@ -166,6 +215,16 @@ export function ghArchivePlan(target: TargetInfo): ArchivePlan {
 
 export function glabArchivePlan(target: TargetInfo): ArchivePlan {
 	const arch = target.glabArch;
+	// macOS: `glab_<ver>_darwin_<arch>.tar.gz`; Windows: `..._windows_<arch>.zip`.
+	if (target.os === "windows") {
+		const slug = `glab_${GLAB_VERSION}_windows_${arch}`;
+		return {
+			slug,
+			archiveName: `${slug}.zip`,
+			url: `https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/${slug}.zip`,
+			sha256: "",
+		};
+	}
 	const slug = `glab_${GLAB_VERSION}_darwin_${arch}`;
 	return {
 		slug,
@@ -177,6 +236,18 @@ export function glabArchivePlan(target: TargetInfo): ArchivePlan {
 
 export function cloudflaredArchivePlan(target: TargetInfo): ArchivePlan {
 	const arch = target.cloudflaredArch;
+	// Windows: upstream publishes a bare `cloudflared-windows-<arch>.exe` (no
+	// archive). The slug is the bare `.exe` filename; the staging executor
+	// downloads it straight to the destination (no extraction).
+	if (target.os === "windows") {
+		const slug = `cloudflared-windows-${arch}`;
+		return {
+			slug,
+			archiveName: `cloudflared-${CLOUDFLARED_VERSION}-windows-${arch}.exe`,
+			url: `https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/${slug}.exe`,
+			sha256: "",
+		};
+	}
 	const slug = `cloudflared-darwin-${arch}`;
 	return {
 		slug,
@@ -244,6 +315,17 @@ export function opencodeArchivePlan(
 }
 
 export function llamaArchivePlan(target: TargetInfo): ArchivePlan {
+	// Windows: upstream ships `llama-<ver>-bin-win-cpu-x64.zip` (server + CLIs +
+	// their `.dll`s). No pinned sha256 (soft-verify), so leave it empty.
+	if (target.os === "windows") {
+		const slug = `llama-${LLAMA_VERSION}-bin-win-cpu-x64`;
+		return {
+			slug,
+			archiveName: `${slug}.zip`,
+			url: `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_VERSION}/${slug}.zip`,
+			sha256: "",
+		};
+	}
 	const archSlug = target.arch === "arm64" ? "macos-arm64" : "macos-x64";
 	const slug = `llama-${LLAMA_VERSION}-bin-${archSlug}`;
 	return {

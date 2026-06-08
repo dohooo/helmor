@@ -22,7 +22,7 @@ impl ProcessTree {
 
     pub fn from_child_pid(pid: u32) -> Self {
         let pid = pid as Pid;
-        Self { pid, pgid: pid }
+        Self::new(pid, pid)
     }
 }
 
@@ -42,6 +42,18 @@ pub fn configure_background_cli(cmd: &mut Command) -> &mut Command {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+/// [`configure_background_cli`] for `tokio::process::Command`.
+pub fn configure_background_cli_tokio(
+    cmd: &mut tokio::process::Command,
+) -> &mut tokio::process::Command {
+    #[cfg(windows)]
+    {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
@@ -99,10 +111,26 @@ pub fn pid_alive(pid: Pid) -> bool {
         }
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    unsafe {
+        use windows::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+        use windows::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+            Ok(handle) => {
+                let mut code = 0u32;
+                let ok = GetExitCodeProcess(handle, &mut code).is_ok();
+                let _ = CloseHandle(handle);
+                ok && code == STILL_ACTIVE.0 as u32
+            }
+            Err(_) => false,
+        }
+    }
+
+    #[cfg(not(any(unix, windows)))]
     {
-        // Future Windows adapter should use a real process query. Returning
-        // false keeps today's non-Unix fallback conservative and isolated.
+        // Other non-Unix targets keep the conservative stub.
         let _ = pid;
         false
     }

@@ -147,8 +147,13 @@ fn cli_install_target() -> std::path::PathBuf {
 }
 
 /// Name of the compiled CLI binary produced by `cargo build --bin helmor-cli`.
+/// Windows appends the `.exe` extension that cargo emits.
 fn cli_source_binary_name() -> &'static str {
-    "helmor-cli"
+    if cfg!(windows) {
+        "helmor-cli.exe"
+    } else {
+        "helmor-cli"
+    }
 }
 
 fn bundled_cli_binary(app_exe: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
@@ -341,6 +346,7 @@ fn build_elevated_install_script(
 
 /// Quote a path so it survives both `do shell script "..."` (AppleScript string
 /// literal) and the shell that AppleScript hands the script to.
+#[cfg(target_os = "macos")]
 fn applescript_shell_arg(path: &std::path::Path) -> String {
     let raw = path.display().to_string();
     // 1. Single-quote for the shell, escaping embedded single quotes via `'\''`.
@@ -398,6 +404,17 @@ fn helmor_skills_install_args(agents: &[&str]) -> Vec<String> {
         args.push((*agent).to_string());
     }
     args
+}
+
+/// A `Command` that runs `npx` cross-platform. `resolve_for_spawn` finds the
+/// real executable (on Windows `npx` is a `.cmd`/`.ps1` shim that
+/// `CreateProcess` can't resolve from the bare name), and
+/// `configure_background_cli` keeps it from flashing a console window — this
+/// runs during the silent startup check.
+fn npx_command() -> Command {
+    let mut cmd = Command::new(crate::platform::executable::resolve_for_spawn("npx"));
+    crate::platform::process::configure_background_cli(&mut cmd);
+    cmd
 }
 
 fn helmor_skills_install_command(agents: &[&str]) -> String {
@@ -575,7 +592,7 @@ pub async fn install_helmor_skills() -> CmdResult<HelmorSkillsStatus> {
             );
         }
 
-        let output = Command::new(crate::platform::executable::resolve_for_spawn("npx"))
+        let output = npx_command()
             .args(helmor_skills_install_args(&agents))
             .output()
             .with_context(|| format!("Failed to start skills installer. Try:\n  {command}"))?;
@@ -808,7 +825,7 @@ fn run_components_check_inner(force: bool) -> ComponentsUpdateCheck {
 
 fn install_skills_silent(agents: &[&str]) -> anyhow::Result<()> {
     let command = helmor_skills_install_command(agents);
-    let output = Command::new(crate::platform::executable::resolve_for_spawn("npx"))
+    let output = npx_command()
         .args(helmor_skills_install_args(agents))
         .output()
         .with_context(|| format!("Failed to start skills installer. Try:\n  {command}"))?;
@@ -1418,7 +1435,8 @@ pub async fn spawn_agent_login_terminal(
             instance_id = %instance_id,
             "spawn_agent_login_terminal: entering run_terminal_session"
         );
-        // Auto-type the login command via the run_terminal_session boot
+        // Auto-type the login command via the run_terminal_session boot input,
+        // in the active shell's syntax (PowerShell needs the call operator).
         // input — written synchronously to the PTY master right after
         // the shell registers, so a frontend re-render-driven
         // cleanup→respawn can't drop the bytes.
@@ -1738,6 +1756,7 @@ fn copy_image_file_to_clipboard(_path: &std::path::Path) -> anyhow::Result<()> {
     anyhow::bail!("Copying images is only supported on macOS")
 }
 
+#[cfg(target_os = "macos")]
 fn applescript_escape(input: &str) -> String {
     input.replace('\\', "\\\\").replace('"', "\\\"")
 }
@@ -1980,6 +1999,28 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn classify_cli_install_reports_managed_for_matching_shim() {
+        let tmp = tempdir().unwrap();
+        let bundled_cli = tmp.path().join("Helmor/helmor-cli.exe");
+        let install_path = tmp.path().join("bin/helmor.cmd");
+        fs::create_dir_all(bundled_cli.parent().unwrap()).unwrap();
+        fs::create_dir_all(install_path.parent().unwrap()).unwrap();
+        fs::write(&bundled_cli, "").unwrap();
+        fs::write(
+            &install_path,
+            format!("@echo off\r\n\"{}\" %*\r\n", bundled_cli.display()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            classify_cli_install(&install_path, &bundled_cli),
+            CliInstallState::Managed
+        );
+    }
+
+    #[cfg(unix)]
     #[test]
     fn classify_cli_install_reports_managed_for_matching_symlink() {
         let tmp = tempdir().unwrap();
@@ -2012,6 +2053,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn install_cli_symlink_replaces_stale_copy_with_managed_symlink() {
         let tmp = tempdir().unwrap();
@@ -2030,6 +2072,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn check_and_heal_cli_symlink_repoints_a_stale_link() {
         let tmp = tempdir().unwrap();
@@ -2076,6 +2119,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn applescript_shell_arg_quotes_plain_path() {
         assert_eq!(
@@ -2084,6 +2128,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn applescript_shell_arg_escapes_single_quote_for_shell_then_applescript() {
         // Shell-quote turns `'` into `'\''`; the embedded backslash then needs
@@ -2094,6 +2139,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn applescript_shell_arg_escapes_double_quote_and_backslash() {
         assert_eq!(
@@ -2182,6 +2228,11 @@ mod tests {
         );
     }
 
+    // macOS-only: exercises the `/usr/local/bin` sudo-elevation install path and
+    // asserts the macOS "administrator access / Retry" message. Windows installs
+    // a `.cmd` shim under %LOCALAPPDATA% with no elevation flow, so this scenario
+    // doesn't apply there.
+    #[cfg(target_os = "macos")]
     #[test]
     fn try_install_cli_silent_at_bails_with_friendly_message_on_permission_denied() {
         // Pick a parent that almost certainly isn't writable to the test

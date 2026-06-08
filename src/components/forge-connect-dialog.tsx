@@ -253,6 +253,10 @@ export function ForgeConnectDialog({
 							head === "workspaceAccountProfile")
 					);
 				},
+				// Refetch inactive siblings too: otherwise switching to another
+				// same-account workspace after login flashes the stale Connect
+				// CTA before the refetch settles it to the normal button.
+				refetchType: "all",
 			});
 			if (workspaceId) {
 				void queryClient.invalidateQueries({
