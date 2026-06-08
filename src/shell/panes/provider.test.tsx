@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { initialPanesState, panesReducer, PanesProvider, usePanes } from "./provider";
+import { initialPanesState, panesReducer, PanesProvider, usePanes, useSyncDefaultPaneToSelection } from "./provider";
 
 describe("panesReducer", () => {
 	it("seeds with a single default pane targeting main", () => {
@@ -85,5 +85,41 @@ describe("PanesProvider", () => {
 		expect(() => renderHook(() => usePanes())).toThrowError(
 			/usePanes must be used inside <PanesProvider>/,
 		);
+	});
+});
+
+describe("useSyncDefaultPaneToSelection", () => {
+	const wrapper = ({ children }: { children: ReactNode }) => (
+		<PanesProvider>{children}</PanesProvider>
+	);
+
+	it("updates the default pane when the selection changes", () => {
+		const { result, rerender } = renderHook(
+			(props: { ws: string | null; s: string | null }) => {
+				useSyncDefaultPaneToSelection({
+					workspaceId: props.ws,
+					sessionId: props.s,
+				});
+				return usePanes();
+			},
+			{ wrapper, initialProps: { ws: null as string | null, s: null as string | null } },
+		);
+
+		expect(result.current.panes[0]).toMatchObject({
+			workspaceId: null,
+			sessionId: null,
+		});
+
+		rerender({ ws: "ws-a", s: "s-x" });
+		expect(result.current.panes[0]).toMatchObject({
+			workspaceId: "ws-a",
+			sessionId: "s-x",
+		});
+
+		rerender({ ws: "ws-b", s: "s-y" });
+		expect(result.current.panes[0]).toMatchObject({
+			workspaceId: "ws-b",
+			sessionId: "s-y",
+		});
 	});
 });

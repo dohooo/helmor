@@ -2,6 +2,7 @@ import {
 	createContext,
 	useCallback,
 	useContext,
+	useEffect,
 	useMemo,
 	useReducer,
 	type ReactNode,
@@ -101,4 +102,23 @@ export function usePanes(): PanesContextValue {
 		);
 	}
 	return value;
+}
+
+/**
+ * Mirror the existing app-shell selection onto the default pane. PR 1 uses
+ * this so the new PaneIdentityContext stays in lockstep with the legacy
+ * singleton; PR 2 inverts the direction (PanelContainer consumes the pane
+ * identity, the singleton goes away or becomes a derived view).
+ */
+export function useSyncDefaultPaneToSelection(target: {
+	workspaceId: string | null;
+	sessionId: string | null;
+}): void {
+	const { replaceTarget } = usePanes();
+	useEffect(() => {
+		replaceTarget("default", {
+			workspaceId: target.workspaceId,
+			sessionId: target.sessionId,
+		});
+	}, [replaceTarget, target.workspaceId, target.sessionId]);
 }
