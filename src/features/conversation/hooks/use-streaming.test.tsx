@@ -1094,14 +1094,14 @@ describe("useConversationStreaming", () => {
 		expect(result.current.isSending).toBe(false);
 	});
 
-	it("does not orphan the 3s changes-refresh interval when the send RPC rejects", async () => {
+	it("does not orphan the changes-refresh interval when the send RPC rejects", async () => {
 		// LEAK FIX regression guard. `handleComposerSubmit` starts a
-		// `setInterval(..., 3000)` (the workspaceChanges refresh) BEFORE
+		// `setInterval(..., 7000)` (the workspaceChanges refresh) BEFORE
 		// awaiting `startAgentMessageStream`. When that RPC rejects, control
 		// jumps to the catch — which previously never ran `cleanup()`, so the
 		// interval ticked forever (one leaked interval per failed send). The
 		// catch now calls `cleanup?.()`; this test instruments
-		// setInterval/clearInterval and asserts no 3s interval survives.
+		// setInterval/clearInterval and asserts no changes-refresh interval survives.
 		// Key on the raw timer handle (jsdom/Node returns a Timeout *object*,
 		// not a number, so don't assume `number`). Reference equality holds:
 		// cleanup() passes back the exact handle setInterval handed out.
@@ -1168,13 +1168,13 @@ describe("useConversationStreaming", () => {
 			expect(result.current.activeSendError).toBe("RPC transport closed");
 			expect(result.current.isSending).toBe(false);
 
-			// The 3s changes-refresh interval was created exactly once and then
+			// The changes-refresh interval was created exactly once and then
 			// cleared — no orphan survives the failed send.
-			const threeSecondIntervals = [...created.entries()]
-				.filter(([, delay]) => delay === 3_000)
+			const changesRefreshIntervals = [...created.entries()]
+				.filter(([, delay]) => delay === 7_000)
 				.map(([handle]) => handle);
-			expect(threeSecondIntervals).toHaveLength(1);
-			for (const handle of threeSecondIntervals) {
+			expect(changesRefreshIntervals).toHaveLength(1);
+			for (const handle of changesRefreshIntervals) {
 				expect(cleared.has(handle)).toBe(true);
 			}
 		} finally {

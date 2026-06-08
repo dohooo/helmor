@@ -931,7 +931,12 @@ export function useConversationStreaming({
 					frameId: null,
 				};
 
-				const changesRefreshInterval = window.setInterval(() => {
+				// Refresh the Changes diff WHILE streaming. 7s (was 3s) cuts the
+				// recurring full Changes-section re-render burst during a turn;
+				// `cleanup` fires one FINAL refresh on stream end (any terminal arm
+				// or the RPC-reject catch) so the post-turn diff is fresh despite the
+				// longer interval.
+				const refreshChanges = () => {
 					if (!workingDirectory) return;
 					void queryClient.invalidateQueries({
 						queryKey: helmorQueryKeys.workspaceChanges(
@@ -939,7 +944,12 @@ export function useConversationStreaming({
 							targetWorkspaceId,
 						),
 					});
-				}, 3_000);
+				};
+
+				const changesRefreshInterval = window.setInterval(
+					refreshChanges,
+					7_000,
+				);
 
 				const flushers = createStreamFlushers({
 					accumulator,
@@ -948,6 +958,7 @@ export function useConversationStreaming({
 					userMessageId,
 					optimisticUserMessage,
 					changesRefreshInterval,
+					onFinalChangesRefresh: refreshChanges,
 				});
 				const { flushStreamMessages, scheduleFlush } = flushers;
 				cleanup = flushers.cleanup;

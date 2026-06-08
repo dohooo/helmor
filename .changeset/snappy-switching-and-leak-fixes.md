@@ -7,3 +7,4 @@ Snappier UI and memory-leak fixes:
 - Opening a workspace whose conversation contains code no longer briefly freezes — syntax highlighting is computed off the first paint, so the thread appears immediately and highlights a moment later (identical result).
 - Fixed two leaks: an orphaned background refresh timer left running when a send fails at the IPC layer, and an app-update listener left attached when Settings closes before it finishes connecting.
 - Lighter typing and streaming: the composer no longer walks the whole document on every caret move, and the conversation's live-stream state uses a single store subscription instead of six.
+- While an agent is streaming, the right-side Changes list refreshes a little less often (and once more the moment the turn ends), removing a periodic re-render hitch with no change to the post-turn diff.
