@@ -150,7 +150,7 @@ function renderComposer() {
 				provider="claude"
 				effortLevel="high"
 				onSelectEffort={vi.fn()}
-				permissionMode="acceptEdits"
+				permissionMode="bypassPermissions"
 				onChangePermissionMode={vi.fn()}
 				restoreImages={[]}
 				restoreFiles={[]}
