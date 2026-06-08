@@ -1,7 +1,13 @@
-import { describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { initialPanesState, panesReducer, PanesProvider, usePanes, useSyncDefaultPaneToSelection } from "./provider";
+import { describe, expect, it } from "vitest";
+import {
+	initialPanesState,
+	PanesProvider,
+	panesReducer,
+	usePanes,
+	useSyncDefaultPaneToSelection,
+} from "./provider";
 
 describe("panesReducer", () => {
 	it("seeds with a single default pane targeting main", () => {
@@ -102,7 +108,10 @@ describe("useSyncDefaultPaneToSelection", () => {
 				});
 				return usePanes();
 			},
-			{ wrapper, initialProps: { ws: null as string | null, s: null as string | null } },
+			{
+				wrapper,
+				initialProps: { ws: null as string | null, s: null as string | null },
+			},
 		);
 
 		expect(result.current.panes[0]).toMatchObject({

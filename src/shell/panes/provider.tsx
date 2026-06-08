@@ -1,11 +1,11 @@
 import {
 	createContext,
+	type ReactNode,
 	useCallback,
 	useContext,
 	useEffect,
 	useMemo,
 	useReducer,
-	type ReactNode,
 } from "react";
 import type { Pane } from "./types";
 
@@ -68,7 +68,11 @@ export interface PanesContextValue {
 const PanesContext = createContext<PanesContextValue | null>(null);
 
 export function PanesProvider({ children }: { children: ReactNode }) {
-	const [state, dispatch] = useReducer(panesReducer, undefined, initialPanesState);
+	const [state, dispatch] = useReducer(
+		panesReducer,
+		undefined,
+		initialPanesState,
+	);
 
 	const replaceTarget = useCallback<PanesContextValue["replaceTarget"]>(
 		(paneId, target) => {
@@ -91,7 +95,9 @@ export function PanesProvider({ children }: { children: ReactNode }) {
 		[state, replaceTarget],
 	);
 
-	return <PanesContext.Provider value={value}>{children}</PanesContext.Provider>;
+	return (
+		<PanesContext.Provider value={value}>{children}</PanesContext.Provider>
+	);
 }
 
 export function usePanes(): PanesContextValue {
