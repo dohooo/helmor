@@ -123,6 +123,10 @@ export function OpencodeModels({
 		});
 	}
 
+	function clearAll() {
+		void persist({ enabledModelIds: [] });
+	}
+
 	const runningCount = runningOpencode.length;
 
 	return (
@@ -132,6 +136,7 @@ export function OpencodeModels({
 				enabledSet={enabledSet}
 				available={available}
 				onToggle={toggle}
+				onClear={clearAll}
 				loading={isSyncing}
 				triggerClassName="min-w-0 flex-1"
 			/>
