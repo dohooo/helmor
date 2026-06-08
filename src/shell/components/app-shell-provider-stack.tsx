@@ -11,6 +11,7 @@ import { ComposerInsertProvider } from "@/lib/composer-insert-context";
 import { SessionRunStatesProvider } from "@/lib/session-run-state-context";
 import { WorkspaceToastProvider } from "@/lib/workspace-toast-context";
 import { SelectionStoreProvider } from "@/shell/controllers/selection-store-context";
+import { PanesProvider } from "@/shell/panes";
 
 type Props = {
 	selectionStore: ComponentProps<typeof SelectionStoreProvider>["value"];
@@ -33,7 +34,7 @@ export function AppShellProviderStack({
 				<WorkspaceToastProvider value={pushWorkspaceToast}>
 					<SessionRunStatesProvider value={sessionRunStates}>
 						<ComposerInsertProvider value={insertIntoComposer}>
-							{children}
+							<PanesProvider>{children}</PanesProvider>
 						</ComposerInsertProvider>
 					</SessionRunStatesProvider>
 				</WorkspaceToastProvider>
