@@ -11,6 +11,7 @@ import type {
 	PermissionRuleset,
 	TextPartInput,
 } from "@opencode-ai/sdk/v2";
+import { ActiveTurnRegistry } from "./active-turn-registry.js";
 import type { SidecarEmitter } from "./emitter.js";
 import { prependLinkedDirectoriesContext } from "./linked-directories-context.js";
 import { errorDetails, logger } from "./logger.js";
@@ -42,7 +43,6 @@ interface SessionCtx {
 	activeRequestId: string | null;
 	activeEmitter: SidecarEmitter | null;
 	settle: TurnSettle | null;
-	aborted: boolean;
 	/** Mutable: replaced with a fresh controller when a stopped session is
 	 *  reused, so the next turn's pump subscribes with a live signal. */
 	abort: AbortController;
@@ -329,8 +329,7 @@ export class OpencodeSessionManager implements SessionManager {
 	private readonly server = new OpencodeServer(() => this.handleServerExit());
 	private readonly sessions = new Map<string, SessionCtx>();
 	private readonly byOpencodeId = new Map<string, SessionCtx>();
-	/** Stop pressed while sendMessage was still in startup (no ctx yet). */
-	private readonly pendingAborts = new Set<string>();
+	private readonly turns = new ActiveTurnRegistry();
 	/** `provider/model` slug → context-window size, for the usage ring. */
 	private readonly modelContextLimits = new Map<string, number>();
 	private readonly pendingPermissions = new Map<
@@ -427,21 +426,29 @@ export class OpencodeSessionManager implements SessionManager {
 		params: SendMessageParams,
 		emitter: SidecarEmitter,
 	): Promise<void> {
+		// Register before startup (server.start + session.create) so a Stop
+		// pressed mid-startup emits `aborted` instantly via `tearDownTurn`.
+		this.turns.begin(params.sessionId, requestId, emitter, () =>
+			this.tearDownTurn(params.sessionId),
+		);
 		let handle: Awaited<ReturnType<OpencodeServer["start"]>>;
 		try {
 			handle = await this.server.start(process.env);
 		} catch (error) {
-			emitter.error(requestId, `opencode: ${errorMessage(error)}`);
-			emitter.end(requestId);
+			if (!this.turns.isAbortRequested(params.sessionId)) {
+				emitter.error(requestId, `opencode: ${errorMessage(error)}`);
+				emitter.end(requestId);
+			}
+			this.turns.end(params.sessionId);
 			return;
 		}
 		const { client } = handle;
 		const directory = params.cwd ?? process.cwd();
 
-		// Stop pressed during server startup → bail before creating a session.
-		if (this.pendingAborts.delete(params.sessionId)) {
-			emitter.aborted(requestId, "user_requested");
-			emitter.end(requestId);
+		// Stop pressed during server startup — `requestStop` already emitted
+		// `aborted`; clear the turn and bail before creating a session.
+		if (this.turns.isAbortRequested(params.sessionId)) {
+			this.turns.end(params.sessionId);
 			return;
 		}
 
@@ -470,14 +477,20 @@ export class OpencodeSessionManager implements SessionManager {
 					});
 					openCodeSessionId = created.data?.id ?? null;
 				} catch (error) {
-					emitter.error(requestId, `opencode: ${errorMessage(error)}`);
-					emitter.end(requestId);
+					if (!this.turns.isAbortRequested(params.sessionId)) {
+						emitter.error(requestId, `opencode: ${errorMessage(error)}`);
+						emitter.end(requestId);
+					}
+					this.turns.end(params.sessionId);
 					return;
 				}
 			}
 			if (!openCodeSessionId) {
-				emitter.error(requestId, "opencode: session.create returned no id");
-				emitter.end(requestId);
+				if (!this.turns.isAbortRequested(params.sessionId)) {
+					emitter.error(requestId, "opencode: session.create returned no id");
+					emitter.end(requestId);
+				}
+				this.turns.end(params.sessionId);
 				return;
 			}
 			ctx = {
@@ -487,7 +500,6 @@ export class OpencodeSessionManager implements SessionManager {
 				activeRequestId: null,
 				activeEmitter: null,
 				settle: null,
-				aborted: false,
 				abort: new AbortController(),
 				pumpStarted: false,
 				subtaskParents: new Map(),
@@ -512,18 +524,16 @@ export class OpencodeSessionManager implements SessionManager {
 			});
 		}
 
-		// Stop pressed during session create/resume (after the startup check) →
-		// honor it now instead of running the turn.
-		if (this.pendingAborts.delete(params.sessionId)) {
-			emitter.aborted(requestId, "user_requested");
-			emitter.end(requestId);
+		// Stop pressed during session create/resume — `requestStop` already
+		// emitted `aborted`; clear the turn and bail.
+		if (this.turns.isAbortRequested(params.sessionId)) {
+			this.turns.end(params.sessionId);
 			return;
 		}
 
 		ctx.directory = directory;
 		ctx.activeRequestId = requestId;
 		ctx.activeEmitter = emitter;
-		ctx.aborted = false;
 		ctx.planMode = params.permissionMode === "plan";
 		resetPlanCapture(ctx.planCapture);
 		this.ensureSessionPump(client, ctx);
@@ -598,8 +608,11 @@ export class OpencodeSessionManager implements SessionManager {
 			ctx.settle = null;
 			ctx.activeRequestId = null;
 			ctx.activeEmitter = null;
-			emitter.error(requestId, `opencode: ${errorMessage(error)}`);
-			emitter.end(requestId);
+			if (!this.turns.isAbortRequested(params.sessionId)) {
+				emitter.error(requestId, `opencode: ${errorMessage(error)}`);
+				emitter.end(requestId);
+			}
+			this.turns.end(params.sessionId);
 			return;
 		}
 
@@ -614,9 +627,13 @@ export class OpencodeSessionManager implements SessionManager {
 			ctx.activeEmitter = null;
 		}
 
-		if (ctx.aborted) {
-			emitter.aborted(requestId, "user_requested");
-		} else if (turnError) {
+		// Stop pressed — `requestStop` already emitted the terminal `aborted`.
+		if (this.turns.isAbortRequested(params.sessionId)) {
+			this.turns.end(params.sessionId);
+			return;
+		}
+
+		if (turnError) {
 			emitter.error(requestId, `opencode: ${turnError.message}`);
 		} else if (ctx.planMode) {
 			// Re-surface the captured plan as a plan-review card (lands after the
@@ -632,7 +649,12 @@ export class OpencodeSessionManager implements SessionManager {
 		}
 		// Emit BEFORE `end`: Rust's stream loop breaks on the terminal event.
 		await this.emitContextUsage(ctx, requestId, emitter);
-		emitter.end(requestId);
+		// Re-check: a Stop landing during the await above already emitted the
+		// terminal `aborted`, so skip `end` to avoid a double terminal.
+		if (!this.turns.isAbortRequested(params.sessionId)) {
+			emitter.end(requestId);
+		}
+		this.turns.end(params.sessionId);
 	}
 
 	private ensureSessionPump(client: OpencodeClient, ctx: SessionCtx): void {
@@ -1113,25 +1135,21 @@ export class OpencodeSessionManager implements SessionManager {
 		}
 	}
 
-	async stopSession(sessionId: string): Promise<void> {
+	/** Tear down the active turn: unblock `await turnDone`, abort the pump, and
+	 *  fire a best-effort remote abort. No-op if no ctx is registered yet
+	 *  (mid-startup) — the post-startup abort checks bail instead. */
+	private tearDownTurn(sessionId: string): void {
 		const ctx = this.sessions.get(sessionId);
-		if (!ctx) {
-			// Mid-startup: sendMessage hasn't registered a ctx yet. Record the
-			// intent so it's honored once startup lands, not dropped.
-			this.pendingAborts.add(sessionId);
-			return;
-		}
-		this.pendingAborts.delete(sessionId);
-		ctx.aborted = true;
+		if (!ctx) return;
 		this.clearPending(ctx);
 		// Unblock the local turn FIRST — never gate it behind the remote abort
 		// RPC, which can hang against a wedged server and strand `await
-		// turnDone` forever (the bug this fixes). Stop the pump too so we don't
-		// leak the SSE subscription; reuse swaps in a fresh controller.
+		// turnDone` forever. Stop the pump too so we don't leak the SSE
+		// subscription; reuse swaps in a fresh controller.
 		ctx.settle?.resolve();
 		ctx.abort.abort();
 		ctx.pumpStarted = false;
-		// Best-effort remote abort, fire-and-forget: it tells opencode to stop
+		// Best-effort remote abort, fire-and-forget: tells opencode to stop
 		// server-side work but must not block (or fail) the local teardown.
 		void this.server
 			.start(process.env)
@@ -1144,6 +1162,12 @@ export class OpencodeSessionManager implements SessionManager {
 			.catch((error) =>
 				logger.debug("opencode abort failed", errorDetails(error)),
 			);
+	}
+
+	async stopSession(sessionId: string): Promise<void> {
+		// Emits `aborted` instantly + runs `tearDownTurn` — works at any point,
+		// including during the first turn's startup (server.start + create).
+		this.turns.requestStop(sessionId);
 	}
 
 	// Mid-turn steer via a second promptAsync on the busy session. RPC-first:
@@ -1194,15 +1218,12 @@ export class OpencodeSessionManager implements SessionManager {
 
 	async shutdown(): Promise<void> {
 		for (const ctx of this.byOpencodeId.values()) {
-			ctx.aborted = true;
-			ctx.settle?.resolve();
-			ctx.abort.abort();
+			this.turns.requestStop(ctx.helmorSessionId);
 		}
 		this.sessions.clear();
 		this.byOpencodeId.clear();
 		this.pendingPermissions.clear();
 		this.pendingQuestions.clear();
-		this.pendingAborts.clear();
 		this.server.kill();
 	}
 }

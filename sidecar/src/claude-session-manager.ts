@@ -15,6 +15,7 @@ import {
 	type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { isAbortError, isQueryClosedTransient } from "./abort.js";
+import { ActiveTurnRegistry } from "./active-turn-registry.js";
 import { buildAgentProxyEnv } from "./agent-proxy.js";
 import { loadProjectMcpServers } from "./claude-project-mcp.js";
 import { buildClaudeRichMeta, buildClaudeStoredMeta } from "./context-usage.js";
@@ -163,10 +164,6 @@ interface LiveSession {
 	 *  synthetic user event to the pipeline so the UI renders the mid-turn
 	 *  bubble at the correct position instead of tacking it onto the end. */
 	readonly emitter: SidecarEmitter;
-	/** Set by `stopSession` once it has emitted `aborted` up front, so the
-	 *  for-await catch doesn't emit a duplicate when the SDK iterator finally
-	 *  unwinds (its child teardown defers SIGTERM by ~2s). */
-	abortEmitted?: boolean;
 }
 
 // Helmor models permission as a binary: `plan` (read-only) or full access.
@@ -320,6 +317,9 @@ async function buildUserMessageWithImages(
 
 export class ClaudeSessionManager implements SessionManager {
 	private readonly sessions = new Map<string, LiveSession>();
+	/** Shared Stop handling: instant `aborted` emit at any point (see
+	 *  ActiveTurnRegistry). Identical across all four providers. */
+	private readonly turns = new ActiveTurnRegistry();
 	private readonly pendingPermissions = new Map<
 		string,
 		(resolution: PermissionResolution) => void
@@ -384,6 +384,11 @@ export class ClaudeSessionManager implements SessionManager {
 			sourceRepoPath,
 		} = params;
 		const abortController = new AbortController();
+		// Register the turn before any await so a Stop during SDK startup
+		// emits `aborted` instantly + aborts the query.
+		this.turns.begin(sessionId, requestId, emitter, () =>
+			abortController.abort(),
+		);
 		const additionalDirectories = [...(params.additionalDirectories ?? [])];
 		logger.info(`[${requestId}] claude additionalDirectories resolved`, {
 			directories: additionalDirectories,
@@ -678,7 +683,7 @@ export class ClaudeSessionManager implements SessionManager {
 				// so the iterator can still drain buffered events — even a natural
 				// `result`. Drop them and return: passing them through or emitting
 				// `end` here would violate the "exactly one terminal event" contract.
-				if (live.abortEmitted) return;
+				if (this.turns.isAbortRequested(sessionId)) return;
 				logger.sdkEvent(requestId, message);
 				if (message.type === "rate_limit_event") {
 					lastRateLimitInfo = (
@@ -732,12 +737,13 @@ export class ClaudeSessionManager implements SessionManager {
 					return;
 				}
 			}
-			if (!live.abortEmitted) emitter.end(requestId);
+			if (!this.turns.isAbortRequested(sessionId)) emitter.end(requestId);
 		} catch (err) {
 			if (isAbortError(err)) {
 				// stopSession already emitted `aborted` up front (see below) —
 				// don't double-emit when the iterator finally unwinds.
-				if (!live.abortEmitted) emitter.aborted(requestId, "user_requested");
+				if (!this.turns.isAbortRequested(sessionId))
+					emitter.aborted(requestId, "user_requested");
 				return;
 			}
 			throw err;
@@ -758,6 +764,7 @@ export class ClaudeSessionManager implements SessionManager {
 			}
 			promptSource.close();
 			this.sessions.delete(sessionId);
+			this.turns.end(sessionId);
 			// Only cancel waiters belonging to THIS session — `pendingUserInputs`
 			// is manager-wide and other sessions may have parked AUQs / MCP
 			// elicitations on it.
@@ -1207,18 +1214,11 @@ export class ClaudeSessionManager implements SessionManager {
 	}
 
 	async stopSession(sessionId: string): Promise<void> {
-		const session = this.sessions.get(sessionId);
-		if (session) {
-			// Emit `aborted` now instead of waiting for the SDK's async iterator
-			// to unwind — its child teardown defers SIGTERM by ~2s, which is what
-			// made Claude's Stop button feel laggy (1–2s at any point in a turn).
-			// The abort controller still tears the query down in the background;
-			// the for-await catch skips the duplicate emit via `abortEmitted`.
-			session.abortEmitted = true;
-			session.abortController.abort();
-			session.emitter.aborted(session.requestId, "user_requested");
-			this.sessions.delete(sessionId);
-		}
+		// Instant `aborted` + abort the query (teardown) at any point in the
+		// turn, including SDK startup. The for-await/catch dedupe via the
+		// registry; the finally hard-closes the query in the background.
+		this.turns.requestStop(sessionId);
+		this.sessions.delete(sessionId);
 	}
 
 	async shutdown(): Promise<void> {

@@ -11,6 +11,7 @@ import crypto from "node:crypto";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { ActiveTurnRegistry } from "./active-turn-registry.js";
 import type { AgentProxySettings } from "./agent-proxy.js";
 import {
 	CodexAppServer,
@@ -445,10 +446,7 @@ export class CodexAppServerManager implements SessionManager {
 	private sessions = new Map<string, AppServerContext>();
 	private pendingApprovals = new Map<string, PendingApproval>();
 	private pendingUserInputs = new Map<string, PendingUserInput>();
-	// Sessions the user hit Stop on while the codex thread was still starting
-	// up (before `ensureContext` registers a context). `sendMessage` consumes
-	// the intent after startup and tears the turn down instead of running it.
-	private abortRequested = new Set<string>();
+	private readonly turns = new ActiveTurnRegistry();
 
 	/** Called by index.ts when frontend responds to a permission prompt. */
 	resolvePermission(permissionId: string, behavior: "allow" | "deny"): void {
@@ -543,10 +541,12 @@ export class CodexAppServerManager implements SessionManager {
 			additionalDirectories,
 			images,
 		} = params;
-		// Drop any stale abort intent from a prior stop that landed with no
-		// live context. A genuine mid-startup stop for THIS turn is recorded
-		// again during the awaits below and caught right after ensureContext.
-		this.abortRequested.delete(sessionId);
+		// Register the turn before any startup await (goal pre-flight +
+		// ensureContext) so a Stop pressed mid-startup emits `aborted`
+		// instantly and tears the turn down via `tearDownTurn`.
+		this.turns.begin(sessionId, requestId, emitter, () =>
+			this.tearDownTurn(sessionId),
+		);
 		const workDir = cwd ?? process.cwd();
 		const effectiveFastMode =
 			fastMode === true && modelSupportsFastMode("codex", model);
@@ -588,13 +588,12 @@ export class CodexAppServerManager implements SessionManager {
 			effectiveFastMode,
 			agentProxy,
 		);
-		// User hit Stop while the thread was still starting up. stopSession
-		// couldn't find a context to kill and only recorded the intent — honor
-		// it now: tear down and report the abort instead of running the turn.
-		if (this.abortRequested.delete(sessionId)) {
+		// Stop pressed during startup — `requestStop` already emitted `aborted`.
+		// Kill the freshly-started server and bail instead of running the turn.
+		if (this.turns.isAbortRequested(sessionId)) {
 			ctx.server.kill();
 			this.sessions.delete(sessionId);
-			emitter.aborted(requestId, "user_requested");
+			this.turns.end(sessionId);
 			return;
 		}
 		// Codex usage notifications do not include a model id.
@@ -641,8 +640,6 @@ export class CodexAppServerManager implements SessionManager {
 		);
 		turnStartParams.sandboxPolicy = sandboxPolicy;
 
-		let aborted = false;
-
 		// Stash the active stream's routing info so `steer()` can fire a
 		// synthetic user passthrough on the correct request id / emitter.
 		ctx.activeRequestId = requestId;
@@ -650,10 +647,7 @@ export class CodexAppServerManager implements SessionManager {
 
 		return new Promise<void>((resolve, reject) => {
 			ctx.turnResolve = resolve;
-			ctx.turnReject = (err) => {
-				aborted = true;
-				reject(err);
-			};
+			ctx.turnReject = reject;
 
 			const emit = (event: object) => {
 				emitter.passthrough(requestId, event);
@@ -1055,11 +1049,12 @@ export class CodexAppServerManager implements SessionManager {
 					reject(err);
 				});
 		}).finally(() => {
-			if (aborted) {
-				emitter.aborted(requestId, "user_requested");
-			} else {
+			// `aborted` is terminal — `requestStop` already emitted it. Only
+			// emit `end` on natural completion / error-resolve, then clear.
+			if (!this.turns.isAbortRequested(sessionId)) {
 				emitter.end(requestId);
 			}
+			this.turns.end(sessionId);
 			if (ctx.activeRequestId === requestId) {
 				ctx.activeRequestId = null;
 				ctx.activeEmitter = null;
@@ -1388,17 +1383,13 @@ export class CodexAppServerManager implements SessionManager {
 
 	// ── stopSession / shutdown ───────────────────────────────────────────
 
-	async stopSession(sessionId: string): Promise<void> {
+	/** Tear down the active turn: drop pending prompts, interrupt the upstream
+	 *  turn (best-effort, no await), kill the app-server, reject the turn
+	 *  promise. No-op if no context is registered yet (mid-startup) — the
+	 *  post-`ensureContext` abort check kills the freshly-started server. */
+	private tearDownTurn(sessionId: string): void {
 		const ctx = this.sessions.get(sessionId);
-		if (!ctx) {
-			// Mid-startup: `ensureContext` (process spawn + initialize +
-			// thread/start) hasn't registered a context yet, so there's
-			// nothing to kill. Record the intent — `sendMessage` honors it
-			// the moment startup lands instead of dropping the abort and
-			// running the turn to completion.
-			this.abortRequested.add(sessionId);
-			return;
-		}
+		if (!ctx) return;
 		logger.info(`stopSession ${sessionId}`, {
 			threadId: ctx.providerThreadId ?? "(none)",
 		});
@@ -1436,9 +1427,14 @@ export class CodexAppServerManager implements SessionManager {
 		ctx.server.kill();
 		this.sessions.delete(sessionId);
 
-		// Use AbortError so the index catch can distinguish user-stop from real errors
-		const abortErr = new DOMException("Session stopped by user", "AbortError");
-		pendingReject?.(abortErr);
+		// AbortError lets the index catch distinguish user-stop from real errors.
+		pendingReject?.(new DOMException("Session stopped by user", "AbortError"));
+	}
+
+	async stopSession(sessionId: string): Promise<void> {
+		// Emits `aborted` instantly + runs `tearDownTurn` — works at any point,
+		// including during the first turn's startup (spawn + thread/start).
+		this.turns.requestStop(sessionId);
 	}
 
 	/**
@@ -1550,12 +1546,12 @@ export class CodexAppServerManager implements SessionManager {
 	}
 
 	async shutdown(): Promise<void> {
-		for (const [_id, ctx] of this.sessions) {
+		for (const sessionId of [...this.sessions.keys()]) {
 			try {
-				ctx.turnReject?.(new Error("Sidecar shutdown"));
-				ctx.turnResolve = null;
-				ctx.turnReject = null;
-				ctx.server.kill();
+				// Abort any active turn (emits `aborted` + rejects), then make
+				// sure the server is dead even on idle sessions.
+				this.turns.requestStop(sessionId);
+				this.sessions.get(sessionId)?.server.kill();
 			} catch (err) {
 				logger.error("shutdown: kill failed", errorDetails(err));
 			}
