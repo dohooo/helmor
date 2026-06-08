@@ -79,13 +79,23 @@ fn ensure_external_bin_placeholders() {
         return;
     };
 
+    // Tauri appends `.exe` to externalBin paths on Windows when it validates
+    // them during the build-script run, so the placeholders must carry it too —
+    // otherwise a clean checkout panics with "resource path …-msvc.exe doesn't
+    // exist" before prepare-sidecar.mjs has produced the real artifacts.
+    let exe = if target.contains("windows") {
+        ".exe"
+    } else {
+        ""
+    };
+
     let manifest_dir =
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR should be set"));
     ensure_executable_placeholder(
         manifest_dir
             .join("target")
             .join("bundled")
-            .join(format!("helmor-cli-{target}")),
+            .join(format!("helmor-cli-{target}{exe}")),
     );
 
     if let Some(repo_root) = manifest_dir.parent() {
@@ -93,7 +103,7 @@ fn ensure_external_bin_placeholders() {
             repo_root
                 .join("sidecar")
                 .join("dist")
-                .join(format!("helmor-sidecar-{target}")),
+                .join(format!("helmor-sidecar-{target}{exe}")),
         );
     }
 }

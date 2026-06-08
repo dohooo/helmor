@@ -44,6 +44,17 @@ import {
 const IS_WINDOWS = process.platform === "win32";
 /** Executable suffix for staged binaries on the target. */
 const EXE = IS_WINDOWS ? ".exe" : "";
+/**
+ * Archiver to shell out to. Both bsdtar (Windows 10+ in-box, macOS) handle
+ * zip + tar.gz. On Windows we MUST use the System32 bsdtar by absolute path:
+ * under a bash shell (CI) a bare `tar` resolves to Git's GNU tar, which reads
+ * the `D:` in an archive path like `D:\…\gh.zip` as an `rsh` host spec and
+ * fails with "Cannot connect to D: resolve failed". bsdtar treats it as a
+ * local path.
+ */
+const TAR_BIN = IS_WINDOWS
+	? `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\tar.exe`
+	: "tar";
 
 const SIDECAR_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const NODE_MODULES = join(SIDECAR_ROOT, "node_modules");
@@ -132,7 +143,7 @@ function sha256OfFile(path: string): string {
 /// which ships in-box on Windows 10+ and macOS and transparently handles both
 /// formats — so we don't need a separate `unzip`.
 function extractArchive(archive: string, destDir: string): void {
-	execFileSync("tar", ["-xf", archive, "-C", destDir], { stdio: "inherit" });
+	execFileSync(TAR_BIN, ["-xf", archive, "-C", destDir], { stdio: "inherit" });
 }
 
 function downloadAndVerify(
@@ -286,7 +297,7 @@ function stageCloudflaredBinary(target: TargetInfo): string {
 
 	const extractDir = join(BUNDLE_CACHE, plan.slug);
 	freshExtractDir(extractDir);
-	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
+	execFileSync(TAR_BIN, ["-xzf", archive, "-C", extractDir], {
 		stdio: "inherit",
 	});
 
@@ -355,7 +366,7 @@ function stageClaudeCodeBinary(target: TargetInfo): string {
 
 	const extractDir = join(BUNDLE_CACHE, plan.slug);
 	freshExtractDir(extractDir);
-	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
+	execFileSync(TAR_BIN, ["-xzf", archive, "-C", extractDir], {
 		stdio: "inherit",
 	});
 
@@ -496,7 +507,7 @@ function stageCodexBinary(target: TargetInfo): void {
 
 	const extractDir = join(BUNDLE_CACHE, plan.slug);
 	freshExtractDir(extractDir);
-	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
+	execFileSync(TAR_BIN, ["-xzf", archive, "-C", extractDir], {
 		stdio: "inherit",
 	});
 
@@ -555,7 +566,7 @@ function stageOpencodeBinary(target: TargetInfo): string {
 
 	const extractDir = join(BUNDLE_CACHE, plan.slug);
 	freshExtractDir(extractDir);
-	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
+	execFileSync(TAR_BIN, ["-xzf", archive, "-C", extractDir], {
 		stdio: "inherit",
 	});
 
@@ -661,7 +672,7 @@ function stageLlamaCppBinaries(target: TargetInfo): string {
 
 	const extractDir = join(BUNDLE_CACHE, plan.slug);
 	freshExtractDir(extractDir);
-	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
+	execFileSync(TAR_BIN, ["-xzf", archive, "-C", extractDir], {
 		stdio: "inherit",
 	});
 
