@@ -265,7 +265,7 @@ fn probe_pid_alive(pid: i32) -> bool {
     if pid <= 0 {
         return false;
     }
-    crate::platform::process::pid_alive(pid as u32)
+    crate::platform::process::pid_alive(pid as crate::platform::process::Pid)
 }
 
 #[cfg(test)]
