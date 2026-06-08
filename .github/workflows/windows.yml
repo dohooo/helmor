@@ -37,6 +37,10 @@ jobs:
 
       - name: Setup JS toolchain
         uses: ./.github/actions/setup-js
+        with:
+          # sccache is unused by the Windows jobs and its installer is flaky
+          # on Windows runners; skip it.
+          install-sccache: "false"
 
       # Covers the win32 branches added to sidecar/scripts/vendor-platform.ts
       # and the frontend, neither of which the macOS typecheck exercises with
@@ -55,6 +59,10 @@ jobs:
 
       - name: Setup JS toolchain
         uses: ./.github/actions/setup-js
+        with:
+          # sccache is unused by the Windows jobs and its installer is flaky
+          # on Windows runners; skip it.
+          install-sccache: "false"
 
       - name: Run sidecar tests
         shell: bash
@@ -70,6 +78,10 @@ jobs:
 
       - name: Setup JS toolchain
         uses: ./.github/actions/setup-js
+        with:
+          # sccache is unused by the Windows jobs and its installer is flaky
+          # on Windows runners; skip it.
+          install-sccache: "false"
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -114,6 +126,10 @@ jobs:
 
       - name: Setup JS toolchain
         uses: ./.github/actions/setup-js
+        with:
+          # sccache is unused by the Windows jobs and its installer is flaky
+          # on Windows runners; skip it.
+          install-sccache: "false"
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable

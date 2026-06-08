@@ -22,6 +22,10 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 aes = "0.8"
 anyhow = "1"
+# Canonicalize without Windows `\\?\` verbatim prefixes so repo identity /
+# dedup keys stay consistent between store and lookup. On Unix this is a thin
+# wrapper around `std::fs::canonicalize`, so output is unchanged there.
+dunce = "1"
 # Mobile-companion HTTP surface: a localhost-bound axum server that mirrors
 # the Tauri IPC commands over HTTP/SSE so the same responsive frontend can be
 # served to a phone browser. See `src/companion/`.

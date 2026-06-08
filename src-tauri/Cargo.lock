@@ -2150,6 +2150,7 @@ dependencies = [
  "clap_complete",
  "core-foundation",
  "dotenvy",
+ "dunce",
  "futures",
  "hex",
  "hmac",

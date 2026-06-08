@@ -187,10 +187,16 @@ mod tests {
     #[test]
     fn agent_invocation_path_returns_absolute_helmor_cli_in_dev() {
         let path = agent_invocation_path();
-        // Either an absolute path ending in `/helmor-cli`, or the
-        // bare-name fallback when `current_exe()` is unavailable.
+        // Either an absolute path ending in the platform CLI file name
+        // (`helmor-cli` on Unix, `helmor-cli.exe` on Windows), or that bare
+        // name as the fallback when `current_exe()` is unavailable.
+        let cli_name = if cfg!(windows) {
+            "helmor-cli.exe"
+        } else {
+            "helmor-cli"
+        };
         assert!(
-            path.ends_with("/helmor-cli") || path == "helmor-cli",
+            path.ends_with(cli_name),
             "unexpected dev invocation path: {path}"
         );
         // Never the bare `helmor-dev` symlink name — that's the
