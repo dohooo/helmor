@@ -140,8 +140,8 @@ pub struct ComponentsUpdateCheck {
     pub skills_error: Option<String>,
 }
 
-/// Where Helmor installs its managed CLI entrypoint (symlink on Unix,
-/// `.cmd` shim on Windows — see `platform::cli_install`).
+/// Where Helmor installs its managed CLI entrypoint. The OS-specific target
+/// path lives behind the `platform::cli_install` seam.
 fn cli_install_target() -> std::path::PathBuf {
     crate::platform::cli_install::install_target(crate::cli::installed_cli_name())
 }
@@ -183,59 +183,11 @@ fn classify_cli_install(
     install_path: &std::path::Path,
     bundled_cli: &std::path::Path,
 ) -> CliInstallState {
-    let metadata = match std::fs::symlink_metadata(install_path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return CliInstallState::Missing;
-        }
-        Err(_) => return CliInstallState::Stale,
-    };
-
-    #[cfg(windows)]
-    {
-        // Windows installs a `.cmd` shim instead of a symlink; "Managed"
-        // means the shim forwards to the currently bundled CLI binary.
-        if !metadata.file_type().is_file() {
-            return CliInstallState::Stale;
-        }
-        let Some(target) = crate::platform::cli_install::read_shim_target(install_path) else {
-            return CliInstallState::Stale;
-        };
-        match (
-            std::fs::canonicalize(target),
-            std::fs::canonicalize(bundled_cli),
-        ) {
-            (Ok(installed), Ok(expected)) if installed == expected => CliInstallState::Managed,
-            _ => CliInstallState::Stale,
-        }
-    }
-
-    #[cfg(not(windows))]
-    {
-        if !metadata.file_type().is_symlink() {
-            return CliInstallState::Stale;
-        }
-
-        let target = match std::fs::read_link(install_path) {
-            Ok(target) => target,
-            Err(_) => return CliInstallState::Stale,
-        };
-        let resolved_target = if target.is_absolute() {
-            target
-        } else {
-            install_path
-                .parent()
-                .unwrap_or_else(|| std::path::Path::new("/"))
-                .join(target)
-        };
-
-        match (
-            std::fs::canonicalize(resolved_target),
-            std::fs::canonicalize(bundled_cli),
-        ) {
-            (Ok(installed), Ok(expected)) if installed == expected => CliInstallState::Managed,
-            _ => CliInstallState::Stale,
-        }
+    use crate::platform::cli_install::ManagedCliStatus;
+    match crate::platform::cli_install::classify(install_path, bundled_cli) {
+        ManagedCliStatus::Managed => CliInstallState::Managed,
+        ManagedCliStatus::Stale => CliInstallState::Stale,
+        ManagedCliStatus::Missing => CliInstallState::Missing,
     }
 }
 
@@ -327,26 +279,9 @@ fn try_install_symlink_unprivileged(
         }
     }
 
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(bundled_cli, install_path)
-            .with_context(|| format!("Failed to install CLI at {}", install_path.display()))?;
-        Ok(())
-    }
-
-    #[cfg(windows)]
-    {
-        // No symlinks without elevation on Windows — install a `.cmd` shim
-        // and register its directory on the user PATH instead.
-        crate::platform::cli_install::write_shim(bundled_cli, install_path)?;
-        Ok(())
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = bundled_cli;
-        anyhow::bail!("CLI installation is not supported on this platform.")
-    }
+    crate::platform::cli_install::create_managed_link(bundled_cli, install_path)
+        .with_context(|| format!("Failed to install CLI at {}", install_path.display()))?;
+    Ok(())
 }
 
 fn is_permission_denied(error: &anyhow::Error) -> bool {

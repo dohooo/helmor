@@ -10,4 +10,5 @@ pub mod fs;
 pub mod ipc;
 pub mod paths;
 pub mod process;
+pub mod pty;
 pub mod shell;
