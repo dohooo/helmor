@@ -1015,6 +1015,33 @@ fn is_archive_eligible_state(state: WorkspaceState) -> bool {
     matches!(state, WorkspaceState::Ready | WorkspaceState::SetupPending)
 }
 
+fn can_archive_without_head(record: Option<&workspace_models::WorkspaceRecord>) -> bool {
+    match record {
+        Some(record) => record.kind == "ai_triage" && !record.ai_priming_consumed,
+        None => false,
+    }
+}
+
+fn delete_archived_branch(repo_root: &Path, branch: &str, workspace_id: &str) {
+    let branch_delete_started = std::time::Instant::now();
+    git_ops::run_git(
+        [
+            "-C",
+            &repo_root.display().to_string(),
+            "branch",
+            "-D",
+            branch,
+        ],
+        None,
+    )
+    .ok();
+    tracing::debug!(
+        workspace_id,
+        elapsed_ms = branch_delete_started.elapsed().as_millis(),
+        "Archive: branch delete finished"
+    );
+}
+
 /// Resolve the interpreter + single-command flag used to run the archive
 /// script. Respects `$SHELL` (falling back to `/bin/sh`) and uses `-c`.
 fn archive_shell() -> (String, &'static str) {
@@ -1229,6 +1256,7 @@ pub fn execute_archive_plan(plan: &ArchivePreparedPlan) -> Result<ArchiveWorkspa
     // Missing row defaults to `true` so legacy / orphaned rows still get
     // their branch cleaned up by the worktree-removal path below.
     let archive_owns_branch = record
+        .as_ref()
         .map(|r| matches!(r.branch_intent, WorkspaceBranchIntent::FromBranch))
         .unwrap_or(true);
 
@@ -1241,13 +1269,26 @@ pub fn execute_archive_plan(plan: &ArchivePreparedPlan) -> Result<ArchiveWorkspa
         );
     }
     let git_started = std::time::Instant::now();
-    let archive_commit = git_ops::current_workspace_head_commit(workspace_dir)?;
-    git_ops::verify_commit_exists(repo_root, &archive_commit)?;
-    tracing::debug!(
-        workspace_id,
-        elapsed_ms = git_started.elapsed().as_millis(),
-        "Archive: HEAD resolve + verify finished"
-    );
+    let archive_commit = match git_ops::current_workspace_head_commit(workspace_dir) {
+        Ok(commit) => {
+            git_ops::verify_commit_exists(repo_root, &commit)?;
+            tracing::debug!(
+                workspace_id,
+                elapsed_ms = git_started.elapsed().as_millis(),
+                "Archive: HEAD resolve + verify finished"
+            );
+            commit
+        }
+        Err(error) if can_archive_without_head(record.as_ref()) => {
+            tracing::info!(
+                workspace_id,
+                error = %format!("{error:#}"),
+                "Archive: continuing without HEAD for untouched AI triage workspace"
+            );
+            String::new()
+        }
+        Err(error) => return Err(error),
+    };
 
     // Run archive script (best-effort, don't block archive on script failure).
     let hook_started = std::time::Instant::now();
@@ -1258,32 +1299,38 @@ pub fn execute_archive_plan(plan: &ArchivePreparedPlan) -> Result<ArchiveWorkspa
         "Archive hook finished"
     );
 
-    let remove_worktree_started = std::time::Instant::now();
-    git_ops::remove_worktree(repo_root, workspace_dir)?;
-    tracing::info!(
-        workspace_id,
-        elapsed_ms = remove_worktree_started.elapsed().as_millis(),
-        "Archive worktree removal finished"
-    );
-
-    if archive_owns_branch {
-        let branch_delete_started = std::time::Instant::now();
-        git_ops::run_git(
-            [
-                "-C",
-                &repo_root.display().to_string(),
-                "branch",
-                "-D",
-                branch,
-            ],
-            None,
-        )
-        .ok();
+    let headless_archive = archive_commit.is_empty();
+    if headless_archive {
+        let db_started = std::time::Instant::now();
+        workspace_models::update_archived_workspace_state(workspace_id, "")?;
         tracing::debug!(
             workspace_id,
-            elapsed_ms = branch_delete_started.elapsed().as_millis(),
-            "Archive: branch delete finished"
+            elapsed_ms = db_started.elapsed().as_millis(),
+            "Archive: DB state update finished"
         );
+    }
+
+    let remove_worktree_started = std::time::Instant::now();
+    match git_ops::remove_worktree(repo_root, workspace_dir) {
+        Ok(()) => {
+            tracing::info!(
+                workspace_id,
+                elapsed_ms = remove_worktree_started.elapsed().as_millis(),
+                "Archive worktree removal finished"
+            );
+        }
+        Err(error) if headless_archive => {
+            tracing::warn!(
+                workspace_id,
+                error = %format!("{error:#}"),
+                "Archive: failed to remove headless AI triage worktree"
+            );
+        }
+        Err(error) => return Err(error),
+    }
+
+    if archive_owns_branch {
+        delete_archived_branch(repo_root, branch, workspace_id);
     } else {
         tracing::info!(
             workspace_id,
@@ -1292,19 +1339,22 @@ pub fn execute_archive_plan(plan: &ArchivePreparedPlan) -> Result<ArchiveWorkspa
         );
     }
 
-    let db_started = std::time::Instant::now();
-    if let Err(error) =
-        workspace_models::update_archived_workspace_state(workspace_id, &archive_commit)
-    {
-        cleanup_failed_archive(repo_root, workspace_dir, branch, &archive_commit);
-        return Err(error);
+    if !headless_archive {
+        let db_started = std::time::Instant::now();
+        if let Err(error) =
+            workspace_models::update_archived_workspace_state(workspace_id, &archive_commit)
+        {
+            cleanup_failed_archive(repo_root, workspace_dir, branch, &archive_commit);
+            return Err(error);
+        }
+
+        tracing::debug!(
+            workspace_id,
+            elapsed_ms = db_started.elapsed().as_millis(),
+            "Archive: DB state update finished"
+        );
     }
 
-    tracing::debug!(
-        workspace_id,
-        elapsed_ms = db_started.elapsed().as_millis(),
-        "Archive: DB state update finished"
-    );
     tracing::info!(
         workspace_id,
         elapsed_ms = timing.elapsed().as_millis(),
