@@ -2293,6 +2293,11 @@ mod tests {
         );
     }
 
+    // macOS-only: exercises the `/usr/local/bin` sudo-elevation install path and
+    // asserts the macOS "administrator access / Retry" message. Windows installs
+    // a `.cmd` shim under %LOCALAPPDATA% with no elevation flow, so this scenario
+    // doesn't apply there.
+    #[cfg(target_os = "macos")]
     #[test]
     fn try_install_cli_silent_at_bails_with_friendly_message_on_permission_denied() {
         // Pick a parent that almost certainly isn't writable to the test
