@@ -704,6 +704,13 @@ fn create_workspace_fixture_db(
     repo_name: &str,
 ) {
     let connection = open_fixture_db(db_path);
+    // Store the path through the same canonicalizer production uses so
+    // dedup-by-path lookups match. On Windows the CI runner's tempfile and
+    // dunce::canonicalize disagree on case / short-name handling, so the raw
+    // path stored here wouldn't match what add_repository_from_local_path
+    // computes at lookup time.
+    let stored_root_path = crate::models::repos::normalize_filesystem_path(source_repo_root)
+        .unwrap_or_else(|| source_repo_root.to_string_lossy().into_owned());
     // Prefix lives on the repo row in the multi-account world. Pin
     // `custom + testuser/` directly on the repo so create_workspace
     // produces the `testuser/<directory>` branch the assertions expect.
@@ -713,7 +720,7 @@ fn create_workspace_fixture_db(
                 id, remote_url, name, default_branch, root_path, display_order, hidden,
                 branch_prefix_type, branch_prefix_custom
               ) VALUES (?1, NULL, ?2, 'main', ?3, 1, 0, 'custom', 'testuser/')"#,
-            (repo_id, repo_name, source_repo_root.to_str().unwrap()),
+            (repo_id, repo_name, stored_root_path),
         )
         .unwrap();
 }
@@ -730,10 +737,12 @@ fn create_archived_fixture_db(
     archive_commit: &str,
 ) {
     let connection = open_fixture_db(db_path);
+    let stored_root_path = crate::models::repos::normalize_filesystem_path(source_repo_root)
+        .unwrap_or_else(|| source_repo_root.to_string_lossy().into_owned());
     connection
         .execute(
             "INSERT INTO repos (id, name, remote_url, default_branch, root_path) VALUES (?1, ?2, NULL, 'main', ?3)",
-            ["repo-1", repo_name, source_repo_root.to_str().unwrap()],
+            ["repo-1", repo_name, stored_root_path.as_str()],
         )
         .unwrap();
     connection
@@ -767,10 +776,12 @@ fn create_ready_fixture_db(
     branch: &str,
 ) {
     let connection = open_fixture_db(db_path);
+    let stored_root_path = crate::models::repos::normalize_filesystem_path(source_repo_root)
+        .unwrap_or_else(|| source_repo_root.to_string_lossy().into_owned());
     connection
         .execute(
             "INSERT INTO repos (id, name, remote_url, default_branch, root_path) VALUES (?1, ?2, NULL, 'main', ?3)",
-            ["repo-1", repo_name, source_repo_root.to_str().unwrap()],
+            ["repo-1", repo_name, stored_root_path.as_str()],
         )
         .unwrap();
     connection
