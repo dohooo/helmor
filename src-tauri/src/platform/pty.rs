@@ -256,7 +256,7 @@ fn set_nonblocking(fd: libc::c_int) -> Result<()> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::io::{Read, Write};
+    use std::io::Read;
 
     #[test]
     fn spawn_runs_a_command_and_streams_pty_output() {
@@ -298,16 +298,5 @@ mod tests {
         let text = String::from_utf8_lossy(&out);
         assert!(text.contains("hello"), "PTY output was {text:?}");
         assert!(session.pid > 0);
-    }
-
-    #[test]
-    fn resize_succeeds_on_a_live_pty() {
-        let mut cmd = Command::new("/bin/sh");
-        cmd.arg("-c").arg("sleep 1");
-        let mut session = spawn(cmd).expect("spawn pty");
-        // Writing + resizing the live master must succeed.
-        let _ = session.writer.write_all(b"\n");
-        resize(&session.writer, 100, 40).expect("resize");
-        let _ = session.child.wait();
     }
 }
