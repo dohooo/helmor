@@ -1,0 +1,11 @@
+{
+	"items": [
+		{
+			"text": "You can now clean up all archived workspaces at once from Settings → General to free up disk space.",
+			"action": {
+				"label": "Open General",
+				"value": { "type": "openSettings", "section": "general" }
+			}
+		}
+	]
+}

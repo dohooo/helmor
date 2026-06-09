@@ -734,6 +734,7 @@ pub fn run() {
             commands::editors::open_workspace_in_editor,
             commands::editors::open_workspace_in_finder,
             commands::workspace_commands::permanently_delete_workspace,
+            commands::workspace_commands::cleanup_archived_workspaces,
             commands::workspace_commands::restore_workspace,
             commands::editor_commands::stat_editor_file,
             commands::conductor_commands::conductor_source_available,

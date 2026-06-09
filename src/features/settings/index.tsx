@@ -66,6 +66,7 @@ import { SettingsSelect } from "./components/settings-select";
 import { AccountPanel } from "./panels/account";
 import { AppUpdatesPanel } from "./panels/app-updates";
 import { AppearancePanel } from "./panels/appearance";
+import { ArchiveCleanupPanel } from "./panels/archive-cleanup";
 import { ComponentsPanel } from "./panels/components";
 import { ConductorImportPanel } from "./panels/conductor-import";
 import { DevToolsPanel } from "./panels/dev-tools";
@@ -502,6 +503,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 											</ToggleGroupItem>
 										</ToggleGroup>
 									</SettingsRow>
+									<ArchiveCleanupPanel />
 									<AppUpdatesPanel />
 									<ComponentsPanel />
 								</SettingsGroup>

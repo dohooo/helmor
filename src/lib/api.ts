@@ -3067,6 +3067,29 @@ export async function permanentlyDeleteWorkspace(
 	await invoke("permanently_delete_workspace", { workspaceId });
 }
 
+export interface CleanupArchivedFailure {
+	workspaceId: string;
+	title: string;
+	message: string;
+}
+
+export interface CleanupArchivedWorkspacesResponse {
+	deletedCount: number;
+	failures: CleanupArchivedFailure[];
+}
+
+/**
+ * Permanently delete every archived workspace, one at a time, through the
+ * same backend path as `permanentlyDeleteWorkspace`. Resolves when the
+ * whole run finishes; the run is backend-owned, so it completes even if
+ * the caller unmounts mid-flight.
+ */
+export async function cleanupArchivedWorkspaces(): Promise<CleanupArchivedWorkspacesResponse> {
+	return invoke<CleanupArchivedWorkspacesResponse>(
+		"cleanup_archived_workspaces",
+	);
+}
+
 /**
  * List of action kinds the user has opted-in to auto-close. Action sessions
  * whose `actionKind` appears in this list are hidden automatically after
