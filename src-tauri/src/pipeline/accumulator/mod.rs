@@ -528,8 +528,8 @@ impl StreamAccumulator {
             Some("opencode/session.idle") => opencode::handle_session_idle(self),
             Some("opencode/session.status") => opencode::handle_session_status(self, value),
             // Redundant/informational forms — handled as NoOps for the coverage guard.
-            Some("opencode/session.error")
-            | Some("opencode/session.created")
+            Some("opencode/session.error") => opencode::handle_session_error(self, value),
+            Some("opencode/session.created")
             | Some("opencode/session.updated")
             | Some("opencode/session.diff")
             | Some("opencode/todo.updated")

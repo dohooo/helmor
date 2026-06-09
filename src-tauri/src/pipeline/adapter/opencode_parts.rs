@@ -93,7 +93,33 @@ fn render_part(part: &Value, id: String, streaming_now: bool) -> Option<MessageP
                 body: None,
             })
         }
+        "system-notice" => Some(render_system_notice(part, id)),
         _ => None,
+    }
+}
+
+fn render_system_notice(part: &Value, id: String) -> MessagePart {
+    let severity = match part.get("severity").and_then(Value::as_str) {
+        Some("error") => NoticeSeverity::Error,
+        Some("warning") => NoticeSeverity::Warning,
+        _ => NoticeSeverity::Info,
+    };
+    let label = part
+        .get("label")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Notice")
+        .to_string();
+    let body = part
+        .get("body")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    MessagePart::SystemNotice {
+        id,
+        severity,
+        label,
+        body,
     }
 }
 
@@ -622,6 +648,37 @@ mod tests {
             } => {
                 assert_eq!(severity, &NoticeSeverity::Info);
                 assert_eq!(label, "Context auto-compacted");
+            }
+            other => panic!("expected system-notice, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn session_error_notice_renders_as_error_system_notice() {
+        let msg = json!({
+            "type": "opencode_message",
+            "parts": [{
+                "type": "system-notice",
+                "severity": "error",
+                "label": "OpenCode error",
+                "body": "Quota exceeded. Try again in 5 hours.",
+            }],
+        });
+        let parts = render_parts(&msg, "m1", true);
+        assert_eq!(parts.len(), 1);
+        match &parts[0] {
+            MessagePart::SystemNotice {
+                severity,
+                label,
+                body,
+                ..
+            } => {
+                assert_eq!(severity, &NoticeSeverity::Error);
+                assert_eq!(label, "OpenCode error");
+                assert_eq!(
+                    body.as_deref(),
+                    Some("Quota exceeded. Try again in 5 hours.")
+                );
             }
             other => panic!("expected system-notice, got {other:?}"),
         }

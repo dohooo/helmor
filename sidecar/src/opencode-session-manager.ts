@@ -807,7 +807,9 @@ export class OpencodeSessionManager implements SessionManager {
 			});
 		}
 
-		// Turn lifecycle: idle = done, error = fail. `settle` guards stray events.
+		// Turn lifecycle: only idle = done. `session.error` is a visible provider
+		// notice, not a terminal signal; opencode TUI also keeps the turn busy until
+		// a later idle/status event arrives.
 		switch (event.type) {
 			case "session.idle":
 				ctx.settle?.resolve();
@@ -817,11 +819,6 @@ export class OpencodeSessionManager implements SessionManager {
 					ctx.settle?.resolve();
 				}
 				break;
-			case "session.error": {
-				const detail = sessionErrorMessage(event.properties?.error);
-				ctx.settle?.reject(new Error(detail));
-				break;
-			}
 			default:
 				break;
 		}
@@ -1313,16 +1310,4 @@ function errorMessage(error: unknown): string {
 		}
 	}
 	return String(error);
-}
-
-function sessionErrorMessage(error: unknown): string {
-	if (!error || typeof error !== "object") return "opencode session failed";
-	const data =
-		"data" in error && error.data && typeof error.data === "object"
-			? (error.data as Record<string, unknown>)
-			: null;
-	const message = data && "message" in data ? data.message : null;
-	return typeof message === "string" && message.trim().length > 0
-		? message
-		: "opencode session failed";
 }

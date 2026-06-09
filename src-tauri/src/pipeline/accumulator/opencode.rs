@@ -10,6 +10,8 @@ use serde_json::{json, Value};
 use super::super::types::{CollectedTurn, MessageRole};
 use super::{now_ms, PushOutcome, StreamAccumulator};
 
+const SESSION_ERROR_PART_ID: &str = "__opencode_session_error";
+
 #[derive(Debug, Default)]
 pub(super) struct OpencodeRunState {
     pub turn_id: Option<String>,
@@ -489,6 +491,22 @@ pub(super) fn handle_session_status(acc: &mut StreamAccumulator, value: &Value) 
     }
 }
 
+pub(super) fn handle_session_error(acc: &mut StreamAccumulator, value: &Value) -> PushOutcome {
+    let body = session_error_body(value);
+    upsert_part(
+        acc,
+        SESSION_ERROR_PART_ID,
+        json!({
+            "type": "system-notice",
+            "severity": "error",
+            "label": "OpenCode error",
+            "body": body,
+        }),
+    );
+    rebuild_collected(acc);
+    PushOutcome::StreamingDelta
+}
+
 // Drain in-flight state on abort (no `session.idle` will arrive).
 pub(super) fn flush_in_progress(acc: &mut StreamAccumulator) {
     finalize(acc);
@@ -527,6 +545,39 @@ fn parse_text_delta(value: &Value) -> Option<(&str, &str)> {
         return None;
     }
     Some((part_id, delta))
+}
+
+fn session_error_body(value: &Value) -> String {
+    let error = value.get("error").unwrap_or(value);
+    if let Some(message) = find_error_message(error) {
+        return message.trim().to_string();
+    }
+    if let Value::String(message) = error {
+        let trimmed = message.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    if let Ok(serialized) = serde_json::to_string(error) {
+        if serialized != "null" && serialized != "{}" {
+            return serialized;
+        }
+    }
+    "OpenCode session failed".to_string()
+}
+
+fn find_error_message(value: &Value) -> Option<&str> {
+    value
+        .get("message")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            value
+                .get("data")
+                .and_then(find_error_message)
+                .or_else(|| value.get("error").and_then(find_error_message))
+                .or_else(|| value.get("body").and_then(find_error_message))
+        })
 }
 
 // Append a streamed delta to the named part's `text`, creating a `text` part if
@@ -1056,6 +1107,31 @@ mod tests {
         assert_eq!(tool["output"], "hi");
     }
 
+    #[test]
+    fn session_error_surfaces_without_finalizing_turn() {
+        let mut acc = StreamAccumulator::new("opencode", "");
+        assistant(&mut acc, "m1");
+
+        let out = acc.push_event(
+            &json!({
+                "type": "opencode/session.error",
+                "session_id": "ses_1",
+                "error": { "data": { "message": "Quota exceeded. Try again in 5 hours." } },
+            }),
+            "",
+        );
+
+        assert_eq!(out, PushOutcome::StreamingDelta);
+        assert_eq!(acc.turns_len(), 0);
+        let parsed = acc.collected()[0].parsed.as_ref().unwrap();
+        assert_eq!(parsed["parts"][0]["type"], "system-notice");
+        assert_eq!(parsed["parts"][0]["severity"], "error");
+        assert_eq!(
+            parsed["parts"][0]["body"],
+            "Quota exceeded. Try again in 5 hours."
+        );
+    }
+
     fn assistant(acc: &mut StreamAccumulator, msg_id: &str) {
         acc.push_event(
             &json!({ "type": "opencode/message.updated", "session_id": "ses_1",
@@ -1321,7 +1397,6 @@ mod tests {
         let mut acc = StreamAccumulator::new("opencode", "");
         for ty in [
             "opencode/message.part.delta",
-            "opencode/session.error",
             "opencode/session.created",
             "opencode/session.updated",
             "opencode/session.diff",

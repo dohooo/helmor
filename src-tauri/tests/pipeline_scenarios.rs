@@ -428,6 +428,27 @@ fn opencode_reasoning_carries_thought_duration() {
     assert_yaml_snapshot!(run_normalized(msgs));
 }
 
+#[test]
+fn opencode_session_error_notice_round_trips() {
+    let assistant = json!({
+        "type": "opencode_message",
+        "session_id": "ses_1",
+        "role": "assistant",
+        "parts": [{
+            "type": "system-notice",
+            "severity": "error",
+            "label": "OpenCode error",
+            "body": "Quota exceeded. Try again in 5 hours.",
+        }],
+    });
+    let msgs = vec![make_record(
+        "om1",
+        "assistant",
+        &serde_json::to_string(&assistant).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
 // opencode write/edit/apply_patch carry opencode's per-file unified diff
 // (`fileDiffs`), which the adapter reshapes into the shared apply_patch
 // `changes:[{path,diff}]` view so a colored diff renders on reload too.
