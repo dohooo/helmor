@@ -32,6 +32,7 @@ import {
 	buildCursorMessage,
 	computeModelParameterValues,
 	extractCreatePlanText,
+	isRetryableCursorError,
 	modelInfoToProviderInfo,
 	namespaceEvent,
 	toCursorMode,
@@ -39,6 +40,33 @@ import {
 
 /// Cheapest model on the title-gen hot path.
 const TITLE_MODEL_ID = "composer-2";
+
+/// Retry transient network failures (Cursor's API intermittently resets the
+/// TLS handshake) on the SDK's connection-setup calls. 3 attempts, linear
+/// backoff. Non-retryable errors throw immediately.
+const RETRY_ATTEMPTS = 3;
+const RETRY_BACKOFF_MS = 400;
+
+async function withCursorRetry<T>(
+	label: string,
+	fn: () => Promise<T>,
+): Promise<T> {
+	let lastErr: unknown;
+	for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt++) {
+		try {
+			return await fn();
+		} catch (err) {
+			lastErr = err;
+			if (attempt === RETRY_ATTEMPTS || !isRetryableCursorError(err)) throw err;
+			const wait = RETRY_BACKOFF_MS * attempt;
+			logger.info(
+				`[cursor] ${label} transient network failure (attempt ${attempt}/${RETRY_ATTEMPTS}), retrying in ${wait}ms: ${err instanceof Error ? err.message : String(err)}`,
+			);
+			await new Promise((resolve) => setTimeout(resolve, wait));
+		}
+	}
+	throw lastErr;
+}
 
 interface LiveSession {
 	readonly agent: SDKAgent;
@@ -118,14 +146,16 @@ export class CursorCore {
 		let session = this.sessions.get(params.sessionId);
 		if (!session) {
 			try {
-				const agent = params.resume
-					? await Agent.resume(params.resume, { apiKey })
-					: await Agent.create({
-							apiKey,
-							model: { id: modelId },
-							local: { cwd },
-							mode: toCursorMode(params.permissionMode),
-						});
+				const agent = await withCursorRetry("Agent.create", () =>
+					params.resume
+						? Agent.resume(params.resume, { apiKey })
+						: Agent.create({
+								apiKey,
+								model: { id: modelId },
+								local: { cwd },
+								mode: toCursorMode(params.permissionMode),
+							}),
+				);
 				session = {
 					agent,
 					modelId,
@@ -172,18 +202,21 @@ export class CursorCore {
 		// `{ data, mimeType }` SDKImage variant (`url` throws).
 		const { text, imagePaths } = parseImageRefs(params.prompt, params.images);
 		const message = await buildCursorMessage(text, imagePaths);
+		const activeSession = session;
 		let run: Run;
 		try {
-			run = await session.agent.send(message, {
-				// Pass mode every turn — Cursor sticks with the create-time
-				// mode otherwise, so toggling Plan on/off mid-conversation
-				// (incl. "Implement" → back to agent) wouldn't take effect.
-				mode: toCursorMode(params.permissionMode),
-				model: {
-					id: modelId,
-					...(modelParams.length > 0 ? { params: modelParams } : {}),
-				},
-			});
+			run = await withCursorRetry("agent.send", () =>
+				activeSession.agent.send(message, {
+					// Pass mode every turn — Cursor sticks with the create-time
+					// mode otherwise, so toggling Plan on/off mid-conversation
+					// (incl. "Implement" → back to agent) wouldn't take effect.
+					mode: toCursorMode(params.permissionMode),
+					model: {
+						id: modelId,
+						...(modelParams.length > 0 ? { params: modelParams } : {}),
+					},
+				}),
+			);
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
 			logger.error(`[${requestId}] Cursor agent.send failed: ${msg}`, {
@@ -284,13 +317,14 @@ export class CursorCore {
 		const timeout = timeoutMs ?? TITLE_GENERATION_TIMEOUT_MS;
 
 		// One-shot — never reuses an existing user session.
-		const titleRun = Agent.prompt(prompt, {
-			apiKey,
-			model: { id: modelId },
-			local: { cwd },
-		});
 		const result = await Promise.race([
-			titleRun,
+			withCursorRetry("Agent.prompt", () =>
+				Agent.prompt(prompt, {
+					apiKey,
+					model: { id: modelId },
+					local: { cwd },
+				}),
+			),
 			new Promise<never>((_, reject) =>
 				setTimeout(
 					() =>
@@ -345,7 +379,9 @@ export class CursorCore {
 		// On override mode we propagate errors so the caller can probe
 		// key validity. On stored-key mode we also propagate now (the
 		// older silent-fallback path masked "key invalid" failures).
-		const models = await Cursor.models.list({ apiKey });
+		const models = await withCursorRetry("Cursor.models.list", () =>
+			Cursor.models.list({ apiKey }),
+		);
 		const out = models.map(modelInfoToProviderInfo);
 		if (!overrideKey) this.cacheModelParameters(out);
 		return out;
@@ -360,7 +396,9 @@ export class CursorCore {
 		const cached = this.modelParameters.get(wireId);
 		if (cached) return cached;
 		try {
-			const models = await Cursor.models.list({ apiKey });
+			const models = await withCursorRetry("Cursor.models.list", () =>
+				Cursor.models.list({ apiKey }),
+			);
 			this.cacheModelParameters(models.map(modelInfoToProviderInfo));
 			return this.modelParameters.get(wireId) ?? null;
 		} catch (error) {
@@ -411,5 +449,23 @@ export class CursorCore {
 			}
 		}
 		this.sessions.clear();
+	}
+
+	/// Terminal-fail every in-flight turn with a clean error and drop all
+	/// sessions (their HTTP/2 connections are presumed dead). Called by the
+	/// worker's uncaughtException net so a transient network blow-up surfaces
+	/// as a real error instead of a silent worker death. Returns the affected
+	/// requestIds so the caller can release the proxy's awaiting send promises.
+	failActiveTurns(message: string): string[] {
+		const requestIds = this.turns.failAll(message);
+		for (const [, session] of this.sessions) {
+			try {
+				session.agent.close();
+			} catch {
+				/* swallow */
+			}
+		}
+		this.sessions.clear();
+		return requestIds;
 	}
 }

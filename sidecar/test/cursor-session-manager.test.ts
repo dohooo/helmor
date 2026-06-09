@@ -12,7 +12,65 @@ const {
 	extToMimeType,
 	toCursorMode,
 	extractCreatePlanText,
+	isRetryableCursorError,
 } = __CURSOR_INTERNAL;
+
+describe("isRetryableCursorError — transient network classification", () => {
+	test("real ConnectError shape (TLS reset) → retryable", () => {
+		// Mirrors the observed crash: ConnectError code 10 (aborted) wrapping a
+		// Node ECONNRESET cause from api2.cursor.sh.
+		const err = Object.assign(
+			new Error(
+				"[aborted] Client network socket disconnected before secure TLS connection was established",
+			),
+			{
+				code: 10,
+				cause: Object.assign(
+					new Error(
+						"Client network socket disconnected before secure TLS connection was established",
+					),
+					{ code: "ECONNRESET" },
+				),
+			},
+		);
+		expect(isRetryableCursorError(err)).toBe(true);
+	});
+
+	test("plain socket error codes → retryable", () => {
+		for (const code of ["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "EPIPE"]) {
+			expect(
+				isRetryableCursorError(Object.assign(new Error("x"), { code })),
+			).toBe(true);
+		}
+	});
+
+	test("message-only match (no code) → retryable", () => {
+		expect(isRetryableCursorError(new Error("socket hang up"))).toBe(true);
+		expect(isRetryableCursorError(new Error("request timed out"))).toBe(true);
+	});
+
+	test("non-network errors → not retryable", () => {
+		expect(isRetryableCursorError(new Error("Invalid API key"))).toBe(false);
+		expect(
+			isRetryableCursorError(
+				Object.assign(new Error("unauthenticated"), { code: 16 }),
+			),
+		).toBe(false);
+	});
+
+	test("non-error inputs → not retryable", () => {
+		expect(isRetryableCursorError(null)).toBe(false);
+		expect(isRetryableCursorError(undefined)).toBe(false);
+		expect(isRetryableCursorError("ECONNRESET")).toBe(false);
+		expect(isRetryableCursorError(42)).toBe(false);
+	});
+
+	test("deeply nested cause is bounded (no infinite loop)", () => {
+		const cyclic: { message: string; cause?: unknown } = { message: "nope" };
+		cyclic.cause = cyclic;
+		expect(isRetryableCursorError(cyclic)).toBe(false);
+	});
+});
 
 describe("plan mode", () => {
 	test("toCursorMode: only 'plan' maps to plan; everything else → agent", () => {

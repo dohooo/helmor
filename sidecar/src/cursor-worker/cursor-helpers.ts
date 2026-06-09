@@ -180,6 +180,47 @@ export function modelInfoToProviderInfo(
 	};
 }
 
+/// Transient network failures worth retrying / recovering from rather than
+/// surfacing as a hard failure: TLS/connection resets, timeouts, DNS hiccups.
+/// `api2.cursor.sh` intermittently resets the TLS handshake from some networks,
+/// and the SDK's HTTP/2 client throws that as a ConnectError whose `cause` is a
+/// Node socket error. We match by error `code`, nested `cause.code`, and the
+/// message text so it works across ConnectError and raw socket errors.
+const RETRYABLE_NET_CODES = new Set([
+	"ECONNRESET",
+	"ETIMEDOUT",
+	"ECONNREFUSED",
+	"ECONNABORTED",
+	"EPIPE",
+	"ENOTFOUND",
+	"EAI_AGAIN",
+	"ENETUNREACH",
+	"EHOSTUNREACH",
+]);
+
+const RETRYABLE_NET_MESSAGES = [
+	"socket disconnected",
+	"before secure tls",
+	"socket hang up",
+	"econnreset",
+	"etimedout",
+	"timed out",
+	"network socket disconnected",
+];
+
+export function isRetryableCursorError(err: unknown, depth = 0): boolean {
+	if (!err || typeof err !== "object" || depth > 4) return false;
+	const o = err as { code?: unknown; message?: unknown; cause?: unknown };
+	if (typeof o.code === "string" && RETRYABLE_NET_CODES.has(o.code))
+		return true;
+	if (typeof o.message === "string") {
+		const m = o.message.toLowerCase();
+		if (RETRYABLE_NET_MESSAGES.some((needle) => m.includes(needle)))
+			return true;
+	}
+	return isRetryableCursorError(o.cause, depth + 1);
+}
+
 // Test-only export.
 export const __CURSOR_INTERNAL = {
 	namespaceEvent,
@@ -189,4 +230,5 @@ export const __CURSOR_INTERNAL = {
 	extToMimeType,
 	toCursorMode,
 	extractCreatePlanText,
+	isRetryableCursorError,
 };

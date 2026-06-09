@@ -10,6 +10,7 @@ import { createInterface } from "node:readline";
 import { applyAgentProxyToProcessEnv } from "../agent-proxy.js";
 import type { SidecarEmitter } from "../emitter.js";
 import { CursorCore } from "./cursor-core.js";
+import { isRetryableCursorError } from "./cursor-helpers.js";
 import type { EmitMsg, FromWorker, ToWorker } from "./protocol.js";
 
 // Keep stdout pristine: any stray console.log from the SDK would corrupt the
@@ -55,6 +56,39 @@ const wireEmitter: SidecarEmitter = {
 };
 
 const core = new CursorCore();
+
+// A stray async network error from the SDK's HTTP/2 client (Cursor's API
+// intermittently resets the TLS handshake) surfaces as an uncaughtException,
+// which would otherwise kill the worker and show the user a bare "worker
+// exited unexpectedly". Catch it: fail in-flight turns with a real error and
+// release the proxy's awaiting send promises. For a transient network error
+// stay alive (sessions are dropped; the next turn reconnects); for anything
+// else exit so the supervisor respawns a clean worker.
+let fatalExiting = false;
+function handleFatal(kind: string, err: unknown): void {
+	const message = errMessage(err);
+	console.error(`[cursor-worker] ${kind}: ${message}`);
+	const transient = isRetryableCursorError(err);
+	try {
+		const reason = transient
+			? "Cursor lost its network connection. Please send the message again."
+			: `Cursor worker error: ${message}`;
+		for (const requestId of core.failActiveTurns(reason)) {
+			out({ t: "sendDone", requestId });
+		}
+	} catch (recoverErr) {
+		console.error(`[cursor-worker] recovery failed: ${errMessage(recoverErr)}`);
+	}
+	if (transient || fatalExiting) return;
+	fatalExiting = true;
+	// Let the terminal events flush to the parent, then exit.
+	setTimeout(() => process.exit(1), 30);
+}
+
+process.on("uncaughtException", (err) => handleFatal("uncaughtException", err));
+process.on("unhandledRejection", (reason) =>
+	handleFatal("unhandledRejection", reason),
+);
 
 async function handle(msg: ToWorker): Promise<void> {
 	switch (msg.t) {
