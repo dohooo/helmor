@@ -1,9 +1,10 @@
-// Workspace-surface conversation pane. Subscribes the four selection tracks
-// (selected/displayed workspace + session) straight off the selection store
-// instead of receiving them as flattened props from AppShell, then forwards
-// everything else to `WorkspaceConversationContainer`. Moving just the
-// delivery channel keeps an unrelated selection-field change from re-rendering
-// the conversation via prop churn. The start-surface instance keeps rendering
+// Workspace-surface conversation pane. Stage 3b: the `selected*` tracks come
+// from the ROUTER (the source of truth for navigation intent), the `displayed*`
+// paint tracks stay in the selection store. Both `displayed*` reads share ONE
+// `useShallow` subscription so the two-track pairing is never torn across
+// renders. Moving the delivery channel (router for selected, store for
+// displayed) keeps an unrelated field change from re-rendering the conversation
+// via prop churn. The start-surface instance keeps rendering
 // `WorkspaceConversationContainer` directly with `null` tracks (zero
 // subscription), so the inner container retains its full prop contract.
 import { useStore } from "zustand";
@@ -12,6 +13,7 @@ import {
 	WorkspaceConversationContainer,
 	type WorkspaceConversationContainerProps,
 } from "@/features/conversation";
+import { useRouterSelection } from "@/router/use-router-selection";
 import { useSelectionStore } from "@/shell/controllers/selection-store-context";
 
 type Props = Omit<
@@ -23,21 +25,15 @@ type Props = Omit<
 >;
 
 export function ShellWorkspaceConversation(props: Props) {
-	// One `useShallow` subscription for all four tracks — never four
-	// independent `useStore` calls, which would tear the two-track pairing
-	// across renders. These are the same store fields AppShell read off its
-	// `selection` snapshot; only the delivery channel moved.
-	const {
-		selectedWorkspaceId,
-		displayedWorkspaceId,
-		selectedSessionId,
-		displayedSessionId,
-	} = useStore(
+	// `selected*` from the router (structurally shared → stable identity).
+	const { workspaceId: selectedWorkspaceId, sessionId: selectedSessionId } =
+		useRouterSelection();
+	// `displayed*` from the store — ONE `useShallow` subscription for both, never
+	// two independent `useStore` calls, which would tear the pairing.
+	const { displayedWorkspaceId, displayedSessionId } = useStore(
 		useSelectionStore(),
 		useShallow((s) => ({
-			selectedWorkspaceId: s.selectedWorkspaceId,
 			displayedWorkspaceId: s.displayedWorkspaceId,
-			selectedSessionId: s.selectedSessionId,
 			displayedSessionId: s.displayedSessionId,
 		})),
 	);

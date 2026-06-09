@@ -195,13 +195,13 @@ export function useWorkspaceActionControllers({
 			queryClient,
 			pushToast: pushWorkspaceToast,
 			getSelectionTargets: () => {
-				// Read straight from the store (latest, lazy, non-subscribing) so a
-				// queued insert sees the current selection even between renders.
-				// MUST use getState() — it returns the full SelectionState including
-				// the displayed* track that getSnapshot()/selected-only reads omit.
+				// `selected*` is router-owned (Stage 3b) — read it synchronously via
+				// the snapshot (router.state.location). `displayed*` stays in the
+				// store; read it lazily (non-subscribing) so a queued insert sees the
+				// current paint track even between renders.
 				const snap = selectionStore.getState();
 				return {
-					selectedWorkspaceId: snap.selectedWorkspaceId,
+					selectedWorkspaceId: selectionActions.getSnapshot().workspaceId,
 					displayedWorkspaceId: snap.displayedWorkspaceId,
 					displayedSessionId: snap.displayedSessionId,
 				};

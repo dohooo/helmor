@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { AppSurface } from "@/lib/settings";
 import type { ShellViewMode } from "@/shell/controllers/use-selection-controller";
 
@@ -35,8 +35,22 @@ export function useShellStartupEffects({
 	openWorkspaceStart: (opts?: { persist?: boolean }) => void;
 	closeStartContextPreview: () => void;
 }) {
+	// One-shot boot restore. The persisted `lastSurface` says WHICH surface to
+	// restore, but persistence is now the async single `onResolved` settings
+	// writer, so `appSettings.lastSurface` lags a synchronous router navigation
+	// by a tick. Re-running this on every dep change therefore bounced the user
+	// back to Start the instant they navigated AWAY from it: the router-derived
+	// `workspaceViewMode` flips to "conversation" synchronously while
+	// `lastSurface` is still "workspace-start", so the effect re-fired
+	// `openWorkspaceStart`. This is a startup decision — make it exactly once
+	// (after settings load), then never again, so it is timing-independent.
+	const bootStartRestoreAppliedRef = useRef(false);
 	useEffect(() => {
-		if (!areSettingsLoaded || lastSurface !== "workspace-start") {
+		if (bootStartRestoreAppliedRef.current || !areSettingsLoaded) {
+			return;
+		}
+		bootStartRestoreAppliedRef.current = true;
+		if (lastSurface !== "workspace-start") {
 			return;
 		}
 		if (

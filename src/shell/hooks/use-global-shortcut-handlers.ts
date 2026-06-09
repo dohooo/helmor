@@ -128,10 +128,12 @@ export function useGlobalShortcutHandlers({
 			{
 				id: "workspace.previous" as const,
 				callback: () => handleNavigateWorkspaces(-1),
+				repeatable: true,
 			},
 			{
 				id: "workspace.next" as const,
 				callback: () => handleNavigateWorkspaces(1),
+				repeatable: true,
 			},
 			{
 				id: "workspace.quickSwitchNext" as const,
@@ -145,11 +147,13 @@ export function useGlobalShortcutHandlers({
 				id: "session.previous" as const,
 				callback: () => handleNavigateSessions(-1),
 				enabled: workspaceViewMode === "conversation",
+				repeatable: true,
 			},
 			{
 				id: "session.next" as const,
 				callback: () => handleNavigateSessions(1),
 				enabled: workspaceViewMode === "conversation",
+				repeatable: true,
 			},
 			{
 				id: "session.close" as const,

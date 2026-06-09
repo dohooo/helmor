@@ -2,8 +2,6 @@
 // collapse, and the settings entry button at the bottom.
 import { PanelLeftClose } from "lucide-react";
 import { useLayoutEffect, useRef } from "react";
-import { useStore } from "zustand";
-import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import {
 	Tooltip,
@@ -20,7 +18,10 @@ import type { AppUpdateStatus } from "@/lib/api";
 import type { AppSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
-import { useSelectionStore } from "@/shell/controllers/selection-store-context";
+import {
+	useRouterIsStart,
+	useRouterSelectedWorkspaceId,
+} from "@/router/use-router-selection";
 import { useEdgePeek } from "@/shell/hooks/use-edge-peek";
 import { useEdgeSwipe } from "@/shell/hooks/use-edge-swipe";
 import { EdgeSwipeLayer } from "./edge-swipe-layer";
@@ -81,28 +82,20 @@ export function ShellSidebarPane({
 	onOpenSettings,
 	pushWorkspaceToast,
 }: Props) {
-	// Subscribe to the selection store directly instead of receiving these as
-	// flattened props from AppShell. Both fields come from the same store
-	// snapshot, so the `start → null` highlight derivation and the auto-select
-	// gate stay mutually consistent exactly as they were when AppShell computed
-	// them off one `selection` render. `useShallow` keeps the multi-field
-	// selector stable across renders.
-	const { selectedWorkspaceId, viewMode } = useStore(
-		useSelectionStore(),
-		useShallow((s) => ({
-			selectedWorkspaceId: s.selectedWorkspaceId,
-			viewMode: s.viewMode,
-		})),
-	);
+	// Read the selected workspace + start flag from the ROUTER (Stage 3b: the
+	// router owns navigation intent). Both come from the same location, so the
+	// `start → null` highlight derivation and the auto-select gate stay mutually
+	// consistent — and lag-free, since the router is now authoritative (no
+	// store→router microtask gap that could let auto-select fight openStart).
+	const selectedWorkspaceId = useRouterSelectedWorkspaceId();
+	const isStart = useRouterIsStart();
 	// In Start mode nothing in the list is the active workspace — drop the
 	// highlight. Mirrors AppShell's old `viewMode === "start" ? null : id` prop.
-	const highlightedWorkspaceId =
-		viewMode === "start" ? null : selectedWorkspaceId;
-	// AND the settings-side gate with the live view mode: auto-select must stay
+	const highlightedWorkspaceId = isStart ? null : selectedWorkspaceId;
+	// AND the settings-side gate with the live start flag: auto-select must stay
 	// off while the start surface is showing. Same expression AppShell used to
-	// flatten into the `autoSelectEnabled` prop, just split across the two
-	// delivery channels.
-	const autoSelectEnabled = autoSelectSettingsGate && viewMode !== "start";
+	// flatten into the `autoSelectEnabled` prop.
+	const autoSelectEnabled = autoSelectSettingsGate && !isStart;
 
 	// Inline width written via ref so each remount re-applies it.
 	const asideRef = useRef<HTMLElement>(null);

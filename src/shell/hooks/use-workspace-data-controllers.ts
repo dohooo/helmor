@@ -38,6 +38,7 @@ export function useWorkspaceDataControllers({
 	handleSelectWorkspace,
 	handleSelectSession,
 	selectedWorkspaceId,
+	settledWorkspaceId,
 	displayedSessionId,
 	workspaceReselectTick,
 	pendingCreatedWorkspaceSubmit,
@@ -55,6 +56,10 @@ export function useWorkspaceDataControllers({
 	handleSelectWorkspace: (workspaceId: string | null) => void;
 	handleSelectSession: (sessionId: string | null) => void;
 	selectedWorkspaceId: string | null;
+	// Settle-gated workspace id (lags `selectedWorkspaceId` only for cold targets
+	// during a rapid-switch burst). Feeds the forge/detail/git query cluster so it
+	// fetches the settled workspace, not every one scrubbed past.
+	settledWorkspaceId: string | null;
 	displayedSessionId: string | null;
 	workspaceReselectTick: number;
 	pendingCreatedWorkspaceSubmit: PendingCreatedWorkspaceSubmit | null;
@@ -97,7 +102,14 @@ export function useWorkspaceDataControllers({
 	const interactionRequiredWorkspaceIds =
 		readState.interactionRequiredWorkspaceIds;
 
-	const forge = useWorkspaceForgeData({ queryClient, selectedWorkspaceId });
+	// Key the forge/detail/git cluster on the SETTLED id (not the router-instant
+	// `selectedWorkspaceId`) so a held-key burst doesn't fire 5 IPCs + a git-diff
+	// per intermediate workspace. Warm/single/slow switches settle instantly, so
+	// this is byte-identical to the old behaviour outside a rapid burst.
+	const forge = useWorkspaceForgeData({
+		queryClient,
+		selectedWorkspaceId: settledWorkspaceId,
+	});
 	const {
 		selectedWorkspaceDetailQuery,
 		selectedWorkspaceDetail,

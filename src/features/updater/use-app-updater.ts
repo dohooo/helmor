@@ -86,6 +86,14 @@ export function useAppUpdater(): AppUpdateStatus | null {
 			.catch(() => {});
 		void listenAppUpdateStatus(handleStatus)
 			.then((unlisten) => {
+				// If the component unmounted before listen() resolved, the
+				// cleanup below already ran (cleanup was still undefined), so it
+				// could never call this unlisten — detach it now to avoid a
+				// leaked backend listener. Mirrors use-ui-sync-bridge.ts.
+				if (!mounted) {
+					unlisten();
+					return;
+				}
 				cleanup = unlisten;
 			})
 			.catch(() => {});
