@@ -179,7 +179,6 @@ export function ShellSidebarPane({
 						/>
 					</div>
 					<div className="absolute right-[12px] top-[6px] z-20 flex items-center gap-[2px]">
-						<AppUpdateButton status={appUpdateStatus} />
 						<div className="flex items-center max-[960px]:hidden">
 							<MiniModeToggleButton
 								pending={miniModePending}
@@ -213,12 +212,15 @@ export function ShellSidebarPane({
 							</TooltipContent>
 						</Tooltip>
 					</div>
-					<div className="flex shrink-0 items-center px-3 pb-3 pt-1">
-						<SettingsButton
-							onClick={onOpenSettings}
-							shortcut={getShortcut(appSettings.shortcuts, "settings.open")}
-						/>
-						<FeedbackButton onClick={onOpenFeedback} />
+					<div className="flex shrink-0 items-center justify-between px-3 pb-3 pt-1">
+						<div className="flex items-center">
+							<SettingsButton
+								onClick={onOpenSettings}
+								shortcut={getShortcut(appSettings.shortcuts, "settings.open")}
+							/>
+							<FeedbackButton onClick={onOpenFeedback} />
+						</div>
+						<AppUpdateButton status={appUpdateStatus} />
 					</div>
 				</div>
 			</div>

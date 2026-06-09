@@ -1,10 +1,11 @@
 name: Publish Release
 
-# macOS-only publish. Matrix produces:
+# macOS publish. Matrix produces:
 #   - macOS aarch64 DMG + .app.tar.gz updater artifact
 #   - macOS x86_64 DMG + .app.tar.gz updater artifact
 # tauri-action@v0.6 merges each runner's per-platform entry into the same
-# latest.json on the release.
+# latest.json on the release. Windows NSIS installers are built in CI by
+# windows.yml (uploaded as a workflow artifact; no release publishing yet).
 
 on:
   workflow_dispatch:

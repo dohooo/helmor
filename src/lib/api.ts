@@ -1987,7 +1987,7 @@ export type SlackImportResult = {
 	alreadyConnected: SlackWorkspace[];
 };
 
-/** Read the user's local Slack desktop session (macOS only in v1) and
+/** Read the user's local Slack desktop session (currently wired on macOS) and
  *  import every workspace whose token still authenticates. Strictly
  *  better UX than the webview-based connect flow when it works because
  *  it reuses whatever auth state Slack desktop already negotiated —

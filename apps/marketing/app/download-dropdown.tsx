@@ -16,6 +16,8 @@ type Props = {
 		| "armDmgSize"
 		| "intelDmgUrl"
 		| "intelDmgSize"
+		| "windowsSetupUrl"
+		| "windowsSetupSize"
 		| "signedAndNotarized"
 	>;
 };
@@ -25,7 +27,7 @@ type Props = {
  *
  * Behavior (ported from Marketing Site.html):
  *  - hover opens, hover-out schedules a delayed close (cancelable on re-enter)
- *  - click toggles, focus on trigger opens
+ *  - click downloads Apple Silicon directly, focus on trigger opens
  *  - outside click or Escape closes
  *
  * The menu uses `data-open` for CSS transitions and `aria-expanded` for a11y.
@@ -85,18 +87,18 @@ export function DownloadDropdown({ data }: Props) {
 			onMouseEnter={openNow}
 			onMouseLeave={scheduleClose}
 		>
-			<button
-				type="button"
+			<a
+				href={data.armDmgUrl}
 				className="btn primary dl-trigger"
 				aria-haspopup="menu"
 				aria-expanded={open}
 				onFocus={openNow}
-				onClick={() => (open ? closeNow() : openNow())}
+				onClick={closeNow}
 			>
 				<DownloadIcon />
 				Download for macOS
 				<CaretIcon />
-			</button>
+			</a>
 			<div className="dl-panel" role="menu">
 				<a
 					className="dl-item"
@@ -128,13 +130,30 @@ export function DownloadDropdown({ data }: Props) {
 						·dmg {formatMegabytes(data.intelDmgSize)}
 					</span>
 				</a>
+				<a
+					className="dl-item"
+					href={data.windowsSetupUrl}
+					role="menuitem"
+					onClick={closeNow}
+				>
+					<span className="dl-chip">Win</span>
+					<span className="dl-text">
+						<span className="dl-title">Windows x64</span>
+						<span className="dl-sub">NSIS installer</span>
+					</span>
+					<span className="dl-size">
+						{data.windowsSetupSize > 0
+							? `.exe ${formatMegabytes(data.windowsSetupSize)}`
+							: ".exe"}
+					</span>
+				</a>
 				<div className="dl-foot">
 					<span>
 						{data.version}
 						{data.signedAndNotarized ? (
 							<>
 								{" · "}
-								<span className="ok">signed &amp; notarized</span>
+								<span className="ok">macOS signed &amp; notarized</span>
 							</>
 						) : null}
 					</span>
