@@ -21,24 +21,13 @@
 >
 > Orchestrating, reviewing, testing, merging, and actually shipping software.
 
-## About this fork
-
-This repository is a fork of [dohooo/helmor](https://github.com/dohooo/helmor). Its main purpose is to add **Windows support**, while keeping all functionality as close to the original project as possible. Changes are limited to what is needed for Helmor to build and run on Windows; everything else stays in sync with upstream.
-
-- **Questions about features?** Please head to the [main repository](https://github.com/dohooo/helmor) — features are developed and discussed upstream.
-- **Questions or problems with the Windows build?** Open an issue in this repository.
-
 ## Install
-
-[**Download for Windows (x64)** →](https://github.com/JRBusiness/helmor/releases)
-
-For macOS builds, use the upstream releases below.
 
 <p align="center">
   <img src="src/assets/helmor-screenshot-light.png" alt="Helmor screenshot" width="100%" />
 </p>
 
-[**Download for macOS (upstream)** →](https://github.com/dohooo/helmor/releases)
+[**Download for macOS** →](https://github.com/dohooo/helmor/releases)
 
 ## Documentation
 
