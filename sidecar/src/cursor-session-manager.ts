@@ -56,12 +56,14 @@ export class CursorSessionManager implements SessionManager {
 		string,
 		{ resolve: (value: unknown) => void; reject: (err: Error) => void }
 	>();
-	/// Last key the host pushed; (re)sent on every fresh worker spawn.
+	/// Last key the host (UI config) pushed; replayed on every fresh worker
+	/// spawn. `null` = not configured / cleared → worker errors out (no env
+	/// fallback exists anymore).
 	private apiKey: string | null = null;
 
 	setApiKey(apiKey: string | null): void {
 		this.apiKey = apiKey;
-		// Only forward to a live worker; a fresh spawn re-sends `this.apiKey`.
+		// Forward to a live worker too (incl. null = cleared takes effect now).
 		if (this.worker) this.send({ t: "setApiKey", apiKey });
 	}
 
@@ -237,9 +239,11 @@ export class CursorSessionManager implements SessionManager {
 			this.handleWorkerGone();
 		});
 
-		// Re-establish the key the host already pushed before this spawn.
-		if (this.apiKey !== null)
+		// Hand the fresh worker the UI-configured key. A null (cleared / never
+		// set) needs no replay — the worker defaults to null = not configured.
+		if (this.apiKey !== null) {
 			this.send({ t: "setApiKey", apiKey: this.apiKey });
+		}
 	}
 
 	private onWorkerLine(line: string): void {

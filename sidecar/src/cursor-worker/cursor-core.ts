@@ -58,19 +58,14 @@ export class CursorCore {
 		string,
 		readonly CursorModelParameter[]
 	>();
-	/// API key pushed in via Rust's `updateConfig` RPC. `null` until the
-	/// host says something; env-var fallback only before that.
+	/// API key, pushed in via Rust's `updateConfig` RPC (UI-configured only —
+	/// no env-var fallback). `null` means not configured → cursor errors out.
 	private apiKey: string | null = null;
-	/// True once the host has spoken (incl. explicit clear). Once set,
-	/// we never silent-fallback to CURSOR_API_KEY — a user who cleared
-	/// the key would not expect env-var auth to keep working.
-	private apiKeyHostManaged = false;
 
 	setApiKey(apiKey: string | null): void {
 		const next = apiKey?.trim() ? apiKey.trim() : null;
-		if (this.apiKeyHostManaged && next === this.apiKey) return;
+		if (next === this.apiKey) return; // unchanged — keep live sessions
 		this.apiKey = next;
-		this.apiKeyHostManaged = true;
 		// Drop existing sessions — they were minted with the old key.
 		// In-flight cursor turns abort; claude/codex unaffected.
 		for (const [sessionId, session] of this.sessions) {
@@ -90,9 +85,7 @@ export class CursorCore {
 	}
 
 	private resolveApiKey(): string | null {
-		// Host decision is authoritative once made; env var only before.
-		if (this.apiKeyHostManaged) return this.apiKey;
-		return this.apiKey ?? process.env.CURSOR_API_KEY ?? null;
+		return this.apiKey;
 	}
 
 	resolveUserInput(
