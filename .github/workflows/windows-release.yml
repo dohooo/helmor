@@ -1,32 +1,25 @@
-name: Windows Release
+name: Publish Windows Release
 
-# Builds the Windows NSIS installer for a tagged commit and attaches it to
-# the GitHub release. Tag the commit with a v-prefixed semver (e.g. v0.32.0)
-# to fire automatically, or trigger from the Actions tab with workflow_dispatch
-# and supply an existing tag.
-#
-# The build step mirrors the windows-build job in windows.yml. The publish
-# step adds the .exe to a release (created or updated) with auto-generated
-# notes when one doesn't already exist.
+# Windows companion to publish.yml. Same trigger shape, same release the
+# macOS jobs target — tauri-action merges this runner's Windows entry into
+# the same latest.json so the in-app updater sees both platforms on every
+# tagged release. preflight mirrors publish.yml: tag/version match, secret
+# presence, and the curated release-notes body from `bun run release:notes`.
 
 on:
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: "Create the GitHub release as a draft"
+        required: false
+        default: true
+        type: boolean
   push:
     tags:
       - "v*"
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Existing tag to build and publish (e.g. v0.32.0)"
-        required: true
-        type: string
-      draft:
-        description: "Publish the release as a draft"
-        required: false
-        default: false
-        type: boolean
 
 concurrency:
-  group: windows-release-${{ github.event.inputs.tag || github.ref }}
+  group: publish-windows-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -36,8 +29,71 @@ env:
   CI: true
 
 jobs:
-  windows-release:
-    name: Build + publish Windows NSIS installer
+  preflight:
+    name: Release Preflight
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release_body: ${{ steps.notes.outputs.release_body }}
+      draft: ${{ steps.release-mode.outputs.draft }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+        with:
+          install-sccache: "false"
+
+      - name: Verify release config
+        run: |
+          bun run release:verify
+          test -n "${HELMOR_UPDATER_PUBKEY}"
+          test -n "${HELMOR_UPDATER_ENDPOINTS}"
+          test -n "${TAURI_SIGNING_PRIVATE_KEY}"
+        env:
+          HELMOR_UPDATER_PUBKEY: ${{ secrets.HELMOR_UPDATER_PUBKEY }}
+          HELMOR_UPDATER_ENDPOINTS: ${{ secrets.HELMOR_UPDATER_ENDPOINTS }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+
+      - name: Read version
+        id: version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate pushed tag matches app version
+        if: github.ref_type == 'tag'
+        run: |
+          expected="v${{ steps.version.outputs.version }}"
+          if [ "${GITHUB_REF_NAME}" != "${expected}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match app version ${expected}"
+            exit 1
+          fi
+
+      - name: Extract release notes
+        id: notes
+        run: |
+          {
+            echo 'release_body<<EOF'
+            bun run release:notes -- "${{ steps.version.outputs.version }}"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve release mode
+        id: release-mode
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "draft=${{ inputs.draft }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "draft=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-and-publish:
+    name: Build and Publish (x86_64-pc-windows-msvc)
+    needs: preflight
     runs-on: windows-latest
     timeout-minutes: 60
     env:
@@ -48,7 +104,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
 
       - name: Setup JS toolchain
         uses: ./.github/actions/setup-js
@@ -69,17 +125,26 @@ jobs:
           shared-key: windows-tauri-v1
           workspaces: src-tauri -> target
 
-      # tauri build's beforeBuildCommand runs prepare-sidecar.mjs, which stages
-      # the win32 vendor tree, builds the bun sidecar + helmor-cli, then bundles.
-      - name: Build Windows installer (NSIS)
-        shell: bash
-        run: bun x tauri build --bundles nsis
-
-      - name: Publish installer to GitHub Release
-        uses: softprops/action-gh-release@v2
+      # tauri-action's beforeBuildCommand runs prepare-sidecar.mjs, which
+      # stages the win32 vendor tree, builds the bun sidecar + helmor-cli,
+      # then bundles. NSIS only — WiX/MSI is not part of what this fork
+      # ships. includeUpdaterJson merges the Windows entry into the same
+      # latest.json the macOS jobs write on this release.
+      - name: Build and publish (Windows NSIS)
+        id: tauri
+        uses: tauri-apps/tauri-action@v0.6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          HELMOR_UPDATER_PUBKEY: ${{ secrets.HELMOR_UPDATER_PUBKEY }}
+          HELMOR_UPDATER_ENDPOINTS: ${{ secrets.HELMOR_UPDATER_ENDPOINTS }}
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: src-tauri/target/release/bundle/nsis/*-setup.exe
-          fail_on_unmatched_files: true
-          generate_release_notes: true
-          draft: ${{ github.event.inputs.draft || false }}
+          tagName: v__VERSION__
+          releaseName: Helmor v__VERSION__
+          releaseBody: ${{ needs.preflight.outputs.release_body }}
+          releaseDraft: ${{ needs.preflight.outputs.draft == 'true' }}
+          prerelease: false
+          includeUpdaterJson: true
+          args: --bundles nsis
+          tauriScript: bun run tauri
