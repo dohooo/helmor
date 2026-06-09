@@ -72,12 +72,23 @@ fn official_claude_section() -> AgentModelSection {
         label: "Claude Code".to_string(),
         status: AgentModelSectionStatus::Ready,
         options: vec![
+            // Fable 5 leads the list as the most capable pick, but it burns
+            // limits ~2x faster than Opus — `useEnsureDefaultModel` therefore
+            // pins the app default to the `default` (Opus) entry below, NOT
+            // to options[0]. No fast mode (Opus 4.6+ only).
+            claude_model(
+                "claude-fable-5[1m]",
+                "Fable 5 1M",
+                &["low", "medium", "high", "xhigh", "max"],
+                false,
+            ),
             // `default` resolves to the newest Opus the bundled claude-code
-            // knows about — 2.1.154 maps it to Opus 4.8 (1M context, adaptive
+            // knows about — 2.1.170 maps it to Opus 4.8 (1M context, adaptive
             // thinking, default high effort, fast mode at 2x rate / 2.5x
             // speed). Kept as `default` so it stays the auto-latest pick and
-            // remains the first entry (the app's default selection). MUST stay
-            // in sync with `sidecar/src/model-catalog.ts`.
+            // remains the app's default selection (see
+            // `useEnsureDefaultModel`, which prefers id == "default"). MUST
+            // stay in sync with `sidecar/src/model-catalog.ts`.
             claude_model(
                 "default",
                 "Opus 4.8 1M",
@@ -598,6 +609,7 @@ mod tests {
                 .map(|model| model.id.as_str())
                 .collect::<Vec<_>>(),
             vec![
+                "claude-fable-5[1m]",
                 "default",
                 "claude-opus-4-7[1m]",
                 "claude-opus-4-6[1m]",
@@ -659,6 +671,7 @@ mod tests {
                 .map(|model| model.id.as_str())
                 .collect::<Vec<_>>(),
             vec![
+                "claude-fable-5[1m]",
                 "default",
                 "claude-opus-4-7[1m]",
                 "claude-opus-4-6[1m]",
@@ -668,14 +681,14 @@ mod tests {
             ]
         );
         assert_eq!(
-            sections[0].options[5].provider_key.as_deref(),
+            sections[0].options[6].provider_key.as_deref(),
             Some("minimax")
         );
         assert_eq!(
-            sections[0].options[5].effort_levels,
+            sections[0].options[6].effort_levels,
             vec!["low", "medium", "high", "xhigh", "max"]
         );
-        assert!(!sections[0].options[5].supports_context_usage);
+        assert!(!sections[0].options[6].supports_context_usage);
         assert_eq!(sections[1].id, "codex");
     }
 
@@ -914,20 +927,37 @@ mod tests {
     }
 
     #[test]
-    fn official_claude_section_surfaces_opus_4_8_default_above_4_7_and_4_6() {
+    fn official_claude_section_surfaces_fable_5_above_opus_lineage() {
         let sections = model_sections_for_inputs(Vec::new(), None, None);
         let claude = sections.iter().find(|s| s.id == "claude").unwrap();
         let ids: Vec<&str> = claude.options.iter().map(|o| o.id.as_str()).collect();
-        // User-facing ordering: 4.8 (default) on top, then 4.7, then 4.6.
+        // User-facing ordering: Fable 5 on top, then 4.8 (default), 4.7, 4.6.
         assert_eq!(
-            &ids[..3],
-            &["default", "claude-opus-4-7[1m]", "claude-opus-4-6[1m]"],
-            "Opus 4.8 must lead, with explicit 4.7 / 4.6 beneath it"
+            &ids[..4],
+            &[
+                "claude-fable-5[1m]",
+                "default",
+                "claude-opus-4-7[1m]",
+                "claude-opus-4-6[1m]"
+            ],
+            "Fable 5 must lead, with Opus 4.8 (default) / 4.7 / 4.6 beneath it"
         );
 
-        // `default` → Opus 4.8: leads the list (so `useEnsureDefaultModel`
-        // picks it), supports fast mode, and keeps the xhigh effort tier.
-        let default = &claude.options[0];
+        // Fable 5: most capable, leads the list, but is NOT the app default
+        // (too expensive) — `useEnsureDefaultModel` pins to id == "default".
+        // No fast mode (Opus 4.6+ only); full effort tiers incl. xhigh.
+        let fable = &claude.options[0];
+        assert_eq!(fable.label, "Fable 5 1M");
+        assert_eq!(fable.cli_model, "claude-fable-5[1m]");
+        assert!(!fable.supports_fast_mode);
+        assert_eq!(
+            fable.effort_levels,
+            vec!["low", "medium", "high", "xhigh", "max"]
+        );
+
+        // `default` → Opus 4.8: stays the app default selection, supports
+        // fast mode, and keeps the xhigh effort tier.
+        let default = &claude.options[1];
         assert_eq!(default.label, "Opus 4.8 1M");
         assert_eq!(default.cli_model, "default");
         assert!(default.supports_fast_mode, "Opus 4.8 supports fast mode");
@@ -937,7 +967,7 @@ mod tests {
         );
 
         // Explicit 4.7 pin: same effort tiers as before, still no fast mode.
-        let opus47 = &claude.options[1];
+        let opus47 = &claude.options[2];
         assert_eq!(opus47.label, "Opus 4.7 1M");
         assert_eq!(opus47.cli_model, "claude-opus-4-7[1m]");
         assert!(!opus47.supports_fast_mode);
@@ -947,7 +977,7 @@ mod tests {
         );
 
         // 4.6 unchanged.
-        let opus46 = &claude.options[2];
+        let opus46 = &claude.options[3];
         assert_eq!(opus46.label, "Opus 4.6 1M");
         assert!(opus46.supports_fast_mode);
     }

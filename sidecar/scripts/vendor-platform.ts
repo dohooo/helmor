@@ -78,6 +78,10 @@ export const CLAUDE_CODE_SHA256: Readonly<
 		arm64: "2394afa765253caaac8cb030c7954650c4052b537aacc664c634d6397bed064a",
 		x64: "95643be424f07808e7b67195695191b05d0edc6ad7c3c274424dfb062c875fb5",
 	},
+	"2.1.170": {
+		arm64: "95d699dd2f03827e95286fe854999d42e3d0bfeec37af88c5bf49908ee56aa53",
+		x64: "f3e63255173dc3a9fcaa4cbe945b87454c8530e5d245affcd5b207b20c3e8bb0",
+	},
 };
 
 export const OPENCODE_SHA256: Readonly<

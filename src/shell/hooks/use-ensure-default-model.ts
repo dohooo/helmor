@@ -63,8 +63,14 @@ export function useEnsureDefaultModel() {
 		// Repair the default when it's never been set, or was set but is now
 		// definitively gone (wait for every provider to settle first).
 		if (!defaultValid && (settled || !settings.defaultModelId)) {
+			// Prefer the Claude `default` entry (auto-latest Opus) over the
+			// first listed option — pricier models (Fable 5) sit above it in
+			// the picker but must not become the app default.
+			const claudeOptions =
+				sections.find((s) => s.id === "claude")?.options ?? [];
 			const pick =
-				sections.find((s) => s.id === "claude")?.options[0]?.id ??
+				claudeOptions.find((o) => o.id === "default")?.id ??
+				claudeOptions[0]?.id ??
 				allOptions[0]?.id ??
 				null;
 			if (pick) {
