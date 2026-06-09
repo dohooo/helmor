@@ -1,9 +1,15 @@
 // Selection state machine for the workspace shell.
 //
-// Encapsulates the `selected` vs `displayed` two-track that AppShell used to
-// expose directly. `selected*` is the user's most recent intent; `displayed*`
-// is what's actually painted (waits for query cache to warm). Race-guards
-// ensure rapid switches don't reorder.
+// Stage 3b: the ROUTER is the single source of truth for navigation INTENT
+// (`viewMode`, `selectedWorkspaceId`, `selectedSessionId`). The actions set
+// that intent through `router.navigate` (memory history; the location commits
+// synchronously, so a read of `router.state.location` right after a navigate is
+// correct). This controller still OWNS the `displayed*` two-track — what's
+// actually painted, which waits for the query cache to warm — plus
+// `reselectTick`, the request-id race guards, the warmup/prefetch effects, and
+// the session-selection history. `selected*` is read back from the router via
+// `getSnapshot()` (synchronous) and `useRouterSelectedWorkspaceId()` (reactive,
+// for the prewarm/warmup effects).
 import type { QueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef } from "react";
 import { useStore } from "zustand";
@@ -23,6 +29,14 @@ import {
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
 import type { AppSettings } from "@/lib/settings";
+import { router } from "@/router";
+import { locationToSelection } from "@/router/location-mapping";
+import {
+	installLocationPersistence,
+	navigateSelection,
+	suppressNextStartPersist,
+} from "@/router/navigate-selection";
+import { useRouterSelectedWorkspaceId } from "@/router/use-router-selection";
 import {
 	SESSION_SELECTION_HISTORY_MAX,
 	WORKSPACE_WARMUP_INITIAL_DELAY_MS,
@@ -41,12 +55,17 @@ import {
 
 export type ShellViewMode = "conversation" | "editor" | "start";
 
+// Trailing window before the per-switch fire-and-forget IPC (git fetch +
+// slash-command prewarm) runs. Matches the inspector settle window so a held
+// burst coalesces these to the settled workspace; a single switch fires after
+// one frame or two (imperceptible for background work).
+const WORKSPACE_SWITCH_SIDE_EFFECT_DELAY_MS = 140;
+
+// The store now holds ONLY the paint track + the reselect signal. `selected*`
+// and `viewMode` were retired in Stage 3b — they live in the router.
 export type SelectionState = {
-	selectedWorkspaceId: string | null;
 	displayedWorkspaceId: string | null;
-	selectedSessionId: string | null;
 	displayedSessionId: string | null;
-	viewMode: ShellViewMode;
 	reselectTick: number;
 };
 
@@ -81,13 +100,22 @@ export type SelectionController = {
 };
 
 const INITIAL_SELECTION_STATE: SelectionState = {
-	selectedWorkspaceId: null,
 	displayedWorkspaceId: null,
-	selectedSessionId: null,
 	displayedSessionId: null,
-	viewMode: "conversation",
 	reselectTick: 0,
 };
+
+// Read the authoritative selection intent off the router synchronously.
+// `router.state.location` reflects the latest committed navigation immediately
+// (memory history commits the location inside the navigate call), so this is
+// the synchronous "latest intent" the actions / `getSnapshot` rely on.
+function getRouterSelection(): SelectionSnapshot {
+	const loc = router.state.location;
+	return locationToSelection({
+		pathname: loc.pathname,
+		search: loc.search as { view?: string },
+	});
+}
 
 export type SelectionControllerDeps = {
 	queryClient: QueryClient;
@@ -111,25 +139,19 @@ export type SelectionControllerDeps = {
 export function useSelectionController(
 	deps: SelectionControllerDeps,
 ): SelectionController {
-	const {
-		queryClient,
-		workspaceGroups,
-		archivedRows,
-		appSettings,
-		updateSettings,
-	} = deps;
+	const { queryClient, workspaceGroups, archivedRows, updateSettings } = deps;
 
 	// Callbacks held by ref so AppShell can pass inline arrows without
 	// destabilising every downstream `useCallback`/`useMemo`.
 	const onWorkspaceSwitchedRef = useLatestRef(deps.onWorkspaceSwitched);
 	const onStartOpenedRef = useLatestRef(deps.onStartOpened);
+	const updateSettingsRef = useLatestRef(updateSettings);
 
 	// Instance-level store (lazy-init via ref, one per controller — NOT a
 	// global singleton; deps like queryClient/callbacks are closed over by
-	// the actions below, so a module store can't hold them). The six fields
-	// live here so panes can subscribe to individual selectors; the
-	// `selected*` and `displayed*` tracks plus `viewMode`/`reselectTick`
-	// remain a single atomic store written in lockstep by the actions.
+	// the actions below, so a module store can't hold them). The three fields
+	// here are the paint track (`displayed*`) plus `reselectTick`; the
+	// `selected*` intent moved to the router (Stage 3b).
 	const storeRef = useRef<SelectionStore | null>(null);
 	if (storeRef.current === null) {
 		storeRef.current = createStore<SelectionState>(() => ({
@@ -138,34 +160,46 @@ export function useSelectionController(
 	}
 	const store = storeRef.current;
 
-	const selectedWorkspaceIdRef = useRef<string | null>(null);
-	const selectedSessionIdRef = useRef<string | null>(null);
-	const viewModeRef = useRef<ShellViewMode>("conversation");
 	const workspaceSelectionRequestRef = useRef(0);
 	const sessionSelectionRequestRef = useRef(0);
+	// Trailing-edge timer for the per-switch fire-and-forget IPC (git fetch +
+	// slash-command prewarm). During a held-key burst each keypress resets it, so
+	// the IPC only fires for the workspace the user lands on. A single switch has
+	// no follow-up keypress, so it fires after one short window (~a frame or two)
+	// — imperceptible for background work. Cleaned up on unmount.
+	const workspaceSwitchSideEffectTimerRef = useRef<number | null>(null);
+	useEffect(
+		() => () => {
+			if (workspaceSwitchSideEffectTimerRef.current !== null) {
+				window.clearTimeout(workspaceSwitchSideEffectTimerRef.current);
+			}
+		},
+		[],
+	);
 	const startupPrefetchedWorkspaceRef = useRef<string | null>(null);
 	const warmedWorkspaceIdsRef = useRef<Set<string>>(new Set());
 	const sessionSelectionHistoryByWorkspaceRef = useRef<
 		Record<string, string[]>
 	>({});
 
-	// Reactive reads for the effects below. These mirror what the deleted
-	// useState values drove: the persist effect (selectedSessionId) and the
-	// prewarm/warmup effects (selectedWorkspaceId + displayedWorkspaceId).
-	// Subscribing keeps each effect's re-run cadence identical to the old
-	// state-driven version — only the source of truth moved into the store.
-	const selectedWorkspaceId = useStore(store, (s) => s.selectedWorkspaceId);
-	const displayedWorkspaceId = useStore(store, (s) => s.displayedWorkspaceId);
-	const selectedSessionId = useStore(store, (s) => s.selectedSessionId);
-
-	// Persist last session for restore-on-launch. Last workspace is written
-	// synchronously inside `selectWorkspace` so surface restore cannot race
-	// it.
+	// Single persistence writer: subscribe to the router's `onResolved` and
+	// write the SAME settings keys the scattered effects used to
+	// (`lastSurface` / `lastWorkspaceId` / `lastSessionId`). Replaces the
+	// synchronous write in `selectWorkspace`, the `selectedSessionId` effect,
+	// and the `openStart` persist write. Always reads the latest
+	// `updateSettings` through the ref so the subscription can mount once.
 	useEffect(() => {
-		if (selectedSessionId) {
-			void updateSettings({ lastSessionId: selectedSessionId });
-		}
-	}, [selectedSessionId, updateSettings]);
+		return installLocationPersistence((patch) => {
+			void updateSettingsRef.current(patch);
+		});
+	}, [updateSettingsRef]);
+
+	// Reactive selected workspace for the effects below (prewarm / warmup /
+	// startup prefetch). Sourced from the router — same re-run cadence as the
+	// old store subscription, only the source of truth moved. `displayed*`
+	// stays in the store.
+	const selectedWorkspaceId = useRouterSelectedWorkspaceId();
+	const displayedWorkspaceId = useStore(store, (s) => s.displayedWorkspaceId);
 
 	const primeWorkspaceDisplay = useCallback(
 		async (workspaceId: string) => {
@@ -260,10 +294,10 @@ export function useSelectionController(
 			}
 
 			if (
-				appSettings.lastSessionId &&
-				(!sessionIds || sessionIds.has(appSettings.lastSessionId))
+				deps.appSettings.lastSessionId &&
+				(!sessionIds || sessionIds.has(deps.appSettings.lastSessionId))
 			) {
-				return appSettings.lastSessionId;
+				return deps.appSettings.lastSessionId;
 			}
 
 			return (
@@ -273,7 +307,7 @@ export function useSelectionController(
 				null
 			);
 		},
-		[queryClient, appSettings.lastSessionId],
+		[queryClient, deps.appSettings.lastSessionId],
 	);
 
 	const rememberSessionSelection = useCallback(
@@ -362,21 +396,13 @@ export function useSelectionController(
 
 	const selectWorkspace = useCallback<SelectionActions["selectWorkspace"]>(
 		(workspaceId) => {
-			if (workspaceId) {
-				void updateSettings({
-					lastSurface: "workspace",
-					lastWorkspaceId: workspaceId,
-				});
-			}
-			if (viewModeRef.current === "start") {
-				viewModeRef.current = "conversation";
-				store.setState({ viewMode: "conversation" });
-			}
+			const current = getRouterSelection();
 
-			if (workspaceId === selectedWorkspaceIdRef.current) {
+			if (workspaceId === current.workspaceId) {
 				// Re-clicking the same workspace bumps the tick so downstream
 				// effects (mark-read) re-evaluate even though the displayed
-				// session didn't change.
+				// session didn't change. The router navigate would be a no-op
+				// (same location), so the tick stays an out-of-band store signal.
 				if (workspaceId !== null) {
 					store.setState({ reselectTick: store.getState().reselectTick + 1 });
 				}
@@ -388,25 +414,45 @@ export function useSelectionController(
 			const requestId = workspaceSelectionRequestRef.current + 1;
 			workspaceSelectionRequestRef.current = requestId;
 			sessionSelectionRequestRef.current += 1;
-			selectedWorkspaceIdRef.current = workspaceId;
 			const immediateSessionId = workspaceId
 				? resolvePreferredSessionId(workspaceId)
 				: null;
-			selectedSessionIdRef.current = immediateSessionId;
-			store.setState({
-				selectedWorkspaceId: workspaceId,
-				selectedSessionId: immediateSessionId,
+
+			// Set the navigation intent (the router is authoritative). Preserve the
+			// current view EXCEPT when leaving the start surface, matching the legacy
+			// behavior: the old code only reset `viewMode` to "conversation" when it
+			// was "start", so switching workspaces while in the editor stayed in the
+			// editor instead of being forced back to conversation.
+			const nextViewMode =
+				current.viewMode === "start" ? "conversation" : current.viewMode;
+			navigateSelection({
+				viewMode: nextViewMode,
+				workspaceId,
+				sessionId: immediateSessionId,
 			});
 
 			if (workspaceId) {
-				// Skip git fetch while the worktree is still initializing.
-				const cachedDetail = queryClient.getQueryData<WorkspaceDetail | null>(
-					helmorQueryKeys.workspaceDetail(workspaceId),
-				);
-				if (cachedDetail?.state !== "initializing") {
-					triggerWorkspaceFetch(workspaceId);
-					void prewarmSlashCommandsForWorkspace(workspaceId);
+				// Defer the per-switch fire-and-forget IPC to a trailing edge so a
+				// held-key burst doesn't fire a git fetch + slash-command prewarm for
+				// every workspace scrubbed past — only the settled one. Re-read the
+				// cached detail at fire time so the `initializing` skip stays accurate.
+				if (workspaceSwitchSideEffectTimerRef.current !== null) {
+					window.clearTimeout(workspaceSwitchSideEffectTimerRef.current);
 				}
+				const settleRequestId = requestId;
+				workspaceSwitchSideEffectTimerRef.current = window.setTimeout(() => {
+					workspaceSwitchSideEffectTimerRef.current = null;
+					// Bail if a newer switch superseded this one (race guard parity).
+					if (workspaceSelectionRequestRef.current !== settleRequestId) return;
+					// Skip git fetch while the worktree is still initializing.
+					const cachedDetail = queryClient.getQueryData<WorkspaceDetail | null>(
+						helmorQueryKeys.workspaceDetail(workspaceId),
+					);
+					if (cachedDetail?.state !== "initializing") {
+						triggerWorkspaceFetch(workspaceId);
+						void prewarmSlashCommandsForWorkspace(workspaceId);
+					}
+				}, WORKSPACE_SWITCH_SIDE_EFFECT_DELAY_MS);
 			}
 
 			if (workspaceId === null) {
@@ -428,9 +474,16 @@ export function useSelectionController(
 				immediateSessionId,
 			);
 			if (cached) {
-				selectedSessionIdRef.current = cached.sessionId;
 				rememberSessionSelection(workspaceId, cached.sessionId);
-				store.setState({ selectedSessionId: cached.sessionId });
+				// Refine the URL's session segment if the cache resolved a
+				// different session than the immediate guess.
+				if (cached.sessionId !== immediateSessionId) {
+					navigateSelection({
+						viewMode: nextViewMode,
+						workspaceId,
+						sessionId: cached.sessionId,
+					});
+				}
 				if (workspaceSelectionRequestRef.current !== requestId) return;
 				store.setState({
 					displayedWorkspaceId: cached.workspaceId,
@@ -453,10 +506,15 @@ export function useSelectionController(
 			void primeWorkspaceDisplay(workspaceId)
 				.then(({ sessionId }) => {
 					if (workspaceSelectionRequestRef.current !== requestId) return;
-					selectedSessionIdRef.current = sessionId;
 					rememberSessionSelection(workspaceId, sessionId);
+					if (sessionId !== immediateSessionId) {
+						navigateSelection({
+							viewMode: nextViewMode,
+							workspaceId,
+							sessionId,
+						});
+					}
 					store.setState({
-						selectedSessionId: sessionId,
 						displayedWorkspaceId: workspaceId,
 						displayedSessionId: sessionId,
 					});
@@ -476,19 +534,28 @@ export function useSelectionController(
 			resolveCachedWorkspaceDisplay,
 			resolvePreferredSessionId,
 			store,
-			updateSettings,
 		],
 	);
 
 	const selectSession = useCallback(
 		(sessionId: string | null) => {
-			if (sessionId === selectedSessionIdRef.current) return;
+			const current = getRouterSelection();
+			if (sessionId === current.sessionId) return;
 
 			const requestId = sessionSelectionRequestRef.current + 1;
 			sessionSelectionRequestRef.current = requestId;
-			rememberSessionSelection(selectedWorkspaceIdRef.current, sessionId);
-			selectedSessionIdRef.current = sessionId;
-			store.setState({ selectedSessionId: sessionId });
+			rememberSessionSelection(current.workspaceId, sessionId);
+
+			// Set the navigation intent. Keep the current workspace + view mode;
+			// only the session segment changes. (A session is never selected
+			// without a workspace, so `current.workspaceId` is non-null here in
+			// practice; if it were null `selectionToLocation` collapses to `/`.)
+			navigateSelection({
+				viewMode:
+					current.viewMode === "start" ? "conversation" : current.viewMode,
+				workspaceId: current.workspaceId,
+				sessionId,
+			});
 
 			if (sessionId === null) {
 				if (sessionSelectionRequestRef.current !== requestId) return;
@@ -528,41 +595,48 @@ export function useSelectionController(
 		(options?: { persist?: boolean }) => {
 			workspaceSelectionRequestRef.current += 1;
 			sessionSelectionRequestRef.current += 1;
-			selectedWorkspaceIdRef.current = null;
-			selectedSessionIdRef.current = null;
-			viewModeRef.current = "start";
-			store.setState({
-				selectedWorkspaceId: null,
-				selectedSessionId: null,
-				displayedWorkspaceId: null,
-				displayedSessionId: null,
-				viewMode: "start",
-			});
 
 			const persist = options?.persist !== false;
-			onStartOpenedRef.current?.({ persist });
-
-			if (persist) {
-				void updateSettings({ lastSurface: "workspace-start" });
+			// `persist: false` must NOT re-write `lastSurface` — arm the one-shot
+			// suppression BEFORE navigating so the `onResolved` writer skips the
+			// `/start` resolve.
+			if (!persist) {
+				suppressNextStartPersist();
 			}
-		},
-		[store, updateSettings],
-	);
+			navigateSelection({
+				viewMode: "start",
+				workspaceId: null,
+				sessionId: null,
+			});
+			store.setState({
+				displayedWorkspaceId: null,
+				displayedSessionId: null,
+			});
 
-	const setViewMode = useCallback(
-		(mode: ShellViewMode) => {
-			viewModeRef.current = mode;
-			store.setState({ viewMode: mode });
+			onStartOpenedRef.current?.({ persist });
 		},
 		[store],
 	);
+
+	const setViewMode = useCallback((mode: ShellViewMode) => {
+		// View-mode toggles (conversation ↔ editor) keep the current
+		// workspace/session and only flip the `?view` search param. `start` is
+		// owned by `openStart`; a `setViewMode("start")` would fall through to
+		// `selectionToLocation`, which maps start → `/start`.
+		const current = getRouterSelection();
+		navigateSelection({
+			viewMode: mode,
+			workspaceId: current.workspaceId,
+			sessionId: current.sessionId,
+		});
+	}, []);
 
 	const navigateWorkspaces = useCallback(
 		(offset: -1 | 1) => {
 			const nextWorkspaceId = findAdjacentWorkspaceId(
 				workspaceGroups,
 				archivedRows,
-				selectedWorkspaceIdRef.current,
+				getRouterSelection().workspaceId,
 				offset,
 			);
 			if (!nextWorkspaceId) return;
@@ -573,7 +647,7 @@ export function useSelectionController(
 
 	const navigateSessions = useCallback(
 		(offset: -1 | 1) => {
-			const workspaceId = selectedWorkspaceIdRef.current;
+			const workspaceId = getRouterSelection().workspaceId;
 			if (!workspaceId) return;
 			const workspaceSessions =
 				queryClient.getQueryData<WorkspaceSessionSummary[]>(
@@ -581,7 +655,7 @@ export function useSelectionController(
 				) ?? [];
 			const nextSessionId = findAdjacentSessionId(
 				workspaceSessions,
-				selectedSessionIdRef.current,
+				getRouterSelection().sessionId,
 				offset,
 			);
 			if (!nextSessionId) return;
@@ -592,36 +666,24 @@ export function useSelectionController(
 
 	const resolveDisplayedSession = useCallback(
 		(sessionId: string | null) => {
-			rememberSessionSelection(selectedWorkspaceIdRef.current, sessionId);
-			selectedSessionIdRef.current = sessionId;
+			// PAINT-track only. The panel calls this when it resolves which session
+			// is actually displayable (e.g. the selected one vanished after a
+			// close, so it falls back to the workspace's active session). This must
+			// NOT rewrite the URL — the URL is the user's SELECTED intent, owned by
+			// the explicit `selectSession`/`selectWorkspace` navigations. (Pre-3b
+			// `selected*` + `displayed*` were both store fields and this synced
+			// them; now `selected` is the router, so we only advance `displayed`.)
+			rememberSessionSelection(getRouterSelection().workspaceId, sessionId);
 			const snap = store.getState();
-			const nextSelected =
-				snap.selectedSessionId === sessionId
-					? snap.selectedSessionId
-					: sessionId;
-			const nextDisplayed =
-				snap.displayedSessionId === sessionId
-					? snap.displayedSessionId
-					: sessionId;
-			if (
-				nextSelected !== snap.selectedSessionId ||
-				nextDisplayed !== snap.displayedSessionId
-			) {
-				store.setState({
-					selectedSessionId: nextSelected,
-					displayedSessionId: nextDisplayed,
-				});
+			if (snap.displayedSessionId !== sessionId) {
+				store.setState({ displayedSessionId: sessionId });
 			}
 		},
 		[rememberSessionSelection, store],
 	);
 
 	const getSnapshot = useCallback(
-		(): SelectionSnapshot => ({
-			workspaceId: selectedWorkspaceIdRef.current,
-			sessionId: selectedSessionIdRef.current,
-			viewMode: viewModeRef.current,
-		}),
+		(): SelectionSnapshot => getRouterSelection(),
 		[],
 	);
 
@@ -640,10 +702,10 @@ export function useSelectionController(
 		getSnapshot,
 	});
 
-	// Synthesise the legacy `state` object from the store. The store merges
-	// on every `setState`, so the snapshot reference changes exactly when a
-	// field changes — same identity cadence as the old `useMemo`-over-6-fields
-	// version, so `state.X` reads stay byte-for-byte compatible.
+	// Synthesise the `state` object from the store. The store merges on every
+	// `setState`, so the snapshot reference changes exactly when a field
+	// changes — same identity cadence as before, so `state.X` reads stay
+	// compatible for the `displayed*` / `reselectTick` track.
 	const state = useStore(store, (s) => s);
 
 	return { state, actions, store };

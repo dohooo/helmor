@@ -3,15 +3,18 @@
 // `sessionID` in the manager. Spawned ourselves (not the SDK helper) so we own
 // the process group for tree kill.
 
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { promisify } from "node:util";
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2";
 import { errorDetails, logger } from "./logger.js";
+
+const execFileAsync = promisify(execFile);
 
 const READY_PREFIX = "opencode server listening";
 const STARTUP_TIMEOUT_MS = 20_000;
@@ -77,6 +80,104 @@ function parseServerUrl(buffer: string): string | null {
 	return null;
 }
 
+// ── Reaper ───────────────────────────────────────────────────────────────────
+// `opencode serve` can re-exec out of the process group we spawn it in, so
+// `process.kill(-pid)` alone sometimes misses the real server. A `ps`-scan
+// catches it. Two matchers, each with a discriminator that CANNOT hit a serve
+// Helmor didn't start (so we never kill the user's own opencode):
+//   • teardown: the exact ephemeral `--port` we just bound (unique system-wide)
+//   • startup:  our full binary path AND ppid==1 (orphaned → parent already dead,
+//               so never a live sibling Helmor's server)
+
+interface ServeProcess {
+	readonly pid: number;
+	readonly ppid: number;
+	readonly command: string;
+}
+
+/** `opencode`-ish processes via `ps`. Unix-only; [] on Windows or any failure. */
+async function listProcesses(): Promise<ReadonlyArray<ServeProcess>> {
+	if (process.platform === "win32") return [];
+	try {
+		const { stdout } = await execFileAsync(
+			"ps",
+			["-axo", "pid=,ppid=,command="],
+			// Bounded so a wedged `ps` can't stall opencode startup; on timeout
+			// the reject is swallowed below and we just skip reaping.
+			{ maxBuffer: 8 * 1024 * 1024, timeout: 2_000 },
+		);
+		const out: ServeProcess[] = [];
+		for (const line of stdout.split("\n")) {
+			const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
+			const command = match?.[3];
+			if (!match || command === undefined) continue;
+			const pid = Number(match[1]);
+			const ppid = Number(match[2]);
+			if (Number.isInteger(pid) && pid > 0) out.push({ pid, ppid, command });
+		}
+		return out;
+	} catch {
+		return [];
+	}
+}
+
+function commandBasename(path: string): string {
+	return path.split(/[\\/]/).at(-1) ?? path;
+}
+
+/** Our serve process, pinned by the exact port it bound — a system-wide unique
+ *  key, so this only ever matches the server we ourselves started. */
+export function matchesServeOnPort(input: {
+	command: string;
+	binaryPath: string;
+	hostname: string;
+	port: number;
+}): boolean {
+	return (
+		/\bserve\b/.test(input.command) &&
+		input.command.includes(commandBasename(input.binaryPath)) &&
+		input.command.includes(`--hostname=${input.hostname}`) &&
+		input.command.includes(`--port=${input.port}`)
+	);
+}
+
+/** An ORPHANED serve (ppid==1) launched from OUR exact binary path. Full path
+ *  rules out a user's separate opencode install; ppid==1 rules out a live
+ *  sibling Helmor (whose server still has a live sidecar parent). Returns false
+ *  for a bare (path-less) binary, where we can't tell ours apart — caller skips. */
+export function matchesOrphanedServe(input: {
+	command: string;
+	ppid: number;
+	binaryPath: string;
+}): boolean {
+	if (!/[\\/]/.test(input.binaryPath)) return false;
+	return (
+		input.ppid === 1 &&
+		/\bserve\b/.test(input.command) &&
+		input.command.includes(input.binaryPath)
+	);
+}
+
+/** Signal every process matching `match` (skipping our own pid). Best-effort;
+ *  never throws. Returns the count signaled. */
+async function signalProcesses(
+	match: (proc: ServeProcess) => boolean,
+	signal: NodeJS.Signals,
+): Promise<number> {
+	if (process.platform === "win32") return 0;
+	let count = 0;
+	for (const proc of await listProcesses()) {
+		if (proc.pid === process.pid || !match(proc)) continue;
+		try {
+			process.kill(proc.pid, signal);
+			count++;
+		} catch {
+			// Exited between `ps` and `kill`.
+		}
+	}
+	return count;
+}
+
 export interface OpencodeServerHandle {
 	readonly client: OpencodeClient;
 	readonly url: string;
@@ -87,6 +188,10 @@ export class OpencodeServer {
 	private proc: ChildProcess | null = null;
 	private handle: Promise<OpencodeServerHandle> | null = null;
 	private proxyUrl: string | null = null;
+	/** Port the live server bound; lets `kill()` reap a serve that escaped the group. */
+	private lastPort: number | null = null;
+	/** Startup orphan-reap runs once per process, before the first spawn. */
+	private orphanReapDone = false;
 
 	/**
 	 * @param onProcessExit Fired whenever a spawned server process exits
@@ -104,7 +209,7 @@ export class OpencodeServer {
 			logger.info("opencode proxy changed — restarting server", {
 				proxy: proxyUrl ?? "(none)",
 			});
-			this.kill();
+			void this.kill();
 		}
 		if (this.handle) return this.handle;
 		this.proxyUrl = proxyUrl;
@@ -119,7 +224,9 @@ export class OpencodeServer {
 	private async spawnAndConnect(
 		env: NodeJS.ProcessEnv,
 	): Promise<OpencodeServerHandle> {
+		await this.reapOrphans();
 		const port = await findFreePort();
+		this.lastPort = port;
 		const password = randomBytes(24).toString("hex");
 		const dbPath = resolveOpencodeDbPath();
 		try {
@@ -188,7 +295,7 @@ export class OpencodeServer {
 				);
 			});
 		}).catch((err) => {
-			this.kill();
+			void this.kill();
 			throw err;
 		});
 
@@ -227,27 +334,88 @@ export class OpencodeServer {
 		this.proc?.on("exit", cb);
 	}
 
-	/** SIGTERM the process group, then SIGKILL. Safe to call repeatedly. */
-	kill(): void {
+	/**
+	 * SIGTERM then (1s later) SIGKILL. Three targets, since `opencode serve` can
+	 * re-exec out of the spawned group: the process group, the direct child, and
+	 * any serve still bound to our exact port. Safe to call repeatedly. The
+	 * promise resolves after the SIGTERM pass; SIGKILL escalates in the background.
+	 */
+	async kill(): Promise<void> {
 		const child = this.proc;
+		const port = this.lastPort;
 		this.proc = null;
 		this.handle = null;
-		if (!child || child.exitCode !== null || child.pid === undefined) return;
-		const signalGroup = (signal: NodeJS.Signals): void => {
-			try {
-				if (process.platform === "win32") {
-					child.kill(signal);
-				} else {
-					// Negative pid signals the whole detached `serve` tree.
-					process.kill(-child.pid!, signal);
+		this.lastPort = null;
+		if (
+			(!child || child.exitCode !== null || child.pid === undefined) &&
+			port === null
+		) {
+			return;
+		}
+
+		const signalAll = async (signal: NodeJS.Signals): Promise<void> => {
+			if (child && child.exitCode === null && child.pid !== undefined) {
+				try {
+					if (process.platform === "win32") {
+						child.kill(signal);
+					} else {
+						// Negative pid signals the whole detached `serve` group.
+						process.kill(-child.pid, signal);
+					}
+				} catch (err) {
+					logger.debug("opencode server kill failed", errorDetails(err));
 				}
-			} catch (err) {
-				logger.debug("opencode server kill failed", errorDetails(err));
+				// Direct handle too, in case the group kill missed.
+				try {
+					child.kill(signal);
+				} catch {
+					// Already gone.
+				}
+			}
+			// Reap a serve that escaped the group, keyed on our exact port.
+			if (port !== null) {
+				await signalProcesses(
+					(p) =>
+						matchesServeOnPort({
+							command: p.command,
+							binaryPath: OPENCODE_BIN_PATH,
+							hostname: HOSTNAME,
+							port,
+						}),
+					signal,
+				);
 			}
 		};
-		signalGroup("SIGTERM");
-		const killTimer = setTimeout(() => signalGroup("SIGKILL"), 1_000);
+
+		await signalAll("SIGTERM");
+		const killTimer = setTimeout(() => void signalAll("SIGKILL"), 1_000);
 		killTimer.unref?.();
-		child.once("exit", () => clearTimeout(killTimer));
+		child?.once("exit", () => clearTimeout(killTimer));
+	}
+
+	/** One-shot at first spawn: SIGTERM/SIGKILL serve processes orphaned by a
+	 *  prior Helmor that died without a clean shutdown (dev rebuild, crash,
+	 *  force-quit). Matches only our binary path + ppid==1, so it never hits a
+	 *  user's own opencode or a live sibling Helmor's server. */
+	private async reapOrphans(): Promise<void> {
+		if (this.orphanReapDone || process.platform === "win32") return;
+		this.orphanReapDone = true;
+		const match = (p: ServeProcess): boolean =>
+			matchesOrphanedServe({
+				command: p.command,
+				ppid: p.ppid,
+				binaryPath: OPENCODE_BIN_PATH,
+			});
+		const signaled = await signalProcesses(match, "SIGTERM");
+		if (signaled > 0) {
+			logger.info(
+				`opencode reaper: SIGTERM ${signaled} orphaned serve process(es) from a prior run`,
+			);
+			const timer = setTimeout(
+				() => void signalProcesses(match, "SIGKILL"),
+				1_000,
+			);
+			timer.unref?.();
+		}
 	}
 }
