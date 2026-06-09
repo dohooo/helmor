@@ -17,13 +17,14 @@ name: Release Plan
 #      (b) additionally tags `@helmor/marketing@...` which we don't want.
 #
 # 3. The tag push triggers `publish.yml` for signed/notarized macOS DMGs +
-#    updater artifacts and `windows-release.yml` for the Windows x64 NSIS
-#    installer. The workflows attach their artifacts to the GitHub Release.
+#    updater artifacts, which attach them to the GitHub Release. (Windows has
+#    no automated release publishing yet — windows.yml builds the NSIS
+#    installer in CI as a workflow artifact only.)
 #
 # Why PAT instead of GITHUB_TOKEN: GitHub suppresses workflow runs for
 # pushes authored by GITHUB_TOKEN (recursion guard). A PAT-authored tag
-# push does fire downstream workflows, which is how publish.yml and
-# windows-release.yml know to build.
+# push does fire downstream workflows, which is how publish.yml knows to
+# build.
 
 on:
   workflow_dispatch:

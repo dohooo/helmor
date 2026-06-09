@@ -1,12 +1,12 @@
 # Release Secrets
 
-Configure these GitHub repository secrets before running the release workflows.
+Configure these GitHub repository secrets before running the macOS release workflow.
 
 ## Required for release creation
 
 - `GITHUB_TOKEN`
   - Provided automatically by GitHub Actions
-  - Must have `contents: write` permission in macOS and Windows release workflows
+  - Must have `contents: write` permission in the workflow
 
 ## Required for Tauri updater signing
 
@@ -23,12 +23,6 @@ Configure these GitHub repository secrets before running the release workflows.
 
 macOS release publication uses the official `tauri-action`. It uploads the signed
 updater bundle and generates the `latest.json` manifest consumed by Helmor's updater.
-
-## Required for Windows NSIS publishing
-
-The Windows Release workflow builds the x64 NSIS installer on `windows-latest`
-and attaches `*-setup.exe` to the GitHub Release. It only needs the workflow
-`GITHUB_TOKEN` with `contents: write`.
 
 ## Required for macOS signing and notarization
 

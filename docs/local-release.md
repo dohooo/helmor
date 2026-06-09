@@ -43,11 +43,13 @@ generated updater bundle and signature to create the GitHub Releases metadata.
 
 After the local build succeeds, copy the same values into the GitHub repository secrets described in [release-secrets.md](./release-secrets.md).
 
-## 5. Windows release check
+## 5. Windows installer check
 
 The Windows x64 NSIS installer is not built by the local macOS validation script.
-For a tagged release, confirm the **Windows Release** workflow finishes and attaches:
+It is built and validated in CI by the **Windows** workflow (`windows.yml` →
+Windows Build job), which uploads the installer as a workflow artifact:
 
 - `src-tauri/target/release/bundle/nsis/*-setup.exe`
 
-The Windows installer currently ships through GitHub Releases; macOS also publishes the signed updater manifest (`latest.json`).
+There is no automated Windows release publishing yet; macOS publishes the signed
+updater manifest (`latest.json`) via `publish.yml`.
