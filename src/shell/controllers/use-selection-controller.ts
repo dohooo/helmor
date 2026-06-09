@@ -418,11 +418,15 @@ export function useSelectionController(
 				? resolvePreferredSessionId(workspaceId)
 				: null;
 
-			// Set the navigation intent (the router is authoritative). Always
-			// "conversation" view — selecting a workspace exits start/editor, the
-			// same way the old code reset `viewMode` to "conversation".
+			// Set the navigation intent (the router is authoritative). Preserve the
+			// current view EXCEPT when leaving the start surface, matching the legacy
+			// behavior: the old code only reset `viewMode` to "conversation" when it
+			// was "start", so switching workspaces while in the editor stayed in the
+			// editor instead of being forced back to conversation.
+			const nextViewMode =
+				current.viewMode === "start" ? "conversation" : current.viewMode;
 			navigateSelection({
-				viewMode: "conversation",
+				viewMode: nextViewMode,
 				workspaceId,
 				sessionId: immediateSessionId,
 			});
@@ -475,7 +479,7 @@ export function useSelectionController(
 				// different session than the immediate guess.
 				if (cached.sessionId !== immediateSessionId) {
 					navigateSelection({
-						viewMode: "conversation",
+						viewMode: nextViewMode,
 						workspaceId,
 						sessionId: cached.sessionId,
 					});
@@ -505,7 +509,7 @@ export function useSelectionController(
 					rememberSessionSelection(workspaceId, sessionId);
 					if (sessionId !== immediateSessionId) {
 						navigateSelection({
-							viewMode: "conversation",
+							viewMode: nextViewMode,
 							workspaceId,
 							sessionId,
 						});

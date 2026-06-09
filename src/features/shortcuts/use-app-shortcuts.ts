@@ -72,32 +72,38 @@ export function useAppShortcuts({ overrides, handlers }: UseAppShortcutsArgs) {
 		// shortcut supersedes any prior loop.
 		let heldRafId: number | null = null;
 		let heldFrameCounter = 0;
-		let heldCallback: (() => void) | null = null;
+		let heldShortcutId: ShortcutId | null = null;
 
 		const stopHeldRepeat = () => {
 			if (heldRafId !== null) {
 				cancelAnimationFrame(heldRafId);
 				heldRafId = null;
 			}
-			heldCallback = null;
+			heldShortcutId = null;
 			heldFrameCounter = 0;
 		};
 
-		const startHeldRepeat = (callback: () => void) => {
+		const startHeldRepeat = (id: ShortcutId) => {
 			// Defensive: clear any prior loop before arming so we never leak a
 			// second rAF (callers already guard on `heldRafId === null`).
 			stopHeldRepeat();
-			heldCallback = callback;
+			heldShortcutId = id;
 			heldFrameCounter = 0;
 			const tick = () => {
-				if (heldCallback === null) return;
+				if (heldShortcutId === null) return;
 				heldFrameCounter += 1;
 				if (heldFrameCounter >= HELD_REPEAT_FRAME_INTERVAL) {
 					heldFrameCounter = 0;
-					// `callback` reads the live committed selection (router.state) on
-					// each call, so it always steps off the latest value, never a stale
-					// snapshot captured when the key was first pressed.
-					heldCallback();
+					// Re-read the LATEST callback for this shortcut each tick (not the
+					// one captured when the key was first pressed): the nav callbacks
+					// close over the workspace/session lists, so a mid-hold refetch
+					// gives them a new identity. Stepping off the live registration —
+					// what main did by re-reading registrationsRef on every OS
+					// auto-repeat keydown — avoids scrubbing off a stale snapshot.
+					const current = registrationsRef.current.find(
+						(registration) => registration.id === heldShortcutId,
+					);
+					current?.callback();
 				}
 				heldRafId = requestAnimationFrame(tick);
 			};
@@ -147,7 +153,7 @@ export function useAppShortcuts({ overrides, handlers }: UseAppShortcutsArgs) {
 				// the OS key-repeat backlog can no longer accumulate and keep the
 				// selection moving after release. Re-arming is idempotent (a no-op
 				// after the first repeat), so we just keep it running.
-				if (heldRafId === null) startHeldRepeat(match.callback);
+				if (heldRafId === null) startHeldRepeat(match.id);
 				return;
 			}
 

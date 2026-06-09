@@ -120,6 +120,18 @@ export function installLocationPersistence(
 ): () => void {
 	let pendingPatch: ReturnType<typeof locationToSettingsPatch> | null = null;
 	let timer: ReturnType<typeof setTimeout> | null = null;
+	// Write any pending patch synchronously and disarm the timer. Shared by the
+	// teardown path and the page-hide / quit flush below.
+	const flushPending = () => {
+		if (timer !== null) {
+			clearTimeout(timer);
+			timer = null;
+		}
+		if (pendingPatch) {
+			saveSettings(pendingPatch);
+			pendingPatch = null;
+		}
+	};
 	const unsubscribe = router.subscribe("onResolved", ({ toLocation }) => {
 		const patch = locationToSettingsPatch({
 			pathname: toLocation.pathname,
@@ -150,14 +162,24 @@ export function installLocationPersistence(
 			if (next) saveSettings(next);
 		}, PERSIST_DEBOUNCE_MS);
 	});
+	// A real app quit (Cmd+Q → `helmor://quit-requested` → process exit) never
+	// runs the cleanup below, so a navigation in the last PERSIST_DEBOUNCE_MS would
+	// never be written. `pagehide` / `visibilitychange → hidden` fire on webview
+	// teardown / backgrounding — flush the pending location synchronously there,
+	// restoring the pre-debounce "dispatched immediately" guarantee without
+	// per-keypress writes during a held burst.
+	const handlePageHide = () => flushPending();
+	const handleVisibilityChange = () => {
+		if (document.visibilityState === "hidden") flushPending();
+	};
+	window.addEventListener("pagehide", handlePageHide);
+	document.addEventListener("visibilitychange", handleVisibilityChange);
 	return () => {
-		if (timer !== null) clearTimeout(timer);
-		// Flush any pending write so an unmount mid-window doesn't drop the last
+		window.removeEventListener("pagehide", handlePageHide);
+		document.removeEventListener("visibilitychange", handleVisibilityChange);
+		// Flush any pending write so teardown mid-window doesn't drop the last
 		// settled location (preserves the pre-debounce "always persisted" guarantee).
-		if (pendingPatch) {
-			saveSettings(pendingPatch);
-			pendingPatch = null;
-		}
+		flushPending();
 		unsubscribe();
 	};
 }
