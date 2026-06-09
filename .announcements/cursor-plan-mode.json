@@ -1,7 +1,0 @@
-{
-	"items": [
-		{
-			"text": "Cursor now supports Plan mode — it drafts a read-only plan first, then lets you approve it or request changes before it touches your code."
-		}
-	]
-}
