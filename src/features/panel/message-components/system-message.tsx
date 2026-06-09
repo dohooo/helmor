@@ -60,12 +60,16 @@ export function SystemNotice({
 				className={cn("size-3 shrink-0", iconClass, wrap ? "mt-0.5" : null)}
 				strokeWidth={1.8}
 			/>
-			<span>{part.label}</span>
+			<span className={wrap ? "shrink-0 whitespace-nowrap" : undefined}>
+				{part.label}
+			</span>
 			{part.body ? (
 				<span
 					className={cn(
 						"ml-1 text-muted-foreground/70",
-						wrap ? "min-w-0 whitespace-pre-wrap break-words" : "truncate",
+						wrap
+							? "min-w-0 flex-1 whitespace-pre-wrap break-words"
+							: "truncate",
 					)}
 				>
 					- {part.body}
