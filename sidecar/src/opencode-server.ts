@@ -102,9 +102,9 @@ async function listProcesses(): Promise<ReadonlyArray<ServeProcess>> {
 		const { stdout } = await execFileAsync(
 			"ps",
 			["-axo", "pid=,ppid=,command="],
-			{
-				maxBuffer: 8 * 1024 * 1024,
-			},
+			// Bounded so a wedged `ps` can't stall opencode startup; on timeout
+			// the reject is swallowed below and we just skip reaping.
+			{ maxBuffer: 8 * 1024 * 1024, timeout: 2_000 },
 		);
 		const out: ServeProcess[] = [];
 		for (const line of stdout.split("\n")) {
