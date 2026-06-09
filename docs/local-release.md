@@ -1,6 +1,6 @@
 # Local Release Validation
 
-Validate the macOS release flow locally before moving the same values into GitHub Actions.
+Validate the macOS release flow locally before moving the same values into GitHub Actions. Windows is built in GitHub Actions on `windows-latest`.
 
 ## 1. Prepare local secrets
 
@@ -42,3 +42,14 @@ generated updater bundle and signature to create the GitHub Releases metadata.
 ## 4. Move to GitHub Actions after local success
 
 After the local build succeeds, copy the same values into the GitHub repository secrets described in [release-secrets.md](./release-secrets.md).
+
+## 5. Windows installer check
+
+The Windows x64 NSIS installer is not built by the local macOS validation script.
+It is built and validated in CI by the **Windows** workflow (`windows.yml` →
+Windows Build job), which uploads the installer as a workflow artifact:
+
+- `src-tauri/target/release/bundle/nsis/*-setup.exe`
+
+There is no automated Windows release publishing yet; macOS publishes the signed
+updater manifest (`latest.json`) via `publish.yml`.

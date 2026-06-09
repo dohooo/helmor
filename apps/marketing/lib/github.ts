@@ -19,8 +19,6 @@ const REVALIDATE_SECONDS = 3600;
 
 // Fallbacks mirror what the design shipped with. Used when the GitHub API is
 // unreachable, rate-limited, or the repo has no releases yet.
-// The DMG byte sizes are chosen so `(bytes / 1 MiB).toFixed(1)` renders the
-// exact strings shown in the design ("64.2 MB" / "68.7 MB").
 const FALLBACK = {
 	version: "v0.4.2",
 	versionShort: "v0.4",
@@ -34,6 +32,8 @@ const FALLBACK = {
 	armDmgSize: 67319398, // 64.2 MB
 	intelDmgUrl: `https://github.com/${REPO}/releases/latest`,
 	intelDmgSize: 72037171, // 68.7 MB
+	windowsSetupUrl: `https://github.com/${REPO}/releases/latest`,
+	windowsSetupSize: 0,
 	signedAndNotarized: true,
 } as const;
 
@@ -50,6 +50,8 @@ export type RepoData = {
 	armDmgSize: number;
 	intelDmgUrl: string;
 	intelDmgSize: number;
+	windowsSetupUrl: string;
+	windowsSetupSize: number;
 	signedAndNotarized: boolean;
 };
 
@@ -123,6 +125,7 @@ export async function getRepoData(): Promise<RepoData> {
 
 	const arm = pickDmgAsset(release?.assets, /aarch64|arm64/i);
 	const intel = pickDmgAsset(release?.assets, /x64|x86[_-]?64|intel/i);
+	const windows = pickWindowsSetupAsset(release?.assets);
 	const signedAndNotarized =
 		release?.body != null && /notariz/i.test(release.body)
 			? true
@@ -141,6 +144,8 @@ export async function getRepoData(): Promise<RepoData> {
 		armDmgSize: arm?.size ?? FALLBACK.armDmgSize,
 		intelDmgUrl: intel?.browser_download_url ?? FALLBACK.intelDmgUrl,
 		intelDmgSize: intel?.size ?? FALLBACK.intelDmgSize,
+		windowsSetupUrl: windows?.browser_download_url ?? FALLBACK.windowsSetupUrl,
+		windowsSetupSize: windows?.size ?? FALLBACK.windowsSetupSize,
 		signedAndNotarized,
 	};
 }
@@ -154,6 +159,17 @@ function pickDmgAsset(
 	for (const a of assets) {
 		if (!a.name.toLowerCase().endsWith(".dmg")) continue;
 		if (archPattern.test(a.name)) return a;
+	}
+	return null;
+}
+
+/** Find the Windows x64 NSIS setup `.exe` asset. */
+function pickWindowsSetupAsset(assets: Asset[] | undefined): Asset | null {
+	if (!assets) return null;
+	for (const a of assets) {
+		const name = a.name.toLowerCase();
+		if (!name.endsWith(".exe")) continue;
+		if (/setup|windows|win|x64|x86[_-]?64/.test(name)) return a;
 	}
 	return null;
 }
