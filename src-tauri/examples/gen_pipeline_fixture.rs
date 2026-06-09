@@ -1,7 +1,7 @@
 //! Generate a pipeline snapshot fixture from a real session in the SQLite DB.
 //!
 //! Usage:
-//!   cargo run --bin gen_pipeline_fixture -- <session_id> <fixture_name> [--limit N]
+//!   cargo run --example gen_pipeline_fixture -- <session_id> <fixture_name> [--limit N]
 //!
 //! Reads `session_messages` rows for the given session and writes them to
 //! `tests/fixtures/pipeline/<fixture_name>/input.json`. The expected output
@@ -65,7 +65,7 @@ fn main() -> ExitCode {
         eprintln!();
         eprintln!("Examples:");
         eprintln!(
-            "  cargo run --bin gen_pipeline_fixture -- \\\n        \
+            "  cargo run --example gen_pipeline_fixture -- \\\n        \
              2d94410d-233d-4763-b414-dbe0da119abe large_collapse --limit 80"
         );
         return ExitCode::from(2);

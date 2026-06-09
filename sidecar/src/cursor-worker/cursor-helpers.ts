@@ -1,0 +1,192 @@
+/** Pure helpers for the cursor worker — kept @cursor/sdk-runtime-free (the SDK
+ * is imported as types only) so unit tests can exercise them under Bun without
+ * loading @cursor/sdk. The stateful Agent logic that DOES load the SDK lives in
+ * `cursor-core.ts`, which only ever runs in the Node worker. */
+
+import { basename, extname } from "node:path";
+import type {
+	ModelListItem,
+	ModelParameterValue,
+	SDKImage,
+	SDKMessage,
+	SDKUserMessage,
+} from "@cursor/sdk";
+import { readImageWithResize } from "../image-resize.js";
+import { errorDetails, logger } from "../logger.js";
+import type {
+	CursorModelParameter,
+	ProviderModelInfo,
+} from "../session-manager.js";
+
+/// Map Helmor's permissionMode to Cursor's conversation mode. Plan mode
+/// runs Cursor read-only; everything else is the normal agent mode.
+export function toCursorMode(
+	permissionMode: string | undefined,
+): "agent" | "plan" {
+	return permissionMode === "plan" ? "plan" : "agent";
+}
+
+/// Pull the plan markdown out of a `createPlan` tool_call event
+/// (`args.plan`). Returns null when absent/blank so `planCaptured` falls
+/// back to a bare marker rather than an empty plan card.
+export function extractCreatePlanText(
+	e: Record<string, unknown>,
+): string | null {
+	const args = e.args as Record<string, unknown> | undefined;
+	const plan = args?.plan;
+	return typeof plan === "string" && plan.trim() !== "" ? plan : null;
+}
+
+export function extToMimeType(filePath: string): string {
+	switch (extname(filePath).toLowerCase()) {
+		case ".jpg":
+		case ".jpeg":
+			return "image/jpeg";
+		case ".png":
+			return "image/png";
+		case ".gif":
+			return "image/gif";
+		case ".webp":
+			return "image/webp";
+		default:
+			return "image/png";
+	}
+}
+
+/// Build the `agent.send` payload. Returns a plain string when there are
+/// no attachments (cheapest path); otherwise an SDKUserMessage carrying
+/// base64 images. Unreadable files degrade to a `[Image not found]` note
+/// appended to the text so the turn still goes through.
+export async function buildCursorMessage(
+	text: string,
+	imagePaths: readonly string[],
+): Promise<string | SDKUserMessage> {
+	if (imagePaths.length === 0) return text;
+	const images: SDKImage[] = [];
+	const notes: string[] = [];
+	for (const imgPath of imagePaths) {
+		try {
+			const { buffer } = await readImageWithResize(imgPath);
+			images.push({
+				data: buffer.toString("base64"),
+				mimeType: extToMimeType(imgPath),
+			});
+		} catch (err) {
+			logger.error("Failed to read Cursor image attachment", {
+				imageName: basename(imgPath),
+				...errorDetails(err),
+			});
+			notes.push(`[Image not found: ${imgPath}]`);
+		}
+	}
+	const finalText = [text, ...notes].filter(Boolean).join("\n");
+	if (images.length === 0) return finalText;
+	return { text: finalText, images };
+}
+
+/// Prefix `type` with `cursor/` so Rust dispatch doesn't collide with
+/// claude/codex. `tool_call` is split into `tool_call_start` /
+/// `tool_call_end` based on `status` so accumulator can branch on type.
+export function namespaceEvent(event: SDKMessage): Record<string, unknown> {
+	const e = event as unknown as Record<string, unknown>;
+	if (e.type === "tool_call") {
+		const status = typeof e.status === "string" ? e.status : "running";
+		return {
+			...e,
+			type:
+				status === "completed"
+					? "cursor/tool_call_end"
+					: "cursor/tool_call_start",
+		};
+	}
+	return { ...e, type: `cursor/${String(e.type)}` };
+}
+
+/// Effort wire ids in priority order: Claude uses `effort`, GPT/Codex
+/// uses `reasoning`. Both can carry levels; when both present, `effort`
+/// wins (Claude has effort + thinking; thinking is the boolean one).
+const CURSOR_EFFORT_PARAM_IDS = ["effort", "reasoning"] as const;
+
+/// Build agent.send params from composer toolbar state. Toolbar surfaces
+/// effort + fast; `thinking` is auto-enabled when the model exposes it.
+export function computeModelParameterValues(
+	parameters: readonly CursorModelParameter[],
+	effortLevel: string | undefined,
+	fastMode: boolean | undefined,
+): ModelParameterValue[] {
+	const out: ModelParameterValue[] = [];
+
+	if (typeof effortLevel === "string" && effortLevel !== "") {
+		for (const id of CURSOR_EFFORT_PARAM_IDS) {
+			const param = parameters.find((p) => p.id === id);
+			if (!param) continue;
+			// Reject out-of-band values — API rejects unknown values.
+			if (param.values.some((v) => v.value === effortLevel)) {
+				out.push({ id: param.id, value: effortLevel });
+			}
+			break;
+		}
+	}
+
+	// Auto-enable `thinking` when present (Claude extended thinking).
+	const thinkingParam = parameters.find((p) => p.id === "thinking");
+	if (thinkingParam?.values.some((v) => v.value === "true")) {
+		out.push({ id: "thinking", value: "true" });
+	}
+
+	if (fastMode === true) {
+		const param = parameters.find((p) => p.id === "fast");
+		if (param?.values.some((v) => v.value === "true")) {
+			out.push({ id: "fast", value: "true" });
+		}
+	}
+
+	return out;
+}
+
+export function modelInfoToProviderInfo(
+	model: ModelListItem,
+): ProviderModelInfo {
+	const params = model.parameters ?? [];
+	const effortParam = CURSOR_EFFORT_PARAM_IDS.map((id) =>
+		params.find((p) => p.id === id),
+	).find((p): p is NonNullable<typeof p> => p !== undefined);
+	const fastParam = params.find((p) => p.id === "fast");
+	const effortLevels = effortParam?.values
+		.map((v) => v.value)
+		.filter((v): v is string => typeof v === "string");
+	const supportsFastMode = Boolean(fastParam);
+	const cursorParameters: CursorModelParameter[] | undefined = model.parameters
+		? model.parameters.map((p) => ({
+				id: p.id,
+				...(p.displayName !== undefined ? { displayName: p.displayName } : {}),
+				values: p.values.map((v) => ({
+					value: v.value,
+					...(v.displayName !== undefined
+						? { displayName: v.displayName }
+						: {}),
+				})),
+			}))
+		: undefined;
+	return {
+		id: model.id,
+		label: model.displayName ?? model.id,
+		cliModel: model.id,
+		...(effortLevels && effortLevels.length > 0 ? { effortLevels } : {}),
+		...(supportsFastMode ? { supportsFastMode } : {}),
+		...(cursorParameters && cursorParameters.length > 0
+			? { cursorParameters }
+			: {}),
+	};
+}
+
+// Test-only export.
+export const __CURSOR_INTERNAL = {
+	namespaceEvent,
+	modelInfoToProviderInfo,
+	computeModelParameterValues,
+	buildCursorMessage,
+	extToMimeType,
+	toCursorMode,
+	extractCreatePlanText,
+};

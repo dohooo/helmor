@@ -81,6 +81,11 @@ pub struct BundledAgentPaths {
     pub claude_bin: Option<PathBuf>,
     pub codex_bin: Option<PathBuf>,
     pub opencode_bin: Option<PathBuf>,
+    /// Node runtime that runs the cursor worker (Cursor's `@cursor/sdk` can't
+    /// run on Bun — its HTTP/2 hits `NGHTTP2_FRAME_SIZE_ERROR` in git repos).
+    pub node_bin: Option<PathBuf>,
+    /// Built `cursor-worker.mjs` entry, run by `node_bin`.
+    pub cursor_worker: Option<PathBuf>,
 }
 
 /// Resolve the bundled Claude/Codex CLI binaries shipped inside the
@@ -131,6 +136,7 @@ fn resolve_bundled_agent_paths_for_exe(exe: &std::path::Path) -> Option<BundledA
     } else {
         "opencode"
     };
+    let node_bin_name = if cfg!(windows) { "node.exe" } else { "node" };
 
     let find = |relative: String| {
         resource_roots
@@ -143,6 +149,8 @@ fn resolve_bundled_agent_paths_for_exe(exe: &std::path::Path) -> Option<BundledA
         claude_bin: find(format!("vendor/claude-code/{claude_bin_name}")),
         codex_bin: find(format!("vendor/codex/{codex_bin_name}")),
         opencode_bin: find(format!("vendor/opencode/{opencode_bin_name}")),
+        node_bin: find(format!("vendor/node/{node_bin_name}")),
+        cursor_worker: find("vendor/cursor-worker/cursor-worker.mjs".to_string()),
     })
 }
 
@@ -160,11 +168,10 @@ impl SidecarProcess {
         let mut cmd = if is_dev {
             let mut c = Command::new(crate::platform::executable::resolve_for_spawn("bun"));
             c.arg("run").arg(&sidecar_path);
-            // Anchor cwd to sidecar/ so Bun discovers `bunfig.toml` and
-            // applies the preload that registers our build-time plugins
-            // (sqlite3 shim + cursor SDK chunk) at runtime. Without this
-            // the sidecar inherits Tauri's cwd and the preload never runs,
-            // so loading @cursor/sdk crashes on the native sqlite3 addon.
+            // Anchor cwd to sidecar/ so the cursor proxy resolves the worker at
+            // `dist/cursor-worker.mjs` and Node finds @cursor/sdk in
+            // `sidecar/node_modules`. Without this the sidecar inherits Tauri's
+            // cwd and the dev worker can't be located.
             if let Some(sidecar_root) = sidecar_path.parent().and_then(|p| p.parent()) {
                 c.current_dir(sidecar_root);
             }
@@ -199,6 +206,8 @@ impl SidecarProcess {
                 claude_bin = ?bundled_paths.claude_bin,
                 codex_bin = ?bundled_paths.codex_bin,
                 opencode_bin = ?bundled_paths.opencode_bin,
+                node_bin = ?bundled_paths.node_bin,
+                cursor_worker = ?bundled_paths.cursor_worker,
                 "Resolved bundled agent paths"
             );
             if let Some(path) = bundled_paths.claude_bin {
@@ -209,6 +218,15 @@ impl SidecarProcess {
             }
             if let Some(path) = bundled_paths.opencode_bin {
                 cmd.env("HELMOR_OPENCODE_BIN_PATH", &path);
+            }
+            // Cursor runs in a Node child process spawned by the sidecar; point
+            // it at the bundled Node + worker entry. Dev resolves both itself
+            // (node on PATH, sidecar/dist/cursor-worker.mjs).
+            if let Some(path) = bundled_paths.node_bin {
+                cmd.env("HELMOR_NODE_BIN_PATH", &path);
+            }
+            if let Some(path) = bundled_paths.cursor_worker {
+                cmd.env("HELMOR_CURSOR_WORKER_PATH", &path);
             }
         }
         // Cursor key is NOT env-passed — pushed via `updateConfig` RPC

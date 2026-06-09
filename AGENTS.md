@@ -112,7 +112,7 @@ Three insta-based targets sharing `tests/common/mod.rs`:
 cd src-tauri && cargo test --tests                                           # All integration tests
 cd src-tauri && INSTA_UPDATE=always cargo test --tests                       # Accept new snapshots
 cd src-tauri && cargo insta review                                           # Interactive accept/reject
-cd src-tauri && cargo run --bin gen_pipeline_fixture -- <session_id> <name>  # Capture real fixture
+cd src-tauri && cargo run --example gen_pipeline_fixture -- <session_id> <name>  # Capture real fixture
 ```
 
 When a snapshot drifts: look at the diff first. Only accept after confirming the new shape is intended, not a regression.
