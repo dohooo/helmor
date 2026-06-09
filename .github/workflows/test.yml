@@ -1,10 +1,7 @@
 name: Test
 
-# macOS-only quality suite. Windows and Linux no longer run unit / sidecar /
-# frontend tests — they're gated by a compile-only job in quality.yml
-# (Rust Windows/Linux Check) so we still catch cross-platform source
-# regressions, but day-to-day test signal comes from the primary target
-# (macOS) where the app actually ships.
+# macOS quality suite. Windows has its own source, sidecar, Rust, and bundle
+# checks in windows.yml; Linux is not a shipped desktop target.
 
 on:
   pull_request:

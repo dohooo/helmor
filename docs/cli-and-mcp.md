@@ -10,10 +10,14 @@ versions stay aligned.
 ### Settings UI
 
 Open the desktop app → Settings → Experimental → **Command Line Tool** → Install.
-This installs a symlink to the app bundle's `helmor-cli`:
+This installs a managed launcher to the app bundle's `helmor-cli`:
 
-- Release build: `/usr/local/bin/helmor`
-- Debug build: `/usr/local/bin/helmor-dev`
+- macOS release: `/usr/local/bin/helmor`
+- macOS debug: `/usr/local/bin/helmor-dev`
+- Windows release: `%LOCALAPPDATA%\Helmor\bin\helmor.cmd`
+- Windows debug: `%LOCALAPPDATA%\Helmor\bin\helmor-dev.cmd`
+
+On Windows, open a new terminal after installing so the updated user `PATH` is visible.
 
 ### Development
 
@@ -133,15 +137,23 @@ helmor workspace new --parent helmor/earth
 
 ### Register with Claude Code
 
+macOS:
+
 ```bash
 claude mcp add helmor -- /usr/local/bin/helmor mcp
+```
+
+Windows:
+
+```powershell
+claude mcp add helmor -- helmor mcp
 ```
 
 Verify: `claude mcp list`
 
 ### Register with Claude Desktop
 
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
+macOS: edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
@@ -154,11 +166,15 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
-Restart Claude Desktop.
+Windows: edit Claude Desktop's `claude_desktop_config.json` and use either `helmor`
+after restarting Claude Desktop, or the absolute `helmor.cmd` path under
+`%LOCALAPPDATA%\Helmor\bin`.
+
+Restart Claude Desktop after changing the config.
 
 ### Register with Cursor
 
-Edit `~/.cursor/mcp.json`:
+macOS: edit `~/.cursor/mcp.json`:
 
 ```json
 {
@@ -170,13 +186,24 @@ Edit `~/.cursor/mcp.json`:
   }
 }
 ```
+
+Windows: use `helmor` after restarting Cursor, or the absolute `helmor.cmd`
+path under `%LOCALAPPDATA%\Helmor\bin`.
 
 ### Dev Mode
 
 Use the debug entrypoint instead:
 
+macOS:
+
 ```bash
 claude mcp add helmor-dev -- /usr/local/bin/helmor-dev mcp
+```
+
+Windows:
+
+```powershell
+claude mcp add helmor-dev -- helmor-dev mcp
 ```
 
 ## Testing the MCP Server

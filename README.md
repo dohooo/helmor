@@ -27,7 +27,10 @@
   <img src="src/assets/helmor-screenshot-light.png" alt="Helmor screenshot" width="100%" />
 </p>
 
-[**Download for macOS** →](https://github.com/dohooo/helmor/releases)
+[**Download Helmor** →](https://github.com/dohooo/helmor/releases)
+
+- macOS: Apple Silicon and Intel DMG
+- Windows: x64 setup installer
 
 ## Documentation
 

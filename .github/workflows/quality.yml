@@ -1,7 +1,7 @@
 name: Quality
 
-# Lint + typecheck run on macOS. Helmor is macOS-only; Windows and Linux
-# quality gates were removed when we dropped cross-platform support.
+# Lint + typecheck run on macOS. Windows source, sidecar, Rust, and bundle
+# coverage lives in windows.yml.
 
 on:
   pull_request:

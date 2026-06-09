@@ -1,12 +1,12 @@
 # Release Secrets
 
-Configure these GitHub repository secrets before running the macOS release workflow.
+Configure these GitHub repository secrets before running the release workflows.
 
 ## Required for release creation
 
 - `GITHUB_TOKEN`
   - Provided automatically by GitHub Actions
-  - Must have `contents: write` permission in the workflow
+  - Must have `contents: write` permission in macOS and Windows release workflows
 
 ## Required for Tauri updater signing
 
@@ -21,8 +21,14 @@ Configure these GitHub repository secrets before running the macOS release workf
   - Stable-only default:
     - `https://github.com/dohooo/helmor/releases/latest/download/latest.json`
 
-GitHub release publication uses the official `tauri-action`. It uploads the signed
+macOS release publication uses the official `tauri-action`. It uploads the signed
 updater bundle and generates the `latest.json` manifest consumed by Helmor's updater.
+
+## Required for Windows NSIS publishing
+
+The Windows Release workflow builds the x64 NSIS installer on `windows-latest`
+and attaches `*-setup.exe` to the GitHub Release. It only needs the workflow
+`GITHUB_TOKEN` with `contents: write`.
 
 ## Required for macOS signing and notarization
 
@@ -47,7 +53,7 @@ The repository now uses ignored `*.local` files for local release setup:
 - `tauri-updater-private-key.local.pub`
 - `tauri-updater-password.local`
 
-The macOS release flow also imports the `Developer ID Application` certificate
+The macOS release flow imports the `Developer ID Application` certificate
 into a temporary keychain before the build starts so nested vendor binaries can
 be re-signed consistently both locally and on GitHub Actions.
 

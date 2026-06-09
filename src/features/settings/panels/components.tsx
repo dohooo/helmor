@@ -213,7 +213,7 @@ function describeCliState(snapshot: HelmorComponentsUpdateCheck): string {
 	switch (snapshot.cli.installState) {
 		case "managed":
 			return snapshot.cli.installPath
-				? `Symlink at ${snapshot.cli.installPath}.`
+				? `Installed at ${snapshot.cli.installPath}.`
 				: "Installed.";
 		case "stale":
 			return "An older copy exists at the install path.";

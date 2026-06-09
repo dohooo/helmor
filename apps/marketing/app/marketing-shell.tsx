@@ -323,7 +323,7 @@ export function MarketingShell({ data }: { data: RepoData }) {
 						<span className="sep" />
 						<span>{data.license}</span>
 						<span className="sep" />
-						<span>macOS</span>
+						<span>macOS · Windows x64</span>
 					</div>
 				</div>
 
