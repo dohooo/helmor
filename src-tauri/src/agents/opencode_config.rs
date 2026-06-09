@@ -192,7 +192,11 @@ fn upsert_custom_provider_at(path: &Path, provider: &OpencodeCustomProvider) -> 
     set_or_remove_string(&options, "apiKey", provider.api_key.trim());
     set_headers(&options, &provider.headers);
     if !models_unchanged {
-        set_object(&block, "models", models_to_cst(&provider.models));
+        set_object(
+            &block,
+            "models",
+            models_to_cst(&provider.models, provider.npm == "@ai-sdk/openai"),
+        );
     }
 
     if let Some(parent) = path.parent() {
@@ -244,7 +248,7 @@ fn set_headers(options: &CstObject, headers: &BTreeMap<String, String>) {
     set_object(options, "headers", value);
 }
 
-fn models_to_cst(models: &[OpencodeCustomModel]) -> CstInputValue {
+fn models_to_cst(models: &[OpencodeCustomModel], include_instructions: bool) -> CstInputValue {
     CstInputValue::Object(
         models
             .iter()
@@ -259,6 +263,15 @@ fn models_to_cst(models: &[OpencodeCustomModel]) -> CstInputValue {
                 )];
                 if m.reasoning {
                     fields.push(("reasoning".to_string(), CstInputValue::Bool(true)));
+                }
+                if include_instructions {
+                    fields.push((
+                        "options".to_string(),
+                        CstInputValue::Object(vec![(
+                            "instructions".to_string(),
+                            CstInputValue::String(" ".to_string()),
+                        )]),
+                    ));
                 }
                 (m.id.clone(), CstInputValue::Object(fields))
             })
@@ -368,6 +381,36 @@ mod tests {
 
         let read = read_custom_providers_at(&path).unwrap();
         assert_eq!(read, vec![sample()]);
+    }
+
+    #[test]
+    fn upsert_injects_instructions_for_openai_npm() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.jsonc");
+        let provider = OpencodeCustomProvider {
+            npm: "@ai-sdk/openai".to_string(),
+            ..sample()
+        };
+        upsert_custom_provider_at(&path, &provider).unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            written.contains("\"instructions\": \" \""),
+            "must inject instructions for @ai-sdk/openai"
+        );
+    }
+
+    #[test]
+    fn upsert_skips_instructions_for_compatible_npm() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.jsonc");
+        upsert_custom_provider_at(&path, &sample()).unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !written.contains("\"instructions\""),
+            "must not inject instructions for @ai-sdk/openai-compatible"
+        );
     }
 
     #[test]
