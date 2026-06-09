@@ -16,12 +16,15 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	chmodSync,
+	closeSync,
 	cpSync,
 	existsSync,
 	lstatSync,
 	mkdirSync,
+	openSync,
 	readdirSync,
 	readFileSync,
+	readSync,
 	rmSync,
 	statSync,
 	writeFileSync,
@@ -865,7 +868,60 @@ function stageCursorWorkerDeps(target: TargetInfo): string {
 	);
 
 	verifyCursorWorkerArch(dest, npmOs, npmArch);
+	signCursorWorkerMachOs(dest);
 	return dest;
+}
+
+/// The staged node_modules ships native Mach-O (node_sqlite3.node, rg,
+/// cursorsandbox) that arrive ad-hoc/linker-signed. Tauri's signing doesn't
+/// reach nested Resources, so re-sign each with our Developer ID + hardened
+/// runtime (no entitlements — none of them JIT) or notarization rejects the
+/// bundle. No-op when not signing (dev) and skips non-Mach-O (e.g. Windows PE).
+function signCursorWorkerMachOs(dest: string): void {
+	if (!process.env.APPLE_SIGNING_IDENTITY?.trim()) return;
+	const root = join(dest, "node_modules");
+	if (!existsSync(root)) return;
+	let signed = 0;
+	const stack = [root];
+	while (stack.length > 0) {
+		const cur = stack.pop();
+		if (!cur) break;
+		for (const entry of readdirSync(cur)) {
+			const p = join(cur, entry);
+			const st = lstatSync(p);
+			if (st.isSymbolicLink()) continue; // .bin/* point inside the tree
+			if (st.isDirectory()) {
+				stack.push(p);
+			} else if (st.isFile() && isMachO(p)) {
+				maybeSignMacBinary(p, false);
+				signed += 1;
+			}
+		}
+	}
+	console.log(`[stage-vendor] cursor worker: signed ${signed} Mach-O file(s)`);
+}
+
+function isMachO(path: string): boolean {
+	let fd: number | undefined;
+	try {
+		fd = openSync(path, "r");
+		const buf = Buffer.alloc(4);
+		if (readSync(fd, buf, 0, 4, 0) < 4) return false;
+		const magic = buf.toString("hex");
+		// thin Mach-O (LE 64/32, BE 64/32) + fat/universal.
+		return (
+			magic === "cffaedfe" ||
+			magic === "cefaedfe" ||
+			magic === "feedfacf" ||
+			magic === "feedface" ||
+			magic === "cafebabe" ||
+			magic === "bebafeca"
+		);
+	} catch {
+		return false;
+	} finally {
+		if (fd !== undefined) closeSync(fd);
+	}
 }
 
 /// Fail the build if the staged cursor-worker deps aren't the bundle target's

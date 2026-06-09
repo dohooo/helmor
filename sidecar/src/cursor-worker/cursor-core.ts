@@ -22,7 +22,6 @@ import type {
 	ProviderModelInfo,
 	SendMessageParams,
 	SlashCommandInfo,
-	UserInputResolution,
 } from "../session-manager.js";
 import {
 	buildTitlePrompt,
@@ -86,14 +85,6 @@ export class CursorCore {
 
 	private resolveApiKey(): string | null {
 		return this.apiKey;
-	}
-
-	resolveUserInput(
-		_userInputId: string,
-		_resolution: UserInputResolution,
-	): boolean {
-		// SDK auto-handles permission prompts; no waiters to resolve.
-		return false;
 	}
 
 	async sendMessage(
@@ -406,16 +397,6 @@ export class CursorCore {
 		// Emits `aborted` instantly + cancels the run via teardown — works at
 		// any point, including during the first turn's Agent.create startup.
 		this.turns.requestStop(sessionId);
-	}
-
-	async steer(
-		_sessionId: string,
-		_prompt: string,
-		_files: readonly string[],
-		_images: readonly string[],
-	): Promise<boolean> {
-		// SDK has no mid-turn injection; caller queues as a new turn.
-		return false;
 	}
 
 	async shutdown(): Promise<void> {
