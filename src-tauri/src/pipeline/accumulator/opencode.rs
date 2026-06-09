@@ -436,7 +436,7 @@ fn render_tool_part(part: &Value) -> Value {
     }
     match status {
         "completed" => {
-            let output = state.and_then(|s| s.get("output")).and_then(Value::as_str);
+            let output = tool_output(state);
             if let Some(o) = output {
                 out["output"] = json!(o);
             }
@@ -446,13 +446,30 @@ fn render_tool_part(part: &Value) -> Value {
             out["output"] = json!(err.unwrap_or("Tool failed"));
             out["isError"] = json!(true);
         }
-        _ => {}
+        _ => {
+            if let Some(o) = tool_output(state) {
+                out["output"] = json!(o);
+            }
+        }
     }
     let file_diffs = opencode_file_diffs(state, title);
     if !file_diffs.is_empty() {
         out["fileDiffs"] = json!(file_diffs);
     }
     out
+}
+
+fn tool_output(state: Option<&Value>) -> Option<&str> {
+    state
+        .and_then(|s| s.get("output"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            state?
+                .get("metadata")
+                .and_then(|m| m.get("output"))
+                .and_then(Value::as_str)
+        })
+        .filter(|output| !output.is_empty())
 }
 
 pub(super) fn handle_session_idle(acc: &mut StreamAccumulator) -> PushOutcome {
@@ -1011,6 +1028,32 @@ mod tests {
         assert_eq!(parts[1]["type"], "tool");
         assert_eq!(parts[1]["tool"], "bash");
         assert_eq!(parts[1]["output"], "a.txt");
+    }
+
+    #[test]
+    fn running_tool_carries_metadata_output() {
+        let mut acc = StreamAccumulator::new("opencode", "");
+        assistant(&mut acc, "m1");
+        acc.push_event(
+            &json!({
+                "type": "opencode/message.part.updated", "session_id": "ses_1",
+                "part": {
+                    "type": "tool", "id": "p1", "messageID": "m1",
+                    "callID": "call_1", "tool": "bash",
+                    "state": {
+                        "status": "running",
+                        "input": { "command": "printf hi" },
+                        "metadata": { "output": "hi" },
+                    },
+                },
+            }),
+            "",
+        );
+
+        let parsed = acc.collected()[0].parsed.as_ref().unwrap();
+        let tool = &parsed["parts"][0];
+        assert_eq!(tool["status"], "running");
+        assert_eq!(tool["output"], "hi");
     }
 
     fn assistant(acc: &mut StreamAccumulator, msg_id: &str) {

@@ -454,6 +454,29 @@ fn opencode_write_tool_renders_unified_diff() {
     assert_yaml_snapshot!(run_normalized(msgs));
 }
 
+// opencode bash output can arrive while the tool is still running under
+// `state.metadata.output`; the live accumulator maps that to `output` so
+// streaming renders don't wait for `status=completed`.
+#[test]
+fn opencode_running_tool_renders_output() {
+    let assistant = json!({
+        "type": "opencode_message",
+        "session_id": "ses_1",
+        "role": "assistant",
+        "parts": [{
+            "type": "tool", "callID": "c1", "tool": "bash", "status": "running",
+            "input": { "command": "printf hi" },
+            "output": "hi",
+        }],
+    });
+    let msgs = vec![make_record(
+        "om1",
+        "assistant",
+        &serde_json::to_string(&assistant).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
 // ============================================================================
 // 4. Edge cases
 // ============================================================================
