@@ -5,6 +5,28 @@ import type { RenderedMessage } from "./shared";
 import { ChatSystemMessage } from "./system-message";
 import { ChatUserMessage } from "./user-message";
 
+/**
+ * Dev-only per-row render counter. Rendered (returns null) only under
+ * `import.meta.env.DEV`, so prod never mounts it and never schedules the
+ * no-dep-array effect for every message row (the recorder itself already
+ * no-ops outside the ?debugRenderCounts=1 dev flag). Kept as its own
+ * component — rather than a `if (DEV) useEffect()` inside ConversationMessage
+ * — so the row's hook order stays unconditional and the React Compiler keeps
+ * memoizing it.
+ */
+function MessageRenderProbe({
+	sessionId,
+	messageKey,
+}: {
+	sessionId: string;
+	messageKey: string;
+}) {
+	useEffect(() => {
+		recordMessageRender(sessionId, messageKey);
+	});
+	return null;
+}
+
 function ConversationMessage({
 	message,
 	previousAssistantMessage,
@@ -17,25 +39,40 @@ function ConversationMessage({
 	itemIndex: number;
 }) {
 	const messageKey = message.id ?? `${message.role}:${itemIndex}`;
-	useEffect(() => {
-		recordMessageRender(sessionId, messageKey);
-	});
-
 	const streaming = message.role === "assistant" && message.streaming === true;
 
+	// Dev-only render counter; renders null (no DOM) and is dropped from prod
+	// builds since `import.meta.env.DEV` is statically false there.
+	const renderProbe = import.meta.env.DEV ? (
+		<MessageRenderProbe sessionId={sessionId} messageKey={messageKey} />
+	) : null;
+
 	if (message.role === "user") {
-		return <ChatUserMessage message={message} />;
+		return (
+			<>
+				{renderProbe}
+				<ChatUserMessage message={message} />
+			</>
+		);
 	}
 
 	if (message.role === "assistant") {
-		return <ChatAssistantMessage message={message} streaming={streaming} />;
+		return (
+			<>
+				{renderProbe}
+				<ChatAssistantMessage message={message} streaming={streaming} />
+			</>
+		);
 	}
 
 	return (
-		<ChatSystemMessage
-			message={message}
-			previousAssistantMessage={previousAssistantMessage}
-		/>
+		<>
+			{renderProbe}
+			<ChatSystemMessage
+				message={message}
+				previousAssistantMessage={previousAssistantMessage}
+			/>
+		</>
 	);
 }
 

@@ -24,8 +24,11 @@ export function AppShell({
 }) {
 	const s = useAppShellState({ onOpenSettings });
 	const { sel, data, chrome, panels } = s;
-	const selectedWorkspaceId = sel.selection.selectedWorkspaceId;
-	const selectedSessionId = sel.selection.selectedSessionId;
+	// Router-owned selection (Stage 3b) — same primitives `useAppShellState`
+	// threads into the data/chrome layers, so the P1-A header memo deps below
+	// see byte-identical values, just sourced from the router.
+	const selectedWorkspaceId = s.selectedWorkspaceId;
+	const selectedSessionId = s.selectedSessionId;
 	const inspectorCollapsed = sel.contextPanel.inspectorCollapsed;
 	const setInspectorCollapsed = sel.contextPanelActions.setInspectorCollapsed;
 
@@ -103,7 +106,7 @@ export function AppShell({
 			onFeedbackOpenChange={s.setFeedbackOpen}
 			onOpenSettings={data.handleOpenSettings}
 			onSubmitFeedbackPrompt={data.submitFeedbackPrompt}
-			workspaceViewMode={sel.selection.viewMode}
+			workspaceViewMode={s.workspaceViewMode}
 			sidebar={{
 				collapsed: panels.sidebarCollapsed,
 				resizing: panels.isSidebarResizing,
@@ -134,7 +137,7 @@ export function AppShell({
 			isSidebarResizing={panels.isSidebarResizing}
 			sidebarWidth={panels.sidebarWidth}
 			workspacePane={{
-				workspaceViewMode: sel.selection.viewMode,
+				workspaceViewMode: s.workspaceViewMode,
 				editorSession: data.editorSession,
 				workspaceRootPath: data.workspaceRootPath,
 				appShortcuts: s.appSettings.shortcuts,
@@ -208,6 +211,10 @@ export function AppShell({
 				onOpenStartContextCard: sel.contextPanelActions.openStartContextCard,
 				onOpenWorkspaceContextCard:
 					sel.contextPanelActions.openWorkspaceContextCard,
+				// Settle-gated id for the inspector's git-diff. Matches the settled
+				// `selectedWorkspaceDetail` / `workspaceRootPath` below so the diff
+				// query key stays internally consistent during a rapid-switch burst.
+				workspaceId: s.settledWorkspaceId,
 				workspaceRootPath: data.workspaceRootPath,
 				selectedWorkspaceDetail: data.selectedWorkspaceDetailQuery.data ?? null,
 				activeEditor: data.activeEditorTarget,

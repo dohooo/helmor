@@ -53,7 +53,7 @@ export function DropFilePlugin() {
 			.then(({ listen }) => {
 				if (cancelledRef.current) return; // effect was cleaned up
 
-				listen<{ paths: string[] }>("tauri://drag-drop", (event) => {
+				return listen<{ paths: string[] }>("tauri://drag-drop", (event) => {
 					const paths = event.payload.paths;
 					if (!paths || paths.length === 0) return;
 

@@ -18,7 +18,15 @@ import {
 	PlusIcon,
 	Undo2Icon,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	memo,
+	useCallback,
+	useDeferredValue,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { AnimatedShinyText } from "@/components/ui/animated-shiny-text";
 import { Badge } from "@/components/ui/badge";
@@ -203,13 +211,25 @@ function ChangesSectionImpl({
 		return () => window.clearTimeout(id);
 	}, [branchSwitching, changes]);
 
+	// Deferred copy of the changes array. On a cold workspace switch a large
+	// new `changes` array arrives in the same urgent render as the ChatThread
+	// mount; deriving the area projections (and the heavy buildTree/sort inside
+	// the tree renderers) from this deferred value lets React paint the rest of
+	// the inspector first, then reconcile the change list at lower priority.
+	// During the transition `useDeferredValue` re-renders with the PREVIOUS
+	// (complete, valid) array, so every settled frame is byte-identical to what
+	// today shows — only the timing shifts (converges in ~1 frame). The
+	// branch-switch effects below intentionally keep reading the immediate
+	// `changes` prop so the target-branch loading state still flips promptly.
+	const deferredChanges = useDeferredValue(changes);
+
 	// Each area has its own insertions/deletions. Project the area's stats
 	// onto a flat `insertions`/`deletions` pair so downstream components
 	// (LineStats etc.) read the correct numbers without knowing which group
 	// they're in.
 	const stagedChanges = useMemo<ChangeRow[]>(
 		() =>
-			changes
+			deferredChanges
 				.filter((change) => change.stagedStatus != null)
 				.map((change) => ({
 					...change,
@@ -217,11 +237,11 @@ function ChangesSectionImpl({
 					insertions: change.stagedInsertions,
 					deletions: change.stagedDeletions,
 				})),
-		[changes],
+		[deferredChanges],
 	);
 	const unstagedChanges = useMemo<ChangeRow[]>(
 		() =>
-			changes
+			deferredChanges
 				.filter((change) => change.unstagedStatus != null)
 				.map((change) => ({
 					...change,
@@ -229,11 +249,11 @@ function ChangesSectionImpl({
 					insertions: change.unstagedInsertions,
 					deletions: change.unstagedDeletions,
 				})),
-		[changes],
+		[deferredChanges],
 	);
 	const committedChanges = useMemo<ChangeRow[]>(
 		() =>
-			changes
+			deferredChanges
 				.filter((change) => change.committedStatus != null)
 				.map((change) => ({
 					...change,
@@ -241,7 +261,7 @@ function ChangesSectionImpl({
 					insertions: change.committedInsertions,
 					deletions: change.committedDeletions,
 				})),
-		[changes],
+		[deferredChanges],
 	);
 	const hasUncommittedChanges =
 		stagedChanges.length > 0 || unstagedChanges.length > 0;

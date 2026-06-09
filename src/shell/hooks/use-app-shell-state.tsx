@@ -18,6 +18,7 @@ import { useDockUnreadBadge } from "@/features/dock-badge";
 import type { SettingsSection } from "@/features/settings";
 import { useAppUpdater } from "@/features/updater/use-app-updater";
 import { useSettings } from "@/lib/settings";
+import { useRouterSelection } from "@/router/use-router-selection";
 import { publishShellEvent } from "@/shell/event-bus";
 import { useEnsureDefaultModel } from "@/shell/hooks/use-ensure-default-model";
 import { useGlobalShortcutHandlers } from "@/shell/hooks/use-global-shortcut-handlers";
@@ -25,6 +26,7 @@ import { useNavigationSidebar } from "@/shell/hooks/use-navigation-sidebar";
 import { useOpencodeStartupSync } from "@/shell/hooks/use-opencode-startup-sync";
 import { useShellPanels } from "@/shell/hooks/use-panels";
 import { useSelectionControllers } from "@/shell/hooks/use-selection-controllers";
+import { useSettledWorkspaceId } from "@/shell/hooks/use-settled-workspace-id";
 import { useShellChromeState } from "@/shell/hooks/use-shell-chrome-state";
 import { useShellStartupEffects } from "@/shell/hooks/use-shell-startup-effects";
 import { useThemeApplication } from "@/shell/hooks/use-theme-application";
@@ -76,12 +78,22 @@ export function useAppShellState({
 	const setInspectorCollapsed = sel.contextPanelActions.setInspectorCollapsed;
 	const handleStartContextPreviewClose =
 		sel.contextPanelActions.closeStartContextPreview;
-	const selectedWorkspaceId = selection.selectedWorkspaceId;
+	// `selected*` + `viewMode` are now router-owned (Stage 3b); read them as
+	// structurally-shared primitives so an unrelated location field doesn't
+	// re-render AppShell. `displayed*` + `reselectTick` stay store-driven.
+	const routerSelection = useRouterSelection();
+	const selectedWorkspaceId = routerSelection.workspaceId;
+	const selectedSessionId = routerSelection.sessionId;
+	const workspaceViewMode = routerSelection.viewMode;
 	const displayedWorkspaceId = selection.displayedWorkspaceId;
-	const selectedSessionId = selection.selectedSessionId;
 	const displayedSessionId = selection.displayedSessionId;
-	const workspaceViewMode = selection.viewMode;
 	const workspaceReselectTick = selection.reselectTick;
+	// Rapid-switch settle gate for the per-workspace DATA cluster (forge/detail/
+	// git + inspector diff). The selection highlight tracks `selectedWorkspaceId`
+	// (router-instant, cheap); the heavy data load reads this settled id so a
+	// held-key burst only fetches/renders the workspace the user lands on. Warm
+	// (cached) and single/slow switches settle instantly — see the hook.
+	const settledWorkspaceId = useSettledWorkspaceId(selectedWorkspaceId);
 
 	// P0-A: cache the per-workspace session-selection history as a stable
 	// reference. `getSessionSelectionHistory` already returns a stable ref
@@ -129,6 +141,7 @@ export function useAppShellState({
 		handleSelectWorkspace: sel.handleSelectWorkspace,
 		handleSelectSession: sel.handleSelectSession,
 		selectedWorkspaceId,
+		settledWorkspaceId,
 		displayedSessionId,
 		workspaceReselectTick,
 		pendingCreatedWorkspaceSubmit: sel.pendingCreatedWorkspaceSubmit,
@@ -267,5 +280,15 @@ export function useAppShellState({
 		handleOpenWorkspaceStart,
 		startCreateContext,
 		workspaceSidebarAutoSelectSettingsGate,
+		// Router-owned selection intent (Stage 3b). Surfaced here so AppShell's
+		// header memo nodes + the layout's view-mode branch read the same
+		// structurally-shared primitives instead of the retired store fields.
+		selectedWorkspaceId,
+		selectedSessionId,
+		workspaceViewMode,
+		// Settle-gated id for the inspector data (git-diff). Keeps its query key
+		// (root-path + id) consistent with the now-settled `selectedWorkspaceDetail`
+		// the inspector already receives via props.
+		settledWorkspaceId,
 	};
 }
