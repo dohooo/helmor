@@ -133,9 +133,10 @@ windows = { version = "0.58", features = [
 name = "helmor-cli"
 path = "src/bin/helmor-cli.rs"
 
-[[bin]]
-name = "gen_pipeline_fixture"
-path = "src/bin/gen_pipeline_fixture.rs"
+# gen_pipeline_fixture{,_from_stream} are dev-only fixture-capture tools and
+# live in examples/ (NOT [[bin]]) on purpose: Tauri's bundler copies every
+# [[bin]] of this crate into the .app, so any bin here would ship. examples are
+# built only on demand (`cargo run --example <name> -- …`) and never bundled.
 
 [dev-dependencies]
 anyhow = "1"

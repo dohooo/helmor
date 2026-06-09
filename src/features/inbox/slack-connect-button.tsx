@@ -7,6 +7,7 @@ import {
 	type SlackWorkspace,
 	slackImportFromDesktop,
 } from "@/lib/api";
+import { isMac } from "@/lib/platform";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
@@ -37,6 +38,7 @@ export function SlackConnectState({
 	const importMutation = useSlackImportMutation({
 		onImported: (workspace) => onConnected?.(workspace.teamId),
 	});
+	const desktopImportSupported = isMac();
 
 	return (
 		<div
@@ -51,8 +53,9 @@ export function SlackConnectState({
 					Connect a Slack workspace
 				</div>
 				<div className="text-pretty text-small leading-5 text-muted-foreground">
-					Connects to your signed-in Slack desktop app. Everything stays local
-					and secure on your device.
+					{desktopImportSupported
+						? "Connects to your signed-in Slack desktop app. Everything stays local and secure on your device."
+						: "Slack desktop import is available on macOS. Windows support is not wired up yet."}
 				</div>
 			</div>
 			<Button
@@ -61,7 +64,7 @@ export function SlackConnectState({
 				size="sm"
 				className="cursor-interactive text-small"
 				onClick={() => importMutation.mutate()}
-				disabled={importMutation.isPending}
+				disabled={!desktopImportSupported || importMutation.isPending}
 			>
 				{importMutation.isPending ? (
 					<>

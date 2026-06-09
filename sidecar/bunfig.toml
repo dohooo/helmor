@@ -1,8 +1,0 @@
-# Apply build-time plugins (sqlite3 shim redirect + cursor SDK chunk inliner)
-# at runtime too, so `bun run` and `bun test` produce the same module shape
-# that `bun build --compile` produces. Compile-time plugins are wired
-# separately in scripts/build.ts.
-preload = ["./scripts/plugins/register-runtime.ts"]
-
-[test]
-preload = ["./scripts/plugins/register-runtime.ts"]

@@ -372,3 +372,126 @@ describe("useAppShortcuts", () => {
 		expect(themeToggle).toHaveBeenCalledTimes(1);
 	});
 });
+
+describe("useAppShortcuts held-key auto-repeat", () => {
+	// `workspace.next` (Mod+Alt+ArrowDown, scope "app") is a repeatable nav
+	// shortcut, so it exercises the rAF held-key path regardless of focus.
+	function fireNavDown(options?: { repeat?: boolean }) {
+		window.dispatchEvent(
+			new KeyboardEvent("keydown", {
+				key: "ArrowDown",
+				code: "ArrowDown",
+				metaKey: true,
+				altKey: true,
+				repeat: options?.repeat ?? false,
+			}),
+		);
+	}
+
+	function fireNavDownKeyUp() {
+		window.dispatchEvent(
+			new KeyboardEvent("keyup", {
+				key: "ArrowDown",
+				code: "ArrowDown",
+				metaKey: true,
+				altKey: true,
+			}),
+		);
+	}
+
+	function RepeatHarness({ onStep }: { onStep: () => void }) {
+		useAppShortcuts({
+			overrides: {},
+			handlers: [{ id: "workspace.next", callback: onStep, repeatable: true }],
+		});
+		return null;
+	}
+
+	beforeEach(() => {
+		_resetActiveScopeForTesting();
+		_resetQuickSwitchActiveForTesting();
+		vi.useFakeTimers();
+	});
+	afterEach(() => {
+		vi.runOnlyPendingTimers();
+		vi.useRealTimers();
+		document.body.innerHTML = "";
+	});
+
+	it("steps exactly once on a single (non-repeat) press and starts no rAF loop", () => {
+		const onStep = vi.fn();
+		render(<RepeatHarness onStep={onStep} />);
+
+		fireNavDown();
+		expect(onStep).toHaveBeenCalledTimes(1);
+
+		// No auto-repeat occurred, so advancing frames must not step again — a
+		// single tap is identical to every other one-shot shortcut.
+		vi.advanceTimersToNextFrame();
+		vi.advanceTimersToNextFrame();
+		vi.advanceTimersToNextFrame();
+		vi.advanceTimersToNextFrame();
+		expect(onStep).toHaveBeenCalledTimes(1);
+	});
+
+	it("drives further steps from the rAF loop once OS auto-repeat begins", () => {
+		const onStep = vi.fn();
+		render(<RepeatHarness onStep={onStep} />);
+
+		fireNavDown();
+		expect(onStep).toHaveBeenCalledTimes(1);
+
+		// First OS auto-repeat starts the loop but does NOT itself step — the
+		// backlog of repeat keydowns is dropped.
+		fireNavDown({ repeat: true });
+		fireNavDown({ repeat: true });
+		fireNavDown({ repeat: true });
+		expect(onStep).toHaveBeenCalledTimes(1);
+
+		// The loop steps once every other frame (HELD_REPEAT_FRAME_INTERVAL = 2).
+		vi.advanceTimersToNextFrame();
+		expect(onStep).toHaveBeenCalledTimes(1);
+		vi.advanceTimersToNextFrame();
+		expect(onStep).toHaveBeenCalledTimes(2);
+		vi.advanceTimersToNextFrame();
+		vi.advanceTimersToNextFrame();
+		expect(onStep).toHaveBeenCalledTimes(3);
+	});
+
+	it("stops immediately on keyup with no further queued steps", () => {
+		const onStep = vi.fn();
+		render(<RepeatHarness onStep={onStep} />);
+
+		fireNavDown();
+		fireNavDown({ repeat: true });
+		vi.advanceTimersToNextFrame();
+		vi.advanceTimersToNextFrame();
+		expect(onStep).toHaveBeenCalledTimes(2);
+
+		fireNavDownKeyUp();
+		// After release, no frame may step again — release stops the loop on the
+		// spot, leaving nothing to drain.
+		vi.advanceTimersToNextFrame();
+		vi.advanceTimersToNextFrame();
+		vi.advanceTimersToNextFrame();
+		vi.advanceTimersToNextFrame();
+		expect(onStep).toHaveBeenCalledTimes(2);
+	});
+
+	it("cancels the rAF loop on unmount (no leak)", () => {
+		const onStep = vi.fn();
+		const { unmount } = render(<RepeatHarness onStep={onStep} />);
+
+		fireNavDown();
+		fireNavDown({ repeat: true });
+		vi.advanceTimersToNextFrame();
+		vi.advanceTimersToNextFrame();
+		expect(onStep).toHaveBeenCalledTimes(2);
+
+		unmount();
+		vi.advanceTimersToNextFrame();
+		vi.advanceTimersToNextFrame();
+		vi.advanceTimersToNextFrame();
+		expect(onStep).toHaveBeenCalledTimes(2);
+	});
+});

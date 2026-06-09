@@ -76,4 +76,24 @@ export class ActiveTurnRegistry {
 	end(sessionId: string): void {
 		this.turns.delete(sessionId);
 	}
+
+	/** Terminal-fail every live turn (worker-fatal network blow-up): emit
+	 *  error+end on each non-aborted turn, then clear. Returns the affected
+	 *  requestIds so the caller can release any external (proxy) waiters. */
+	failAll(message: string, internal = true): string[] {
+		const ids: string[] = [];
+		for (const turn of this.turns.values()) {
+			ids.push(turn.requestId);
+			if (turn.abortEmitted) continue;
+			turn.abortEmitted = true;
+			try {
+				turn.emitter.error(turn.requestId, message, internal);
+				turn.emitter.end(turn.requestId);
+			} catch {
+				// best-effort — must never throw past recovery
+			}
+		}
+		this.turns.clear();
+		return ids;
+	}
 }

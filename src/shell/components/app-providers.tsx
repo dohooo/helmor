@@ -1,5 +1,6 @@
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
-import { type ComponentType, useState } from "react";
+import { RouterProvider } from "@tanstack/react-router";
+import { type ComponentType, useCallback, useMemo, useState } from "react";
 import { QuitConfirmDialog } from "@/components/quit-confirm-dialog";
 import { SplashScreen } from "@/components/splash-screen";
 import { AppOnboarding } from "@/features/onboarding";
@@ -8,6 +9,7 @@ import { SettingsDialog } from "@/features/settings";
 import { getPendingPairingToken } from "@/lib/ipc";
 import { helmorQueryPersister, QUERY_CACHE_BUSTER } from "@/lib/query-client";
 import { SettingsContext } from "@/lib/settings";
+import { router } from "@/router";
 import { EMPTY_SESSION_RUN_STATES } from "@/shell/constants";
 import type { AppBootstrap } from "@/shell/hooks/use-app-bootstrap";
 import { useCompanionAuthState } from "@/shell/hooks/use-companion-auth";
@@ -46,6 +48,28 @@ export function AppProviders({
 	// Read once at mount: a scanned `#pair=` token is staged but not yet active.
 	// Cleared by `confirmCompanionPairing`, which reloads (remounting this).
 	const [pendingPairing] = useState(() => getPendingPairingToken());
+	const onOpenSettings = useCallback(
+		(
+			workspaceId: string | null,
+			workspaceRepoId: string | null,
+			initialSection?: SettingsSection,
+		) => {
+			setSettingsInitialSection(initialSection);
+			setSettingsWorkspaceId(workspaceId);
+			setSettingsWorkspaceRepoId(workspaceRepoId);
+			setSettingsOpen(true);
+		},
+		[
+			setSettingsInitialSection,
+			setSettingsWorkspaceId,
+			setSettingsWorkspaceRepoId,
+			setSettingsOpen,
+		],
+	);
+	const routerContext = useMemo(
+		() => ({ queryClient, onOpenSettings, appShell: AppShell }),
+		[queryClient, onOpenSettings, AppShell],
+	);
 	return (
 		<SettingsContext.Provider value={settingsContextValue}>
 			<PersistQueryClientProvider
@@ -65,14 +89,7 @@ export function AppProviders({
 						<QuitConfirmDialog sessionRunStates={EMPTY_SESSION_RUN_STATES} />
 					</>
 				) : (
-					<AppShell
-						onOpenSettings={(workspaceId, workspaceRepoId, initialSection) => {
-							setSettingsInitialSection(initialSection);
-							setSettingsWorkspaceId(workspaceId);
-							setSettingsWorkspaceRepoId(workspaceRepoId);
-							setSettingsOpen(true);
-						}}
-					/>
+					<RouterProvider router={router} context={routerContext} />
 				)}
 				{splashMounted && <SplashScreen visible={splashVisible} />}
 				<SettingsDialog

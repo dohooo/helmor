@@ -253,6 +253,27 @@ function onEditorError(error: Error) {
 	console.error("[Composer Lexical]", error);
 }
 
+/**
+ * Dev-only render counter. Rendered (returns null) only under
+ * `import.meta.env.DEV`, so prod never mounts it and never schedules the
+ * no-dep-array effect (the recorder itself already no-ops outside the
+ * ?debugRenderCounts=1 dev flag). Kept as its own component — rather than a
+ * `if (DEV) useEffect()` inside WorkspaceComposer — so the parent's hook order
+ * stays unconditional and the React Compiler keeps memoizing the composer.
+ */
+function ComposerRenderProbe({
+	contextKey,
+	instanceId,
+}: {
+	contextKey: string;
+	instanceId: string;
+}) {
+	useEffect(() => {
+		recordComposerRender(contextKey, instanceId);
+	});
+	return null;
+}
+
 export const WorkspaceComposer = memo(function WorkspaceComposer({
 	contextKey,
 	onSubmit,
@@ -321,9 +342,6 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const instanceIdRef = useRef(
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
 	);
-	useEffect(() => {
-		recordComposerRender(contextKey, instanceIdRef.current);
-	});
 
 	// Pre-allocated UUID used as the paste-cache bucket id when
 	// `sessionId` isn't bound yet (StartPage). Forwarded on submit so the
@@ -733,6 +751,15 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 					"cursor-not-allowed opacity-60",
 			)}
 		>
+			{/* Dev-only render counter; renders null (no DOM) and is dropped
+			    from prod builds since `import.meta.env.DEV` is statically
+			    false there. */}
+			{import.meta.env.DEV ? (
+				<ComposerRenderProbe
+					contextKey={contextKey}
+					instanceId={instanceIdRef.current}
+				/>
+			) : null}
 			<label htmlFor="workspace-input" className="sr-only">
 				Workspace input
 			</label>

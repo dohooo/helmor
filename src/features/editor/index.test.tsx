@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { RouterContextProvider } from "@tanstack/react-router";
 import {
 	cleanup,
 	fireEvent,
@@ -9,11 +10,9 @@ import {
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createStore } from "zustand/vanilla";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { EditorSessionState } from "@/lib/editor-session";
-import { SelectionStoreProvider } from "@/shell/controllers/selection-store-context";
-import type { SelectionState } from "@/shell/controllers/use-selection-controller";
+import { router } from "@/router";
 
 const apiMocks = vi.hoisted(() => ({
 	listWorkspaceChanges: vi.fn(),
@@ -137,23 +136,15 @@ function EditorSurfaceHarness({
 				},
 			}),
 	);
-	// WorkspaceEditorSurface now reads `selectedWorkspaceId` from the selection
-	// store instead of a prop. Seed it with `null` to preserve the prior
-	// `workspaceId = null` default these tests were written against.
-	const [selectionStore] = useState(() =>
-		createStore<SelectionState>(() => ({
-			selectedWorkspaceId: null,
-			displayedWorkspaceId: null,
-			selectedSessionId: null,
-			displayedSessionId: null,
-			viewMode: "conversation",
-			reselectTick: 0,
-		})),
-	);
 
+	// Stage 3b: WorkspaceEditorSurface reads `selectedWorkspaceId` from the
+	// ROUTER. The `beforeEach` resets the module router to `/`, so the editor
+	// reads `workspaceId = null` — the prior default these tests were written
+	// against. A bare RouterContextProvider is enough (the editor only reads;
+	// it never navigates).
 	return (
 		<QueryClientProvider client={queryClient}>
-			<SelectionStoreProvider value={selectionStore}>
+			<RouterContextProvider router={router}>
 				<WorkspaceEditorSurface
 					editorSession={session}
 					workspaceRootPath="/tmp/helmor-workspace"
@@ -164,13 +155,16 @@ function EditorSurfaceHarness({
 					onError={onError}
 					onExit={vi.fn()}
 				/>
-			</SelectionStoreProvider>
+			</RouterContextProvider>
 		</QueryClientProvider>
 	);
 }
 
 describe("WorkspaceEditorSurface", () => {
 	beforeEach(() => {
+		// Stage 3b: the editor reads the selected workspace from the module-scope
+		// router. Reset it to `/` so each test starts with `workspaceId = null`.
+		router.history.replace("/");
 		runtimeMocks.reset();
 		apiMocks.listWorkspaceChanges.mockReset();
 		apiMocks.listWorkspaceChanges.mockResolvedValue([]);

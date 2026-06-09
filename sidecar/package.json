@@ -5,9 +5,10 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"build": "bun run scripts/stage-vendor.ts && bun run scripts/build.ts",
-		"dev:prepare": "bun run stage-vendor",
+		"build": "HELMOR_STAGE_CURSOR_WORKER=1 bun run scripts/stage-vendor.ts && bun run scripts/build.ts",
+		"dev:prepare": "bun run stage-vendor && bun run build:worker",
 		"stage-vendor": "bun run scripts/stage-vendor.ts",
+		"build:worker": "bun run scripts/build-worker.ts",
 		"dev": "bun run src/index.ts",
 		"test": "bun test",
 		"typecheck": "bunx tsc --noEmit"
@@ -27,6 +28,7 @@
 		"@types/node": "^25.5.2"
 	},
 	"trustedDependencies": [
-		"@anthropic-ai/claude-code"
+		"@anthropic-ai/claude-code",
+		"sqlite3"
 	]
 }

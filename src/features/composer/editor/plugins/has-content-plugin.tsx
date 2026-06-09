@@ -42,11 +42,19 @@ export function HasContentPlugin({
 	const [editor] = useLexicalComposerContext();
 
 	useEffect(() => {
-		return editor.registerUpdateListener(({ editorState }) => {
-			editorState.read(() => {
-				onChange($hasContent());
-			});
-		});
+		return editor.registerUpdateListener(
+			({ editorState, dirtyElements, dirtyLeaves }) => {
+				// Skip selection-only updates (clicks, arrow keys): they can't
+				// change whether the editor has content, so re-running the
+				// full-tree $hasContent() walk on every caret move is wasted
+				// work. Same guard AutoResizePlugin uses. The emitted boolean is
+				// unchanged — content edits always dirty an element or leaf.
+				if (dirtyElements.size === 0 && dirtyLeaves.size === 0) return;
+				editorState.read(() => {
+					onChange($hasContent());
+				});
+			},
+		);
 	}, [editor, onChange]);
 
 	return null;

@@ -66,9 +66,8 @@ vi.mock("./App.css", () => ({}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
 	open: vi.fn(),
 }));
-// Helmor is macOS-only; `./lib/platform` already returns `isMac: () => true`
-// unconditionally. No mock needed, but keep this vi.mock stub to document the
-// shortcut suite's dependency on that assumption.
+// This shortcut suite exercises the Mac shortcut mapping, so keep the platform
+// mock explicit even when the runtime helper changes.
 vi.mock("./lib/platform", () => ({
 	isMac: () => true,
 	isTauriRuntime: () => true,
@@ -114,6 +113,7 @@ vi.mock("./lib/api", async (importOriginal) => {
 });
 
 import App from "./App";
+import { router } from "./router";
 
 const WORKSPACE_IDS = {
 	done: "workspace-done",
@@ -439,6 +439,12 @@ async function renderAppReady(expectedSessionTitle = "Done session 1") {
 
 describe("App global navigation shortcuts", () => {
 	beforeEach(() => {
+		// Stage 3b: the router is a module-scope singleton that now OWNS the
+		// selected workspace/session. Each test renders a fresh <App/>, so reset
+		// the router to the boot index between tests (the previous App is already
+		// unmounted by afterEach(cleanup)) — otherwise a stale location from the
+		// prior test leaks in and breaks boot auto-select restore.
+		router.history.replace("/");
 		runtimeSessionFixtures = createRuntimeSessionFixtures();
 		apiMocks.createSession.mockReset();
 		apiMocks.deleteSession.mockReset();

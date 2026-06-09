@@ -95,6 +95,39 @@ export const LLAMA_SHA256: Readonly<{ arm64: string; x64: string }> = {
 	x64: "0b415c8d366eabe9ab69fe7d8e79f29b63cc1baa33714967ca8a0c123ae75797",
 };
 
+// Node runtime that runs the cursor worker. Node 24 to match Conductor's
+// bundled runtime. sqlite3 (the only native addon) is built as an N-API addon
+// (`napi_versions` in its package.json), so the prebuilt `.node` is ABI-stable
+// across Node majors and Bun — no Node↔addon ABI pinning needed; verified the
+// worker loads it on both Node 22 and 24. Bumping: pull SHA256 from
+// https://nodejs.org/dist/v$VER/SHASUMS256.txt and wipe sidecar/.bundle-cache.
+export const NODE_VERSION = "24.16.0";
+export const NODE_SHA256: Readonly<{
+	darwin: Record<DarwinArch, string>;
+	windows: Record<DarwinArch, string>;
+}> = {
+	darwin: {
+		arm64: "39189dab4eeb15706c424af0ac08a3044c9e48f7db12a7d77f6b7aafc7dd5df6",
+		x64: "298b4c7b3cb80765c8703e42b90324a4ece3b6634947b89e769c3c980ab55185",
+	},
+	windows: {
+		arm64: "14834611d4c6b3c06054e7007732b90474c16e0b32f395e05b55a571ef71c6d2",
+		x64: "edaca9bd58ec8e92037dac4e877d52f6b8f430b81c18b57e264b4e2fb111cd56",
+	},
+} as const;
+
+export function nodeArchivePlan(target: TargetInfo): ArchivePlan {
+	const platform = target.os === "windows" ? "win" : "darwin";
+	const ext = target.os === "windows" ? "zip" : "tar.gz";
+	const slug = `node-v${NODE_VERSION}-${platform}-${target.arch}`;
+	return {
+		slug,
+		archiveName: `${slug}.${ext}`,
+		url: `https://nodejs.org/dist/v${NODE_VERSION}/${slug}.${ext}`,
+		sha256: NODE_SHA256[target.os][target.arch],
+	};
+}
+
 const TARGETS: Readonly<Record<DarwinArch, TargetInfo>> = {
 	arm64: {
 		os: "darwin",

@@ -308,6 +308,7 @@ export function createStreamFlushers(opts: {
 	userMessageId: string;
 	optimisticUserMessage: ThreadMessageLike;
 	changesRefreshInterval: number;
+	onFinalChangesRefresh?: () => void;
 }): {
 	flushStreamMessages: () => void;
 	scheduleFlush: () => void;
@@ -349,6 +350,9 @@ export function createStreamFlushers(opts: {
 
 	const cleanup = () => {
 		window.clearInterval(opts.changesRefreshInterval);
+		// Final Changes-diff refresh on stream end so the post-turn diff is fresh
+		// even though the periodic refresh now runs every 7s (was 3s) mid-stream.
+		opts.onFinalChangesRefresh?.();
 		if (opts.accumulator.frameId !== null) {
 			window.cancelAnimationFrame(opts.accumulator.frameId);
 			opts.accumulator.frameId = null;

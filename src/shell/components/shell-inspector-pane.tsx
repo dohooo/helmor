@@ -3,7 +3,6 @@
 // surface). Receives every piece of state it needs as props from AppShell.
 import { useLayoutEffect, useRef } from "react";
 import { useStore } from "zustand";
-import { useShallow } from "zustand/react/shallow";
 import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
@@ -22,6 +21,10 @@ import type { ActiveEditorTarget, DiffOpenOptions } from "@/lib/editor-session";
 import type { WorkspaceRightSidebarMode } from "@/lib/settings";
 import type { ContextCard } from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
+import {
+	useRouterIsEditor,
+	useRouterIsStart,
+} from "@/router/use-router-selection";
 import { useSelectionStore } from "@/shell/controllers/selection-store-context";
 import { useEdgePeek } from "@/shell/hooks/use-edge-peek";
 import { useEdgeSwipe } from "@/shell/hooks/use-edge-swipe";
@@ -51,6 +54,11 @@ type Props = {
 	onOpenWorkspaceContextCard: (card: ContextCard) => void;
 
 	// Inspector-sidebar props
+	// Settle-gated workspace id (lags the router-instant selection only for cold
+	// targets mid-burst). Drives the inspector's git-diff query; kept consistent
+	// with the settled `workspaceRootPath` / `selectedWorkspaceDetail` so the diff
+	// query key (root-path + id) never pairs a stale id with a fresh path.
+	workspaceId: string | null;
 	workspaceRootPath: string | null;
 	selectedWorkspaceDetail: WorkspaceDetail | null;
 	activeEditor: ActiveEditorTarget | null;
@@ -84,6 +92,7 @@ export function ShellInspectorPane({
 	workspacePreviewCardId,
 	onOpenStartContextCard,
 	onOpenWorkspaceContextCard,
+	workspaceId,
 	workspaceRootPath,
 	selectedWorkspaceDetail,
 	activeEditor,
@@ -98,20 +107,18 @@ export function ShellInspectorPane({
 	workspaceForgeIsRefreshing,
 	onOpenSettings,
 }: Props) {
-	// Subscribe to the selection store directly instead of receiving these
-	// three as flattened props from AppShell. They're the same store fields
-	// AppShell read; moving the delivery channel keeps an unrelated
-	// selection-field change from re-rendering this pane via prop churn.
-	// `useShallow` keeps the multi-field selector stable across renders.
-	const { selectedWorkspaceId, displayedSessionId, viewMode } = useStore(
+	// The view-mode bits (`isStart` / `isEditor`) come from the ROUTER (Stage 3b:
+	// navigation intent is router-owned) and stay router-instant. The inspector's
+	// DATA target arrives as the settle-gated `workspaceId` prop (see above), so a
+	// rapid-switch burst doesn't re-fire the git-diff per intermediate workspace.
+	// The `displayedSessionId` paint track stays in the store — read via a single
+	// `useStore` selector.
+	const isStart = useRouterIsStart();
+	const editorMode = useRouterIsEditor();
+	const displayedSessionId = useStore(
 		useSelectionStore(),
-		useShallow((s) => ({
-			selectedWorkspaceId: s.selectedWorkspaceId,
-			displayedSessionId: s.displayedSessionId,
-			viewMode: s.viewMode,
-		})),
+		(s) => s.displayedSessionId,
 	);
-	const editorMode = viewMode === "editor";
 	const targetBranch = (() => {
 		const target =
 			selectedWorkspaceDetail?.intendedTargetBranch ??
@@ -190,9 +197,7 @@ export function ShellInspectorPane({
 					{rightSidebarMode === "context" ? (
 						<WorkspaceStartContextSidebar
 							repository={
-								viewMode === "start"
-									? startRepository
-									: selectedWorkspaceRepository
+								isStart ? startRepository : selectedWorkspaceRepository
 							}
 							inboxProviderTab={startInboxProviderTab}
 							onInboxProviderTabChange={onStartInboxProviderTabChange}
@@ -205,22 +210,18 @@ export function ShellInspectorPane({
 								onStartInboxStateFilterBySourceChange
 							}
 							composerInsertTarget={
-								viewMode === "start" ? startComposerInsertTarget : undefined
+								isStart ? startComposerInsertTarget : undefined
 							}
 							selectedCardId={
-								viewMode === "start"
-									? startPreviewCardId
-									: workspacePreviewCardId
+								isStart ? startPreviewCardId : workspacePreviewCardId
 							}
 							onOpenCard={
-								viewMode === "start"
-									? onOpenStartContextCard
-									: onOpenWorkspaceContextCard
+								isStart ? onOpenStartContextCard : onOpenWorkspaceContextCard
 							}
 						/>
 					) : (
 						<WorkspaceInspectorSidebar
-							workspaceId={selectedWorkspaceId}
+							workspaceId={workspaceId}
 							workspaceRootPath={workspaceRootPath}
 							workspaceState={selectedWorkspaceDetail?.state ?? null}
 							workspaceSetupCompletedAt={
