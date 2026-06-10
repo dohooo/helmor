@@ -270,6 +270,9 @@ export function useSelectionController(
 			return {
 				workspaceId,
 				sessionId: resolvedSessionId,
+				// The fetched list rides along so the cold-flip resolve can run
+				// its membership check without re-reading the query cache.
+				sessions: workspaceSessions,
 			};
 		},
 		[queryClient],
@@ -448,7 +451,9 @@ export function useSelectionController(
 	// `selectWorkspace`. Runs either synchronously (no previous pane to hold:
 	// start surface / boot) or one frame later via `scheduleDisplayFlip`.
 	// setState is skipped when the paint track already matches the target so
-	// the store doesn't broadcast a no-op snapshot (A4).
+	// the store doesn't broadcast a no-op snapshot (A4). A COLD target with a
+	// previous pane on screen holds that pane until the prime resolves (B1),
+	// landing a single old→new commit.
 	const runWorkspaceDisplayFlip = useCallback(
 		(
 			workspaceId: string,
@@ -485,13 +490,12 @@ export function useSelectionController(
 				store.setState({ displayedWorkspaceId, displayedSessionId });
 			};
 
-			setDisplayed(workspaceId, targetSessionId);
-
 			const cached = resolveCachedWorkspaceDisplay(
 				workspaceId,
 				targetSessionId,
 			);
 			if (cached) {
+				setDisplayed(workspaceId, targetSessionId);
 				rememberSessionSelection(workspaceId, cached.sessionId);
 				// Refine the URL's session segment if the cache resolved a
 				// different session than the immediate guess.
@@ -518,21 +522,72 @@ export function useSelectionController(
 				return;
 			}
 
+			// Cold target. With a previous pane on screen, HOLD it: no displayed
+			// write until the prime resolves, so the panel paints a single
+			// old→new commit instead of old→blank→new. With nothing displayed
+			// there is no old frame to hold — land the guess immediately (this
+			// only happens via races; the normal displayed===null path flips
+			// synchronously in `selectWorkspace`).
+			if (store.getState().displayedWorkspaceId === null) {
+				setDisplayed(workspaceId, targetSessionId);
+			}
 			void primeWorkspaceDisplay(workspaceId)
-				.then(({ sessionId }) => {
+				.then(async ({ sessionId, sessions }) => {
 					if (workspaceSelectionRequestRef.current !== requestId) return;
-					rememberSessionSelection(workspaceId, sessionId);
-					if (sessionId !== targetSessionId) {
+					// Resolve-time live-read: an explicit session picked while the
+					// prime was in flight (`selectSession` only updates the router
+					// during the hold) wins over the prime's fallback — but only
+					// when it actually belongs to the fetched workspace. Membership
+					// prefers the freshest cached list over the prime's snapshot so
+					// sessions created during the hold are recognized.
+					const live = getRouterSelection();
+					const liveSessions =
+						queryClient.getQueryData<WorkspaceSessionSummary[] | undefined>(
+							helmorQueryKeys.workspaceSessions(workspaceId),
+						) ?? sessions;
+					const explicitSessionId =
+						live.workspaceId === workspaceId &&
+						live.sessionId !== null &&
+						liveSessions.some((session) => session.id === live.sessionId)
+							? live.sessionId
+							: null;
+					const resolvedSessionId = explicitSessionId ?? sessionId;
+					if (
+						explicitSessionId !== null &&
+						queryClient.getQueryData([
+							...helmorQueryKeys.sessionMessages(explicitSessionId),
+							"thread",
+						]) === undefined
+					) {
+						// The prime only warmed the fallback's thread; fetch the
+						// explicit winner's before committing or the hold degrades to
+						// old→loader→content. A fetch failure still commits (the
+						// panel owns its error state, mirroring selectSession).
+						await queryClient
+							.ensureQueryData(
+								sessionThreadMessagesQueryOptions(explicitSessionId),
+							)
+							.catch(() => {});
+						if (workspaceSelectionRequestRef.current !== requestId) return;
+					}
+					rememberSessionSelection(workspaceId, resolvedSessionId);
+					// Repair against the LIVE router session, not the captured
+					// guess: a foreign pick during the hold moves the router while
+					// the guess can coincide with the resolved id — keying off the
+					// guess would leave the URL stuck on the foreign session.
+					if (resolvedSessionId !== live.sessionId) {
 						navigateSelection({
 							viewMode: refinementViewMode(),
 							workspaceId,
-							sessionId,
+							sessionId: resolvedSessionId,
 						});
 					}
-					setDisplayed(workspaceId, sessionId);
+					setDisplayed(workspaceId, resolvedSessionId);
 				})
 				.catch(() => {
 					if (workspaceSelectionRequestRef.current !== requestId) return;
+					// Bounded fallback for the hold: land (target, null) so the
+					// panel shows today's placeholder instead of holding forever.
 					setDisplayed(workspaceId, null);
 				});
 		},
@@ -739,7 +794,19 @@ export function useSelectionController(
 
 			const requestId = sessionSelectionRequestRef.current + 1;
 			sessionSelectionRequestRef.current = requestId;
-			rememberSessionSelection(current.workspaceId, sessionId);
+
+			// HOLD-window divergence: a cold workspace flip already ran and its
+			// prime is in flight — the paint track still shows the previous
+			// workspace. Writing displayed* here would pair the held old pane
+			// with the new session, and remembering it could pollute the target
+			// workspace's history with a non-member session. Update only the
+			// router intent; the prime's resolve-time live-read picks the
+			// session up (membership-checked against the fetched list).
+			const workspaceDiverged =
+				store.getState().displayedWorkspaceId !== current.workspaceId;
+			if (!workspaceDiverged) {
+				rememberSessionSelection(current.workspaceId, sessionId);
+			}
 
 			// Set the navigation intent. Keep the current workspace + view mode;
 			// only the session segment changes. (A session is never selected
@@ -751,6 +818,8 @@ export function useSelectionController(
 				workspaceId: current.workspaceId,
 				sessionId,
 			});
+
+			if (workspaceDiverged) return;
 
 			if (sessionId === null) {
 				if (sessionSelectionRequestRef.current !== requestId) return;
@@ -881,11 +950,14 @@ export function useSelectionController(
 			// display-flip divergence the router already points at the NEW
 			// workspace — the wrong bucket for a write-back about the still-
 			// painted old pane.
-			rememberSessionSelection(
-				store.getState().displayedWorkspaceId,
-				sessionId,
-			);
 			const snap = store.getState();
+			rememberSessionSelection(snap.displayedWorkspaceId, sessionId);
+			// During that divergence (pending or held flip) the paint track must
+			// not advance either: the write-back is about the OLD pane and the
+			// flip will overwrite displayed* wholesale.
+			if (snap.displayedWorkspaceId !== getRouterSelection().workspaceId) {
+				return;
+			}
 			if (snap.displayedSessionId !== sessionId) {
 				store.setState({ displayedSessionId: sessionId });
 			}

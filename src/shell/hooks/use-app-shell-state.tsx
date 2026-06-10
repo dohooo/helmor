@@ -92,8 +92,14 @@ export function useAppShellState({
 	// git + inspector diff). The selection highlight tracks `selectedWorkspaceId`
 	// (router-instant, cheap); the heavy data load reads this settled id so a
 	// held-key burst only fetches/renders the workspace the user lands on. Warm
-	// (cached) and single/slow switches settle instantly — see the hook.
-	const settledWorkspaceId = useSettledWorkspaceId(selectedWorkspaceId);
+	// (cached) and single/slow switches settle instantly — see the hook. The
+	// displayed id gates the hold window: while a deferred/held flip diverges
+	// the paint track from the router, the settled id (and the inspector keyed
+	// off it) waits and swaps in the same commit as the held content.
+	const settledWorkspaceId = useSettledWorkspaceId(
+		selectedWorkspaceId,
+		displayedWorkspaceId,
+	);
 
 	// P0-A: cache the per-workspace session-selection history as a stable
 	// reference. `getSessionSelectionHistory` already returns a stable ref

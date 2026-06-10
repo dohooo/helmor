@@ -465,6 +465,12 @@ describe("WorkspacePanelContainer loading semantics", () => {
 		});
 	});
 
+	// Props-driven loader contract: when the container is HANDED a displayed
+	// session whose thread cache is gone, it must drop the stale pane and show
+	// the loader. In production this state is shielded by the selection
+	// controller's cold hold (displayed* only advances once the prime
+	// resolves), but the container-level contract stays load-bearing for
+	// races/direct writes.
 	it("falls back to loading when revisiting a session after query cache eviction", async () => {
 		const queryClient = createHelmorQueryClient();
 		const workspace1Sessions = createWorkspaceSessions("workspace-1", [
