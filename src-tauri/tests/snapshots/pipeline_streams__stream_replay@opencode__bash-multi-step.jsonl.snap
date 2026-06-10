@@ -41,12 +41,12 @@ historical_render:
     - role: assistant
       part_types:
         - reasoning
-        - reasoning
         - tool-call
+        - reasoning
         - text
-        - reasoning
         - tool-call
+        - reasoning
         - text
-        - reasoning
         - tool-call
+        - reasoning
         - text

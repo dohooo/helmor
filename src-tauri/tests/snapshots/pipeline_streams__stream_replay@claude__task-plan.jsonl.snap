@@ -57,32 +57,32 @@ checkpoints:
       - assistant
     last_part_types:
       - reasoning
-      - reasoning
       - tool-call
+      - reasoning
   - line_index: 25
     event_type: system
     roles:
       - assistant
     last_part_types:
       - reasoning
-      - reasoning
       - tool-call
+      - reasoning
   - line_index: 28
     event_type: assistant
     roles:
       - assistant
     last_part_types:
       - reasoning
-      - reasoning
       - tool-call
+      - reasoning
   - line_index: 32
     event_type: assistant
     roles:
       - assistant
     last_part_types:
       - reasoning
-      - reasoning
       - tool-call
+      - reasoning
       - text
   - line_index: 39
     event_type: assistant
@@ -90,8 +90,8 @@ checkpoints:
       - assistant
     last_part_types:
       - reasoning
-      - reasoning
       - tool-call
+      - reasoning
       - text
       - todo-list
   - line_index: 42
@@ -100,8 +100,8 @@ checkpoints:
       - assistant
     last_part_types:
       - reasoning
-      - reasoning
       - tool-call
+      - reasoning
       - text
       - todo-list
   - line_index: 44
@@ -110,8 +110,8 @@ checkpoints:
       - assistant
     last_part_types:
       - reasoning
-      - reasoning
       - tool-call
+      - reasoning
       - text
       - todo-list
   - line_index: 48
@@ -120,8 +120,8 @@ checkpoints:
       - assistant
     last_part_types:
       - reasoning
-      - reasoning
       - tool-call
+      - reasoning
       - text
       - todo-list
       - reasoning
@@ -131,8 +131,8 @@ checkpoints:
       - assistant
     last_part_types:
       - reasoning
-      - reasoning
       - tool-call
+      - reasoning
       - text
       - todo-list
       - reasoning
@@ -142,8 +142,8 @@ checkpoints:
       - assistant
     last_part_types:
       - reasoning
-      - reasoning
       - tool-call
+      - reasoning
       - text
       - todo-list
       - reasoning
@@ -153,8 +153,8 @@ checkpoints:
       - assistant
     last_part_types:
       - reasoning
-      - reasoning
       - tool-call
+      - reasoning
       - text
       - todo-list
       - reasoning
@@ -164,8 +164,8 @@ checkpoints:
       - assistant
     last_part_types:
       - reasoning
-      - reasoning
       - tool-call
+      - reasoning
       - text
       - todo-list
       - reasoning
@@ -175,8 +175,8 @@ checkpoints:
       - assistant
     last_part_types:
       - reasoning
-      - reasoning
       - tool-call
+      - reasoning
       - text
       - todo-list
       - reasoning
@@ -186,8 +186,8 @@ checkpoints:
       - assistant
     last_part_types:
       - reasoning
-      - reasoning
       - tool-call
+      - reasoning
       - text
       - todo-list
       - reasoning
@@ -197,8 +197,8 @@ checkpoints:
       - assistant
     last_part_types:
       - reasoning
-      - reasoning
       - tool-call
+      - reasoning
       - text
       - todo-list
       - reasoning
@@ -209,8 +209,8 @@ checkpoints:
       - assistant
     last_part_types:
       - reasoning
-      - reasoning
       - tool-call
+      - reasoning
       - text
       - todo-list
       - reasoning
@@ -221,8 +221,8 @@ checkpoints:
       - assistant
     last_part_types:
       - reasoning
-      - reasoning
       - tool-call
+      - reasoning
       - text
       - todo-list
       - reasoning
@@ -233,8 +233,8 @@ checkpoints:
       - assistant
     last_part_types:
       - reasoning
-      - reasoning
       - tool-call
+      - reasoning
       - text
       - todo-list
       - reasoning
@@ -245,8 +245,8 @@ checkpoints:
       - assistant
     last_part_types:
       - reasoning
-      - reasoning
       - tool-call
+      - reasoning
       - text
       - todo-list
       - reasoning
@@ -257,8 +257,8 @@ checkpoints:
       - assistant
     last_part_types:
       - reasoning
-      - reasoning
       - tool-call
+      - reasoning
       - text
       - todo-list
       - reasoning
@@ -269,8 +269,8 @@ checkpoints:
       - assistant
     last_part_types:
       - reasoning
-      - reasoning
       - tool-call
+      - reasoning
       - text
       - todo-list
       - reasoning
@@ -281,8 +281,8 @@ checkpoints:
       - assistant
     last_part_types:
       - reasoning
-      - reasoning
       - tool-call
+      - reasoning
       - text
       - todo-list
       - reasoning
@@ -355,8 +355,8 @@ historical_render:
     - role: assistant
       part_types:
         - reasoning
-        - reasoning
         - tool-call
+        - reasoning
         - text
         - todo-list
         - reasoning
