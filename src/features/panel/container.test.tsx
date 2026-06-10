@@ -985,9 +985,9 @@ describe("WorkspacePanelContainer loading semantics", () => {
 	it("renders a pre-seeded initializing workspace without re-fetching thread messages", async () => {
 		// When use-controller's prepare/paint/finalize flow seeds the detail
 		// + sessions + empty thread cache, the panel paints from cache alone.
-		// The thread messages query's SESSION_STALE_TIME keeps the seeded
-		// empty array fresh, so no backend fetch fires while Phase 2 is
-		// still materializing the worktree.
+		// The thread messages query's staleTime: Infinity (event-driven
+		// invalidation) keeps the seeded empty array fresh, so no backend
+		// fetch fires while Phase 2 is still materializing the worktree.
 		const queryClient = createHelmorQueryClient();
 		const workspaceId = crypto.randomUUID();
 		const sessionId = crypto.randomUUID();

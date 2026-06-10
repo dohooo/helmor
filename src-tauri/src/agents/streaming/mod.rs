@@ -418,7 +418,7 @@ pub(super) fn stream_via_sidecar(
                         .as_ref()
                         .map(|p| p.accumulator.resolved_model().to_string())
                         .unwrap_or_else(|| model_copy.cli_model.to_string());
-                    let persisted = cleanup_abnormal_stream_exit(
+                    let cleanup_outcome = cleanup_abnormal_stream_exit(
                         &rid,
                         exchange_ctx.as_ref(),
                         &resolved_model,
@@ -426,6 +426,21 @@ pub(super) fn stream_via_sidecar(
                         effort_copy.as_deref(),
                         turn_session.ctx.permission_mode.as_deref(),
                     );
+                    let persisted = cleanup_outcome.finalized;
+                    // The synthesized error row really inserted — let idle
+                    // observers mark the thread cache stale. Published here
+                    // (not inside the cleanup fn) so the helper stays free
+                    // of AppHandle plumbing.
+                    if cleanup_outcome.persisted_error {
+                        if let Some(ctx) = exchange_ctx.as_ref() {
+                            crate::ui_sync::publish(
+                                &app,
+                                crate::ui_sync::UiMutationEvent::SessionTurnPersisted {
+                                    session_id: ctx.helmor_session_id.clone(),
+                                },
+                            );
+                        }
+                    }
 
                     tracing::info!(
                         rid = %rid,
@@ -650,7 +665,16 @@ pub(super) fn stream_via_sidecar(
                                     &resolved_model,
                                     BAD_RESUME_USER_MESSAGE,
                                 ) {
-                                    Ok(_) => {}
+                                    Ok(_) => {
+                                        // Real insert — idle observers mark
+                                        // the thread cache stale.
+                                        crate::ui_sync::publish(
+                                            &app,
+                                            crate::ui_sync::UiMutationEvent::SessionTurnPersisted {
+                                                session_id: ctx.helmor_session_id.clone(),
+                                            },
+                                        );
+                                    }
                                     Err(error) => {
                                         tracing::error!(
                                             rid = %rid,
@@ -700,7 +724,19 @@ pub(super) fn stream_via_sidecar(
                                     status,
                                     preassigned,
                                 ) {
-                                    Ok(_) => persisted = true,
+                                    Ok(_) => {
+                                        persisted = true;
+                                        // The turn's result row really
+                                        // inserted — idle observers mark the
+                                        // thread cache stale (the local
+                                        // dispatcher skips this event).
+                                        crate::ui_sync::publish(
+                                            &app,
+                                            crate::ui_sync::UiMutationEvent::SessionTurnPersisted {
+                                                session_id: ctx.helmor_session_id.clone(),
+                                            },
+                                        );
+                                    }
                                     Err(error) => {
                                         tracing::error!(rid = %rid, "Failed to finalize exchange: {error}");
                                     }
@@ -1113,7 +1149,17 @@ pub(super) fn stream_via_sidecar(
                             .unwrap_or_else(|| model_copy.cli_model.to_string());
 
                         match persist_error_message(conn, ctx, &resolved_model, &message) {
-                            Ok(_) => persisted = true,
+                            Ok(_) => {
+                                persisted = true;
+                                // Real insert — idle observers mark the
+                                // thread cache stale.
+                                crate::ui_sync::publish(
+                                    &app,
+                                    crate::ui_sync::UiMutationEvent::SessionTurnPersisted {
+                                        session_id: ctx.helmor_session_id.clone(),
+                                    },
+                                );
+                            }
                             Err(error) => {
                                 tracing::error!(rid = %rid, "Failed to persist error message: {error}");
                             }
