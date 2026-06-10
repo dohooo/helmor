@@ -46,10 +46,12 @@ After the local build succeeds, copy the same values into the GitHub repository 
 ## 5. Windows installer check
 
 The Windows x64 NSIS installer is not built by the local macOS validation script.
-It is built and validated in CI by the **Windows** workflow (`windows.yml` →
-Windows Build job), which uploads the installer as a workflow artifact:
+It is built and published to GitHub Releases in CI by the `build-and-publish-windows`
+job within `publish.yml`, which runs alongside the macOS release jobs. The
+`tauri-action` merges the Windows entry into the same `latest.json` as macOS
+for the in-app updater:
 
 - `src-tauri/target/release/bundle/nsis/*-setup.exe`
 
-There is no automated Windows release publishing yet; macOS publishes the signed
-updater manifest (`latest.json`) via `publish.yml`.
+The same secrets and environment variables used for macOS release publishing
+are required for Windows.
