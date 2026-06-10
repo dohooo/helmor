@@ -28,7 +28,13 @@ import {
 
 // --- sub-components ---
 
-function SystemNotice({ part }: { part: SystemNoticePart }) {
+export function SystemNotice({
+	part,
+	wrap = false,
+}: {
+	part: SystemNoticePart;
+	wrap?: boolean;
+}) {
 	const Icon =
 		part.severity === "error"
 			? AlertCircle
@@ -42,11 +48,30 @@ function SystemNotice({ part }: { part: SystemNoticePart }) {
 				? "text-chart-5"
 				: "text-chart-3";
 	return (
-		<span className="inline-flex min-h-4 items-center gap-1 whitespace-nowrap leading-none">
-			<Icon className={cn("size-3 shrink-0", iconClass)} strokeWidth={1.8} />
-			<span>{part.label}</span>
+		<span
+			className={cn(
+				"inline-flex min-h-4 gap-1",
+				wrap
+					? "min-w-0 items-start whitespace-normal break-words leading-snug"
+					: "items-center whitespace-nowrap leading-none",
+			)}
+		>
+			<Icon
+				className={cn("size-3 shrink-0", iconClass, wrap ? "mt-0.5" : null)}
+				strokeWidth={1.8}
+			/>
+			<span className={wrap ? "shrink-0 whitespace-nowrap" : undefined}>
+				{part.label}
+			</span>
 			{part.body ? (
-				<span className="ml-1 truncate text-muted-foreground/70">
+				<span
+					className={cn(
+						"ml-1 text-muted-foreground/70",
+						wrap
+							? "min-w-0 flex-1 whitespace-pre-wrap break-words"
+							: "truncate",
+					)}
+				>
 					- {part.body}
 				</span>
 			) : null}

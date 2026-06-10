@@ -160,6 +160,36 @@ describe("MemoConversationMessage plan review", () => {
 		);
 	});
 
+	it("renders system notices inside assistant messages", () => {
+		const message: ThreadMessageLike = {
+			id: "opencode-error",
+			role: "assistant",
+			createdAt: "2026-04-12T12:00:00.000Z",
+			content: [
+				{
+					type: "system-notice",
+					id: "opencode-error:notice",
+					severity: "error",
+					label: "OpenCode error",
+					body: 'Bad Request: {"detail":"Unsupported parameter: max_output_tokens"}',
+				},
+			],
+		};
+
+		render(
+			<MemoConversationMessage
+				message={message}
+				sessionId="session-1"
+				itemIndex={1}
+			/>,
+		);
+
+		expect(screen.getByText("OpenCode error")).toBeInTheDocument();
+		expect(
+			screen.getByText(/Unsupported parameter: max_output_tokens/),
+		).toBeInTheDocument();
+	});
+
 	it("copies the previous assistant message from the system meta row", () => {
 		const assistantMessage: ThreadMessageLike = {
 			id: "assistant-copy-source",
