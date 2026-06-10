@@ -72,7 +72,13 @@ describe("ActiveThreadViewport", () => {
 });
 
 // ---------------------------------------------------------------------------
-// First-frame tail window (B2)
+// First-frame tail window
+//
+// The first commit of a session mounts the full 6x-viewport bottom tail (not a
+// narrower slice): a row taller than the slice that sits just above it must be
+// measured on frame one, or its under-estimated height stays in the container
+// height until it mounts a frame later — that late correction re-pins the
+// bottom AFTER paint and flashes.
 //
 // Fixture: 100 user-role messages (user messages render synchronously — no
 // lazy streamdown), estimator mocked to 100px/row, offsetHeight pinned to
@@ -80,19 +86,10 @@ describe("ActiveThreadViewport", () => {
 // and no measured-height churn perturbs the math. jsdom clientHeight is 0, so
 // the viewport takes the 900px fallback path:
 //   totalRowsHeight 10000, header 24, spacer 40 → bottom scrollTop 10064
-//   expanded tail  = 6 x 900 = 5400 → tailTop 4600 → rows 45..99 (55 rows)
-//   narrow tail    = 1.5 x 900 = 1350 → tailTop 8650 → rows 86..99 (14 rows)
-// On a SESSION SWITCH between equal-height threads the initial-scroll effect
-// doesn't re-run (deps unchanged), so the first frame keeps the synthetic
-// bottom anchor: effScrollTop 9100 → regular windowTop 8200 < narrow tailTop
-// 8650 → the 1.5x∪regular union mounts rows 81..99 (19 rows).
-// The EXPANDED set below was captured from the component's behavior BEFORE
-// the tailExpanded change (first/last/count: m:45 / m:99 / 55).
+//   tail = 6 x 900 = 5400 → tailTop 4600 → rows 45..99 (55 rows)
 // ---------------------------------------------------------------------------
 
-const CAPTURED_EXPANDED_TAIL_INDICES = range(45, 99);
-const NARROW_TAIL_INDICES = range(86, 99);
-const NARROW_UNION_AT_SYNTHETIC_ANCHOR_INDICES = range(81, 99);
+const TAIL_INDICES = range(45, 99);
 
 function range(first: number, last: number): number[] {
 	return Array.from({ length: last - first + 1 }, (_, i) => first + i);
@@ -210,93 +207,43 @@ describe("first-frame tail window", () => {
 		});
 	});
 
-	it("mounts only the 1.5x tail on the first frame after a session switch, then expands to the captured 6x set", () => {
+	it("mounts the full 6x tail on the first frame, including after a session switch", () => {
 		const { rerenderPane } = renderPane(makePane("s1", "m1", 100));
-		// Let the first session expand (48ms fallback path).
-		act(() => {
-			vi.advanceTimersByTime(48);
-		});
-		expect(mountedIndices("m1")).toEqual(CAPTURED_EXPANDED_TAIL_INDICES);
+		// No expansion step — the first commit already mounts the 6x tail.
+		expect(mountedIndices("m1")).toEqual(TAIL_INDICES);
 
 		rerenderPane(makePane("s2", "m2", 100));
-		// First frame for the new session: exactly the 1.5x∪regular union —
-		// far below the 55-row expanded set, but never less than the regular
-		// scroll window around the synthetic bottom anchor.
-		expect(mountedIndices("m2")).toEqual(
-			NARROW_UNION_AT_SYNTHETIC_ANCHOR_INDICES,
+		expect(mountedIndices("m2")).toEqual(TAIL_INDICES);
+	});
+
+	it("mounts a row taller than the tail slice on the first frame so its measurement lands pre-paint", () => {
+		// The flash this guards against: a row under-estimated by the layout
+		// estimator (e.g. a multi-hundred-line pasted-code message) must mount
+		// — and therefore measure — on frame one. Here m1-50 reports 4000px
+		// (40x its 100px estimate); even so it sits within the 6x tail and
+		// mounts immediately.
+		const originalOffsetHeight = Object.getOwnPropertyDescriptor(
+			HTMLElement.prototype,
+			"offsetHeight",
 		);
-
-		// After the expansion schedule flushes, the mounted set equals the
-		// pre-change 6x behavior captured above.
-		act(() => {
-			vi.advanceTimersByTime(48);
+		Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+			configurable: true,
+			get(this: HTMLElement) {
+				return this.textContent?.startsWith("m1:50") ? 4000 : 100;
+			},
 		});
-		expect(mountedIndices("m2")).toEqual(CAPTURED_EXPANDED_TAIL_INDICES);
-	});
-
-	it("expands exactly once via the rAF path too", () => {
-		renderPane(makePane("s1", "m1", 100));
-		expect(mountedIndices("m1")).toEqual(NARROW_TAIL_INDICES);
-
-		// rAF wins the race; the 48ms timer must then be a no-op.
-		act(() => {
-			for (const [id, callback] of [...frameCallbacks]) {
-				frameCallbacks.delete(id);
-				callback(performance.now());
+		try {
+			renderPane(makePane("s1", "m1", 100));
+			// The tall row (index 50) is mounted on the first frame.
+			expect(mountedIndices("m1")).toContain(50);
+		} finally {
+			if (originalOffsetHeight) {
+				Object.defineProperty(
+					HTMLElement.prototype,
+					"offsetHeight",
+					originalOffsetHeight,
+				);
 			}
-		});
-		expect(mountedIndices("m1")).toEqual(CAPTURED_EXPANDED_TAIL_INDICES);
-		act(() => {
-			vi.advanceTimersByTime(48);
-		});
-		expect(mountedIndices("m1")).toEqual(CAPTURED_EXPANDED_TAIL_INDICES);
-	});
-
-	it("keeps visible rows mounted when the user scrolls up before the expansion lands", () => {
-		renderPane(makePane("s1", "m1", 100));
-		expect(mountedIndices("m1")).toEqual(NARROW_TAIL_INDICES);
-
-		const scrollParent = document.querySelector(
-			".conversation-scroll-viewport",
-		) as HTMLElement;
-		expect(scrollParent).toBeTruthy();
-
-		// Scroll up 2x viewport (10064 → 8264) before the expansion fires.
-		// Flush ONLY the scroll-commit rAF (registered by the scroll listener
-		// after this snapshot), keeping the expansion's rAF pending.
-		const framesBeforeScroll = new Set(frameCallbacks.keys());
-		scrollParent.scrollTop = 8264;
-		act(() => {
-			scrollParent.dispatchEvent(new Event("scroll"));
-		});
-		act(() => {
-			for (const [id, callback] of [...frameCallbacks]) {
-				if (framesBeforeScroll.has(id)) continue;
-				frameCallbacks.delete(id);
-				callback(performance.now());
-			}
-		});
-
-		// Union protection: the still-narrow tail window unions with the
-		// regular scroll window (windowTop 7340 < narrow tailTop 8650), so
-		// every visible row (82..91) stays mounted — no blank region.
-		const mounted = new Set(mountedIndices("m1"));
-		for (let index = 82; index <= 91; index += 1) {
-			expect(mounted.has(index)).toBe(true);
-		}
-		expect(mounted.has(73)).toBe(true); // union window lower bound
-		expect(mounted.has(72)).toBe(false); // still narrow — not the full 6x
-		expect(mounted.has(99)).toBe(true); // tail stays mounted
-
-		// Expansion still lands afterwards and widens to the full 6x window.
-		act(() => {
-			vi.advanceTimersByTime(48);
-		});
-		const expanded = new Set(mountedIndices("m1"));
-		expect(expanded.has(45)).toBe(true);
-		expect(expanded.has(44)).toBe(false);
-		for (let index = 82; index <= 91; index += 1) {
-			expect(expanded.has(index)).toBe(true);
 		}
 	});
 
@@ -309,17 +256,12 @@ describe("first-frame tail window", () => {
 		expect(mountedIndices("n2")).toEqual(range(0, 9));
 	});
 
-	it("keeps the true bottom pinned through the expansion wave during the initial settle", () => {
-		// Regression lock for the post-switch region flashing: the expansion
-		// (and any measurement wave) grows the scroll height in its own
-		// commit; during the initial settle the viewport must re-pin the true
-		// bottom in the same commit's layout pass, before paint.
-		const { rerenderPane } = renderPane(makePane("s1", "m1", 100));
-		act(() => {
-			vi.advanceTimersByTime(48);
-		});
-
-		rerenderPane(makePane("s2", "m2", 100));
+	it("keeps the true bottom pinned through a measurement wave during the initial settle", () => {
+		// Regression lock for the post-switch region flashing: a late
+		// measurement wave grows the scroll height in its own commit; during
+		// the initial settle the viewport must re-pin the true bottom in the
+		// same commit's layout pass, before paint.
+		const { rerenderPane } = renderPane(makePane("s2", "m2", 100));
 		const scroller = document.querySelector(
 			".conversation-scroll-viewport",
 		) as HTMLElement;
@@ -335,10 +277,12 @@ describe("first-frame tail window", () => {
 		});
 		scroller.scrollTop = 0;
 
-		// Expansion commit lands (48ms fallback) — the settle pin must put the
-		// scroller at the true bottom within the same flush.
+		// Re-render the SAME session with fresh message refs: the rows memo
+		// recomputes → visibleRows changes → the settle pin re-runs (no user
+		// scroll, so the initial-settle regime is still active) and lands the
+		// scroller at the true measured bottom.
 		act(() => {
-			vi.advanceTimersByTime(48);
+			rerenderPane(makePane("s2", "m2", 100));
 		});
 		expect(scroller.scrollTop).toBe(9164);
 	});

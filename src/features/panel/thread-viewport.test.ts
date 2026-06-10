@@ -6,17 +6,12 @@ import {
 } from "./thread-viewport";
 
 describe("resolveStableBottomTailHeight", () => {
-	it("covers 6x the viewport once expanded", () => {
-		expect(resolveStableBottomTailHeight(800, true)).toBe(4800);
-	});
-
-	it("covers only 1.5x the viewport before expansion (first frame)", () => {
-		expect(resolveStableBottomTailHeight(800, false)).toBe(1200);
+	it("covers 6x the viewport", () => {
+		expect(resolveStableBottomTailHeight(800)).toBe(4800);
 	});
 
 	it("falls back to the 900px default height when the viewport is unmeasured", () => {
-		expect(resolveStableBottomTailHeight(0, true)).toBe(5400);
-		expect(resolveStableBottomTailHeight(0, false)).toBe(1350);
+		expect(resolveStableBottomTailHeight(0)).toBe(5400);
 	});
 });
 

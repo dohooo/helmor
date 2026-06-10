@@ -60,17 +60,19 @@ export function resolveConversationRowHeight({
 	return measuredHeight ?? estimatedHeight;
 }
 
-// Height of the Tauri stable-bottom tail window. A session's first commit only
-// mounts 1.5x viewport of tail rows (the visible region plus margin); the full
-// 6x off-screen coverage expands one frame later via a transition so the
-// switch task doesn't pay for the extra mounts.
-export function resolveStableBottomTailHeight(
-	viewportHeight: number,
-	expanded: boolean,
-): number {
+// Height of the Tauri stable-bottom tail window: 6x viewport of bottom rows.
+// The first frame must mount this in full, not a narrower slice — a row taller
+// than the slice that sits just above it (e.g. a multi-hundred-line pasted code
+// message) would otherwise stay unmounted, keeping its UNDER-estimated height
+// in the explicit container height until it mounts a frame later. That late
+// estimate→measured correction grows the container and re-pins the bottom AFTER
+// the first paint, which reads as the thread flashing from one region to
+// another. Mounting the giant row on frame one lets its mount-time measurement
+// land in the container height before paint (see the initial-settle pin).
+export function resolveStableBottomTailHeight(viewportHeight: number): number {
 	const effectiveHeight =
 		viewportHeight > 0 ? viewportHeight : PROGRESSIVE_VIEWPORT_DEFAULT_HEIGHT;
-	return effectiveHeight * (expanded ? 6 : 1.5);
+	return effectiveHeight * 6;
 }
 
 // How long after a session switch the viewport stays in its "initial settle"
@@ -619,29 +621,6 @@ function ProgressiveConversationViewport({
 		setStreamingRowEl(node);
 	}, []);
 
-	// First-frame tail window: a fresh session starts with the narrow 1.5x
-	// tail and expands to the full 6x one frame after its first commit. The
-	// pending expansion handles live in a ref so the session-change reset can
-	// cancel them synchronously in render (an old session's rAF must not
-	// expand the new session's first frame); the handle-identity check makes
-	// the rAF/48ms race exactly-once.
-	const [tailExpanded, setTailExpanded] = useState(false);
-	const tailExpandHandlesRef = useRef<{
-		rafId: number | null;
-		timerId: number | null;
-	} | null>(null);
-	const cancelScheduledTailExpand = useCallback(() => {
-		const handles = tailExpandHandlesRef.current;
-		if (!handles) return;
-		tailExpandHandlesRef.current = null;
-		if (handles.rafId !== null) {
-			window.cancelAnimationFrame(handles.rafId);
-		}
-		if (handles.timerId !== null) {
-			window.clearTimeout(handles.timerId);
-		}
-	}, []);
-
 	// Reset only on sessionId change. Triggering on layoutCacheKey (which
 	// included widthBucket) used to clear measuredHeights whenever a drag
 	// crossed a 32px bound, causing visible row-height jumps and a full
@@ -657,8 +636,6 @@ function ProgressiveConversationViewport({
 		setLastSessionId(sessionId);
 		setCommittedScrollState({ scrollTop: 0, viewportHeight: 0 });
 		setMeasuredHeights({});
-		setTailExpanded(false);
-		cancelScheduledTailExpand();
 		initialScrollAppliedRef.current = false;
 		hasUserScrolledRef.current = false;
 		isUserScrollingRef.current = false;
@@ -669,37 +646,6 @@ function ProgressiveConversationViewport({
 			scrollIdleTimerRef.current = null;
 		}
 	}
-
-	// Schedule the tail expansion after the new session's first commit:
-	// rAF raced with a 48ms timeout (for throttled/absent rAF), whichever
-	// fires first wins; the loser is cancelled through the shared handles.
-	useEffect(() => {
-		const handles: { rafId: number | null; timerId: number | null } = {
-			rafId: null,
-			timerId: null,
-		};
-		const expand = () => {
-			if (tailExpandHandlesRef.current !== handles) return;
-			tailExpandHandlesRef.current = null;
-			if (handles.rafId !== null) {
-				window.cancelAnimationFrame(handles.rafId);
-			}
-			if (handles.timerId !== null) {
-				window.clearTimeout(handles.timerId);
-			}
-			startTransition(() => setTailExpanded(true));
-		};
-		tailExpandHandlesRef.current = handles;
-		handles.rafId = window.requestAnimationFrame(() => {
-			handles.rafId = null;
-			expand();
-		});
-		handles.timerId = window.setTimeout(() => {
-			handles.timerId = null;
-			expand();
-		}, 48);
-		return cancelScheduledTailExpand;
-	}, [cancelScheduledTailExpand, sessionId]);
 
 	const { scrollTop, viewportHeight } = committedScrollState;
 	const measuredHeightsRef = useRef<Record<string, number>>(measuredHeights);
@@ -906,27 +852,18 @@ function ProgressiveConversationViewport({
 		totalRowsHeight - (effectiveScrollTop + effectiveViewportHeight),
 	);
 	const tauriStableBottomZoneHeight = effectiveViewportHeight * 4;
-	const tauriStableBottomTailHeight = resolveStableBottomTailHeight(
-		viewportHeight,
-		tailExpanded,
-	);
+	const tauriStableBottomTailHeight =
+		resolveStableBottomTailHeight(viewportHeight);
 	const visibleRows = useMemo(
 		() =>
 			measureSync(
 				"viewport:visible-rows",
 				() => {
 					if (isTauri && distanceFromBottom <= tauriStableBottomZoneHeight) {
-						let tailWindowTop = Math.max(
+						const tailWindowTop = Math.max(
 							0,
 							totalRowsHeight - tauriStableBottomTailHeight,
 						);
-						if (!tailExpanded) {
-							// Pre-expansion the tail only covers 1.5x — union it
-							// with the regular scroll window so a scroll-up before
-							// the expansion commit can never leave visible rows
-							// unmounted.
-							tailWindowTop = Math.min(tailWindowTop, windowTop);
-						}
 						return rows.filter((row) => row.top + row.height >= tailWindowTop);
 					}
 
@@ -967,7 +904,7 @@ function ProgressiveConversationViewport({
 			isTauri,
 			pinTailRows,
 			rows,
-			tailExpanded,
+			tauriStableBottomTailHeight,
 			totalRowsHeight,
 			windowBottom,
 			windowTop,
