@@ -163,7 +163,9 @@ describe("stabilizeStreamingMessages", () => {
 		expect(messages[0]?.content[0]?.type).toBe("reasoning");
 	});
 
-	it("keeps distinct thinking blocks with different ids", () => {
+	it("merges adjacent thinking segments into one chip, summing durations", () => {
+		// Omitted thinking splits ONE phase into several blocks with distinct
+		// ids — one "Thought for Ns" chip per phase, not one per block.
 		const messages = stabilizeStreamingMessages([
 			assistant(
 				"a1",
@@ -173,6 +175,51 @@ describe("stabilizeStreamingMessages", () => {
 						id: "turn-1:blk:0",
 						text: "First.",
 						streaming: false,
+						durationMs: 1200,
+					},
+				],
+				true,
+			),
+			assistant(
+				"a2",
+				[
+					{
+						type: "reasoning",
+						id: "turn-1:blk:2",
+						text: "Second.",
+						streaming: true,
+						durationMs: 800,
+					},
+				],
+				true,
+			),
+		]);
+
+		expect(messages).toHaveLength(1);
+		expect(messages[0]?.content).toHaveLength(1);
+		const [part] = messages[0]?.content ?? [];
+		if (part?.type !== "reasoning") {
+			throw new Error("expected reasoning");
+		}
+		expect(part.id).toBe("turn-1:blk:0");
+		expect(part.text).toBe("First.\n\nSecond.");
+		expect(part.durationMs).toBe(2000);
+		expect(part.streaming).toBe(true);
+	});
+
+	it("does not re-append in-flight reasoning text the base already absorbed", () => {
+		// The pending partial re-sends the in-flight segment after the base
+		// snapshot merged it — its text is already the tail of the chip.
+		const messages = stabilizeStreamingMessages([
+			assistant(
+				"a1",
+				[
+					{
+						type: "reasoning",
+						id: "turn-1:blk:0",
+						text: "First.\n\nSecond.",
+						streaming: false,
+						durationMs: 1200,
 					},
 				],
 				true,
@@ -192,8 +239,77 @@ describe("stabilizeStreamingMessages", () => {
 		]);
 
 		expect(messages).toHaveLength(1);
+		const [part] = messages[0]?.content ?? [];
+		if (part?.type !== "reasoning") {
+			throw new Error("expected reasoning");
+		}
+		expect(part.text).toBe("First.\n\nSecond.");
+		expect(part.streaming).toBe(true);
+	});
+
+	it("flushes the group before reasoning so reads stay in thread order", () => {
+		const messages = stabilizeStreamingMessages([
+			assistant(
+				"a1",
+				[
+					toolCall("cmd1", "cat a.go", "done"),
+					toolCall("cmd2", "cat b.go", "done"),
+				],
+				true,
+			),
+			assistant(
+				"a2",
+				[
+					{
+						type: "reasoning",
+						id: "turn-1:blk:0",
+						text: "compare",
+						streaming: true,
+					},
+				],
+				true,
+			),
+		]);
+
+		expect(messages).toHaveLength(1);
 		expect(messages[0]?.content).toHaveLength(2);
-		expect(messages[0]?.content[0]?.type).toBe("reasoning");
+		expect(messages[0]?.content[0]?.type).toBe("collapsed-group");
 		expect(messages[0]?.content[1]?.type).toBe("reasoning");
+	});
+
+	it("dedupes a tool call the partial re-sends after the base finalized it", () => {
+		// Phantom "+0 -0" reproduction: base carries the finalized Edit (full
+		// args + result), the stale partial still carries the half-streamed
+		// copy (empty args, live spinner). One card, the finalized one.
+		const finalized: ToolCallPart = {
+			type: "tool-call",
+			toolCallId: "toolu_1",
+			toolName: "Edit",
+			args: { file_path: "a.go", old_string: "x", new_string: "y" },
+			argsText: "",
+			result: "ok",
+			streamingStatus: "done",
+		};
+		const phantom: ToolCallPart = {
+			type: "tool-call",
+			toolCallId: "toolu_1",
+			toolName: "Edit",
+			args: {},
+			argsText: "",
+			streamingStatus: "streaming_input",
+		};
+		const messages = stabilizeStreamingMessages([
+			assistant("a1", [finalized], false),
+			assistant("a2", [phantom], true),
+		]);
+
+		expect(messages).toHaveLength(1);
+		expect(messages[0]?.content).toHaveLength(1);
+		const [part] = messages[0]?.content ?? [];
+		if (part?.type !== "tool-call") {
+			throw new Error("expected tool-call");
+		}
+		expect(part.result).toBe("ok");
+		expect(part.args).toHaveProperty("file_path");
 	});
 });

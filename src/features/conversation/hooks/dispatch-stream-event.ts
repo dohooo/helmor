@@ -209,6 +209,13 @@ export function createStreamEventDispatcher(
 				window.cancelAnimationFrame(deps.accumulator.frameId);
 				deps.accumulator.frameId = null;
 			}
+			// Terminal state renders from the final Full only. The backend
+			// always emits a closing Full (result / materialized abort), so a
+			// pending partial here is stale — flushing it would freeze
+			// duplicate reasoning chips and phantom spinning tool cards into
+			// the thread cache forever (no DB re-read happens after done).
+			deps.accumulator.pendingPartial = null;
+			deps.accumulator.needsFlush = true;
 			deps.flushStreamMessages();
 			deps.cleanup();
 			deps.clearPendingPermissions(deps.contextKey);

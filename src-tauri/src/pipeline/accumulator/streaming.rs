@@ -327,6 +327,18 @@ pub(super) fn build_partial_from_blocks(
     partial_id: String,
     created_at: String,
 ) -> Option<IntermediateMessage> {
+    // Resolved-id scan walks all of collected[] — only pay for it when a
+    // tool block is actually in flight (thinking/text streaming is the
+    // hot path and never consults it).
+    let has_tool_block = acc
+        .blocks
+        .values()
+        .any(|b| matches!(b, StreamingBlock::ToolUse { .. }));
+    let resolved = if has_tool_block {
+        acc.collect_resolved_tool_use_ids()
+    } else {
+        Default::default()
+    };
     let mut content_blocks = Vec::new();
     for block in acc.blocks.values() {
         match block {
@@ -362,8 +374,21 @@ pub(super) fn build_partial_from_blocks(
                 parsed_input,
                 status,
             } => {
+                // Out-of-order guard (SDK 0.3.x): the finalized `assistant`
+                // block for a tool_use can lag behind its `tool_result`. While
+                // it lags, the block sits half-streamed in `self.blocks` with
+                // no parsed input — rendering it now flashes a phantom
+                // "+0 -0" Edit card next to the real one. Skip it: the
+                // imminent `assistant` event renders the real tool-call.
+                if resolved.contains(tool_use_id) {
+                    continue;
+                }
+                // Prefer parsed input, but fall back to a best-effort parse of
+                // the streamed JSON so a still-streaming Edit shows its real
+                // diff instead of "+0 -0" the moment the JSON completes.
                 let input = parsed_input
                     .clone()
+                    .or_else(|| serde_json::from_str::<Value>(input_json_text).ok())
                     .unwrap_or_else(|| serde_json::json!({}));
                 // ToolCall's part id is its `tool_use_id` — no separate
                 // `__part_id` needed, adapter reads `tool_call_id` directly.
@@ -458,8 +483,11 @@ pub(super) fn build_materialized_partial_from_blocks(
                 parsed_input,
                 status,
             } => {
+                // Same best-effort parse as the live partial: without it an
+                // abort mid-input persists an `input: {}` "+0 -0" card.
                 let input = parsed_input
                     .clone()
+                    .or_else(|| serde_json::from_str::<Value>(input_json_text).ok())
                     .unwrap_or_else(|| serde_json::json!({}));
                 content_blocks.push(serde_json::json!({
                     "type": "tool_use",

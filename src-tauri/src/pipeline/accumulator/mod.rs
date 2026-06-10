@@ -267,6 +267,34 @@ fn strip_is_streaming_markers(blocks: &mut [Value]) {
     }
 }
 
+/// Whether `next` re-sends the SAME block as `prev` (cumulative snapshot)
+/// rather than a NEW block of the same type (delta-style). Type alone is
+/// not enough: omitted-thinking turns deliver several distinct thinking
+/// blocks per message — judging those cumulative reuses the first block's
+/// `__part_id` and inherits its `__duration_ms`, rendering N identical
+/// "Thought for Ns" chips.
+fn assistant_block_is_same(prev: &Value, next: &Value) -> bool {
+    let ty = assistant_block_type(prev);
+    if ty != assistant_block_type(next) {
+        return false;
+    }
+    match ty {
+        Some("tool_use" | "server_tool_use" | "mcp_tool_use") => {
+            prev.get("id").and_then(Value::as_str) == next.get("id").and_then(Value::as_str)
+        }
+        Some("thinking") => {
+            prev.get("signature").and_then(Value::as_str)
+                == next.get("signature").and_then(Value::as_str)
+                && prev.get("thinking").and_then(Value::as_str)
+                    == next.get("thinking").and_then(Value::as_str)
+        }
+        Some("text") => {
+            prev.get("text").and_then(Value::as_str) == next.get("text").and_then(Value::as_str)
+        }
+        _ => true,
+    }
+}
+
 fn cumulative_assistant_snapshot_prefix_matches(prev: &[Value], next: &[Value]) -> bool {
     if next.len() < prev.len() {
         return false;
@@ -274,9 +302,7 @@ fn cumulative_assistant_snapshot_prefix_matches(prev: &[Value], next: &[Value]) 
 
     prev.iter()
         .zip(next.iter())
-        .all(|(prev_block, next_block)| {
-            assistant_block_type(prev_block) == assistant_block_type(next_block)
-        })
+        .all(|(prev_block, next_block)| assistant_block_is_same(prev_block, next_block))
 }
 
 fn collect_resolved_id(block: &Value, resolved: &mut HashSet<String>) {
