@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import type { AgentModelSection } from "@/lib/api";
 import { agentModelSectionsQueryOptions } from "@/lib/query-client";
 import { type AppSettings, useSettings } from "@/lib/settings";
+import { isQuickPanelWindow } from "@/lib/window-role";
 import { findModelOption } from "@/lib/workspace-helpers";
 
 const KNOWN_MODEL_PROVIDERS = ["claude", "codex"] as const;
@@ -32,6 +33,9 @@ export function useEnsureDefaultModel() {
 	const sections = modelSectionsQuery.data;
 
 	useEffect(() => {
+		// Settings self-repair runs from one window only to avoid racing
+		// concurrent `updateSettings` patches across webviews.
+		if (isQuickPanelWindow) return;
 		if (!isLoaded) return;
 		if (!sections || sections.length === 0) return;
 		const settled = isModelCatalogSettled(sections);

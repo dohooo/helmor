@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect } from "react";
 import { workspaceGroupsQueryOptions } from "@/lib/query-client";
+import { isQuickPanelWindow } from "@/lib/window-role";
 import { selectUnreadSessionCount } from "./selector";
 
 /**
@@ -25,6 +26,8 @@ export function useDockUnreadBadge(): void {
 	const count = selectUnreadSessionCount(groups);
 
 	useEffect(() => {
+		// The Dock badge is app-wide; let the main window be its single writer.
+		if (isQuickPanelWindow) return;
 		// Wrap in try/catch because the Tauri window handle may lack
 		// `setBadgeCount` entirely — e.g. in the Playwright E2E harness where
 		// `@tauri-apps/api/window` is aliased to a stub, or in any future

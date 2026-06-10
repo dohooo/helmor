@@ -470,6 +470,10 @@ async fn dispatch(
         |         "resize_repo_script"
         |         "reveal_path_in_finder"
         |         "show_image_in_finder"
+        // Quick-panel window management exists only on the desktop host.
+        |         "toggle_quick_panel"
+        |         "hide_quick_panel"
+        |         "reveal_workspace_in_main_window"
         |         "stop_agent_login_terminal"
         |         "stop_forge_cli_auth_terminal"
         |         "stop_repo_script"

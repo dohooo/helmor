@@ -26,6 +26,7 @@ export type ShortcutId =
 	| "zoom.out"
 	| "zoom.reset"
 	| "global.hotkey"
+	| "quickPanel.hotkey"
 	| "action.createPr"
 	| "action.commitAndPush"
 	| "action.pullLatest"

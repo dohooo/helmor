@@ -55,6 +55,7 @@ import type {
 } from "@/lib/composer-insert";
 import { recordComposerRender } from "@/lib/dev-render-debug";
 import { cn } from "@/lib/utils";
+import { isQuickPanelWindow } from "@/lib/window-role";
 import { clampEffort } from "@/lib/workspace-helpers";
 import { ComposerButton } from "./button";
 import { ContextBar } from "./context-bar";
@@ -688,6 +689,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		alternateStartSubmitMode === "saveForLater"
 			? "Save for later"
 			: "Start now";
+	// Narrow surfaces show only the first word ("New" / "Save" / "Start");
+	// the dropdown items keep the full labels.
+	const compactStartSubmitLabel = preferredStartSubmitLabel.split(" ")[0];
 
 	const handleComposerKeyDownCapture = useCallback(
 		(event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -767,7 +771,10 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			data-focus-scope={focusScope}
 			onKeyDownCapture={handleComposerKeyDownCapture}
 			className={cn(
-				"relative flex flex-col rounded-2xl border border-border/40 bg-sidebar shadow-[0_-1px_8px_rgba(0,0,0,0.05),0_0_0_1px_rgba(255,255,255,0.02)]",
+				// Named container: the footer toolbar sheds label text and
+				// re-aligns in narrow surfaces (quick panel, mini mode) via
+				// pure CSS container queries — no JS width checks.
+				"@container/composer relative flex flex-col rounded-2xl border border-border/40 bg-sidebar shadow-[0_-1px_8px_rgba(0,0,0,0.05),0_0_0_1px_rgba(255,255,255,0.02)]",
 				// Pending-interaction panels fill the shell edge-to-edge and own
 				// their own internal padding; the default composer gets the
 				// legacy px-4 pt-3 pb-3 breathing room.
@@ -961,7 +968,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						</div>
 					) : null}
 
-					<div className="mt-2.5 flex items-end justify-between gap-3">
+					<div className="@max-lg/composer:items-center mt-2.5 flex items-end justify-between gap-3">
 						<div className="flex flex-wrap items-center gap-2">
 							{modelsLoading ? (
 								<ShimmerText className="px-1 py-0.5 text-ui text-muted-foreground">
@@ -1210,8 +1217,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										</DropdownMenu>
 									)}
 									{supportsPlanMode ? (
-										<ComposerButton
-											aria-label="Plan mode"
+										<PlanModeButton
 											disabled={toolbarDisabled}
 											className={cn(
 												`gap-1 px-1.5 text-mini ${composerToolbarTriggerClassName}`,
@@ -1219,20 +1225,14 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 													? "text-plan hover:text-plan"
 													: "text-muted-foreground/70 hover:text-muted-foreground/70",
 											)}
-											onClick={() =>
+											onToggle={() =>
 												onChangePermissionMode(
 													permissionMode === "plan"
 														? "bypassPermissions"
 														: "plan",
 												)
 											}
-										>
-											<ClipboardList
-												className="size-[13px]"
-												strokeWidth={1.8}
-											/>
-											<span>Plan</span>
-										</ComposerButton>
+										/>
 									) : null}
 									{onToggleContextPanel ? (
 										<Tooltip>
@@ -1359,7 +1359,12 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 													) : (
 														<ArrowUp className="size-3.5" strokeWidth={2.2} />
 													)}
-													<span>{preferredStartSubmitLabel}</span>
+													<span className="@max-lg/composer:hidden">
+														{preferredStartSubmitLabel}
+													</span>
+													<span className="hidden @max-lg/composer:inline">
+														{compactStartSubmitLabel}
+													</span>
 												</Button>
 												<DropdownMenuTrigger asChild>
 													<Button
@@ -1427,6 +1432,47 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		</div>
 	);
 });
+
+function PlanModeButton({
+	disabled,
+	className,
+	onToggle,
+}: {
+	disabled: boolean;
+	className: string;
+	onToggle: () => void;
+}) {
+	const button = (
+		<ComposerButton
+			aria-label="Plan mode"
+			disabled={disabled}
+			className={className}
+			onClick={onToggle}
+		>
+			<ClipboardList className="size-[13px]" strokeWidth={1.8} />
+			{/* Collapses to icon-only in narrow surfaces. */}
+			<span className="@max-lg/composer:hidden">Plan</span>
+		</ComposerButton>
+	);
+	// Main window: the bare button, exactly as before this feature (also keeps
+	// composer tests free of a TooltipProvider requirement). Quick panel: the
+	// label collapses to icon-only, so hover gets a tooltip.
+	if (!isQuickPanelWindow) {
+		return button;
+	}
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>{button}</TooltipTrigger>
+			<TooltipContent
+				side="top"
+				sideOffset={4}
+				className="flex h-[24px] items-center rounded-md px-2 text-small leading-none"
+			>
+				<span>Plan</span>
+			</TooltipContent>
+		</Tooltip>
+	);
+}
 
 function EffortBrainIcon({ level }: { level: string }) {
 	const cls = "shrink-0";
