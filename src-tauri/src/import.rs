@@ -1035,6 +1035,7 @@ mod tests {
 
     #[test]
     fn import_workspace_db_records_skips_existing() {
+        let _env = crate::testkit::TestEnv::new("import-workspace-db-records-skips-existi");
         let (conn, _dir) = setup_test_db();
 
         conn.execute_batch(

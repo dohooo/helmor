@@ -681,6 +681,7 @@ mod tests {
 
     #[test]
     fn resolve_claude_model() {
+        let _env = crate::testkit::TestEnv::new("resolve-claude-model");
         let m = resolve_model("default", None);
         assert_eq!(m.provider, "claude");
         assert_eq!(m.cli_model, "default");
@@ -690,6 +691,7 @@ mod tests {
 
     #[test]
     fn resolve_opus_model() {
+        let _env = crate::testkit::TestEnv::new("resolve-opus-model");
         let m = resolve_model("opus", None);
         assert_eq!(m.provider, "claude");
         assert_eq!(m.cli_model, "opus");
@@ -697,12 +699,14 @@ mod tests {
 
     #[test]
     fn resolve_sonnet_model() {
+        let _env = crate::testkit::TestEnv::new("resolve-sonnet-model");
         let m = resolve_model("sonnet", None);
         assert_eq!(m.provider, "claude");
     }
 
     #[test]
     fn resolve_gpt_model_routes_to_codex() {
+        let _env = crate::testkit::TestEnv::new("resolve-gpt-model-routes-to-codex");
         let m = resolve_model("gpt-4o", None);
         assert_eq!(m.provider, "codex");
         assert_eq!(m.cli_model, "gpt-4o");
@@ -710,12 +714,14 @@ mod tests {
 
     #[test]
     fn resolve_gpt_5_4_routes_to_codex() {
+        let _env = crate::testkit::TestEnv::new("resolve-gpt-5-4-routes-to-codex");
         let m = resolve_model("gpt-5.4", None);
         assert_eq!(m.provider, "codex");
     }
 
     #[test]
     fn resolve_unknown_model_defaults_to_claude() {
+        let _env = crate::testkit::TestEnv::new("resolve-unknown-model-defaults-to-claude");
         let m = resolve_model("some-future-model", None);
         assert_eq!(m.provider, "claude");
         assert_eq!(m.cli_model, "some-future-model");
@@ -723,6 +729,7 @@ mod tests {
 
     #[test]
     fn resolve_opencode_slug_routes_to_opencode() {
+        let _env = crate::testkit::TestEnv::new("resolve-opencode-slug-routes-to-opencode");
         // Explicit hint.
         let m = resolve_model("anthropic/claude-opus-4-5", Some("opencode"));
         assert_eq!(m.provider, "opencode");
@@ -882,6 +889,7 @@ mod tests {
 
     #[test]
     fn resolve_composer_routes_to_cursor() {
+        let _env = crate::testkit::TestEnv::new("resolve-composer-routes-to-cursor");
         let m = resolve_model("composer-2", None);
         assert_eq!(m.provider, "cursor");
         assert_eq!(m.cli_model, "composer-2");
@@ -889,6 +897,7 @@ mod tests {
 
     #[test]
     fn cursor_namespaced_id_strips_to_wire_for_cli_model() {
+        let _env = crate::testkit::TestEnv::new("cursor-namespaced-id-strips-to-wire-for-");
         // Composer's selected model id from the picker is `cursor-default`
         // (Helmor namespace). Resolver must emit `cli_model = "default"`
         // so the SDK's `Cursor.models.list` token survives the round-trip.
@@ -954,6 +963,7 @@ mod tests {
 
     #[test]
     fn claude_default_no_longer_collides_with_cursor_auto() {
+        let _env = crate::testkit::TestEnv::new("claude-default-no-longer-collides-with-c");
         // `default` belongs to Claude (Opus 4.8 1M). Cursor's Auto is
         // `cursor-default`. They MUST resolve to different providers
         // even when the picker / persistence flow doesn't pass a hint —
@@ -1262,6 +1272,7 @@ mod tests {
 
     #[test]
     fn provider_hint_disambiguates_overlapping_ids() {
+        let _env = crate::testkit::TestEnv::new("provider-hint-disambiguates-overlapping-");
         // A bare `gpt-`-prefixed id routes to Codex by prefix, but a
         // provider hint overrides that: the same id resolves to Cursor when
         // hinted. (Cursor's namespaced form `cursor-gpt-5.3-codex` obviates

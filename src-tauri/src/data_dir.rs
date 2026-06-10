@@ -198,6 +198,20 @@ fn resolve_data_dir() -> Result<PathBuf> {
         return Ok(PathBuf::from(dir));
     }
 
+    // Fuse: a unit test reaching this fallback would operate on the REAL
+    // `~/helmor-dev` data directory — DB pools open against it, file
+    // helpers delete inside it, and a concurrently running dev app gets
+    // its writes starved. Fail the offending test loudly instead of
+    // polluting silently.
+    if cfg!(test) {
+        panic!(
+            "Test resolved the real data directory (~/{}/). Create a \
+             `testkit::TestEnv` (and keep it alive) before touching the DB \
+             or any data-dir path.",
+            default_data_dir_name()
+        );
+    }
+
     // 2. Build profile based
     let home = dirs_home().context("Could not determine home directory")?;
 

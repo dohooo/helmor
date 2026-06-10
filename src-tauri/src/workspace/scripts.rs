@@ -1215,6 +1215,7 @@ mod tests {
     /// invariant.
     #[test]
     fn kill_all_does_not_deadlock_against_concurrent_unregister() {
+        let _env = crate::testkit::TestEnv::new("kill-all-does-not-deadlock-against-concu");
         let mgr = std::sync::Arc::new(ScriptProcessManager::new());
         let ctx = ScriptContext {
             root_path: std::env::temp_dir().display().to_string(),
@@ -1339,6 +1340,7 @@ mod tests {
 
     #[test]
     fn kill_terminates_running_script_quickly() {
+        let _env = crate::testkit::TestEnv::new("kill-terminates-running-script-quickly");
         let mgr = Arc::new(ScriptProcessManager::new());
         let ctx = ScriptContext {
             root_path: std::env::temp_dir().display().to_string(),
@@ -1405,6 +1407,7 @@ mod tests {
 
     #[test]
     fn write_stdin_delivers_bytes_to_running_script() {
+        let _env = crate::testkit::TestEnv::new("write-stdin-delivers-bytes-to-running-sc");
         let mgr = Arc::new(ScriptProcessManager::new());
         let ctx = ScriptContext {
             root_path: std::env::temp_dir().display().to_string(),
@@ -1496,6 +1499,7 @@ mod tests {
 
     #[test]
     fn resize_updates_pty_winsize() {
+        let _env = crate::testkit::TestEnv::new("resize-updates-pty-winsize");
         let mgr = Arc::new(ScriptProcessManager::new());
         let ctx = ScriptContext {
             root_path: std::env::temp_dir().display().to_string(),
@@ -1621,11 +1625,13 @@ mod tests {
 
     #[test]
     fn run_script_true_exits_zero() {
+        let _env = crate::testkit::TestEnv::new("run-script-true-exits-zero");
         assert_eq!(run_simple("true"), Some(0));
     }
 
     #[test]
     fn run_script_failing_command_exits_nonzero() {
+        let _env = crate::testkit::TestEnv::new("run-script-failing-command-exits-nonzero");
         assert_eq!(run_simple("exit 42"), Some(42));
     }
 
@@ -1657,6 +1663,7 @@ mod tests {
     /// keep working alongside the new ones.
     #[test]
     fn script_env_includes_helmor_port_vars_when_range_present() {
+        let _env = crate::testkit::TestEnv::new("script-env-includes-helmor-port-vars-whe");
         let mgr = ScriptProcessManager::new();
         let dir = std::env::temp_dir();
         let ctx = ScriptContext {
@@ -1734,6 +1741,7 @@ mod tests {
     /// `${HELMOR_PORT:-3000}` keep their default.
     #[test]
     fn script_env_omits_helmor_port_vars_when_range_missing() {
+        let _env = crate::testkit::TestEnv::new("script-env-omits-helmor-port-vars-when-r");
         let mgr = ScriptProcessManager::new();
         let dir = std::env::temp_dir();
         let ctx = ScriptContext {
