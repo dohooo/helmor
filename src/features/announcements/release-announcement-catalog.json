@@ -2,6 +2,27 @@
 	"_readme": "AUTO-GENERATED from .announcements during `bun run release:version`. Each item is one released version's in-app announcement. Do not edit released entries by hand.",
 	"items": [
 		{
+			"releaseVersion": "0.34.0",
+			"items": [
+				{
+					"text": "You can now clean up all archived workspaces at once from Settings → General to free up disk space.",
+					"action": {
+						"label": "Open General",
+						"value": {
+							"type": "openSettings",
+							"section": "general"
+						}
+					}
+				},
+				{
+					"text": "Claude Fable 5 (1M context) is now available at the top of the Claude Code model list — Anthropic's most capable model for the hardest, longest-running tasks. Opus 4.8 remains the default."
+				},
+				{
+					"text": "⚡ Major performance improvements across the app."
+				}
+			]
+		},
+		{
 			"releaseVersion": "0.33.0",
 			"items": [
 				{
