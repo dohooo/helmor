@@ -29,6 +29,7 @@ import {
 	workspaceDetailQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
+import { SCHEDULE_AFTER_PAINT_FALLBACK_MS } from "@/lib/schedule-after-paint";
 import type { AppSettings } from "@/lib/settings";
 import { router } from "@/router";
 import { locationToSelection } from "@/router/location-mapping";
@@ -67,8 +68,10 @@ const WORKSPACE_SWITCH_SIDE_EFFECT_DELAY_MS = 140;
 // sidebar-highlight frame paints); when rAF is throttled or never fires
 // (hidden webview), this timeout races it so the flip never stalls. The two
 // paths are exactly-once via the `consumed` bookkeeping in
-// `scheduleDisplayFlip`.
-const DISPLAY_FLIP_FALLBACK_MS = 80;
+// `scheduleDisplayFlip`. The shared ceiling is deliberately long: a short
+// fallback (observed at 80ms) fires before a starved-but-visible rendering
+// update and merges the heavy flip back into the input task's frame.
+const DISPLAY_FLIP_FALLBACK_MS = SCHEDULE_AFTER_PAINT_FALLBACK_MS;
 
 type PendingDisplayFlip = {
 	rafId: number | null;

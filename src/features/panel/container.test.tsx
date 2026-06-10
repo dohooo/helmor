@@ -359,6 +359,42 @@ describe("WorkspacePanelContainer loading semantics", () => {
 		).toEqual(createMessages("session-2"));
 	});
 
+	it("keeps the displayed pane mounted while the selection diverges to another workspace", () => {
+		// Deferred-flip / cold-hold window: the router already points at the
+		// incoming workspace (with its own session guess) while the paint
+		// track still shows the old one. The old pane must stay mounted —
+		// the incoming session intent belongs to a different workspace.
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			createWorkspaceDetail("workspace-1"),
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			createWorkspaceSessions("workspace-1"),
+		);
+		queryClient.setQueryData(
+			[...helmorQueryKeys.sessionMessages("session-1"), "thread"],
+			createMessages("session-1"),
+		);
+
+		renderWithProviders(
+			<WorkspacePanelContainer
+				selectedWorkspaceId="workspace-2"
+				displayedWorkspaceId="workspace-1"
+				selectedSessionId="session-9"
+				displayedSessionId="session-1"
+				sending={false}
+				onSelectSession={vi.fn()}
+				onResolveDisplayedSession={vi.fn()}
+			/>,
+			{ queryClient },
+		);
+
+		expect(getLatestPanelProps().loadingSession).toBe(false);
+		expect(getSessionPaneIds()).toEqual(["session-1"]);
+	});
+
 	it("derives the new-session tab provider from the default model setting", () => {
 		const queryClient = createHelmorQueryClient();
 		queryClient.setQueryData(helmorQueryKeys.agentModelSections, [

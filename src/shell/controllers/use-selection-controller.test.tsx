@@ -14,6 +14,7 @@ import {
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
+import { SCHEDULE_AFTER_PAINT_FALLBACK_MS } from "@/lib/schedule-after-paint";
 import { DEFAULT_SETTINGS } from "@/lib/settings";
 import { router } from "@/router";
 import { locationToSelection } from "@/router/location-mapping";
@@ -80,7 +81,7 @@ beforeEach(() => {
 
 // The deferred displayed-flip tests stub rAF (callback map, manual flush — same
 // pattern as navigation/container.test.tsx) and use fake timers for the
-// setTimeout(0) inner step + the 80ms fallback. Restore both unconditionally so
+// setTimeout(0) inner step + the fallback timer. Restore both unconditionally so
 // the real-timer tests in this file stay untouched.
 const originalRequestAnimationFrame = window.requestAnimationFrame;
 const originalCancelAnimationFrame = window.cancelAnimationFrame;
@@ -397,7 +398,7 @@ describe("useSelectionController", () => {
 		unsubscribe();
 	});
 
-	it("falls back to the 80ms timer exactly once when rAF never fires", () => {
+	it("falls back to the fallback timer exactly once when rAF never fires", () => {
 		installFlipTimingHarness();
 		const queryClient = new QueryClient();
 		seedWorkspaceCache(queryClient, "ws-A", [makeSession("ws-A-session-1")]);
@@ -422,10 +423,10 @@ describe("useSelectionController", () => {
 		});
 		expect(result.current.state.displayedWorkspaceId).toBe("ws-A");
 
-		// rAF is stuck (callbacks captured, never flushed) → the 80ms fallback
+		// rAF is stuck (callbacks captured, never flushed) → the fallback timer
 		// must land the flip.
 		act(() => {
-			vi.advanceTimersByTime(80);
+			vi.advanceTimersByTime(SCHEDULE_AFTER_PAINT_FALLBACK_MS);
 		});
 		expect(result.current.state.displayedWorkspaceId).toBe("ws-B");
 		expect(displayedLog).toEqual(["ws-B"]);
@@ -467,7 +468,7 @@ describe("useSelectionController", () => {
 		const lateFrameCallbacks = [...frameCallbacks.values()];
 
 		act(() => {
-			vi.advanceTimersByTime(80);
+			vi.advanceTimersByTime(SCHEDULE_AFTER_PAINT_FALLBACK_MS);
 		});
 		expect(result.current.state.displayedWorkspaceId).toBe("ws-B");
 		expect(displayedLog).toEqual(["ws-B"]);
