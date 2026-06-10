@@ -215,6 +215,11 @@ export function HistoryRecallPlugin({ getHistory, scopeKey }: Props) {
 						},
 						{ tag: HISTORY_RECALL_RESTORE_TAG },
 					);
+					// `setEditorState` wipes the DOM selection (removeAllRanges),
+					// which blurs the contentEditable in WebKit. Re-placing the
+					// model selection above doesn't refocus it, so the caret stays
+					// invisible — refocus now that the selection is committed.
+					editor.focus(undefined, { defaultSelection: "rootEnd" });
 					return;
 				} catch {
 					// Fall through to empty restore.
