@@ -73,6 +73,26 @@ export function resolveStableBottomTailHeight(
 	return effectiveHeight * (expanded ? 6 : 1.5);
 }
 
+// How long after a session switch the viewport stays in its "initial settle"
+// regime. Within it, measurement corrections commit at urgent priority and
+// the true bottom is re-pinned pre-paint on every height wave (tail
+// expansion, late measures): the deferred flip lets the estimate-positioned
+// first layout and each correction wave PAINT as distinct frames (the old
+// synchronous switch commit hid them), which reads as the list flashing
+// through several regions. Ends early on the first real user scroll.
+export const INITIAL_SETTLE_WINDOW_MS = 1000;
+
+// Measurement-correction commit priority: urgent while the initial settle is
+// active (so the corrected layout paints first) and for the streaming row
+// (whose height `useStickToBottom` must observe in step); transition
+// otherwise, exactly as before.
+export function shouldCommitMeasurementUrgently(
+	isStreamingRow: boolean,
+	initialSettleActive: boolean,
+): boolean {
+	return isStreamingRow || initialSettleActive;
+}
+
 export function ActiveThreadViewport({
 	hasSession,
 	pane,
@@ -628,6 +648,11 @@ function ProgressiveConversationViewport({
 	// remeasure. Within a session the message refs are stable, so the
 	// ResizeObserver naturally reports new heights after the DOM reflows.
 	const [lastSessionId, setLastSessionId] = useState(sessionId);
+	const initialSettleAtRef = useRef<number | null>(null);
+	if (initialSettleAtRef.current === null) {
+		// Fresh mounts settle too (first open of a pane).
+		initialSettleAtRef.current = performance.now();
+	}
 	if (lastSessionId !== sessionId) {
 		setLastSessionId(sessionId);
 		setCommittedScrollState({ scrollTop: 0, viewportHeight: 0 });
@@ -637,6 +662,7 @@ function ProgressiveConversationViewport({
 		initialScrollAppliedRef.current = false;
 		hasUserScrolledRef.current = false;
 		isUserScrollingRef.current = false;
+		initialSettleAtRef.current = performance.now();
 		deferredMeasuredHeightsRef.current = {};
 		if (scrollIdleTimerRef.current !== null) {
 			window.clearTimeout(scrollIdleTimerRef.current);
@@ -972,16 +998,46 @@ function ProgressiveConversationViewport({
 		initialScrollAppliedRef.current = true;
 	}, [scrollParent, totalContentHeight]);
 
+	const isInitialSettleActive = useCallback(
+		() =>
+			!hasUserScrolledRef.current &&
+			performance.now() - (initialSettleAtRef.current ?? 0) <
+				INITIAL_SETTLE_WINDOW_MS,
+		[],
+	);
+
 	useLayoutEffect(() => {
-		if (!scrollParent || pendingScrollAdjustmentRef.current === 0) {
+		if (!scrollParent) {
 			return;
 		}
 
+		// Initial-settle regime: hold the TRUE bottom through the expansion
+		// and measurement waves before anything paints. Pinned absolutely so
+		// the per-row adjustments below can't fight it. The scrollHeight
+		// guard skips environments without layout (jsdom), where the "true
+		// bottom" would read as 0 and fight the initial-scroll effect.
+		if (isInitialSettleActive() && scrollParent.scrollHeight > 0) {
+			const target = Math.max(
+				0,
+				scrollParent.scrollHeight - scrollParent.clientHeight,
+			);
+			if (Math.abs(scrollParent.scrollTop - target) > 1) {
+				scrollParent.scrollTop = target;
+			}
+			pendingScrollAdjustmentRef.current = 0;
+			return;
+		}
+
+		if (pendingScrollAdjustmentRef.current === 0) {
+			return;
+		}
 		if (!hasUserScrolledRef.current) {
 			scrollParent.scrollTop += pendingScrollAdjustmentRef.current;
 		}
 		pendingScrollAdjustmentRef.current = 0;
-	}, [rows, scrollParent]);
+		// visibleRows (not rows): the expansion wave widens the window without
+		// touching the row model, and the pin must land in that very commit.
+	}, [isInitialSettleActive, scrollParent, totalContentHeight, visibleRows]);
 
 	const handleHeightChange = useCallback(
 		(rowKey: string, nextHeight: number) => {
@@ -1044,13 +1100,15 @@ function ProgressiveConversationViewport({
 			// we don't need `flushSync` here — which in long threads becomes
 			// O(n) and re-introduces stuttering near the end of a long
 			// streamed reply.
-			if (isStreamingRow) {
+			if (
+				shouldCommitMeasurementUrgently(isStreamingRow, isInitialSettleActive())
+			) {
 				commit();
 			} else {
 				startTransition(commit);
 			}
 		},
-		[headerHeight, isTauri, scrollParent],
+		[headerHeight, isInitialSettleActive, isTauri, scrollParent],
 	);
 
 	if (data.length === 0) {

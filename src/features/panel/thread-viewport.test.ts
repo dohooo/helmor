@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	resolveConversationRowHeight,
 	resolveStableBottomTailHeight,
+	shouldCommitMeasurementUrgently,
 } from "./thread-viewport";
 
 describe("resolveStableBottomTailHeight", () => {
@@ -36,5 +37,20 @@ describe("resolveConversationRowHeight", () => {
 				measuredHeight: undefined,
 			}),
 		).toBe(168);
+	});
+});
+
+describe("shouldCommitMeasurementUrgently", () => {
+	it("commits urgently for the streaming row regardless of settle state", () => {
+		expect(shouldCommitMeasurementUrgently(true, false)).toBe(true);
+		expect(shouldCommitMeasurementUrgently(true, true)).toBe(true);
+	});
+
+	it("commits urgently during the initial settle so the corrected layout paints first", () => {
+		expect(shouldCommitMeasurementUrgently(false, true)).toBe(true);
+	});
+
+	it("keeps the transition path for historical rows after the settle", () => {
+		expect(shouldCommitMeasurementUrgently(false, false)).toBe(false);
 	});
 });

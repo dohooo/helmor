@@ -308,4 +308,38 @@ describe("first-frame tail window", () => {
 		// Plain list: every row mounts synchronously — no tail window at all.
 		expect(mountedIndices("n2")).toEqual(range(0, 9));
 	});
+
+	it("keeps the true bottom pinned through the expansion wave during the initial settle", () => {
+		// Regression lock for the post-switch region flashing: the expansion
+		// (and any measurement wave) grows the scroll height in its own
+		// commit; during the initial settle the viewport must re-pin the true
+		// bottom in the same commit's layout pass, before paint.
+		const { rerenderPane } = renderPane(makePane("s1", "m1", 100));
+		act(() => {
+			vi.advanceTimersByTime(48);
+		});
+
+		rerenderPane(makePane("s2", "m2", 100));
+		const scroller = document.querySelector(
+			".conversation-scroll-viewport",
+		) as HTMLElement;
+		expect(scroller).not.toBeNull();
+		// jsdom has no layout: stub the geometry the pin reads.
+		Object.defineProperty(scroller, "scrollHeight", {
+			configurable: true,
+			get: () => 10064,
+		});
+		Object.defineProperty(scroller, "clientHeight", {
+			configurable: true,
+			get: () => 900,
+		});
+		scroller.scrollTop = 0;
+
+		// Expansion commit lands (48ms fallback) — the settle pin must put the
+		// scroller at the true bottom within the same flush.
+		act(() => {
+			vi.advanceTimersByTime(48);
+		});
+		expect(scroller.scrollTop).toBe(9164);
+	});
 });
