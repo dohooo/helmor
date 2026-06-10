@@ -202,6 +202,11 @@ export function useWorkspaceCommitLifecycle({
 	const forgeActionStatusRef = useRef(currentForgeActionStatus);
 	forgeActionStatusRef.current = currentForgeActionStatus;
 
+	// Ref mirror so the done-phase effect can read the live selection without
+	// re-firing on every render (the getter is an inline arrow upstream).
+	const getSelectedWorkspaceIdRef = useRef(getSelectedWorkspaceId);
+	getSelectedWorkspaceIdRef.current = getSelectedWorkspaceId;
+
 	// `workspaceChangeRequest` is intentionally NOT invalidated here. Callers
 	// that need fresh PR data already write it directly via setQueryData
 	// (either from `await refreshWorkspaceChangeRequest(...)` or from an
@@ -787,6 +792,11 @@ export function useWorkspaceCommitLifecycle({
 							queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
 						}),
 					]);
+					// Never hijack selection when the user has navigated to another
+					// workspace — the cached detail there is stale anyway (inactive
+					// queries don't refetch, so activeSessionId may still point at
+					// the session we just hid).
+					if (getSelectedWorkspaceIdRef.current() !== workspaceId) return;
 					const detail = queryClient.getQueryData<WorkspaceDetail | null>(
 						helmorQueryKeys.workspaceDetail(workspaceId),
 					);
