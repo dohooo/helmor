@@ -121,18 +121,26 @@ pub(super) fn lookup_workspace_mr_action_status(workspace_id: &str) -> Result<Fo
         Err(error) => {
             let message = format!("{error:#}");
             if looks_like_auth_error(&message) {
-                crate::forge::accounts::note_forge_auth(
+                if crate::forge::accounts::confirm_forge_logged_out(
+                    crate::forge::types::ForgeProvider::Gitlab,
                     &context.remote.host,
                     &context.login,
-                    crate::forge::accounts::AuthCheck::LoggedOut,
-                );
+                ) {
+                    tracing::warn!(
+                        workspace_id,
+                        host = %context.remote.host,
+                        error = %message,
+                        "GitLab MR lookup requires authentication"
+                    );
+                    return Ok(ForgeActionStatus::unauthenticated(message));
+                }
                 tracing::warn!(
                     workspace_id,
                     host = %context.remote.host,
                     error = %message,
-                    "GitLab MR lookup requires authentication"
+                    "GitLab API rejected the request but live auth probe does not confirm logout; treating as transient"
                 );
-                return Ok(ForgeActionStatus::unauthenticated(message));
+                return Ok(ForgeActionStatus::error(message));
             }
             tracing::warn!(
                 workspace_id,
@@ -159,7 +167,13 @@ pub(super) fn lookup_workspace_mr_action_status(workspace_id: &str) -> Result<Fo
             .unwrap_or_default(),
         Err(error) => {
             let message = format!("{error:#}");
-            if looks_like_auth_error(&message) {
+            if looks_like_auth_error(&message)
+                && crate::forge::accounts::confirm_forge_logged_out(
+                    crate::forge::types::ForgeProvider::Gitlab,
+                    &context.remote.host,
+                    &context.login,
+                )
+            {
                 tracing::warn!(
                     workspace_id,
                     host = %context.remote.host,

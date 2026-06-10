@@ -102,11 +102,22 @@ pub fn lookup_workspace_pr_action_status(workspace_id: &str) -> Result<ForgeActi
     // Feed the live API verdict back into the cache so siblings + refocus
     // stay consistent.
     match status.remote_state {
-        crate::forge::RemoteState::Unauthenticated => crate::forge::accounts::note_forge_auth(
-            api::GITHUB_HOST,
-            &context.login,
-            crate::forge::accounts::AuthCheck::LoggedOut,
-        ),
+        crate::forge::RemoteState::Unauthenticated => {
+            if !crate::forge::accounts::confirm_forge_logged_out(
+                crate::forge::types::ForgeProvider::Github,
+                api::GITHUB_HOST,
+                &context.login,
+            ) {
+                tracing::warn!(
+                    workspace_id,
+                    login = %context.login,
+                    "GitHub API returned 401 but live auth probe does not confirm logout; treating as transient"
+                );
+                return Ok(ForgeActionStatus::error(
+                    "GitHub API rejected the request (401) but the account still appears logged in",
+                ));
+            }
+        }
         crate::forge::RemoteState::Ok | crate::forge::RemoteState::NoPr => {
             crate::forge::accounts::note_forge_auth(
                 api::GITHUB_HOST,

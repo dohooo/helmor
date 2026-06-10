@@ -106,6 +106,16 @@ function handleUiMutation(
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceForge(event.workspaceId),
 			});
+			// Auth verdicts are per (host, login) and shared repo-wide:
+			// when one workspace flips to unauthenticated, siblings on the
+			// same repo share the verdict. Refresh every action-status
+			// snapshot so the Connect CTA stays consistent across
+			// workspaces — refetches hit the backend's in-memory verdict
+			// cache, not the network.
+			void queryClient.invalidateQueries({
+				predicate: (query) =>
+					query.queryKey[0] === "workspaceForgeActionStatus",
+			});
 			// Per-account roster (Settings → Account) re-renders too, since
 			// auth flips can mean a new login appeared / disappeared.
 			void queryClient.invalidateQueries({

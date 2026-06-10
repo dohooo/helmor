@@ -35,6 +35,10 @@ impl ForgeAccountBackend for GithubAccountBackend {
         check_github_auth(host, login)
     }
 
+    fn validate_auth(&self, host: &str, login: &str) -> AuthCheck {
+        validated_github_auth(host, login)
+    }
+
     fn repo_access(&self, host: &str, login: &str, owner: &str, name: &str) -> Result<RepoAccess> {
         github_repo_access(host, login, owner, name)
     }
@@ -157,6 +161,62 @@ fn parse_logins_for_host(stdout: &str, host: &str) -> Result<Vec<String>> {
                 .collect()
         })
         .unwrap_or_default())
+}
+
+/// Live-validated auth check via `gh auth status`. Unlike
+/// [`check_github_auth`] (presence-only), this trusts gh's per-account
+/// token validation: only `state == "success"` counts as logged in.
+fn validated_github_auth(host: &str, login: &str) -> AuthCheck {
+    let output = match run_command(
+        "gh",
+        ["auth", "status", "--hostname", host, "--json", "hosts"],
+    ) {
+        Ok(output) => output,
+        Err(error) => {
+            tracing::warn!(
+                host = %host,
+                login = %login,
+                error = %error,
+                "gh auth validation probe failed; treating as Indeterminate"
+            );
+            return AuthCheck::Indeterminate;
+        }
+    };
+    // gh exits non-zero when any account fails validation but still
+    // prints the JSON payload — prefer the payload when decodable.
+    if let Some(verdict) = parse_validated_auth(&output.stdout, host, login) {
+        return verdict;
+    }
+    if looks_like_unauthenticated(&command_detail(&output)) {
+        return AuthCheck::LoggedOut;
+    }
+    tracing::warn!(
+        host = %host,
+        login = %login,
+        detail = %command_detail(&output),
+        "gh auth validation output undecodable; treating as Indeterminate"
+    );
+    AuthCheck::Indeterminate
+}
+
+/// Pure verdict from a `gh auth status --json hosts` payload. `None`
+/// when the payload doesn't decode (caller falls back to classifiers).
+fn parse_validated_auth(stdout: &str, host: &str, login: &str) -> Option<AuthCheck> {
+    let parsed: GhAuthStatusFullResponse = serde_json::from_str(stdout).ok()?;
+    let Some(entries) = parsed.hosts.get(host) else {
+        return Some(AuthCheck::LoggedOut);
+    };
+    let Some(entry) = entries
+        .iter()
+        .find(|entry| entry.login.as_deref().map(str::trim) == Some(login))
+    else {
+        return Some(AuthCheck::LoggedOut);
+    };
+    Some(if entry.state.as_deref() == Some("success") {
+        AuthCheck::LoggedIn
+    } else {
+        AuthCheck::LoggedOut
+    })
 }
 
 fn check_github_auth(host: &str, login: &str) -> AuthCheck {
@@ -649,6 +709,47 @@ mod tests {
     #[test]
     fn parse_logins_for_host_errors_on_malformed_json() {
         assert!(parse_logins_for_host("{not json", "github.com").is_err());
+    }
+
+    // ---------------- parse_validated_auth ----------------
+
+    #[test]
+    fn parse_validated_auth_logged_in_only_on_success_state() {
+        let stdout = r#"{
+            "hosts": {
+                "github.com": [
+                    {"state":"success","login":"octocat"},
+                    {"state":"error","login":"hubot"}
+                ]
+            }
+        }"#;
+        assert!(matches!(
+            parse_validated_auth(stdout, "github.com", "octocat"),
+            Some(AuthCheck::LoggedIn)
+        ));
+        // Token failed gh's live validation → confirmed logout.
+        assert!(matches!(
+            parse_validated_auth(stdout, "github.com", "hubot"),
+            Some(AuthCheck::LoggedOut)
+        ));
+    }
+
+    #[test]
+    fn parse_validated_auth_logged_out_when_login_or_host_absent() {
+        let stdout = r#"{ "hosts": { "github.com": [{"state":"success","login":"octocat"}] } }"#;
+        assert!(matches!(
+            parse_validated_auth(stdout, "github.com", "ghost"),
+            Some(AuthCheck::LoggedOut)
+        ));
+        assert!(matches!(
+            parse_validated_auth(stdout, "ghe.example.com", "octocat"),
+            Some(AuthCheck::LoggedOut)
+        ));
+    }
+
+    #[test]
+    fn parse_validated_auth_none_on_malformed_payload() {
+        assert!(parse_validated_auth("{not json", "github.com", "octocat").is_none());
     }
 
     // ---------------- parse_account_slots ----------------
