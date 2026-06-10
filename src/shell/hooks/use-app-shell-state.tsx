@@ -142,6 +142,7 @@ export function useAppShellState({
 		handleSelectSession: sel.handleSelectSession,
 		selectedWorkspaceId,
 		settledWorkspaceId,
+		displayedWorkspaceId,
 		displayedSessionId,
 		workspaceReselectTick,
 		pendingCreatedWorkspaceSubmit: sel.pendingCreatedWorkspaceSubmit,

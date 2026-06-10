@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
+import { applyImmediateWorkspaceHighlight } from "@/features/navigation/immediate-highlight";
 import type {
 	WorkspaceGroup,
 	WorkspaceRow,
@@ -65,6 +66,13 @@ export function useWorkspaceNavigation({
 				offset,
 			);
 			if (!nextWorkspaceId) return;
+			// Move the sidebar highlight inside the keydown task, before any
+			// selection work — parity with the sidebar's pointerdown preview.
+			// Null-safe: no-ops when the sidebar pane isn't mounted.
+			applyImmediateWorkspaceHighlight(
+				document.querySelector("[data-helmor-sidebar-root]"),
+				nextWorkspaceId,
+			);
 			handleSelectWorkspace(nextWorkspaceId);
 		},
 		[archivedRows, handleSelectWorkspace, selectionActions, workspaceGroups],

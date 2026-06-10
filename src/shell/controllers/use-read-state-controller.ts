@@ -57,7 +57,11 @@ export type ReadStateControllerDeps = {
 	// Selection observers — the mark-read effect needs the displayed session
 	// + the reselect tick to know when to re-fire. `getSelectedWorkspaceId`
 	// gives the matching workspace at IPC time (without forcing the caller
-	// to thread it through props on every render).
+	// to thread it through props on every render). `displayedWorkspaceId`
+	// guards the display-flip/hold divergence window: while it differs from
+	// the selected workspace, the displayed session belongs to the OLD
+	// workspace and must not be marked read against the new one.
+	displayedWorkspaceId: string | null;
 	displayedSessionId: string | null;
 	reselectTick: number;
 	getSelectedWorkspaceId(): string | null;
@@ -75,6 +79,7 @@ export function useReadStateController(
 		queryClient,
 		notify,
 		pushToast,
+		displayedWorkspaceId,
 		displayedSessionId,
 		reselectTick,
 		getSelectedWorkspaceId,
@@ -140,6 +145,11 @@ export function useReadStateController(
 
 		const sessionId = displayedSessionId;
 		const workspaceId = getSelectedWorkspaceIdRef.current();
+		// Display-flip/hold divergence window: the displayed session still
+		// belongs to the OLD workspace while the router already points at the
+		// new one. Skip WITHOUT touching the dedupe key — the effect re-runs on
+		// convergence (displayed* changes) and fires then.
+		if (displayedWorkspaceId !== workspaceId) return;
 		lastMarkedReadSessionIdRef.current = sessionId;
 		lastMarkedReadReselectTickRef.current = reselectTick;
 
@@ -225,6 +235,7 @@ export function useReadStateController(
 			});
 	}, [
 		displayedSessionId,
+		displayedWorkspaceId,
 		interactionRequiredSessionIds,
 		queryClient,
 		reselectTick,

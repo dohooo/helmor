@@ -7,7 +7,7 @@ const streamingMocks = vi.hoisted(() => ({
 	handleComposerSubmit: vi.fn(),
 }));
 const composerMocks = vi.hoisted(() => ({
-	props: [] as Array<{ sending?: boolean }>,
+	props: [] as Array<{ sending?: boolean; disabled?: boolean }>,
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -19,7 +19,10 @@ vi.mock("@/lib/api", async (importOriginal) => {
 });
 
 vi.mock("@/features/composer/container", () => ({
-	WorkspaceComposerContainer: (props: { sending?: boolean }) => {
+	WorkspaceComposerContainer: (props: {
+		sending?: boolean;
+		disabled?: boolean;
+	}) => {
 		composerMocks.props.push(props);
 		return <div data-testid="composer" />;
 	},
@@ -298,5 +301,55 @@ describe("WorkspaceConversationContainer", () => {
 		});
 
 		expect(composerMocks.props.at(-1)?.sending).toBe(true);
+	});
+
+	// Stage A selectionPending narrowing: a workspace-level divergence (the
+	// one-frame display-flip / hold window) keeps the composer bound to the
+	// still-displayed old session and USABLE; only a session-level hold within
+	// the same workspace is "pending".
+	it("keeps the composer enabled during a workspace-level selection divergence", () => {
+		const pendingPayload: ComposerSubmitPayload = {
+			prompt: "Build this now",
+			imagePaths: [],
+			filePaths: [],
+			customTags: [],
+			model: MODEL,
+			workingDirectory: null,
+			effortLevel: "high",
+			permissionMode: "default",
+			fastMode: false,
+		};
+
+		// selected = workspace-1/session-1 (router intent), displayed =
+		// workspace-2/session-2 (paint track) → workspace-level divergence.
+		renderContainer(pendingPayload, vi.fn(), {
+			displayedWorkspaceId: "workspace-2",
+			displayedSessionId: "session-2",
+		});
+
+		expect(composerMocks.props.at(-1)?.disabled).toBe(false);
+	});
+
+	it("disables the composer while a session-level hold within the same workspace is pending", () => {
+		const pendingPayload: ComposerSubmitPayload = {
+			prompt: "Build this now",
+			imagePaths: [],
+			filePaths: [],
+			customTags: [],
+			model: MODEL,
+			workingDirectory: null,
+			effortLevel: "high",
+			permissionMode: "default",
+			fastMode: false,
+		};
+
+		// Same workspace, but the displayed session lags the selected one
+		// (selectSession hold-until-ready) → composer must be disabled.
+		renderContainer(pendingPayload, vi.fn(), {
+			displayedWorkspaceId: "workspace-1",
+			displayedSessionId: "session-2",
+		});
+
+		expect(composerMocks.props.at(-1)?.disabled).toBe(true);
 	});
 });

@@ -52,6 +52,7 @@ import {
 	useWorkspaceDnd,
 	type WorkspaceDndPolicy,
 } from "./dnd/use-workspace-dnd";
+import { applyImmediateWorkspaceHighlight } from "./immediate-highlight";
 import {
 	createInitialSectionOpenState,
 	readStoredSectionOpenState,
@@ -115,10 +116,6 @@ function getGroupHeaderHeight(_hasRows: boolean) {
 
 function getGroupGapSize(previousHasRows: boolean, nextHasRows: boolean) {
 	return previousHasRows && nextHasRows ? GROUP_GAP : EMPTY_GROUP_GAP;
-}
-
-function escapeAttributeSelectorValue(value: string) {
-	return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
 // ---------------------------------------------------------------------------
@@ -742,18 +739,10 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	}, []);
 	const applyImmediateSelectionClass = useCallback(
 		(workspaceId: string | null) => {
-			const root = scrollContainerRef.current;
-			if (!root) return;
-			for (const element of root.querySelectorAll(
-				"[data-workspace-row-body].workspace-row-selected",
-			)) {
-				element.classList.remove("workspace-row-selected");
-			}
-			if (!workspaceId) return;
-			const target = root.querySelector(
-				`[data-workspace-row-body][data-workspace-row-id="${escapeAttributeSelectorValue(workspaceId)}"]`,
-			);
-			target?.classList.add("workspace-row-selected");
+			// Root stays the sidebar's own scroll container (NOT a document-wide
+			// query) so standalone renders — and the pointerdown preview they
+			// test — keep working without `[data-helmor-sidebar-root]`.
+			applyImmediateWorkspaceHighlight(scrollContainerRef.current, workspaceId);
 		},
 		[],
 	);

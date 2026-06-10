@@ -13,6 +13,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef } from "react";
 import { useStore } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import {
 	prewarmSlashCommandsForWorkspace,
@@ -60,6 +61,27 @@ export type ShellViewMode = "conversation" | "editor" | "start";
 // burst coalesces these to the settled workspace; a single switch fires after
 // one frame or two (imperceptible for background work).
 const WORKSPACE_SWITCH_SIDE_EFFECT_DELAY_MS = 140;
+
+// Fallback ceiling for the one-frame displayed* flip deferral. The flip is
+// normally scheduled rAF → setTimeout(0) (the macrotask right after the
+// sidebar-highlight frame paints); when rAF is throttled or never fires
+// (hidden webview), this timeout races it so the flip never stalls. The two
+// paths are exactly-once via the `consumed` bookkeeping in
+// `scheduleDisplayFlip`.
+const DISPLAY_FLIP_FALLBACK_MS = 80;
+
+type PendingDisplayFlip = {
+	rafId: number | null;
+	innerTimerId: number | null;
+	fallbackTimerId: number | null;
+	consumed: boolean;
+	// Flip args, kept so `selectSession` can flush a still-pending flip
+	// synchronously before applying an explicit session pick.
+	workspaceId: string;
+	immediateSessionId: string | null;
+	requestId: number;
+	nextViewMode: ShellViewMode;
+};
 
 // The store now holds ONLY the paint track + the reselect signal. `selected*`
 // and `viewMode` were retired in Stage 3b — they live in the router.
@@ -176,6 +198,31 @@ export function useSelectionController(
 		},
 		[],
 	);
+	// The in-flight one-frame deferral of the displayed* flip (see
+	// `scheduleDisplayFlip`). Cancelled by a newer schedule, `openStart`, and
+	// unmount; the run itself clears it before executing.
+	const pendingDisplayFlipRef = useRef<PendingDisplayFlip | null>(null);
+	const cancelScheduledDisplayFlip = useCallback(() => {
+		const pending = pendingDisplayFlipRef.current;
+		if (!pending) return;
+		pendingDisplayFlipRef.current = null;
+		// Mark consumed so a handle that already escaped cancellation (e.g. a
+		// frame callback dispatched before the cancel landed) stays a no-op.
+		pending.consumed = true;
+		if (pending.rafId !== null) {
+			window.cancelAnimationFrame(pending.rafId);
+			pending.rafId = null;
+		}
+		if (pending.innerTimerId !== null) {
+			window.clearTimeout(pending.innerTimerId);
+			pending.innerTimerId = null;
+		}
+		if (pending.fallbackTimerId !== null) {
+			window.clearTimeout(pending.fallbackTimerId);
+			pending.fallbackTimerId = null;
+		}
+	}, []);
+	useEffect(() => cancelScheduledDisplayFlip, [cancelScheduledDisplayFlip]);
 	const startupPrefetchedWorkspaceRef = useRef<string | null>(null);
 	const warmedWorkspaceIdsRef = useRef<Set<string>>(new Set());
 	const sessionSelectionHistoryByWorkspaceRef = useRef<
@@ -335,6 +382,9 @@ export function useSelectionController(
 	// settings but `displayedWorkspaceId` is still null.
 	useEffect(() => {
 		if (!selectedWorkspaceId || displayedWorkspaceId !== null) return;
+		// A pending display flip means `selectWorkspace` already owns this
+		// target's priming — skip so the same workspace isn't primed twice.
+		if (pendingDisplayFlipRef.current !== null) return;
 		if (startupPrefetchedWorkspaceRef.current === selectedWorkspaceId) return;
 		startupPrefetchedWorkspaceRef.current = selectedWorkspaceId;
 		void primeWorkspaceDisplay(selectedWorkspaceId).catch(() => {
@@ -393,6 +443,170 @@ export function useSelectionController(
 		selectedWorkspaceId,
 		workspaceGroups,
 	]);
+
+	// The displayed* flip body — the original synchronous tail of
+	// `selectWorkspace`. Runs either synchronously (no previous pane to hold:
+	// start surface / boot) or one frame later via `scheduleDisplayFlip`.
+	// setState is skipped when the paint track already matches the target so
+	// the store doesn't broadcast a no-op snapshot (A4).
+	const runWorkspaceDisplayFlip = useCallback(
+		(
+			workspaceId: string,
+			immediateSessionId: string | null,
+			requestId: number,
+			nextViewMode: ShellViewMode,
+		) => {
+			// Live-read the router at execution: the captured guess/view mode can
+			// go stale inside the deferral window (an explicit session pick, a
+			// view-mode toggle) and replaying them would overwrite the newer
+			// intent. Fall back to the captured values only when the router no
+			// longer points at this flip's workspace.
+			const liveSelection = getRouterSelection();
+			const targetSessionId =
+				liveSelection.workspaceId === workspaceId &&
+				liveSelection.sessionId !== null
+					? liveSelection.sessionId
+					: immediateSessionId;
+			const refinementViewMode = () => {
+				const live = getRouterSelection();
+				return live.workspaceId === workspaceId ? live.viewMode : nextViewMode;
+			};
+			const setDisplayed = (
+				displayedWorkspaceId: string | null,
+				displayedSessionId: string | null,
+			) => {
+				const snap = store.getState();
+				if (
+					snap.displayedWorkspaceId === displayedWorkspaceId &&
+					snap.displayedSessionId === displayedSessionId
+				) {
+					return;
+				}
+				store.setState({ displayedWorkspaceId, displayedSessionId });
+			};
+
+			setDisplayed(workspaceId, targetSessionId);
+
+			const cached = resolveCachedWorkspaceDisplay(
+				workspaceId,
+				targetSessionId,
+			);
+			if (cached) {
+				rememberSessionSelection(workspaceId, cached.sessionId);
+				// Refine the URL's session segment if the cache resolved a
+				// different session than the immediate guess.
+				if (cached.sessionId !== targetSessionId) {
+					navigateSelection({
+						viewMode: refinementViewMode(),
+						workspaceId,
+						sessionId: cached.sessionId,
+					});
+				}
+				if (workspaceSelectionRequestRef.current !== requestId) return;
+				setDisplayed(cached.workspaceId, cached.sessionId);
+				void queryClient.prefetchQuery(
+					workspaceDetailQueryOptions(workspaceId),
+				);
+				void queryClient.prefetchQuery(
+					workspaceSessionsQueryOptions(workspaceId),
+				);
+				if (cached.sessionId) {
+					void queryClient.prefetchQuery(
+						sessionThreadMessagesQueryOptions(cached.sessionId),
+					);
+				}
+				return;
+			}
+
+			void primeWorkspaceDisplay(workspaceId)
+				.then(({ sessionId }) => {
+					if (workspaceSelectionRequestRef.current !== requestId) return;
+					rememberSessionSelection(workspaceId, sessionId);
+					if (sessionId !== targetSessionId) {
+						navigateSelection({
+							viewMode: refinementViewMode(),
+							workspaceId,
+							sessionId,
+						});
+					}
+					setDisplayed(workspaceId, sessionId);
+				})
+				.catch(() => {
+					if (workspaceSelectionRequestRef.current !== requestId) return;
+					setDisplayed(workspaceId, null);
+				});
+		},
+		[
+			primeWorkspaceDisplay,
+			queryClient,
+			rememberSessionSelection,
+			resolveCachedWorkspaceDisplay,
+			store,
+		],
+	);
+
+	// Defer the displayed* flip out of the input task so the router commit
+	// (sidebar highlight) paints first: rAF → setTimeout(0) targets the
+	// macrotask right after the next frame, raced against an 80ms fallback for
+	// throttled/absent rAF. Three handles + `consumed` make the run
+	// exactly-once even when both paths fire (e.g. the rAF already dispatched
+	// but its inner timer hadn't run when the fallback won).
+	const scheduleDisplayFlip = useCallback(
+		(
+			workspaceId: string,
+			immediateSessionId: string | null,
+			requestId: number,
+			nextViewMode: ShellViewMode,
+		) => {
+			cancelScheduledDisplayFlip();
+			const handles: PendingDisplayFlip = {
+				rafId: null,
+				innerTimerId: null,
+				fallbackTimerId: null,
+				consumed: false,
+				workspaceId,
+				immediateSessionId,
+				requestId,
+				nextViewMode,
+			};
+			pendingDisplayFlipRef.current = handles;
+			const run = () => {
+				if (handles.consumed) return;
+				handles.consumed = true;
+				if (handles.rafId !== null) {
+					window.cancelAnimationFrame(handles.rafId);
+					handles.rafId = null;
+				}
+				if (handles.innerTimerId !== null) {
+					window.clearTimeout(handles.innerTimerId);
+					handles.innerTimerId = null;
+				}
+				if (handles.fallbackTimerId !== null) {
+					window.clearTimeout(handles.fallbackTimerId);
+					handles.fallbackTimerId = null;
+				}
+				if (pendingDisplayFlipRef.current === handles) {
+					pendingDisplayFlipRef.current = null;
+				}
+				if (workspaceSelectionRequestRef.current !== requestId) return;
+				runWorkspaceDisplayFlip(
+					workspaceId,
+					immediateSessionId,
+					requestId,
+					nextViewMode,
+				);
+			};
+			handles.rafId = window.requestAnimationFrame(() => {
+				handles.rafId = null;
+				handles.innerTimerId = window.setTimeout(run, 0);
+			});
+			handles.fallbackTimerId = window.setTimeout(
+				run,
+				DISPLAY_FLIP_FALLBACK_MS,
+			);
+		},
+		[cancelScheduledDisplayFlip, runWorkspaceDisplayFlip],
+	);
 
 	const selectWorkspace = useCallback<SelectionActions["selectWorkspace"]>(
 		(workspaceId) => {
@@ -464,81 +678,62 @@ export function useSelectionController(
 				return;
 			}
 
-			store.setState({
-				displayedWorkspaceId: workspaceId,
-				displayedSessionId: immediateSessionId,
-			});
-
-			const cached = resolveCachedWorkspaceDisplay(
-				workspaceId,
-				immediateSessionId,
-			);
-			if (cached) {
-				rememberSessionSelection(workspaceId, cached.sessionId);
-				// Refine the URL's session segment if the cache resolved a
-				// different session than the immediate guess.
-				if (cached.sessionId !== immediateSessionId) {
-					navigateSelection({
-						viewMode: nextViewMode,
-						workspaceId,
-						sessionId: cached.sessionId,
-					});
-				}
-				if (workspaceSelectionRequestRef.current !== requestId) return;
-				store.setState({
-					displayedWorkspaceId: cached.workspaceId,
-					displayedSessionId: cached.sessionId,
-				});
-				void queryClient.prefetchQuery(
-					workspaceDetailQueryOptions(workspaceId),
+			// Two-track split: when a previous pane is on screen, defer the
+			// displayed* flip by one frame so the router commit (sidebar
+			// highlight) paints inside the input task and the heavy pane commit
+			// lands in the next one. With nothing displayed (start surface /
+			// boot) there is no old frame to hold — flip synchronously so the
+			// panel never renders its EmptyState fallback in between.
+			if (store.getState().displayedWorkspaceId === null) {
+				runWorkspaceDisplayFlip(
+					workspaceId,
+					immediateSessionId,
+					requestId,
+					nextViewMode,
 				);
-				void queryClient.prefetchQuery(
-					workspaceSessionsQueryOptions(workspaceId),
-				);
-				if (cached.sessionId) {
-					void queryClient.prefetchQuery(
-						sessionThreadMessagesQueryOptions(cached.sessionId),
-					);
-				}
 				return;
 			}
 
-			void primeWorkspaceDisplay(workspaceId)
-				.then(({ sessionId }) => {
-					if (workspaceSelectionRequestRef.current !== requestId) return;
-					rememberSessionSelection(workspaceId, sessionId);
-					if (sessionId !== immediateSessionId) {
-						navigateSelection({
-							viewMode: nextViewMode,
-							workspaceId,
-							sessionId,
-						});
-					}
-					store.setState({
-						displayedWorkspaceId: workspaceId,
-						displayedSessionId: sessionId,
-					});
-				})
-				.catch(() => {
-					if (workspaceSelectionRequestRef.current !== requestId) return;
-					store.setState({
-						displayedWorkspaceId: workspaceId,
-						displayedSessionId: null,
-					});
-				});
+			scheduleDisplayFlip(
+				workspaceId,
+				immediateSessionId,
+				requestId,
+				nextViewMode,
+			);
 		},
 		[
-			primeWorkspaceDisplay,
 			queryClient,
-			rememberSessionSelection,
-			resolveCachedWorkspaceDisplay,
 			resolvePreferredSessionId,
+			runWorkspaceDisplayFlip,
+			scheduleDisplayFlip,
 			store,
 		],
 	);
 
 	const selectSession = useCallback(
 		(sessionId: string | null) => {
+			// A pending workspace flip still carries its captured session guess;
+			// letting it run AFTER this explicit pick would overwrite it one
+			// frame later (selectSession only bumps the session request id, so
+			// the flip's workspace request id stays current). Flush it
+			// synchronously first — reproducing the strict workspace-then-
+			// session ordering of the pre-split code — or just drop it when a
+			// newer workspace request already superseded it.
+			const pendingFlip = pendingDisplayFlipRef.current;
+			if (pendingFlip) {
+				const isCurrentRequest =
+					workspaceSelectionRequestRef.current === pendingFlip.requestId;
+				cancelScheduledDisplayFlip();
+				if (isCurrentRequest) {
+					runWorkspaceDisplayFlip(
+						pendingFlip.workspaceId,
+						pendingFlip.immediateSessionId,
+						pendingFlip.requestId,
+						pendingFlip.nextViewMode,
+					);
+				}
+			}
+
 			const current = getRouterSelection();
 			if (sessionId === current.sessionId) return;
 
@@ -588,13 +783,22 @@ export function useSelectionController(
 					store.setState({ displayedSessionId: sessionId });
 				});
 		},
-		[queryClient, rememberSessionSelection, store],
+		[
+			cancelScheduledDisplayFlip,
+			queryClient,
+			rememberSessionSelection,
+			runWorkspaceDisplayFlip,
+			store,
+		],
 	);
 
 	const openStart = useCallback(
 		(options?: { persist?: boolean }) => {
 			workspaceSelectionRequestRef.current += 1;
 			sessionSelectionRequestRef.current += 1;
+			// A deferred displayed flip in flight must not land after the start
+			// surface clears the paint track.
+			cancelScheduledDisplayFlip();
 
 			const persist = options?.persist !== false;
 			// `persist: false` must NOT re-write `lastSurface` — arm the one-shot
@@ -615,7 +819,7 @@ export function useSelectionController(
 
 			onStartOpenedRef.current?.({ persist });
 		},
-		[store],
+		[cancelScheduledDisplayFlip, store],
 	);
 
 	const setViewMode = useCallback((mode: ShellViewMode) => {
@@ -673,7 +877,14 @@ export function useSelectionController(
 			// the explicit `selectSession`/`selectWorkspace` navigations. (Pre-3b
 			// `selected*` + `displayed*` were both store fields and this synced
 			// them; now `selected` is the router, so we only advance `displayed`.)
-			rememberSessionSelection(getRouterSelection().workspaceId, sessionId);
+			// History keys on the DISPLAYED workspace, not the router's: during a
+			// display-flip divergence the router already points at the NEW
+			// workspace — the wrong bucket for a write-back about the still-
+			// painted old pane.
+			rememberSessionSelection(
+				store.getState().displayedWorkspaceId,
+				sessionId,
+			);
 			const snap = store.getState();
 			if (snap.displayedSessionId !== sessionId) {
 				store.setState({ displayedSessionId: sessionId });
@@ -702,11 +913,21 @@ export function useSelectionController(
 		getSnapshot,
 	});
 
-	// Synthesise the `state` object from the store. The store merges on every
-	// `setState`, so the snapshot reference changes exactly when a field
-	// changes — same identity cadence as before, so `state.X` reads stay
-	// compatible for the `displayed*` / `reselectTick` track.
-	const state = useStore(store, (s) => s);
+	// Synthesise the `state` object from the store. Narrowed with `useShallow`
+	// over the three fields (the store holds exactly these) so the controller —
+	// and the ~1650-line orchestration layer consuming `sel.selection` — only
+	// re-renders when a field VALUE changes, not on every snapshot identity
+	// bump. Consumers read individual fields, so the contract is unchanged.
+	const state = useStore(
+		store,
+		useShallow(
+			(s): SelectionState => ({
+				displayedWorkspaceId: s.displayedWorkspaceId,
+				displayedSessionId: s.displayedSessionId,
+				reselectTick: s.reselectTick,
+			}),
+		),
+	);
 
 	return { state, actions, store };
 }
