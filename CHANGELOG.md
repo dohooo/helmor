@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.34.1
+
+### Patch Changes
+
+- [#780](https://github.com/dohooo/helmor/pull/780) [`1ceadbf`](https://github.com/dohooo/helmor/commit/1ceadbf1f945c1ca056ca8cb54dbadff5a07b2a5) Thanks [@natllian](https://github.com/natllian)! - Fix Claude streaming render glitches introduced by the claude-code 2.1.170 upgrade:
+
+  - Thinking phases no longer render as a run of duplicated "Thought for Ns" chips — split thinking segments now merge into one chip with the real total duration.
+  - Edits no longer leave phantom "+0 -0" cards spinning forever after the turn has finished.
+  - Collapsed read/search groups now stay in chronological order instead of jumping below thinking that happened later.
+
+- [#781](https://github.com/dohooo/helmor/pull/781) [`16be910`](https://github.com/dohooo/helmor/commit/16be91071c4c8631c5dc94108eebb2a33a595872) Thanks [@natllian](https://github.com/natllian)! - Make the Connect GitHub/GitLab state reliable:
+
+  - A transient API 401 no longer flips a workspace to "Connect" — Helmor now re-validates the account with the forge CLI before treating it as logged out.
+  - When an account logout is detected, every workspace of the same repository updates together instead of showing inconsistent Connect states.
+
+- [#778](https://github.com/dohooo/helmor/pull/778) [`60cd37e`](https://github.com/dohooo/helmor/commit/60cd37e74dc66ce29b641006caae7bd7d5abab7d) Thanks [@natllian](https://github.com/natllian)! - Fix the streaming timer briefly showing the previous session's elapsed time when switching workspaces, so it now updates to the correct value immediately.
+
 ## 0.34.0
 
 ### Minor Changes
