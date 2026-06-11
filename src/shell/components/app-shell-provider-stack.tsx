@@ -17,6 +17,8 @@ type Props = {
 	pushWorkspaceToast: ComponentProps<typeof WorkspaceToastProvider>["value"];
 	sessionRunStates: ComponentProps<typeof SessionRunStatesProvider>["value"];
 	insertIntoComposer: ComponentProps<typeof ComposerInsertProvider>["value"];
+	/** The quick panel opts out: only the main window confirms app quit. */
+	showQuitConfirm?: boolean;
 	children: ReactNode;
 };
 
@@ -25,6 +27,7 @@ export function AppShellProviderStack({
 	pushWorkspaceToast,
 	sessionRunStates,
 	insertIntoComposer,
+	showQuitConfirm = true,
 	children,
 }: Props) {
 	return (
@@ -37,7 +40,9 @@ export function AppShellProviderStack({
 						</ComposerInsertProvider>
 					</SessionRunStatesProvider>
 				</WorkspaceToastProvider>
-				<QuitConfirmDialog sessionRunStates={sessionRunStates} />
+				{showQuitConfirm && (
+					<QuitConfirmDialog sessionRunStates={sessionRunStates} />
+				)}
 			</SelectionStoreProvider>
 		</TooltipProvider>
 	);

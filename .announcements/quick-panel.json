@@ -1,0 +1,11 @@
+{
+	"items": [
+		{
+			"text": "Quick panel: press ⇧⌥Space anywhere to spin up a task in a small floating window — pick a repo, send the prompt, and keep chatting without opening Helmor. Hotkey configurable in Settings → Shortcuts.",
+			"action": {
+				"label": "Try it",
+				"value": { "type": "toggleQuickPanel" }
+			}
+		}
+	]
+}

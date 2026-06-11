@@ -40,7 +40,10 @@ const GROUPS: ShortcutGroup[] = [
 	"Editor",
 	"Terminal",
 ];
-const PINNED_SHORTCUT_IDS: ShortcutId[] = ["global.hotkey"];
+const PINNED_SHORTCUT_IDS: ShortcutId[] = [
+	"global.hotkey",
+	"quickPanel.hotkey",
+];
 const PINNED_SHORTCUT_ID_SET = new Set<ShortcutId>(PINNED_SHORTCUT_IDS);
 
 const MODIFIER_KEYS = new Set(["Alt", "Control", "Meta", "Shift"]);

@@ -586,11 +586,22 @@ export function useStartSurfaceController(
 						},
 						finalized: false,
 					});
-					requestAnimationFrame(() => {
+					// WKWebView pauses rAF entirely while the webview is hidden or
+					// occluded (`document.visibilityState === "hidden"` — e.g. the
+					// quick panel dismissed right after submit, or a window on
+					// another Space). Race a timer fallback so the view switch can
+					// never be lost; when rAF is alive it wins and keeps the
+					// paint-first behavior.
+					let viewSwitchDone = false;
+					const switchToConversation = () => {
+						if (viewSwitchDone) return;
+						viewSwitchDone = true;
 						selectWorkspaceRef.current(outcome.workspaceId);
 						selectSessionRef.current(outcome.sessionId);
 						setViewModeRef.current("conversation");
-					});
+					};
+					requestAnimationFrame(switchToConversation);
+					setTimeout(switchToConversation, 120);
 
 					let finalizedWorkingDirectory: string | null =
 						preparedWorkingDirectory;

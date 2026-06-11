@@ -12,6 +12,7 @@ import { useAppShellState } from "@/shell/hooks/use-app-shell-state";
 import { AppShellLayout } from "./app-shell-layout";
 import { WorkspaceHeaderActions } from "./workspace-header-actions";
 import { WorkspaceHeaderLeading } from "./workspace-header-leading";
+import { buildWorkspacePaneProps } from "./workspace-pane-props";
 
 export function AppShell({
 	onOpenSettings,
@@ -136,54 +137,11 @@ export function AppShell({
 			sidebarCollapsed={panels.sidebarCollapsed}
 			isSidebarResizing={panels.isSidebarResizing}
 			sidebarWidth={panels.sidebarWidth}
-			workspacePane={{
-				workspaceViewMode: s.workspaceViewMode,
-				editorSession: data.editorSession,
-				workspaceRootPath: data.workspaceRootPath,
-				appShortcuts: s.appSettings.shortcuts,
-				sidebarCollapsed: panels.sidebarCollapsed,
-				contextPanelOpen: sel.contextPanel.contextPanelOpen,
-				handleEditorSessionChange: data.handleEditorSessionChange,
-				editorSessionActions: data.editorSessionActions,
-				repositories: s.repositories,
-				selectionActions: sel.selectionActions,
-				readStateActions: data.readStateActions,
-				pendingQueueActions: data.pendingQueueActions,
-				contextPanelActions: sel.contextPanelActions,
-				startSurfaceActions: sel.startSurfaceActions,
-				activeStreams: data.activeStreams,
-				effectiveBusySessionIds: data.effectiveBusySessionIds,
-				effectiveStoppableSessionIds: data.effectiveStoppableSessionIds,
-				interactionRequiredSessionIds: data.interactionRequiredSessionIds,
-				pendingComposerInserts: data.pendingComposerInserts,
-				onSelectSession: sel.handleSelectSession,
-				onRequestCloseSession: data.requestCloseSession,
-				handlePendingPromptConsumed: data.handlePendingPromptConsumed,
-				queuePendingPromptForSession: data.queuePendingPromptForSession,
-				startRepository: sel.startSurface.startRepository,
-				startSourceBranch: sel.startSurface.startSourceBranch,
-				startBranches: sel.startSurface.startBranches,
-				startBranchesLoading: sel.startSurface.startBranchesLoading,
-				startMode: sel.startSurface.startMode,
-				startBranchIntent: sel.startSurface.startBranchIntent,
-				startPreviewCard: sel.contextPanel.startPreviewCard,
-				startComposerInsertTarget: sel.startSurface.startComposerInsertTarget,
-				startComposerContextKey: sel.startSurface.startComposerContextKey,
-				startCreateContext: s.startCreateContext,
-				startLinkedDirectoriesController:
-					sel.startSurface.startLinkedDirectoriesController,
-				repoId: data.selectedWorkspaceDetailQuery.data?.repoId ?? null,
-				sessionSelectionHistory: s.sessionSelectionHistory,
-				workspaceChangeRequest: data.workspaceChangeRequest,
-				pendingPromptForSession: data.pendingPromptForSession,
-				pendingCreatedWorkspaceSubmit: sel.pendingCreatedWorkspaceSubmit,
-				handlePendingCreatedWorkspaceSubmitConsumed:
-					data.handlePendingCreatedWorkspaceSubmitConsumed,
-				contextPreviewCard: sel.contextPanel.workspacePreviewCard,
-				contextPreviewActive: sel.contextPanel.workspacePreviewActive,
+			workspacePane={buildWorkspacePaneProps({
+				s,
 				headerLeadingNode,
 				headerActionsNode,
-			}}
+			})}
 			rightSidebarAvailable={sel.contextPanel.rightSidebarAvailable}
 			selectedWorkspaceDetail={data.selectedWorkspaceDetail}
 			inspector={{

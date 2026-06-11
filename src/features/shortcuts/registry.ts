@@ -210,6 +210,17 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		editable: true,
 	},
 	{
+		// OS-level hotkey registered by the Rust backend. The default below
+		// MUST stay in sync with `default_hotkey` in src-tauri/src/global_hotkey.rs.
+		id: "quickPanel.hotkey",
+		title: "Quick panel hotkey",
+		description: "Open the quick task panel from anywhere.",
+		group: "System",
+		defaultHotkey: "Shift+Alt+Space",
+		scopes: ["app"],
+		editable: true,
+	},
+	{
 		id: "theme.toggle",
 		title: "Toggle theme (dark/light)",
 		group: "System",

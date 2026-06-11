@@ -837,12 +837,35 @@ export async function installDownloadedAppUpdate(): Promise<AppUpdateStatus> {
 	return invoke<AppUpdateStatus>("install_downloaded_app_update");
 }
 
-export async function syncGlobalHotkey(hotkey: string | null): Promise<void> {
+export type OsGlobalHotkeyId = "global.hotkey" | "quickPanel.hotkey";
+
+export async function syncGlobalHotkey(
+	id: OsGlobalHotkeyId,
+	hotkey: string | null,
+): Promise<void> {
 	try {
-		await invoke<void>("sync_global_hotkey", { hotkey });
+		await invoke<void>("sync_global_hotkey", { id, hotkey });
 	} catch (error) {
 		throw new Error(describeInvokeError(error, "Unable to set global hotkey."));
 	}
+}
+
+export async function toggleQuickPanel(): Promise<void> {
+	return invoke<void>("toggle_quick_panel");
+}
+
+export async function hideQuickPanel(): Promise<void> {
+	return invoke<void>("hide_quick_panel");
+}
+
+export async function revealWorkspaceInMainWindow(
+	workspaceId: string,
+	sessionId: string | null,
+): Promise<void> {
+	return invoke<void>("reveal_workspace_in_main_window", {
+		workspaceId,
+		sessionId,
+	});
 }
 
 export async function listenAppUpdateStatus(
@@ -2207,6 +2230,11 @@ export type UiMutationEvent =
 			sessionId: string;
 			workspaceId: string;
 			prompt: string;
+	  }
+	| {
+			type: "workspaceRevealRequested";
+			workspaceId: string;
+			sessionId: string | null;
 	  };
 
 export type TriageConfig = {
