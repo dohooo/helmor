@@ -34,7 +34,17 @@ export type ShellEvent =
 	| { type: "toggle-context-panel" }
 	| { type: "focus-active-terminal" }
 	// Imperative archive from surfaces outside the sidebar controller (reuses its optimistic path).
-	| { type: "request-archive-workspace"; workspaceId: string };
+	| { type: "request-archive-workspace"; workspaceId: string }
+	// Composer Terminal-Mode submit: create a terminal session in the current
+	// workspace and boot the provider's TUI with this prompt + composer state.
+	| {
+			type: "create-terminal-session";
+			prompt: string;
+			provider: string;
+			modelId: string | null;
+			effortLevel: string | null;
+			permissionMode: string | null;
+	  };
 
 export type ShellEventType = ShellEvent["type"];
 

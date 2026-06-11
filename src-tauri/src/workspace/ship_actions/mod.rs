@@ -112,6 +112,8 @@ impl OwnedSessionOverrides {
             effort_level: self.effort_level.as_deref(),
             fast_mode: self.fast_mode,
             seed_session_id: None,
+            session_kind: None,
+            agent_type: None,
         }
     }
 }

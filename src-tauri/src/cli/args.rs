@@ -203,6 +203,15 @@ pub enum Commands {
     Quit,
     /// Run as an MCP (Model Context Protocol) server over stdio.
     Mcp,
+    /// Internal: receive an agent hook callback (invoked by agent CLIs, not
+    /// users). Reads the hook payload from stdin; the owning terminal session
+    /// is passed via the HELMOR_TERMINAL_SESSION_ID env var.
+    #[command(hide = true)]
+    TerminalHook {
+        /// Agent kind: claude / codex.
+        #[arg(long)]
+        agent: String,
+    },
 }
 
 // ---------------------------------------------------------------------------

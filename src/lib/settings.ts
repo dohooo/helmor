@@ -271,6 +271,9 @@ export type AppSettings = {
 	notificationSound: NotificationSound;
 	/** When true, hovering a terminal-like inspector tab body expands it. */
 	terminalHoverExpansion: boolean;
+	/** Shows the Terminal-Mode toggle in the composer; sending with it on
+	 *  opens the prompt in an agent TUI instead of a GUI session. */
+	enableTerminalMode: boolean;
 	lastWorkspaceId: string | null;
 	lastSessionId: string | null;
 	lastSurface: AppSurface;
@@ -385,6 +388,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	notifications: true,
 	notificationSound: "off",
 	terminalHoverExpansion: true,
+	enableTerminalMode: false,
 	lastWorkspaceId: null,
 	lastSessionId: null,
 	lastSurface: "workspace",
@@ -563,6 +567,7 @@ const SETTINGS_KEY_MAP: Record<
 	notifications: "app.notifications",
 	notificationSound: "app.notification_sound",
 	terminalHoverExpansion: "app.terminal_hover_expansion",
+	enableTerminalMode: "app.enable_terminal_mode",
 	lastWorkspaceId: "app.last_workspace_id",
 	lastSessionId: "app.last_session_id",
 	lastSurface: "app.last_surface",
@@ -1226,6 +1231,7 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.terminalHoverExpansion] !== undefined
 					? raw[SETTINGS_KEY_MAP.terminalHoverExpansion] === "true"
 					: DEFAULT_SETTINGS.terminalHoverExpansion,
+			enableTerminalMode: raw[SETTINGS_KEY_MAP.enableTerminalMode] === "true",
 			lastWorkspaceId: raw[SETTINGS_KEY_MAP.lastWorkspaceId] || null,
 			lastSessionId: raw[SETTINGS_KEY_MAP.lastSessionId] || null,
 			lastSurface:

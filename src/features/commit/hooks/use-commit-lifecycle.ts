@@ -18,6 +18,7 @@ import {
 	type WorkspaceDetail,
 	type WorkspaceGitActionStatus,
 	type WorkspaceGroup,
+	type WorkspaceSessionSummary,
 	type WorkspaceStatus,
 } from "@/lib/api";
 import {
@@ -599,9 +600,44 @@ export function useWorkspaceCommitLifecycle({
 
 	const queuePendingPromptForSession = useCallback(
 		(request: PendingPromptForSession) => {
+			// A terminal session has no GUI send pipeline, and injecting text
+			// into its TUI is unreliable (mid-turn, permission dialogs,
+			// half-typed user input). Host-triggered prompts open a fresh GUI
+			// session in the same workspace instead.
+			const workspaceId = getSelectedWorkspaceId();
+			const target = workspaceId
+				? queryClient
+						.getQueryData<WorkspaceSessionSummary[]>(
+							helmorQueryKeys.workspaceSessions(workspaceId),
+						)
+						?.find((session) => session.id === request.sessionId)
+				: undefined;
+			if (target?.sessionKind === "terminal" && workspaceId) {
+				void (async () => {
+					try {
+						const { sessionId } = await createSession(workspaceId);
+						await queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
+						});
+						setPendingPromptForSession({ ...request, sessionId });
+						onSelectSession(sessionId);
+					} catch (error) {
+						console.error(
+							"[pendingPrompt] failed to open a chat session for a terminal target:",
+							error,
+						);
+						pushToast?.(
+							getErrorMessage(error, "Unable to open a chat session."),
+							"Prompt not delivered",
+							"destructive",
+						);
+					}
+				})();
+				return;
+			}
 			setPendingPromptForSession(request);
 		},
-		[],
+		[getSelectedWorkspaceId, onSelectSession, pushToast, queryClient],
 	);
 
 	const handleInspectorReviewAction = useCallback(

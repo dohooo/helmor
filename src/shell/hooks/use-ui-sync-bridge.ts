@@ -1,6 +1,10 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
-import { subscribeUiMutations, type UiMutationEvent } from "@/lib/api";
+import {
+	generateSessionTitle,
+	subscribeUiMutations,
+	type UiMutationEvent,
+} from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 
@@ -257,6 +261,46 @@ function handleUiMutation(
 				queryKey: helmorQueryKeys.pairedDevices,
 			});
 			return;
+		case "terminalSessionIdle":
+			// Terminal turn finished (agent Stop hook). Re-dispatch as the
+			// window event the read-state controller already listens on, so
+			// the shared completion path (unread + notification) fires.
+			window.dispatchEvent(
+				new CustomEvent("helmor:terminal-session-idle", {
+					detail: {
+						sessionId: event.sessionId,
+						workspaceId: event.workspaceId,
+					},
+				}),
+			);
+			// The session tab's spinner also reads sessions.status from the DB;
+			// refetch now or it shows 'streaming' until some other event lands
+			// (the sidebar uses activeStreams and was already instant).
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceSessions(event.workspaceId),
+			});
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceDetail(event.workspaceId),
+			});
+			return;
+		case "terminalPromptCaptured": {
+			// Terminal session's first prompt (agent UserPromptSubmit hook).
+			// Run the same title + branch generator GUI sessions use; it's
+			// gated server-side so only the first turn actually renames.
+			const { sessionId, workspaceId, prompt } = event;
+			void generateSessionTitle(sessionId, prompt).then((result) => {
+				if (result?.title || result?.branchRenamed) {
+					requestSidebarReconcile(queryClient);
+					void queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
+					});
+					void queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
+					});
+				}
+			});
+			return;
+		}
 	}
 }
 

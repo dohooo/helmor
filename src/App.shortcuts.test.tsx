@@ -682,7 +682,10 @@ describe("App global navigation shortcuts", () => {
 		pressCreateSessionShortcut();
 
 		await waitFor(() => {
-			expect(apiMocks.createSession).toHaveBeenCalledWith(WORKSPACE_IDS.done);
+			expect(apiMocks.createSession).toHaveBeenCalledWith(
+				WORKSPACE_IDS.done,
+				expect.objectContaining({ sessionKind: "gui" }),
+			);
 			expectSelectedSession("Untitled");
 		});
 	});

@@ -63,7 +63,7 @@ async fn dispatch(
             Ok(Value::Null)
         }
         "create_repo_run_action" => to_value(crate::commands::script_commands::create_repo_run_action(app.clone(), arg_string(&args, "repoId")?, arg_string(&args, "name")?, arg_string(&args, "command")?, arg_string(&args, "mode")?, arg_opt_string(&args, "stopCommand")).await?),
-        "create_session" => to_value(crate::commands::session_commands::create_session(arg_string(&args, "workspaceId")?, arg_opt_json(&args, "actionKind")?, arg_opt_string(&args, "permissionMode"), arg_opt_string(&args, "model"), arg_opt_string(&args, "effortLevel"), arg_opt_bool(&args, "fastMode"), arg_opt_string(&args, "seedSessionId")).await?),
+        "create_session" => to_value(crate::commands::session_commands::create_session(arg_string(&args, "workspaceId")?, arg_opt_json(&args, "actionKind")?, arg_opt_string(&args, "permissionMode"), arg_opt_string(&args, "model"), arg_opt_string(&args, "effortLevel"), arg_opt_bool(&args, "fastMode"), arg_opt_string(&args, "seedSessionId"), arg_opt_string(&args, "sessionKind"), arg_opt_string(&args, "agentType")).await?),
         "create_workspace_from_repo" => to_value(crate::commands::workspace_commands::create_workspace_from_repo(app.clone(), arg_string(&args, "repoId")?).await?),
         "delete_opencode_custom_provider" => {
             crate::commands::opencode_config_commands::delete_opencode_custom_provider(arg_string(&args, "id")?).await?;
@@ -250,6 +250,18 @@ async fn dispatch(
         }
         "set_session_draft" => {
             crate::commands::session_commands::set_session_draft(arg_string(&args, "sessionId")?, arg_opt_string(&args, "draftState")).await?;
+            Ok(Value::Null)
+        }
+        "set_terminal_session_busy" => {
+            crate::commands::terminal_commands::set_terminal_session_busy(
+                app.clone(),
+                app.state::<crate::agents::ActiveStreams>(),
+                arg_string(&args, "sessionId")?,
+                arg_string(&args, "workspaceId")?,
+                arg_opt_string(&args, "provider"),
+                arg_bool(&args, "busy")?,
+            )
+            .await?;
             Ok(Value::Null)
         }
         "set_workspace_active_run_action" => {

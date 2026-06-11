@@ -43,8 +43,7 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>) -> Result<()> {
                     Ok(0) => br#"{"ok":false,"error":"empty request"}"#.as_slice(),
                     Ok(_) => match serde_json::from_str::<UiMutationEnvelope>(&line) {
                         Ok(envelope) if envelope.version == UiMutationEnvelope::VERSION => {
-                            let manager = app.state::<UiSyncManager>();
-                            manager.publish(envelope.event);
+                            apply_ui_mutation(&app, envelope.event);
                             br#"{"ok":true}"#.as_slice()
                         }
                         Ok(_) => br#"{"ok":false,"error":"unsupported version"}"#.as_slice(),
@@ -61,6 +60,39 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>) -> Result<()> {
         .context("Failed to spawn UI sync socket listener")?;
 
     Ok(())
+}
+
+/// Apply a UI-sync event arriving over the socket. Most events just broadcast
+/// to the frontend; `TerminalActivityChanged` additionally folds the agent-hook
+/// busy/idle signal into the active-stream registry so the sidebar spinner
+/// treats a Terminal session like any other, then re-broadcasts.
+fn apply_ui_mutation<R: Runtime>(app: &AppHandle<R>, event: super::events::UiMutationEvent) {
+    use super::events::UiMutationEvent as E;
+    let manager = app.state::<UiSyncManager>();
+    match event {
+        E::TerminalActivityChanged {
+            session_id,
+            workspace_id,
+            busy,
+        } => {
+            app.state::<crate::agents::ActiveStreams>()
+                .set_session_active(&session_id, Some(workspace_id.clone()), "terminal", busy);
+            let _ = crate::models::sessions::set_session_status(
+                &session_id,
+                if busy { "streaming" } else { "idle" },
+            );
+            manager.publish(E::ActiveStreamsChanged);
+            // Stop → run the shared completion path (notification + unread)
+            // exactly like a GUI session's final stream event.
+            if !busy {
+                manager.publish(E::TerminalSessionIdle {
+                    session_id,
+                    workspace_id,
+                });
+            }
+        }
+        other => manager.publish(other),
+    }
 }
 
 pub fn notify_running_app(event: super::events::UiMutationEvent) -> Result<bool> {

@@ -81,6 +81,31 @@ impl ActiveStreams {
         }
     }
 
+    /// Register/unregister a non-SDK stream (e.g. a Terminal session) keyed by
+    /// its own session id, so the UI's busy/spinner derivation treats a working
+    /// terminal like any other busy session. `request_id` == `helmor_session_id`
+    /// == `session_id` (one in-flight "turn" per terminal).
+    pub(crate) fn set_session_active(
+        &self,
+        session_id: &str,
+        workspace_id: Option<String>,
+        provider: &str,
+        active: bool,
+    ) -> bool {
+        if active {
+            self.try_register_for_session(ActiveStreamHandle {
+                request_id: session_id.to_string(),
+                sidecar_session_id: String::new(),
+                provider: provider.to_string(),
+                helmor_session_id: Some(session_id.to_string()),
+                workspace_id,
+            })
+        } else {
+            self.unregister(session_id);
+            true
+        }
+    }
+
     fn snapshot(&self) -> Vec<ActiveStreamHandle> {
         self.inner
             .lock()

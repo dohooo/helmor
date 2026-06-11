@@ -434,6 +434,9 @@ export type WorkspaceSessionSummary = {
 	 * inspector commit button (e.g. "create-pr", "commit-and-push"). Drives
 	 * post-stream verifiers and auto-close behavior. */
 	actionKind?: ActionKind | null;
+	/** "gui" (SDK chat session) or "terminal" (live PTY in the message area).
+	 * Optional for test mocks / optimistic rows; absent is treated as "gui". */
+	sessionKind?: "gui" | "terminal";
 	active: boolean;
 };
 
@@ -2197,7 +2200,14 @@ export type UiMutationEvent =
 	| { type: "triageActiveStatusChanged" }
 	| { type: "triageWorkspaceCreated"; workspaceId: string }
 	| { type: "fastModeUnavailable"; sessionId: string; reason: string }
-	| { type: "pairedDevicesChanged" };
+	| { type: "pairedDevicesChanged" }
+	| { type: "terminalSessionIdle"; sessionId: string; workspaceId: string }
+	| {
+			type: "terminalPromptCaptured";
+			sessionId: string;
+			workspaceId: string;
+			prompt: string;
+	  };
 
 export type TriageConfig = {
 	enabled: boolean;
@@ -4050,6 +4060,10 @@ export async function createSession(
 		fastMode?: boolean | null;
 		/** Pre-allocated session UUID; see `prepareWorkspaceFromRepo`. */
 		seedSessionId?: string | null;
+		/** "terminal" creates a Terminal session (live PTY); defaults to "gui". */
+		sessionKind?: "gui" | "terminal" | null;
+		/** Pin agent_type at creation (Terminal preset CLI, e.g. "claude"). */
+		agentType?: string | null;
 	},
 ): Promise<CreateSessionResponse> {
 	return invoke<CreateSessionResponse>("create_session", {
@@ -4060,6 +4074,8 @@ export async function createSession(
 		effortLevel: options?.effortLevel ?? null,
 		fastMode: options?.fastMode ?? null,
 		seedSessionId: options?.seedSessionId ?? null,
+		sessionKind: options?.sessionKind ?? null,
+		agentType: options?.agentType ?? null,
 	});
 }
 
@@ -4610,6 +4626,8 @@ export async function spawnTerminal(
 	workspaceId: string,
 	instanceId: string,
 	onEvent: (event: ScriptEvent) => void,
+	bootCommand?: string | null,
+	agentKind?: string | null,
 ): Promise<void> {
 	const channel = new Channel<ScriptEvent>();
 	channel.onmessage = onEvent;
@@ -4617,6 +4635,8 @@ export async function spawnTerminal(
 		repoId,
 		workspaceId,
 		instanceId,
+		agentKind: agentKind ?? null,
+		bootCommand: bootCommand ?? null,
 		channel,
 	});
 }
@@ -4630,6 +4650,22 @@ export async function stopTerminal(
 		repoId,
 		workspaceId,
 		instanceId,
+	});
+}
+
+/** Mirror a Terminal session's working/idle state into the active-stream
+ * registry (drives the sidebar spinner + completion notification). */
+export async function setTerminalSessionBusy(
+	sessionId: string,
+	workspaceId: string,
+	busy: boolean,
+	provider?: string | null,
+): Promise<void> {
+	await invoke("set_terminal_session_busy", {
+		sessionId,
+		workspaceId,
+		busy,
+		provider: provider ?? null,
 	});
 }
 

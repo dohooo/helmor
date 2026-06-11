@@ -270,6 +270,12 @@ pub fn run() {
                 Err(e) => tracing::warn!("Failed to reconcile orphaned workspaces: {e:#}"),
             }
 
+            // Terminal sessions left at 'streaming' from a prior run have dead
+            // PTYs; reset them so the sidebar doesn't show a phantom spinner.
+            if let Err(e) = models::sessions::reset_stale_terminal_statuses() {
+                tracing::warn!("Failed to reset stale terminal statuses: {e:#}");
+            }
+
             // Repair `.agent-contexts/` provisioning for existing worktree
             // workspaces. This is best-effort because a missing scratch dir
             // should never block the app from starting.
@@ -665,6 +671,7 @@ pub fn run() {
             commands::terminal_commands::stop_terminal,
             commands::terminal_commands::write_terminal_stdin,
             commands::terminal_commands::resize_terminal,
+            commands::terminal_commands::set_terminal_session_busy,
             commands::triage_commands::get_triage_config,
             commands::triage_commands::update_triage_config,
             commands::triage_commands::get_triage_active_status,

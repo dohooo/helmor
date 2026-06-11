@@ -729,7 +729,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 					<TooltipTrigger asChild>
 						<Button
 							aria-label="New session"
-							onClick={sessionActions.createSession}
+							onClick={() => void sessionActions.createSession()}
 							variant="ghost"
 							size="icon-sm"
 							className="ml-0.5 shrink-0 text-muted-foreground hover:bg-accent/60 hover:text-foreground"

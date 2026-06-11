@@ -1,5 +1,6 @@
-import { memo, type ReactNode, useEffect } from "react";
+import { memo, type ReactNode, useEffect, useState } from "react";
 import { SourceDetailView } from "@/features/source-detail";
+import { TerminalSessionPanel } from "@/features/terminal/terminal-session-panel";
 import type {
 	AgentProvider,
 	ChangeRequestInfo,
@@ -8,6 +9,7 @@ import type {
 } from "@/lib/api";
 import { HelmorProfiler } from "@/lib/dev-react-profiler";
 import type { ContextCard } from "@/lib/sources/types";
+import { cn } from "@/lib/utils";
 import type { WorkspaceScriptType } from "@/lib/workspace-script-actions";
 import { WorkspacePanelHeader } from "./header";
 import { EmptyState, preloadStreamdown } from "./message-components";
@@ -94,6 +96,30 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 		sessionPanes[0] ??
 		null;
 
+	// Terminal panels stay MOUNTED across session switches (CSS-hidden, like
+	// the inspector terminals). Unmount + chunk-replay cannot reproduce a TUI's
+	// incremental ANSI rendering — cursor-relative sequences replayed against a
+	// fresh screen / different size corrupt the layout. Track every terminal
+	// session the user has visited; it unmounts only when its session closes.
+	const visibleTerminalId =
+		!contextPreviewActive && selectedSession?.sessionKind === "terminal"
+			? selectedSession.id
+			: null;
+	const [visitedTerminalIds, setVisitedTerminalIds] = useState<
+		ReadonlySet<string>
+	>(new Set());
+	useEffect(() => {
+		if (!visibleTerminalId) return;
+		setVisitedTerminalIds((prev) =>
+			prev.has(visibleTerminalId) ? prev : new Set(prev).add(visibleTerminalId),
+		);
+	}, [visibleTerminalId]);
+	const terminalSessions = sessions.filter(
+		(session) =>
+			session.sessionKind === "terminal" &&
+			(visitedTerminalIds.has(session.id) || session.id === visibleTerminalId),
+	);
+
 	useEffect(() => {
 		if (typeof window === "undefined") {
 			return;
@@ -150,11 +176,29 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 				/>
 
 				<div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+					{terminalSessions.map((session) => (
+						<div
+							key={session.id}
+							className={cn(
+								"min-h-0 flex-1 flex-col",
+								session.id === visibleTerminalId ? "flex" : "hidden",
+							)}
+						>
+							<TerminalSessionPanel
+								repoId={workspace?.repoId ?? null}
+								workspaceId={session.workspaceId}
+								sessionId={session.id}
+								agentKind={session.agentType}
+								providerSessionId={session.providerSessionId}
+								isActive={session.id === visibleTerminalId}
+							/>
+						</div>
+					))}
 					{contextPreviewActive && contextPreviewCard ? (
 						<div className="min-h-0 flex-1 overflow-hidden px-0 pt-4 pb-3">
 							<SourceDetailView card={contextPreviewCard} />
 						</div>
-					) : activePane?.hasLoaded ? (
+					) : visibleTerminalId ? null : activePane?.hasLoaded ? (
 						<ActiveThreadViewport
 							hasSession={!!selectedSession}
 							pane={activePane}

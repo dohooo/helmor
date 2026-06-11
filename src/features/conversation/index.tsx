@@ -21,7 +21,10 @@ import {
 import type { ResolvedComposerInsertRequest } from "@/lib/composer-insert";
 import { insertRequestMatchesComposer } from "@/lib/composer-insert";
 import { hasUnresolvedPlanReview } from "@/lib/plan-review";
-import { sessionThreadMessagesQueryOptions } from "@/lib/query-client";
+import {
+	sessionThreadMessagesQueryOptions,
+	workspaceSessionsQueryOptions,
+} from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import type { ContextCard } from "@/lib/sources/types";
 import {
@@ -302,10 +305,23 @@ export const WorkspaceConversationContainer = memo(
 
 		const queueItems = useSubmitQueueForSession(displayedSessionId);
 
+		// Terminal sessions render a live PTY (no SDK thread): skip the message
+		// query + composer for them.
+		const sessionsQuery = useQuery({
+			...workspaceSessionsQueryOptions(displayedWorkspaceId ?? "__none__"),
+			enabled: Boolean(displayedWorkspaceId),
+		});
+		const isTerminalSession = useMemo(
+			() =>
+				(sessionsQuery.data ?? []).find((s) => s.id === displayedSessionId)
+					?.sessionKind === "terminal",
+			[sessionsQuery.data, displayedSessionId],
+		);
+
 		// Derived from thread messages — survives refresh / session switch.
 		const threadQuery = useQuery({
 			...sessionThreadMessagesQueryOptions(displayedSessionId ?? "__none__"),
-			enabled: Boolean(displayedSessionId),
+			enabled: Boolean(displayedSessionId) && !isTerminalSession,
 		});
 		const hasPlanReview = useMemo(
 			() => hasUnresolvedPlanReview(threadQuery.data ?? []),
@@ -609,6 +625,7 @@ export const WorkspaceConversationContainer = memo(
 					className={cn(
 						composerOnly ? "w-full" : "mt-auto px-4 pb-4 pt-0",
 						composerWrapperClassName,
+						isTerminalSession && "hidden",
 					)}
 				>
 					<WorkspaceComposerContainer
