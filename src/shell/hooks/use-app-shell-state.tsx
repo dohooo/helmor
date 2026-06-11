@@ -31,6 +31,7 @@ import { useSettledWorkspaceId } from "@/shell/hooks/use-settled-workspace-id";
 import { useShellChromeState } from "@/shell/hooks/use-shell-chrome-state";
 import { useShellStartupEffects } from "@/shell/hooks/use-shell-startup-effects";
 import { useThemeApplication } from "@/shell/hooks/use-theme-application";
+import { useThreadFocusBackstop } from "@/shell/hooks/use-thread-focus-backstop";
 import { useUiSyncBridge } from "@/shell/hooks/use-ui-sync-bridge";
 import { useWorkspaceActionControllers } from "@/shell/hooks/use-workspace-action-controllers";
 import { useWorkspaceDataControllers } from "@/shell/hooks/use-workspace-data-controllers";
@@ -244,6 +245,14 @@ export function useAppShellState({
 		reloadSettings: () => publishShellEvent({ type: "reload-settings" }),
 		// Quick-panel "Open in Helmor": only the main window navigates.
 		onWorkspaceReveal: isQuickPanelWindow ? undefined : handleWorkspaceReveal,
+	});
+	// Event-fresh threads (`staleTime: Infinity`) get a focus-time backstop
+	// so a missed `sessionTurnPersisted` can't leave the on-screen thread
+	// stale forever.
+	useThreadFocusBackstop({
+		queryClient,
+		getDisplayedSessionId: () =>
+			sel.selectionStore.getState().displayedSessionId,
 	});
 
 	// Close-confirmation is handled by <QuitConfirmDialog /> which registers
