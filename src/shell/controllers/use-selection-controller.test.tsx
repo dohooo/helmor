@@ -1186,6 +1186,118 @@ describe("useSelectionController", () => {
 		unsubscribe();
 	});
 
+	it("a second explicit pick during the explicit thread fetch wins — no router/displayed tear", async () => {
+		const { flushFrames } = installFlipTimingHarness();
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		seedWorkspaceCache(queryClient, "ws-A", [
+			makeSession("ws-A-session-1", { active: true }),
+		]);
+		// ws-B is cold. The first explicit pick (session-2) has an uncached
+		// thread, parking the resolve on its fetch; the second pick (session-3)
+		// lands DURING that await and must win the displayed commit.
+		const detail = deferred<WorkspaceDetail | null>();
+		const sessions = deferred<WorkspaceSessionSummary[]>();
+		const fallbackThread = deferred<ThreadMessageLike[]>();
+		const firstPickThread = deferred<ThreadMessageLike[]>();
+		const secondPickThread = deferred<ThreadMessageLike[]>();
+		vi.mocked(loadWorkspaceDetail).mockImplementation((workspaceId) =>
+			workspaceId === "ws-B" ? detail.promise : new Promise(() => {}),
+		);
+		vi.mocked(loadWorkspaceSessions).mockImplementation((workspaceId) =>
+			workspaceId === "ws-B" ? sessions.promise : new Promise(() => {}),
+		);
+		vi.mocked(loadSessionThreadMessages).mockImplementation((sessionId) =>
+			sessionId === "ws-B-session-1"
+				? fallbackThread.promise
+				: sessionId === "ws-B-session-2"
+					? firstPickThread.promise
+					: sessionId === "ws-B-session-3"
+						? secondPickThread.promise
+						: new Promise(() => {}),
+		);
+
+		const { result } = renderHook(
+			() => useSelectionController(buildHookProps({ queryClient })),
+			{ wrapper: routerWrapper },
+		);
+
+		act(() => {
+			result.current.actions.selectWorkspace("ws-A");
+		});
+
+		const displayedLog: Array<{
+			workspaceId: string | null;
+			sessionId: string | null;
+		}> = [];
+		const unsubscribe = result.current.store.subscribe((s) => {
+			displayedLog.push({
+				workspaceId: s.displayedWorkspaceId,
+				sessionId: s.displayedSessionId,
+			});
+		});
+
+		act(() => {
+			result.current.actions.selectWorkspace("ws-B");
+		});
+		act(() => {
+			flushFrames();
+			vi.advanceTimersByTime(0);
+		});
+		act(() => {
+			result.current.actions.selectSession("ws-B-session-2");
+		});
+
+		await act(async () => {
+			detail.resolve(makeWorkspace("ws-B"));
+			sessions.resolve([
+				makeSession("ws-B-session-1", { active: true }),
+				makeSession("ws-B-session-2"),
+				makeSession("ws-B-session-3"),
+			]);
+			fallbackThread.resolve([]);
+		});
+		await flushPrimeResolution();
+		// Resolve is parked on session-2's thread fetch; pick session-3 now.
+		expect(loadSessionThreadMessages).toHaveBeenCalledWith("ws-B-session-2");
+		act(() => {
+			result.current.actions.selectSession("ws-B-session-3");
+		});
+		expect(routerSelection().sessionId).toBe("ws-B-session-3");
+		expect(result.current.state.displayedWorkspaceId).toBe("ws-A");
+
+		await act(async () => {
+			firstPickThread.resolve([]);
+		});
+		await flushPrimeResolution();
+		// The post-await re-read adopts session-3; its thread is still in
+		// flight, so the hold continues instead of committing the stale pick.
+		expect(result.current.state.displayedWorkspaceId).toBe("ws-A");
+		expect(loadSessionThreadMessages).toHaveBeenCalledWith("ws-B-session-3");
+
+		await act(async () => {
+			secondPickThread.resolve([]);
+		});
+		await flushPrimeResolution();
+
+		// One displayed commit, landing on the LATEST pick — router untouched.
+		expect(displayedLog).toEqual([
+			{ workspaceId: "ws-B", sessionId: "ws-B-session-3" },
+		]);
+		expect(routerSelection().workspaceId).toBe("ws-B");
+		expect(routerSelection().sessionId).toBe("ws-B-session-3");
+		unsubscribe();
+		// The two-await chain has a deeper async tail than the single-pick
+		// tests; settle it under fake timers so no scheduled flip survives into
+		// teardown (afterEach restores real timers).
+		await flushPrimeResolution();
+		act(() => {
+			flushFrames();
+			vi.advanceTimersByTime(100); // past the 80ms flip fallback
+		});
+	});
+
 	it("a foreign-session selectSession during the hold resolves to the prime fallback without polluting history", async () => {
 		const { flushFrames } = installFlipTimingHarness();
 		const queryClient = new QueryClient({

@@ -548,19 +548,20 @@ export function useSelectionController(
 					// when it actually belongs to the fetched workspace. Membership
 					// prefers the freshest cached list over the prime's snapshot so
 					// sessions created during the hold are recognized.
-					const live = getRouterSelection();
-					const liveSessions =
-						queryClient.getQueryData<WorkspaceSessionSummary[] | undefined>(
-							helmorQueryKeys.workspaceSessions(workspaceId),
-						) ?? sessions;
-					const explicitSessionId =
-						live.workspaceId === workspaceId &&
-						live.sessionId !== null &&
-						liveSessions.some((session) => session.id === live.sessionId)
+					const resolveExplicitSessionId = () => {
+						const live = getRouterSelection();
+						const liveSessions =
+							queryClient.getQueryData<WorkspaceSessionSummary[] | undefined>(
+								helmorQueryKeys.workspaceSessions(workspaceId),
+							) ?? sessions;
+						return live.workspaceId === workspaceId &&
+							live.sessionId !== null &&
+							liveSessions.some((session) => session.id === live.sessionId)
 							? live.sessionId
 							: null;
-					const resolvedSessionId = explicitSessionId ?? sessionId;
-					if (
+					};
+					let explicitSessionId = resolveExplicitSessionId();
+					while (
 						explicitSessionId !== null &&
 						queryClient.getQueryData([
 							...helmorQueryKeys.sessionMessages(explicitSessionId),
@@ -577,13 +578,21 @@ export function useSelectionController(
 							)
 							.catch(() => {});
 						if (workspaceSelectionRequestRef.current !== requestId) return;
+						// Re-read after the await: a newer pick made during the fetch
+						// must win — committing the stale one would tear router vs
+						// displayed with no later repair (re-clicking the same
+						// session is a selectSession no-op).
+						const latest = resolveExplicitSessionId();
+						if (latest === explicitSessionId) break;
+						explicitSessionId = latest;
 					}
+					const resolvedSessionId = explicitSessionId ?? sessionId;
 					rememberSessionSelection(workspaceId, resolvedSessionId);
-					// Repair against the LIVE router session, not the captured
-					// guess: a foreign pick during the hold moves the router while
+					// Repair against the LIVE router session, not a pre-await
+					// capture: a foreign pick during the hold moves the router while
 					// the guess can coincide with the resolved id — keying off the
 					// guess would leave the URL stuck on the foreign session.
-					if (resolvedSessionId !== live.sessionId) {
+					if (resolvedSessionId !== getRouterSelection().sessionId) {
 						navigateSelection({
 							viewMode: refinementViewMode(),
 							workspaceId,
