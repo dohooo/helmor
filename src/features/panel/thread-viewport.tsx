@@ -26,8 +26,10 @@ import { useSettings } from "@/lib/settings";
 import type { WorkspaceScriptType } from "@/lib/workspace-script-actions";
 import { isShellResizing, onShellResize } from "@/shell/hooks/use-panels";
 import {
+	consumeAnchoredToggle,
 	EmptyState,
 	MemoConversationMessage,
+	resetAnchoredToggle,
 	UserMessageExpansionProvider,
 } from "./message-components";
 import { useEscapeBottomLock } from "./thread-viewport/use-escape-bottom-lock";
@@ -648,6 +650,9 @@ function ProgressiveConversationViewport({
 		isUserScrollingRef.current = false;
 		initialSettleAtRef.current = performance.now();
 		deferredMeasuredHeightsRef.current = {};
+		// A mark from the previous session must not suppress a legit
+		// compensation here (message ids could collide across panes).
+		resetAnchoredToggle();
 		if (scrollIdleTimerRef.current !== null) {
 			window.clearTimeout(scrollIdleTimerRef.current);
 			scrollIdleTimerRef.current = null;
@@ -1012,6 +1017,11 @@ function ProgressiveConversationViewport({
 				return;
 			}
 
+			// One-shot: the expand/collapse anchor already offset the scroller
+			// for this row's height change — compensating below too would
+			// double-apply the delta.
+			const anchoredToggle = consumeAnchoredToggle(row.message.id);
+
 			// Defer during shell resize too: each visible row's RO fires per frame
 			// as the main pane width changes, and committing all of them would
 			// thrash React. Same buffered path as user-scrolling.
@@ -1039,6 +1049,7 @@ function ProgressiveConversationViewport({
 			// swaps) where it is genuinely needed.
 			if (
 				!isStreamingRow &&
+				!anchoredToggle &&
 				scrollParent &&
 				row.top + headerHeight < scrollParent.scrollTop
 			) {

@@ -1,5 +1,11 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+	act,
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ThreadMessageLike } from "@/lib/api";
 import { createHelmorQueryClient } from "@/lib/query-client";
@@ -303,6 +309,117 @@ describe("first-frame tail window", () => {
 		rerenderPane(makePane("p2", "n2", 10));
 		// Plain list: every row mounts synchronously — no tail window at all.
 		expect(mountedIndices("n2")).toEqual(range(0, 9));
+	});
+
+	it("compensates an anchored expand exactly once (toggle anchor + viewport must not double-apply)", () => {
+		// Controllable RO so the test can fire the toggled row's height change
+		// the way the browser would after the expand reflow.
+		const observed = new Map<Element, ResizeObserverCallback>();
+		class ControlledResizeObserver {
+			private readonly callback: ResizeObserverCallback;
+			constructor(callback: ResizeObserverCallback) {
+				this.callback = callback;
+			}
+			observe(element: Element) {
+				observed.set(element, this.callback);
+			}
+			unobserve(element: Element) {
+				observed.delete(element);
+			}
+			disconnect() {}
+		}
+		const originalResizeObserver = window.ResizeObserver;
+		window.ResizeObserver =
+			ControlledResizeObserver as unknown as typeof ResizeObserver;
+		globalThis.ResizeObserver = window.ResizeObserver;
+		// Truncation-probe geometry: clamped bodies report cut-off content so
+		// every user message renders its Show more control.
+		Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+			configurable: true,
+			get() {
+				return 980;
+			},
+		});
+		Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+			configurable: true,
+			get(this: HTMLElement) {
+				const clamped = this.style?.webkitLineClamp !== "";
+				return clamped ? 560 : 980;
+			},
+		});
+
+		try {
+			renderPane(makePane("s1", "m1", 100));
+			const scroller = document.querySelector(
+				".conversation-scroll-viewport",
+			) as HTMLElement;
+			// Instance stubs shadow the prototype ones: scrollHeight 0 keeps the
+			// settle pin inert (same trick as the scroll-up union test).
+			Object.defineProperty(scroller, "scrollHeight", {
+				configurable: true,
+				get: () => 0,
+			});
+			Object.defineProperty(scroller, "clientHeight", {
+				configurable: true,
+				get: () => 900,
+			});
+
+			// Scrollbar-drag to mid-thread: a plain scroll event, no wheel —
+			// hasUserScrolledRef stays false, so pending adjustments DO apply.
+			act(() => {
+				scroller.scrollTop = 7000;
+				scroller.dispatchEvent(new Event("scroll"));
+				for (const [id, callback] of [...frameCallbacks]) {
+					frameCallbacks.delete(id);
+					callback(performance.now());
+				}
+			});
+
+			// Row 65 (top 6500) starts above the viewport top — the row whose
+			// growth the viewport would normally compensate for.
+			const control = document.querySelector(
+				'[data-message-id="m1-65"] button[aria-expanded]',
+			) as HTMLElement;
+			expect(control).not.toBeNull();
+			fireEvent.click(control);
+
+			const messageText = screen.getByText("m1:65");
+			const rowEl = [...observed.keys()].find(
+				(el) =>
+					(el as HTMLElement).style.position === "absolute" &&
+					el.contains(messageText),
+			);
+			expect(rowEl).toBeDefined();
+			const fireRowResize = (height: number) => {
+				const callback = observed.get(rowEl as Element);
+				act(() => {
+					callback?.(
+						[
+							{
+								borderBoxSize: [{ blockSize: height, inlineSize: 600 }],
+								contentRect: { height },
+							} as unknown as ResizeObserverEntry,
+						],
+						{} as ResizeObserver,
+					);
+				});
+			};
+
+			// The toggle's own reflow (100 → 600): the click anchor already
+			// offset the scroller, so the viewport must NOT add the delta again.
+			fireRowResize(600);
+			expect(scroller.scrollTop).toBe(7000);
+
+			// A later non-toggle growth of the same above-viewport row still
+			// compensates — the legit path is unregressed.
+			fireRowResize(700);
+			expect(scroller.scrollTop).toBe(7100);
+		} finally {
+			window.ResizeObserver = originalResizeObserver;
+			globalThis.ResizeObserver = originalResizeObserver;
+			delete (HTMLElement.prototype as { scrollHeight?: unknown }).scrollHeight;
+			delete (HTMLElement.prototype as { clientHeight?: unknown }).clientHeight;
+		}
 	});
 
 	it("keeps the true bottom pinned through a measurement wave during the initial settle", () => {

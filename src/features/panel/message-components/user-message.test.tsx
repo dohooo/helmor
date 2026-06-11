@@ -1,11 +1,15 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ThreadMessageLike } from "@/lib/api";
+import { consumeAnchoredToggle, resetAnchoredToggle } from "./anchored-toggle";
 import { serializeMessageForClipboard } from "./copy-message";
 import { ChatUserMessage } from "./user-message";
 import { UserMessageExpansionProvider } from "./user-message-expansion";
 
-afterEach(cleanup);
+afterEach(() => {
+	cleanup();
+	resetAnchoredToggle();
+});
 
 // First line stays under the 40-char label truncation so the chip shows it
 // verbatim.
@@ -155,6 +159,26 @@ describe("ChatUserMessage line clamp", () => {
 		expect(
 			screen.getByRole("button", { name: /Show more/ }),
 		).toBeInTheDocument();
+	});
+
+	it("marks the anchored-toggle handshake for the viewport when a scroller is present", () => {
+		stubBodyGeometry({ overflowing: true });
+		render(
+			<div className="conversation-scroll-viewport">
+				<ChatUserMessage message={textMessage("an overflowing body")} />
+			</div>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: /Show more/ }));
+		expect(consumeAnchoredToggle("user-1")).toBe(true);
+		// One-shot: consumed marks don't re-fire.
+		expect(consumeAnchoredToggle("user-1")).toBe(false);
+	});
+
+	it("does not mark the handshake without a scroller (nothing was pre-compensated)", () => {
+		stubBodyGeometry({ overflowing: true });
+		render(<ChatUserMessage message={textMessage("an overflowing body")} />);
+		fireEvent.click(screen.getByRole("button", { name: /Show more/ }));
+		expect(consumeAnchoredToggle("user-1")).toBe(false);
 	});
 
 	it("pins the control's viewport position across expand and collapse", () => {

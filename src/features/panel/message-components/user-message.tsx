@@ -11,6 +11,7 @@ import {
 import { USER_MESSAGE_CLAMP_LINES } from "@/lib/message-layout-estimator";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
+import { markAnchoredToggle } from "./anchored-toggle";
 import { CopyMessageButton } from "./copy-message";
 import type { RenderedMessage } from "./shared";
 import { isFileMentionPart, isPastedTextPart, isTextPart } from "./shared";
@@ -112,6 +113,10 @@ export function ChatUserMessage({ message }: { message: RenderedMessage }) {
 				scroller,
 				controlTop: control.getBoundingClientRect().top,
 			};
+			// Tell the viewport this row's next height change is pre-compensated.
+			if (message.id) {
+				markAnchoredToggle(message.id);
+			}
 		}
 		if (expanded) {
 			// Collapsing re-truncates (it was truncated before expanding —
@@ -123,7 +128,7 @@ export function ChatUserMessage({ message }: { message: RenderedMessage }) {
 			setTruncated(true);
 		}
 		toggle();
-	}, [toggle, expanded]);
+	}, [toggle, expanded, message.id]);
 	useLayoutEffect(() => {
 		const anchor = pendingToggleAnchorRef.current;
 		if (!anchor) {
