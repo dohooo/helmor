@@ -524,6 +524,45 @@ function isMarkdownTableSeparator(line: string) {
 	return /^\|?(?:\s*:?-{3,}:?\s*\|)+(?:\s*:?-{3,}:?\s*)?$/.test(line);
 }
 
+/**
+ * pretext renders `\t` at its default `tab-size: 8`, but the live `pre-wrap`
+ * surfaces (user bubble `<p class="whitespace-pre-wrap break-words">`, reasoning
+ * body, plan review) render at `tab-size: 4`. pretext 0.0.x exposes no option to
+ * change the tab stop, so for tab-indented pasted code pretext counts every tab
+ * as double its on-screen width and over-predicts how many lines the text wraps
+ * to. Expanding each tab to the spaces that reach the next 4-column tab stop —
+ * column-aware, per line — makes pretext see the exact glyphs the browser lays
+ * out, so the estimate matches the live tab-size-4 DOM. Width math (`maxWidth`)
+ * is untouched. Only the `pre-wrap` path calls this; `normal` collapses
+ * whitespace anyway.
+ */
+function expandTabsToFourColumnStops(text: string): string {
+	if (!text.includes("\t")) {
+		return text;
+	}
+	const lines = text.split("\n");
+	for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+		const line = lines[lineIndex] ?? "";
+		if (!line.includes("\t")) {
+			continue;
+		}
+		let expanded = "";
+		let column = 0;
+		for (const char of line) {
+			if (char === "\t") {
+				const advance = 4 - (column % 4);
+				expanded += " ".repeat(advance);
+				column += advance;
+			} else {
+				expanded += char;
+				column += 1;
+			}
+		}
+		lines[lineIndex] = expanded;
+	}
+	return lines.join("\n");
+}
+
 function measureTextHeight(
 	text: string,
 	options: {
@@ -534,7 +573,9 @@ function measureTextHeight(
 	},
 ) {
 	const normalizedText =
-		options.whiteSpace === "pre-wrap" ? text : text.replace(/\s+/g, " ").trim();
+		options.whiteSpace === "pre-wrap"
+			? expandTabsToFourColumnStops(text)
+			: text.replace(/\s+/g, " ").trim();
 
 	if (normalizedText.length === 0) {
 		return options.lineHeight;

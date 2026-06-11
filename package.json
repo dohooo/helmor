@@ -52,7 +52,7 @@
 		"build-storybook": "storybook build"
 	},
 	"dependencies": {
-		"@chenglou/pretext": "0.0.4",
+		"@chenglou/pretext": "0.0.7",
 		"@fontsource-variable/geist": "^5.2.8",
 		"@fontsource-variable/geist-mono": "^5.2.7",
 		"@lexical/react": "^0.42.0",
