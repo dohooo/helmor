@@ -58,6 +58,10 @@ async fn dispatch(
             Ok(Value::Null)
         }
         "continue_workspace_from_target_branch" => to_value(crate::commands::workspace_commands::continue_workspace_from_target_branch(app.clone(), arg_string(&args, "workspaceId")?).await?),
+        "convert_session_to_terminal" => {
+            crate::commands::terminal_commands::convert_session_to_terminal(arg_string(&args, "sessionId")?, arg_string(&args, "agentType")?).await?;
+            Ok(Value::Null)
+        }
         "create_and_checkout_branch" => {
             crate::commands::workspace_commands::create_and_checkout_branch(arg_string(&args, "repoId")?, arg_string(&args, "branch")?).await?;
             Ok(Value::Null)
