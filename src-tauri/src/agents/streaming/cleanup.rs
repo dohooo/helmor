@@ -111,6 +111,30 @@ pub(crate) fn cleanup_abnormal_stream_exit(
     }
 }
 
+/// Finalize the session after a user abort. Returns `true` iff the session
+/// row really updated — the caller publishes `SessionTurnPersisted` only
+/// then (the aborted turn's rows were already inserted by that point).
+pub(crate) fn finalize_aborted_exchange(
+    rid: &str,
+    conn: &rusqlite::Connection,
+    ctx: &ExchangeContext,
+    status: &str,
+    effort_level: Option<&str>,
+    permission_mode: Option<&str>,
+) -> bool {
+    match finalize_session_metadata(conn, ctx, status, effort_level, permission_mode) {
+        Ok(_) => true,
+        Err(error) => {
+            tracing::error!(
+                rid = %rid,
+                session_id = %ctx.helmor_session_id,
+                "finalize_aborted_exchange: finalize_session_metadata failed: {error}"
+            );
+            false
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,6 +308,38 @@ mod tests {
                 "abnormal exit must clear provider_session_id so the next send doesn't \
                  replay a corrupt resume target (issue #398)",
             );
+        });
+    }
+
+    #[test]
+    fn finalize_aborted_exchange_returns_true_and_sets_status() {
+        with_session("streaming", || {
+            let finalized = {
+                let conn = crate::models::db::write_conn().unwrap();
+                finalize_aborted_exchange("rid-abort", &conn, &ctx(), "aborted", None, None)
+            };
+            assert!(
+                finalized,
+                "session row updated — caller publishes SessionTurnPersisted"
+            );
+            assert_eq!(session_status(), "aborted");
+        });
+    }
+
+    #[test]
+    fn finalize_aborted_exchange_returns_false_for_missing_session() {
+        with_session("streaming", || {
+            let mut bad_ctx = ctx();
+            bad_ctx.helmor_session_id = "nonexistent".to_string();
+            let finalized = {
+                let conn = crate::models::db::write_conn().unwrap();
+                finalize_aborted_exchange("rid-abort-2", &conn, &bad_ctx, "aborted", None, None)
+            };
+            assert!(
+                !finalized,
+                "no row updated — caller must NOT publish SessionTurnPersisted"
+            );
+            assert_eq!(session_status(), "streaming");
         });
     }
 }

@@ -36,7 +36,8 @@ pub enum UiMutationEvent {
     },
     /// A turn's terminal rows really landed in `session_messages` — fired
     /// after `persist_result_and_finalize` / `persist_error_message`
-    /// succeed (including the abnormal-exit cleanup path). Unlike
+    /// succeed (including the abnormal-exit cleanup path) and after an
+    /// aborted turn finalizes. Unlike
     /// `SessionMessagesAppended` (active refetch for out-of-band inserts),
     /// frontends only mark the thread cache stale (`refetchType: 'none'`)
     /// so the next mount refetches; the live-stream dispatcher keeps

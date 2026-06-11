@@ -32,6 +32,7 @@ pub use bridges::{
     bridge_user_input_request_event,
 };
 pub(crate) use cleanup::cleanup_abnormal_stream_exit;
+use cleanup::finalize_aborted_exchange;
 pub use params::{
     build_send_message_params, lookup_workspace_linked_directories, BuildSendMessageParamsInput,
 };
@@ -705,17 +706,25 @@ pub(super) fn stream_via_sidecar(
                                     }
                                 }
                             } else if is_aborted {
-                                match finalize_session_metadata(
+                                if finalize_aborted_exchange(
+                                    &rid,
                                     conn,
                                     ctx,
                                     status,
                                     effort_copy.as_deref(),
                                     turn_session.ctx.permission_mode.as_deref(),
                                 ) {
-                                    Ok(_) => persisted = true,
-                                    Err(error) => {
-                                        tracing::error!(rid = %rid, "Failed to finalize exchange: {error}");
-                                    }
+                                    persisted = true;
+                                    // The aborted turn's rows (user prompt,
+                                    // flushed turns, aborted notice) are in
+                                    // the DB — idle observers mark the
+                                    // thread cache stale.
+                                    crate::ui_sync::publish(
+                                        &app,
+                                        crate::ui_sync::UiMutationEvent::SessionTurnPersisted {
+                                            session_id: ctx.helmor_session_id.clone(),
+                                        },
+                                    );
                                 }
                             } else {
                                 let preassigned = pipeline_state.accumulator.take_result_id();
