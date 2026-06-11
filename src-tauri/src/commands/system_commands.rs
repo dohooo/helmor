@@ -1507,6 +1507,7 @@ pub async fn spawn_agent_login_terminal(
             &context,
             channel.clone(),
             Some(&boot_input),
+            None,
         ) {
             tracing::warn!(
                 provider = %provider,

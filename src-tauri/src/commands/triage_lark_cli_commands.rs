@@ -78,6 +78,7 @@ pub async fn spawn_lark_cli_auth_terminal(
             &context,
             channel.clone(),
             Some(&boot_input),
+            None,
         ) {
             let _ = channel.send(ScriptEvent::Error {
                 message: error.to_string(),

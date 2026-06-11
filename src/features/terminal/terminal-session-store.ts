@@ -94,18 +94,36 @@ const TUI_START_RE = /\x1b\[\?(?:1049|1047|47|2026|1004)h/;
  * (a non-TUI command would otherwise render nothing at all). */
 const BOOT_GATE_TIMEOUT_MS = 3000;
 
+// Terminal protocol sequences (CSI / OSC / two-byte ESC) the shell emits
+// before the TUI marker — bracketed paste (?2004h), cursor hide (?25l), kitty
+// keyboard (>1u), etc. Their plain-text neighbours (prompt, boot echo) are
+// dropped, but swallowing the sequences too desyncs xterm's mode state, so we
+// replay them ahead of the visible region.
+const PRELUDE_SEQ_RE =
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI is ESC-framed.
+	/\x1b(?:\[[0-9;?>=]*[A-Za-z]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[=>78])/g;
+
 /** Stop gating: emit from `fromIndex` (the TUI start sequence itself must
- * reach xterm) — or everything on a timeout/exit fallback (fromIndex 0). */
+ * reach xterm) — or everything on a timeout/exit fallback (fromIndex 0). The
+ * dropped prefix's control sequences are still replayed so xterm's mode state
+ * stays in sync with the TUI. */
 function releaseGate(entry: Instance, fromIndex: number) {
 	const gate = entry.gate;
 	if (!gate) return;
 	clearTimeout(gate.timer);
 	entry.gate = null;
-	const visible = gate.buf.slice(fromIndex);
-	if (visible) deliver(entry, visible);
+	const prelude =
+		fromIndex > 0
+			? (gate.buf.slice(0, fromIndex).match(PRELUDE_SEQ_RE)?.join("") ?? "")
+			: "";
+	const payload = prelude + gate.buf.slice(fromIndex);
+	if (payload) deliver(entry, payload);
 }
 
-/** Spawn the PTY for a session if not already running. Idempotent. */
+/** Spawn the PTY for a session if not already running. Idempotent.
+ *
+ * `cols`/`rows` are the renderer's real size — an inline TUI paints its first
+ * frame against them, so callers spawn only once their xterm has fit. */
 export function ensureTerminal(
 	repoId: string,
 	workspaceId: string,
@@ -113,6 +131,8 @@ export function ensureTerminal(
 	bootCommand: string | null,
 	agentKind: string | null,
 	fastMode = false,
+	cols?: number | null,
+	rows?: number | null,
 ) {
 	if (instances.has(sessionId)) return;
 	const entry: Instance = {
@@ -196,6 +216,8 @@ export function ensureTerminal(
 		bootCommand,
 		agentKind,
 		fastMode,
+		cols,
+		rows,
 	).catch((err) => {
 		const current = instances.get(sessionId);
 		if (!current) return;

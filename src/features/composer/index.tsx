@@ -735,18 +735,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				return;
 			}
 
-			// Terminal-Mode toggle — only when the toggle is offered (setting
-			// on + provider supports it), and workspace-composer only like plan.
-			if (
-				toggleTerminalShortcut &&
-				hotkey === toggleTerminalShortcut &&
-				onChangeTerminalMode &&
-				focusScope === "workspace-composer"
-			) {
-				event.preventDefault();
-				event.stopPropagation();
-				onChangeTerminalMode(!terminalMode);
-			}
+			// Terminal-Mode toggle (⌘⇧T) is app-scoped — handled globally, not here.
 		},
 		[
 			inputDisabled,
@@ -755,9 +744,6 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			permissionMode,
 			supportsPlanMode,
 			togglePlanShortcut,
-			toggleTerminalShortcut,
-			onChangeTerminalMode,
-			terminalMode,
 			toggleFollowUpShortcut,
 			handleSubmitOpposite,
 			submitEnabled,
@@ -986,7 +972,10 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 														composerToolbarTriggerClassName,
 														terminalMode
 															? "text-emerald-500 hover:bg-emerald-500/10 hover:text-emerald-500"
-															: "text-muted-foreground",
+															: // Pin the hover text color (like the Plan toggle) so the
+																// toolbar base `hover:text-foreground` can't flash the icon
+																// white for a frame while `transition-colors` runs on toggle.
+																"text-muted-foreground hover:text-muted-foreground",
 														toolbarDisabled
 															? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
 															: null,

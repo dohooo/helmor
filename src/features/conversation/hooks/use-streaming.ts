@@ -63,28 +63,10 @@ import {
 	createStreamFlushers,
 	type StreamAccumulator,
 } from "./dispatch-stream-event";
-import { seedSessionTitle } from "./seed-session-title";
+import { buildTitleSeed, seedSessionTitle } from "./seed-session-title";
 
 const EMPTY_IMAGES: string[] = [];
 const EMPTY_FILES: string[] = [];
-
-function buildTitleSeed(prompt: string): string {
-	const normalized = prompt
-		.trim()
-		.split(/\r?\n/g)[0]
-		?.trim()
-		.replace(/\s+/g, " ");
-
-	if (!normalized) {
-		return "Untitled";
-	}
-
-	if (normalized.length <= 36) {
-		return normalized;
-	}
-
-	return `${normalized.slice(0, 33).trimEnd()}...`;
-}
 
 /**
  * Re-export from the streaming store — kept here so existing import
