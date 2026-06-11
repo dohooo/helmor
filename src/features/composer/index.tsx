@@ -735,18 +735,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				return;
 			}
 
-			// Terminal-Mode toggle — only when the toggle is offered (setting
-			// on + provider supports it), and workspace-composer only like plan.
-			if (
-				toggleTerminalShortcut &&
-				hotkey === toggleTerminalShortcut &&
-				onChangeTerminalMode &&
-				focusScope === "workspace-composer"
-			) {
-				event.preventDefault();
-				event.stopPropagation();
-				onChangeTerminalMode(!terminalMode);
-			}
+			// Terminal-Mode toggle (⌘⇧T) is app-scoped — handled globally, not here.
 		},
 		[
 			inputDisabled,
@@ -755,9 +744,6 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			permissionMode,
 			supportsPlanMode,
 			togglePlanShortcut,
-			toggleTerminalShortcut,
-			onChangeTerminalMode,
-			terminalMode,
 			toggleFollowUpShortcut,
 			handleSubmitOpposite,
 			submitEnabled,

@@ -312,7 +312,8 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		title: "Toggle terminal mode",
 		group: "Composer",
 		defaultHotkey: "Mod+Shift+T",
-		scopes: ["workspace-composer"],
+		// App-scoped — handled in the global shortcut table, not composer-local.
+		scopes: ["app"],
 		editable: true,
 	},
 	{

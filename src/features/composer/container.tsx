@@ -58,7 +58,7 @@ import {
 	isNewSession,
 	resolveSessionSelectedModelId,
 } from "@/lib/workspace-helpers";
-import { publishShellEvent } from "@/shell/event-bus";
+import { publishShellEvent, useShellEvent } from "@/shell/event-bus";
 import { CodexGoalBanner } from "../panel/codex-goal-banner";
 import {
 	type ComposerQuickAction,
@@ -830,6 +830,11 @@ export const WorkspaceComposerContainer = memo(
 		const showTerminalToggle =
 			settings.enableTerminalMode &&
 			findTerminalAgent(effectiveModel?.provider) !== null;
+
+		// App-scoped ⌘⇧T (global shortcut → shell event).
+		useShellEvent("toggle-terminal-mode", () => {
+			if (showTerminalToggle) setTerminalMode((value) => !value);
+		});
 
 		const handleComposerSubmitInner = useCallback(
 			(

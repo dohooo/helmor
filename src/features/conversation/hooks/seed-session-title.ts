@@ -5,6 +5,27 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { helmorQueryKeys } from "@/lib/query-client";
 
+/** Provisional session title from a prompt: first line, whitespace-collapsed,
+ * clamped to 36 chars. Shared by the GUI send path and Terminal Mode so both
+ * show the same instant title before the AI rename lands. */
+export function buildTitleSeed(prompt: string): string {
+	const normalized = prompt
+		.trim()
+		.split(/\r?\n/g)[0]
+		?.trim()
+		.replace(/\s+/g, " ");
+
+	if (!normalized) {
+		return "Untitled";
+	}
+
+	if (normalized.length <= 36) {
+		return normalized;
+	}
+
+	return `${normalized.slice(0, 33).trimEnd()}...`;
+}
+
 export function seedSessionTitle(
 	queryClient: QueryClient,
 	sessionId: string,

@@ -1,5 +1,9 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect } from "react";
+import {
+	buildTitleSeed,
+	seedSessionTitle,
+} from "@/features/conversation/hooks/seed-session-title";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import type { SessionCloseRequest } from "@/features/panel/use-confirm-session-close";
 import { buildTerminalBootCommand } from "@/features/terminal/terminal-presets";
@@ -7,6 +11,7 @@ import { setPendingBoot } from "@/features/terminal/terminal-session-store";
 import {
 	closeMainWindow,
 	createSession,
+	renameSession,
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
@@ -202,6 +207,20 @@ export function useSessionActions({
 					setPendingBoot(sessionId, {
 						bootCommand: boot,
 						fastMode: event.fastMode,
+					});
+				}
+				// Layer 1 of the two-layer title (same as GUI): provisional title
+				// from the prompt now; the agent hook drives the AI rename later.
+				if (event.prompt) {
+					const titleSeed = buildTitleSeed(event.prompt);
+					seedSessionTitle(
+						queryClient,
+						sessionId,
+						event.workspaceId,
+						titleSeed,
+					);
+					void renameSession(sessionId, titleSeed).catch((error) => {
+						console.warn("[terminal] failed to seed title:", error);
 					});
 				}
 			},
