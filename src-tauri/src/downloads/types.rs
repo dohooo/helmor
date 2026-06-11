@@ -22,6 +22,9 @@ pub struct Asset {
     /// `files[0]` is the on-disk name (or the extracted top-level
     /// directory name for `ArchiveKind::TarGz`).
     pub files: Vec<String>,
+    /// Best-effort companions; absence doesn't demote from Downloaded.
+    /// Separate remote/local names so flat dirs don't collide.
+    pub optional_files: Vec<OptionalFile>,
     /// Where bytes come from.
     pub source: AssetSource,
     /// Post-download decoration (extract / verify-only / …).
@@ -45,6 +48,15 @@ pub enum AssetSource {
     /// missing manifest falls back to HTTP `Content-Length` + no
     /// integrity verification.
     HuggingFace { repo: String },
+}
+
+/// One optional file with separate remote (HF) and local (disk) names.
+/// Decoupling them lets two assets that ship the same projector filename
+/// (`mmproj-F16.gguf`) in different repos coexist in a flat target dir.
+#[derive(Debug, Clone)]
+pub struct OptionalFile {
+    pub remote_name: String,
+    pub local_name: String,
 }
 
 /// What we do with the downloaded bytes once they hit `.part`. Only
@@ -84,6 +96,12 @@ pub struct AssetStatus {
     /// the asset estimate; once the first part hits the network it's
     /// replaced with the real `Content-Length`.
     pub total: u64,
+    /// `false` when at least one `optional_files` entry is missing from
+    /// disk. Lets the UI surface a "top-up" affordance for already-
+    /// downloaded models whose projector wasn't fetched yet, without
+    /// forcing a Delete + redownload. Always `true` for entries with
+    /// no optional files.
+    pub optional_complete: bool,
     /// Last error message — only meaningful when `state == Failed`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -96,6 +114,7 @@ impl AssetStatus {
             state: AssetState::NotDownloaded,
             downloaded: 0,
             total,
+            optional_complete: true,
             error: None,
         }
     }
@@ -142,6 +161,11 @@ pub enum AssetEventKind {
         /// Callers use this to wire the artefact into their runtime.
         path: String,
         sha256_verified: bool,
+        /// Whether every optional file is on disk after this run. The
+        /// worker can succeed on essentials but warn-and-continue on a
+        /// missing optional, so callers can't assume completion = full
+        /// set. UI threads this into `LocalLlmDownloadStatus`.
+        optional_complete: bool,
     },
     Failed {
         error: String,

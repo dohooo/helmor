@@ -1,0 +1,13 @@
+{"type":"opencode/session_init","session_id":"ses_1","model":"anthropic/claude-sonnet-4-6"}
+{"type":"opencode/session.created","session_id":"ses_1","info":{"id":"ses_1"}}
+{"type":"opencode/message.updated","session_id":"ses_1","info":{"id":"mu","role":"user"}}
+{"type":"opencode/message.part.updated","session_id":"ses_1","part":{"type":"text","text":"fetch the logo and the spec pdf","messageID":"mu","id":"pu"}}
+{"type":"opencode/session.status","session_id":"ses_1","status":{"type":"busy"}}
+{"type":"opencode/message.updated","session_id":"ses_1","info":{"id":"ma","role":"assistant","model":{"providerID":"anthropic","modelID":"claude-sonnet-4-6"}}}
+{"type":"opencode/message.part.updated","session_id":"ses_1","part":{"type":"text","text":"Here is what I found:","messageID":"ma","id":"pt"}}
+{"type":"opencode/message.part.updated","session_id":"ses_1","part":{"type":"file","mime":"image/png","filename":"logo.png","url":"data:image/png;base64,QUJD","messageID":"ma","id":"pf1"}}
+{"type":"opencode/message.part.updated","session_id":"ses_1","part":{"type":"file","mime":"image/png","filename":"diagram.png","url":"https://example.com/diagram.png","messageID":"ma","id":"pf2"}}
+{"type":"opencode/message.part.updated","session_id":"ses_1","part":{"type":"file","mime":"application/pdf","filename":"spec.pdf","url":"file:///tmp/spec.pdf","messageID":"ma","id":"pf3"}}
+{"type":"opencode/session.status","session_id":"ses_1","status":{"type":"idle"}}
+{"type":"opencode/session.idle","session_id":"ses_1"}
+{"id":"req","type":"end"}

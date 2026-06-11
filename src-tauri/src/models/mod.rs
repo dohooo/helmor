@@ -1,5 +1,7 @@
 pub mod db;
+pub mod paired_devices;
 pub mod repos;
+pub mod session_inspection;
 pub mod sessions;
 pub mod settings;
 pub mod slack_workspaces;

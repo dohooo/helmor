@@ -13,6 +13,7 @@ pub struct GenerateSessionTitleRequest {
     pub session_id: String,
     pub user_message: String,
     pub title_seed: Option<String>,
+    pub provider: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -212,6 +213,7 @@ pub async fn generate_session_title(
                 "userMessage": request.user_message,
                 "branchRenamePrompt": branch_rename_prompt,
                 "generateBranch": should_generate_branch,
+                "provider": request.provider,
             });
             if let Some(model) = super::custom_providers::configured_models()
                 .into_iter()
@@ -229,6 +231,11 @@ pub async fn generate_session_title(
                             "ANTHROPIC_AUTH_TOKEN": model.api_key,
                         }),
                     );
+                }
+            }
+            if let Some(agent_proxy) = super::streaming::load_agent_proxy_setting() {
+                if let Some(obj) = params.as_object_mut() {
+                    obj.insert("agentProxy".to_string(), agent_proxy);
                 }
             }
             let sidecar_req = crate::sidecar::SidecarRequest {
@@ -453,13 +460,10 @@ pub async fn generate_session_title(
                     };
 
                     if fs_rename_ok {
-                        let write_result = crate::models::db::write_conn().and_then(|conn| {
-                            conn.execute(
-                                "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
-                                (&new_branch, &workspace_id),
-                            )
-                            .map_err(|e| anyhow::anyhow!(e))
-                        });
+                        let write_result = crate::models::workspaces::update_workspace_branch(
+                            &workspace_id,
+                            &new_branch,
+                        );
                         if let Err(error) = write_result {
                             tracing::error!(workspace_id = %workspace_id, "DB UPDATE workspaces.branch failed: {error:#}");
                             if fs_rename_attempted {
@@ -1190,6 +1194,108 @@ fn parse_cursor_parameters(arr: &[Value]) -> Vec<CursorModelParameter> {
         .collect()
 }
 
+// opencode model list — proxied to the sidecar's `client.provider.list()`
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpencodeModelEntry {
+    // `<providerID>/<modelID>` slug — doubles as the cliModel.
+    pub id: String,
+    pub label: String,
+    // opencode `variants` keys; empty ⟺ no effort switch.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub effort_levels: Vec<String>,
+}
+
+const LIST_OPENCODE_MODELS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+pub fn fetch_opencode_models(
+    sidecar: &crate::sidecar::ManagedSidecar,
+    force_reload: bool,
+) -> CmdResult<Vec<OpencodeModelEntry>> {
+    let request_id = Uuid::new_v4().to_string();
+    let sidecar_req = crate::sidecar::SidecarRequest {
+        id: request_id.clone(),
+        method: "listModels".to_string(),
+        params: serde_json::json!({ "provider": "opencode", "forceReload": force_reload }),
+    };
+
+    let rx = sidecar.subscribe(&request_id);
+    if let Err(e) = sidecar.send(&sidecar_req) {
+        sidecar.unsubscribe(&request_id);
+        return Err(anyhow::anyhow!("Sidecar send failed: {e}").into());
+    }
+
+    let mut models: Vec<OpencodeModelEntry> = Vec::new();
+    let mut error: Option<String> = None;
+
+    loop {
+        match rx.recv_timeout(LIST_OPENCODE_MODELS_TIMEOUT) {
+            Ok(event) => match event.event_type() {
+                "modelsListed" => {
+                    if let Some(entries) = event.raw.get("models").and_then(Value::as_array) {
+                        for entry in entries {
+                            let Some(id) = entry.get("id").and_then(Value::as_str) else {
+                                continue;
+                            };
+                            let label = entry
+                                .get("label")
+                                .and_then(Value::as_str)
+                                .unwrap_or(id)
+                                .to_string();
+                            let effort_levels = entry
+                                .get("effortLevels")
+                                .and_then(Value::as_array)
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|v| v.as_str().map(str::to_string))
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            models.push(OpencodeModelEntry {
+                                id: id.to_string(),
+                                label,
+                                effort_levels,
+                            });
+                        }
+                    }
+                    break;
+                }
+                "error" => {
+                    error = Some(
+                        event
+                            .raw
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("Unknown error")
+                            .to_string(),
+                    );
+                    break;
+                }
+                _ => {}
+            },
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                error = Some(format!(
+                    "opencode model list timed out after {}s",
+                    LIST_OPENCODE_MODELS_TIMEOUT.as_secs()
+                ));
+                break;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                error = Some("Sidecar disconnected during opencode model list".to_string());
+                break;
+            }
+        }
+    }
+
+    sidecar.unsubscribe(&request_id);
+
+    if let Some(message) = error {
+        return Err(anyhow::anyhow!(message).into());
+    }
+    Ok(models)
+}
+
 // ---------------------------------------------------------------------------
 // Live context-usage (hover popover, Claude only)
 // ---------------------------------------------------------------------------
@@ -1228,6 +1334,9 @@ pub fn fetch_live_context_usage(
     params.insert("model".into(), Value::String(request.model.clone()));
     if let Some(cwd) = request.cwd.as_deref() {
         params.insert("cwd".into(), Value::String(cwd.to_string()));
+    }
+    if let Some(agent_proxy) = super::streaming::load_agent_proxy_setting() {
+        params.insert("agentProxy".into(), agent_proxy);
     }
 
     let sidecar_req = crate::sidecar::SidecarRequest {

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { WorkspaceGroup, WorkspaceSummary } from "@/lib/api";
+import type { WorkspaceGroup, WorkspaceRow, WorkspaceSummary } from "@/lib/api";
 import {
 	applySidebarView,
+	nestStacks,
 	type PendingArchiveEntry,
 	type PendingCreationEntry,
 	projectSidebarLists,
@@ -506,6 +507,136 @@ describe("projectVisualSidebar", () => {
 		// for both groupings.
 		expect(repo.archivedRows.map((r) => r.id)).toEqual(["ws-a"]);
 		expect(status.archivedRows.map((r) => r.id)).toEqual(["ws-a"]);
+	});
+});
+
+describe("nestStacks", () => {
+	const mkRow = (id: string, parentWorkspaceId?: string): WorkspaceRow => ({
+		id,
+		title: id,
+		state: "ready",
+		status: "in-progress",
+		repoId: "repo-1",
+		repoName: "repo-one",
+		...(parentWorkspaceId ? { parentWorkspaceId } : {}),
+	});
+
+	it("hoists a stack's members contiguously under the tip, across status groups", () => {
+		// Stack tip `c` → `b` → root `a`, scattered across three status groups.
+		const groups: WorkspaceGroup[] = [
+			{ id: "done", label: "Done", tone: "done", rows: [mkRow("a")] },
+			{
+				id: "review",
+				label: "In review",
+				tone: "review",
+				rows: [mkRow("b", "a")],
+			},
+			{
+				id: "progress",
+				label: "In progress",
+				tone: "progress",
+				rows: [mkRow("c", "b")],
+			},
+		];
+		const result = nestStacks(groups);
+
+		// Tip keeps its group; the rest follow it in tip → root order.
+		const progress = result.find((g) => g.id === "progress");
+		expect(progress?.rows.map((r) => r.id)).toEqual(["c", "b", "a"]);
+		// Donor groups are emptied of the relocated members.
+		expect(result.find((g) => g.id === "done")?.rows).toEqual([]);
+		expect(result.find((g) => g.id === "review")?.rows).toEqual([]);
+		// Connector metadata lives on the tip's group.
+		expect(progress?.stackMeta?.get("c")).toEqual({
+			role: "tip",
+			depth: 0,
+			stackSize: 3,
+			tipId: "c",
+		});
+		expect(progress?.stackMeta?.get("b")).toEqual({
+			role: "mid",
+			depth: 1,
+			stackSize: 3,
+			tipId: "c",
+		});
+		expect(progress?.stackMeta?.get("a")).toEqual({
+			role: "root",
+			depth: 2,
+			stackSize: 3,
+			tipId: "c",
+		});
+	});
+
+	it("leaves non-stacked rows untouched with no stackMeta", () => {
+		const groups: WorkspaceGroup[] = [
+			{
+				id: "progress",
+				label: "In progress",
+				tone: "progress",
+				rows: [mkRow("x"), mkRow("y")],
+			},
+		];
+		const result = nestStacks(groups);
+		expect(result[0]?.rows.map((r) => r.id)).toEqual(["x", "y"]);
+		expect(result[0]?.stackMeta).toBeUndefined();
+	});
+
+	it("ignores a parent link pointing outside the visible set (dangling)", () => {
+		const groups: WorkspaceGroup[] = [
+			{
+				id: "progress",
+				label: "In progress",
+				tone: "progress",
+				rows: [mkRow("child", "missing-parent")],
+			},
+		];
+		const result = nestStacks(groups);
+		expect(result[0]?.rows.map((r) => r.id)).toEqual(["child"]);
+		expect(result[0]?.stackMeta).toBeUndefined();
+	});
+
+	it("terminates on a parent cycle without duplicating rows", () => {
+		const groups: WorkspaceGroup[] = [
+			{
+				id: "progress",
+				label: "In progress",
+				tone: "progress",
+				rows: [mkRow("a", "b"), mkRow("b", "a")],
+			},
+		];
+		const result = nestStacks(groups);
+		expect([...(result[0]?.rows.map((r) => r.id) ?? [])].sort()).toEqual([
+			"a",
+			"b",
+		]);
+	});
+
+	it("keeps the stack contiguous through applySidebarView regardless of sort", () => {
+		// Two-member stack (tip `c2` → root `c1`) plus a standalone `z`.
+		const projected = {
+			groups: [
+				{
+					id: "progress",
+					label: "In progress",
+					tone: "progress" as const,
+					rows: [
+						{ ...mkRow("c1"), title: "alpha-root" },
+						{ ...mkRow("c2", "c1"), title: "mango-tip" },
+						{ ...mkRow("z"), title: "zebra" },
+					],
+				},
+			],
+			archivedRows: [],
+		};
+		const result = applySidebarView(projected, { sort: "createdAt" });
+		const ids = result.groups[0]?.rows.map((r) => r.id) ?? [];
+		// nestStacks runs after the sort: the root `c1` clings to its tip
+		// `c2` (immediately after), never standing alone.
+		const tipIndex = ids.indexOf("c2");
+		expect(tipIndex).toBeGreaterThanOrEqual(0);
+		expect(ids[tipIndex + 1]).toBe("c1");
+		// All rows survive exactly once.
+		expect([...ids].sort()).toEqual(["c1", "c2", "z"]);
 	});
 });
 

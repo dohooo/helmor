@@ -104,6 +104,7 @@ vi.mock("streamdown", () => ({
 	Streamdown: ({ children }: { children?: React.ReactNode }) => (
 		<div data-test="streamdown">{children}</div>
 	),
+	defaultRehypePlugins: { raw: () => {}, harden: () => {} },
 }));
 
 vi.mock("@/components/streamdown-components", () => ({

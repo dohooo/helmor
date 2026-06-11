@@ -252,6 +252,77 @@ pub async fn stop_repo_script(
     Ok(manager.kill(&key))
 }
 
+/// Run a run action's configured `stop_command` as a standalone script
+/// (no preceding main process to terminate). The state machine for the
+/// frontend Run tab treats `exited` as "clean slate", but commands like
+/// `supabase start` / `docker compose up` leave side effects (containers,
+/// daemons) that outlive the spawned process. The Cleanup button surfaces
+/// the user-configured stop command after exit so they can tear down those
+/// side effects without re-running the failed start.
+///
+/// Reuses the same process slot (`"run:<id>"`) as the start script, so the
+/// frontend's terminal output buffer and per-action status indicator
+/// naturally reflect the cleanup run. We deliberately do NOT call
+/// `kill_others_in_repo` — for concurrent-mode actions, another workspace
+/// may legitimately be running the same action and that run is independent
+/// of this workspace's cleanup. Same-key replacement within this workspace
+/// is handled atomically by `register()` inside `spawn_script`.
+#[tauri::command]
+pub async fn execute_repo_stop_command(
+    app: AppHandle,
+    manager: State<'_, ScriptProcessManager>,
+    repo_id: String,
+    workspace_id: String,
+    action_id: String,
+    channel: Channel<ScriptEvent>,
+) -> CmdResult<()> {
+    let ws = Some(workspace_id.clone());
+    let rid = repo_id.clone();
+    let aid = Some(action_id.clone());
+    let action = match tauri::async_runtime::spawn_blocking(move || {
+        resolve_run_target(&rid, ws.as_deref(), aid.as_deref())
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e}"))?
+    {
+        Ok(a) => a,
+        Err(e) => {
+            let _ = channel.send(ScriptEvent::Error {
+                message: e.to_string(),
+            });
+            return Ok(());
+        }
+    };
+
+    let Some(stop_command) = action
+        .stop_command
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    else {
+        let _ = channel.send(ScriptEvent::Error {
+            message: format!("No stop command configured for action: {}", action.name),
+        });
+        return Ok(());
+    };
+
+    let process_type = run_script_type(&action.id);
+
+    spawn_script(
+        app,
+        manager,
+        repo_id,
+        process_type,
+        Some(workspace_id),
+        stop_command,
+        channel,
+        // Cleanup itself has no further cleanup — None preserves the
+        // pre-feature SIGTERM→SIGKILL path if the user stops it mid-flight.
+        None,
+    )
+    .await
+}
+
 /// Write raw bytes to the PTY master of a running script. The kernel's tty
 /// line discipline turns `\x03` into SIGINT for the foreground process group,
 /// so this is what makes Ctrl+C inside the terminal tab actually work.

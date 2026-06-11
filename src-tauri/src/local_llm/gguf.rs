@@ -29,6 +29,8 @@ const GGUF_MAGIC: u32 = 0x4655_4747; // b"GGUF" little-endian
 /// ever read a byte of payload. 10K is ~50× the largest legitimate count
 /// we've seen — buy headroom, bail past it.
 const MAX_METADATA_KV_COUNT: u64 = 10_000;
+/// Cumulative metadata-bytes cap (256 MB) — corrupted files can't OOM the host.
+const MAX_METADATA_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Subset of GGUF metadata Helmor consumes. Other 30+ keys (rope params,
 /// quantization metadata, tokenizer vocab, ...) are read off the wire
@@ -150,9 +152,10 @@ pub fn read_metadata(path: &Path) -> Result<ModelMetadata> {
     }
 
     let mut kvs: HashMap<String, MetaValue> = HashMap::with_capacity(metadata_kv_count as usize);
+    let mut budget = MAX_METADATA_TOTAL_BYTES;
     for _ in 0..metadata_kv_count {
-        let key = read_string(&mut reader)?;
-        let value = read_value(&mut reader)?;
+        let key = read_string(&mut reader, &mut budget)?;
+        let value = read_value(&mut reader, &mut budget)?;
         kvs.insert(key, value);
     }
 
@@ -245,24 +248,35 @@ fn read_f64(reader: &mut impl Read) -> Result<f64> {
 fn read_bool(reader: &mut impl Read) -> Result<bool> {
     Ok(read_u8(reader)? != 0)
 }
-fn read_string(reader: &mut impl Read) -> Result<String> {
+fn debit_budget(budget: &mut u64, n: u64) -> Result<()> {
+    if n > *budget {
+        return Err(anyhow!(
+            "GGUF metadata exceeds {MAX_METADATA_TOTAL_BYTES}-byte cumulative cap"
+        ));
+    }
+    *budget -= n;
+    Ok(())
+}
+
+fn read_string(reader: &mut impl Read, budget: &mut u64) -> Result<String> {
     let len = read_u64(reader)?;
     if len > 64 * 1024 * 1024 {
         // Largest legitimate string is the tokenizer vocab JSON ≪ 64 MB.
         // Anything past this is a corrupt header — bail before alloc.
         return Err(anyhow!("absurd string length {len} in GGUF metadata"));
     }
+    debit_budget(budget, len)?;
     let mut buf = vec![0u8; len as usize];
     reader.read_exact(&mut buf)?;
     String::from_utf8(buf).map_err(|e| anyhow!("non-UTF8 string in GGUF metadata: {e}"))
 }
 
-fn read_value(reader: &mut impl Read) -> Result<MetaValue> {
+fn read_value(reader: &mut impl Read, budget: &mut u64) -> Result<MetaValue> {
     let type_id = read_u32(reader)?;
-    read_value_typed(reader, type_id)
+    read_value_typed(reader, type_id, budget)
 }
 
-fn read_value_typed(reader: &mut impl Read, type_id: u32) -> Result<MetaValue> {
+fn read_value_typed(reader: &mut impl Read, type_id: u32, budget: &mut u64) -> Result<MetaValue> {
     match type_id {
         0 => Ok(MetaValue::U64(read_u8(reader)? as u64)),
         1 => Ok(MetaValue::U64(read_i8(reader)? as u64)),
@@ -279,7 +293,7 @@ fn read_value_typed(reader: &mut impl Read, type_id: u32) -> Result<MetaValue> {
             let _ = read_bool(reader)?;
             Ok(MetaValue::Other)
         }
-        8 => Ok(MetaValue::String(read_string(reader)?)),
+        8 => Ok(MetaValue::String(read_string(reader, budget)?)),
         9 => {
             // Array: inner type (u32) + length (u64) + values
             let inner_type = read_u32(reader)?;
@@ -288,7 +302,7 @@ fn read_value_typed(reader: &mut impl Read, type_id: u32) -> Result<MetaValue> {
                 return Err(anyhow!("absurd array length {len} in GGUF metadata"));
             }
             for _ in 0..len {
-                read_value_typed(reader, inner_type)?;
+                read_value_typed(reader, inner_type, budget)?;
             }
             Ok(MetaValue::Other)
         }

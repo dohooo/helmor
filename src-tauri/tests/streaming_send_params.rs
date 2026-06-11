@@ -106,6 +106,7 @@ fn base_input<'a>(session_id: Option<&'a str>) -> BuildSendMessageParamsInput<'a
         helmor_session_id: session_id,
         claude_base_url: None,
         claude_auth_token: None,
+        agent_proxy: None,
         claude_thinking_display: None,
         images: &[],
     }
@@ -145,6 +146,22 @@ fn includes_claude_environment_for_custom_provider() {
 
     let params = build(input);
     assert_yaml_snapshot!("params_with_claude_environment", &params);
+}
+
+#[test]
+fn includes_agent_proxy_for_any_provider() {
+    let env = TestEnv::new();
+    seed_workspace_session(&env.connection(), "w-5", "s-5", None);
+
+    let proxy = serde_json::json!({
+        "mode": "custom",
+        "customUrl": "http://127.0.0.1:7890",
+    });
+    let mut input = base_input(Some("s-5"));
+    input.agent_proxy = Some(&proxy);
+
+    let params = build(input);
+    assert_yaml_snapshot!("params_with_agent_proxy", &params);
 }
 
 #[test]

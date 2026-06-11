@@ -12,11 +12,10 @@
 
 use std::collections::HashMap;
 
-use chrono::Utc;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use super::super::types::{CollectedTurn, IntermediateMessage, MessageRole};
+use super::super::types::{CollectedTurn, MessageRole};
 use super::{now_ms, PushOutcome, StreamAccumulator};
 
 #[derive(Debug, Default)]
@@ -32,7 +31,7 @@ pub(super) struct CursorRunState {
     pub started_at: Option<f64>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(super) struct CursorToolCall {
     pub call_id: String,
     pub name: String,
@@ -68,16 +67,25 @@ pub(super) fn handle_status(acc: &mut StreamAccumulator, value: &Value) -> PushO
 }
 
 pub(super) fn handle_thinking(acc: &mut StreamAccumulator, value: &Value) -> PushOutcome {
+    let mut changed = false;
     if let Some(text) = value.get("text").and_then(Value::as_str) {
         if !text.is_empty() {
             acc.cursor_state.thinking_text.push_str(text);
-            acc.fallback_thinking.push_str(text);
             acc.saw_thinking_delta = true;
+            changed = true;
         }
     }
     if let Some(ms) = value.get("thinking_duration_ms").and_then(Value::as_u64) {
         acc.cursor_state.thinking_duration_ms = Some(ms);
+        changed = true;
     }
+    if !changed {
+        return PushOutcome::NoOp;
+    }
+    // Materialize thinking as its own leading message so it stays ahead of
+    // any tools that arrive after it. Streams via the provider partial;
+    // `fallback_thinking` is intentionally left untouched.
+    materialize_cursor_thinking(acc, false);
     PushOutcome::StreamingDelta
 }
 
@@ -121,12 +129,13 @@ pub(super) fn handle_tool_call_start(acc: &mut StreamAccumulator, value: &Value)
         .to_string();
     let args = value.get("args").cloned().unwrap_or(json!({}));
 
-    if let Some(&idx) = acc.cursor_state.tool_index.get(&call_id) {
+    let idx = if let Some(&idx) = acc.cursor_state.tool_index.get(&call_id) {
         // Mid-stream arg refinement — replace existing entry's args.
         if let Some(entry) = acc.cursor_state.tools.get_mut(idx) {
             entry.name = name;
             entry.args = args;
         }
+        idx
     } else {
         let idx = acc.cursor_state.tools.len();
         acc.cursor_state.tools.push(CursorToolCall {
@@ -137,8 +146,13 @@ pub(super) fn handle_tool_call_start(acc: &mut StreamAccumulator, value: &Value)
             is_error: false,
         });
         acc.cursor_state.tool_index.insert(call_id, idx);
-    }
-    PushOutcome::StreamingDelta
+        idx
+    };
+    // Materialize the running tool_use into `collected[]` immediately so it
+    // renders live (Finalized → full render). Persist only on tool_call_end.
+    let tool = acc.cursor_state.tools[idx].clone();
+    emit_cursor_tool(acc, &tool, false);
+    PushOutcome::Finalized
 }
 
 pub(super) fn handle_tool_call_end(acc: &mut StreamAccumulator, value: &Value) -> PushOutcome {
@@ -153,16 +167,21 @@ pub(super) fn handle_tool_call_end(acc: &mut StreamAccumulator, value: &Value) -
         .and_then(Value::as_str)
         .is_some_and(|status| status != "success");
 
-    if let Some(&idx) = acc.cursor_state.tool_index.get(call_id) {
-        if let Some(entry) = acc.cursor_state.tools.get_mut(idx) {
-            entry.result = result;
-            entry.is_error = is_error;
-        }
-    } else {
+    let idx = match acc.cursor_state.tool_index.get(call_id) {
+        Some(&idx) => idx,
         // No matching tool_call_start — ignore.
-        return PushOutcome::NoOp;
+        None => return PushOutcome::NoOp,
+    };
+    if let Some(entry) = acc.cursor_state.tools.get_mut(idx) {
+        entry.result = result;
+        entry.is_error = is_error;
     }
-    PushOutcome::StreamingDelta
+    // Re-upsert the now-complete tool (result-derived input + tool_result
+    // message) and persist its turns. Finalized → full render so the card
+    // flips from running to done live.
+    let tool = acc.cursor_state.tools[idx].clone();
+    emit_cursor_tool(acc, &tool, true);
+    PushOutcome::Finalized
 }
 
 /// Drain in-flight cursor state on abort (no `status FINISHED` will
@@ -172,131 +191,201 @@ pub(super) fn flush_in_progress(acc: &mut StreamAccumulator) {
     finalize(acc);
 }
 
-/// Push assistant message + tool_result follow-ups on `status FINISHED`.
-fn finalize(acc: &mut StreamAccumulator) -> PushOutcome {
-    let state = std::mem::take(&mut acc.cursor_state);
-
-    // Defensive: skip empty runs.
-    let has_text = !state.assistant_text.is_empty();
-    let has_thinking = !state.thinking_text.is_empty();
-    let has_tools = !state.tools.is_empty();
-    if !has_text && !has_thinking && !has_tools {
-        acc.fallback_text.clear();
-        acc.fallback_thinking.clear();
-        return PushOutcome::NoOp;
-    }
-
-    let assistant_id = acc
-        .active_turn_id
-        .take()
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
+/// Build the `{type:"assistant", ...}` envelope cursor messages share. Each
+/// per-tool / thinking / text message uses it so the shared adapter sees a
+/// uniform Claude-shaped assistant.
+fn cursor_assistant_msg(acc: &StreamAccumulator, msg_id: &str, content: Vec<Value>) -> Value {
     let session_id_value: Value = acc
         .session_id
         .as_deref()
         .map(|s| Value::String(s.to_string()))
         .unwrap_or(Value::Null);
-    let resolved_model = acc.resolved_model.clone();
-    let created_at = Utc::now().to_rfc3339();
-
-    let mut content: Vec<Value> = Vec::with_capacity(2 + state.tools.len());
-    if has_thinking {
-        let mut block = json!({
-            "type": "thinking",
-            "thinking": state.thinking_text,
-            "signature": "",
-        });
-        if let Some(ms) = state.thinking_duration_ms {
-            block["__duration_ms"] = json!(ms);
-        }
-        content.push(block);
-    }
-    for tool in &state.tools {
-        let (mapped_name, mapped_args) = translate_cursor_tool(tool);
-        content.push(json!({
-            "type": "tool_use",
-            "id": tool.call_id,
-            "name": mapped_name,
-            "input": mapped_args,
-        }));
-    }
-    if has_text {
-        content.push(json!({
-            "type": "text",
-            "text": state.assistant_text,
-        }));
-    }
-
-    let assistant_msg = json!({
+    json!({
         "type": "assistant",
         "session_id": session_id_value,
         "message": {
-            "id": assistant_id,
+            "id": msg_id,
             "role": "assistant",
-            "model": resolved_model,
+            "model": acc.resolved_model,
             "content": content,
         },
-    });
-    let raw_json = assistant_msg.to_string();
-    acc.collected.push(IntermediateMessage {
-        id: assistant_id.clone(),
-        role: MessageRole::Assistant,
-        raw_json: raw_json.clone(),
-        parsed: Some(assistant_msg),
-        created_at: created_at.clone(),
-        is_streaming: false,
-    });
-    acc.turns.push(CollectedTurn {
-        id: assistant_id,
-        role: MessageRole::Assistant,
-        content_json: raw_json,
-    });
+    })
+}
 
-    // One synthetic user/tool_result per tool that completed.
-    for tool in &state.tools {
-        let Some(result) = &tool.result else { continue };
-        let result_text = format_tool_result(result);
-        let user_msg = json!({
-            "type": "user",
-            "session_id": session_id_value,
-            "message": {
-                "role": "user",
-                "content": [{
-                    "type": "tool_result",
-                    "tool_use_id": tool.call_id,
-                    "content": result_text,
-                    "is_error": tool.is_error,
-                }],
-            },
-        });
-        let raw = user_msg.to_string();
-        let id = format!("tool_result_{}", tool.call_id);
-        acc.collected.push(IntermediateMessage {
-            id: id.clone(),
-            role: MessageRole::User,
-            raw_json: raw.clone(),
-            parsed: Some(user_msg),
-            created_at: created_at.clone(),
-            is_streaming: false,
-        });
+/// Materialize one tool call into `collected[]` as a Claude-shaped
+/// `assistant{tool_use}` (plus a `user{tool_result}` once the result is in),
+/// keyed by stable ids so successive upserts (running → done) replace in
+/// place and render live. Mirrors codex's `handle_command_execution`.
+/// `persist` pushes the matching `CollectedTurn`(s) for reload — done on
+/// completion (`tool_call_end`) and on the abort flush, never on `start`.
+fn emit_cursor_tool(acc: &mut StreamAccumulator, tool: &CursorToolCall, persist: bool) {
+    let (mapped_name, mapped_args) = translate_cursor_tool(tool);
+    let mut tool_use = json!({
+        "type": "tool_use",
+        "id": tool.call_id,
+        "name": mapped_name,
+        "input": mapped_args,
+    });
+    if tool.result.is_none() {
+        // Spinner during streaming; abort flips this to "error" via
+        // `mark_pending_tools_aborted` (matches codex's contract).
+        tool_use["__streaming_status"] = json!("running");
+    }
+    let asst_id = format!("cursor-tool-asst:{}", tool.call_id);
+    let asst = cursor_assistant_msg(acc, &asst_id, vec![tool_use]);
+    let asst_str = asst.to_string();
+    acc.collect_or_replace(
+        &asst_str,
+        &asst,
+        MessageRole::Assistant,
+        Some(asst_id.clone()),
+    );
+    if persist {
         acc.turns.push(CollectedTurn {
-            id,
+            id: asst_id,
+            role: MessageRole::Assistant,
+            content_json: asst_str,
+        });
+    }
+
+    let Some(result) = &tool.result else {
+        return;
+    };
+    let result_text = format_tool_result(result);
+    let is_error = tool.is_error;
+    let user_id = format!("cursor-tool-user:{}", tool.call_id);
+    let user_msg = json!({
+        "type": "user",
+        "session_id": acc
+            .session_id
+            .as_deref()
+            .map(|s| Value::String(s.to_string()))
+            .unwrap_or(Value::Null),
+        "message": {
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": tool.call_id,
+                "content": result_text,
+                "is_error": is_error,
+            }],
+        },
+    });
+    let user_str = user_msg.to_string();
+    acc.collect_or_replace(
+        &user_str,
+        &user_msg,
+        MessageRole::User,
+        Some(user_id.clone()),
+    );
+    if persist {
+        acc.turns.push(CollectedTurn {
+            id: user_id,
             role: MessageRole::User,
-            content_json: raw,
+            content_json: user_str,
+        });
+    }
+}
+
+/// Materialize the accumulated thinking into its own leading
+/// `assistant{thinking}` message, keyed by a stable id so it stays ahead of
+/// any tools. `persist` pushes its turn (done at finalize).
+fn materialize_cursor_thinking(acc: &mut StreamAccumulator, persist: bool) {
+    let thinking = acc.cursor_state.thinking_text.clone();
+    if thinking.is_empty() {
+        return;
+    }
+    let duration = acc.cursor_state.thinking_duration_ms;
+    let (turn_id, _) = acc.get_or_create_turn_identity();
+    let think_id = format!("cursor-think:{turn_id}");
+    let mut block = json!({
+        "type": "thinking",
+        "thinking": thinking,
+        "signature": "",
+    });
+    if let Some(ms) = duration {
+        block["__duration_ms"] = json!(ms);
+    }
+    let msg = cursor_assistant_msg(acc, &think_id, vec![block]);
+    let msg_str = msg.to_string();
+    acc.collect_or_replace(
+        &msg_str,
+        &msg,
+        MessageRole::Assistant,
+        Some(think_id.clone()),
+    );
+    if persist {
+        acc.turns.push(CollectedTurn {
+            id: think_id,
+            role: MessageRole::Assistant,
+            content_json: msg_str,
+        });
+    }
+}
+
+/// Finalize a cursor turn on `status FINISHED`. Tools were already
+/// materialized live (per `tool_call_start`/`end`); here we persist any tool
+/// left running (abort flush), push the leading thinking + trailing text
+/// turns, roll persistence fields, and emit the `turn/completed` footer.
+fn finalize(acc: &mut StreamAccumulator) -> PushOutcome {
+    let has_text = !acc.cursor_state.assistant_text.is_empty();
+    let has_thinking = !acc.cursor_state.thinking_text.is_empty();
+    let has_tools = !acc.cursor_state.tools.is_empty();
+    if !has_text && !has_thinking && !has_tools {
+        acc.fallback_text.clear();
+        acc.fallback_thinking.clear();
+        acc.cursor_state = new_run_state();
+        return PushOutcome::NoOp;
+    }
+
+    // Persist any tool that started but never completed (abort path). On a
+    // clean FINISHED every tool already persisted at its `tool_call_end`, so
+    // `result.is_some()` and this re-emits nothing.
+    let tools = std::mem::take(&mut acc.cursor_state.tools);
+    for tool in &tools {
+        if tool.result.is_none() {
+            emit_cursor_tool(acc, tool, true);
+        }
+    }
+
+    // Thinking leads (already streamed in place); push its turn now.
+    if has_thinking {
+        materialize_cursor_thinking(acc, true);
+    }
+
+    // Trailing assistant text (streamed via the fallback partial).
+    if has_text {
+        let text = acc.cursor_state.assistant_text.clone();
+        let (turn_id, _) = acc.get_or_create_turn_identity();
+        let msg = cursor_assistant_msg(acc, &turn_id, vec![json!({"type": "text", "text": text})]);
+        let msg_str = msg.to_string();
+        acc.collect_or_replace(
+            &msg_str,
+            &msg,
+            MessageRole::Assistant,
+            Some(turn_id.clone()),
+        );
+        acc.turns.push(CollectedTurn {
+            id: turn_id,
+            role: MessageRole::Assistant,
+            content_json: msg_str,
         });
     }
 
     // Roll into persistence fields for parsed_output().
     if has_text {
+        let text = acc.cursor_state.assistant_text.clone();
         if !acc.assistant_text.is_empty() {
             acc.assistant_text.push('\n');
         }
-        acc.assistant_text.push_str(&state.assistant_text);
+        acc.assistant_text.push_str(&text);
     }
     if has_thinking {
+        let thinking = acc.cursor_state.thinking_text.clone();
         if !acc.thinking_text.is_empty() {
             acc.thinking_text.push('\n');
         }
-        acc.thinking_text.push_str(&state.thinking_text);
+        acc.thinking_text.push_str(&thinking);
     }
 
     acc.fallback_text.clear();
@@ -304,7 +393,7 @@ fn finalize(acc: &mut StreamAccumulator) -> PushOutcome {
 
     // Synthesize a turn/completed row with duration so the adapter renders
     // the "Ns • about X ago" footer, matching Claude/Codex behavior.
-    if let Some(started) = state.started_at {
+    if let Some(started) = acc.cursor_state.started_at {
         let duration = now_ms() - started;
         if duration > 0.0 {
             let enriched = json!({ "type": "turn/completed", "duration_ms": duration });
@@ -316,6 +405,7 @@ fn finalize(acc: &mut StreamAccumulator) -> PushOutcome {
         }
     }
 
+    acc.cursor_state = new_run_state();
     PushOutcome::Finalized
 }
 
@@ -536,6 +626,107 @@ fn format_tool_result(result: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ev(s: &str) -> Value {
+        serde_json::from_str(s).unwrap()
+    }
+
+    fn push(acc: &mut StreamAccumulator, s: &str) -> PushOutcome {
+        let v = ev(s);
+        acc.push_event(&v, &v.to_string())
+    }
+
+    #[test]
+    fn tool_call_start_materializes_running_tool_use_live() {
+        let mut acc = StreamAccumulator::new("cursor", "composer-2");
+        push(
+            &mut acc,
+            r#"{"type":"cursor/status","status":"RUNNING","run_id":"r1"}"#,
+        );
+        let outcome = push(
+            &mut acc,
+            r#"{"type":"cursor/tool_call_start","call_id":"t1","name":"shell","status":"running","args":{"command":"ls"}}"#,
+        );
+        // Finalized → full render so the tool appears mid-stream (not batched).
+        assert!(matches!(outcome, PushOutcome::Finalized));
+        let collected = acc.collected();
+        assert_eq!(collected.len(), 1);
+        let block = &collected[0].parsed.as_ref().unwrap()["message"]["content"][0];
+        assert_eq!(block["type"], "tool_use");
+        assert_eq!(block["name"], "Bash");
+        assert_eq!(block["__streaming_status"], "running");
+        // Not persisted until tool_call_end.
+        assert_eq!(acc.turns_len(), 0);
+    }
+
+    #[test]
+    fn tool_call_end_adds_result_clears_running_and_persists() {
+        let mut acc = StreamAccumulator::new("cursor", "composer-2");
+        push(
+            &mut acc,
+            r#"{"type":"cursor/status","status":"RUNNING","run_id":"r1"}"#,
+        );
+        push(
+            &mut acc,
+            r#"{"type":"cursor/tool_call_start","call_id":"t1","name":"shell","status":"running","args":{"command":"ls"}}"#,
+        );
+        let outcome = push(
+            &mut acc,
+            r#"{"type":"cursor/tool_call_end","call_id":"t1","name":"shell","status":"completed","args":{"command":"ls"},"result":{"status":"success","value":{"stdout":"file\n","stderr":""}}}"#,
+        );
+        assert!(matches!(outcome, PushOutcome::Finalized));
+        let collected = acc.collected();
+        // assistant(tool_use) + user(tool_result).
+        assert_eq!(collected.len(), 2);
+        let asst = &collected[0].parsed.as_ref().unwrap()["message"]["content"][0];
+        assert_eq!(asst["type"], "tool_use");
+        assert!(
+            asst.get("__streaming_status").is_none(),
+            "done tool drops running"
+        );
+        let result = &collected[1].parsed.as_ref().unwrap()["message"]["content"][0];
+        assert_eq!(result["type"], "tool_result");
+        assert_eq!(result["tool_use_id"], "t1");
+        assert!(result["content"].as_str().unwrap().contains("file"));
+        // Both persisted as turns on completion.
+        assert_eq!(acc.turns_len(), 2);
+    }
+
+    #[test]
+    fn finalize_splits_text_into_its_own_trailing_turn() {
+        let mut acc = StreamAccumulator::new("cursor", "composer-2");
+        for s in [
+            r#"{"type":"cursor/status","status":"RUNNING","run_id":"r1"}"#,
+            r#"{"type":"cursor/tool_call_start","call_id":"t1","name":"shell","status":"running","args":{"command":"ls"}}"#,
+            r#"{"type":"cursor/tool_call_end","call_id":"t1","name":"shell","status":"completed","args":{"command":"ls"},"result":{"status":"success","value":{"stdout":"x\n"}}}"#,
+            r#"{"type":"cursor/assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}"#,
+            r#"{"type":"cursor/status","status":"FINISHED","run_id":"r1"}"#,
+        ] {
+            push(&mut acc, s);
+        }
+        // Per-item: asst(tool_use), user(tool_result), asst(text). Footer is a
+        // collected message, not a turn.
+        assert_eq!(acc.turns_len(), 3);
+        assert_eq!(acc.turn_at(2).role, MessageRole::Assistant);
+        assert!(acc.turn_at(2).content_json.contains("done"));
+    }
+
+    #[test]
+    fn finalize_thinking_leads_text_as_separate_turns() {
+        let mut acc = StreamAccumulator::new("cursor", "composer-2");
+        for s in [
+            r#"{"type":"cursor/status","status":"RUNNING","run_id":"r1"}"#,
+            r#"{"type":"cursor/thinking","text":"hmm"}"#,
+            r#"{"type":"cursor/assistant","message":{"role":"assistant","content":[{"type":"text","text":"answer"}]}}"#,
+            r#"{"type":"cursor/status","status":"FINISHED","run_id":"r1"}"#,
+        ] {
+            push(&mut acc, s);
+        }
+        // Thinking turn first, text turn second.
+        assert_eq!(acc.turns_len(), 2);
+        assert!(acc.turn_at(0).content_json.contains("thinking"));
+        assert!(acc.turn_at(1).content_json.contains("answer"));
+    }
 
     /// Build a `CursorToolCall` from one of the captured wire-format
     /// fixtures under `tests/fixtures/cursor-tools/`. Each fixture is a

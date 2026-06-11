@@ -137,6 +137,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 	getCurrentWindow: vi.fn(() => ({
 		onCloseRequested: vi.fn(async () => () => {}),
 		setBadgeCount: vi.fn(async () => {}),
+		close: vi.fn(async () => {}),
 	})),
 }));
 
@@ -193,6 +194,26 @@ vi.mock("@tauri-apps/api/core", () => ({
 					lastError: null,
 					lastAttemptAt: null,
 					downloadedAt: null,
+				};
+			case "get_helmor_components_update_check":
+				return {
+					cli: {
+						installed: false,
+						installPath: null,
+						buildMode: "development",
+						installState: "missing",
+					},
+					skills: {
+						installed: false,
+						claude: false,
+						codex: false,
+						command:
+							"npx --yes skills add dohooo/helmor/.agents/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code -a codex",
+					},
+					lastCheckedVersion: null,
+					currentVersion: "0.0.0-test",
+					cliError: null,
+					skillsError: null,
 				};
 			case "load_auto_close_action_kinds":
 				return [];

@@ -13,6 +13,7 @@ import {
 	getShortcut,
 	getShortcutConflicts,
 } from "@/features/shortcuts/registry";
+import { findTerminalAgent } from "@/features/terminal/terminal-presets";
 import type {
 	AgentModelOption,
 	AgentModelSection,
@@ -22,6 +23,8 @@ import type {
 } from "@/lib/api";
 import {
 	createSession,
+	findProviderCapabilities,
+	getOpencodeCustomProviders,
 	mutateCodexGoal,
 	saveAutoCloseActionKinds,
 	setWorkspaceLinkedDirectories,
@@ -35,10 +38,12 @@ import {
 	agentModelSectionsQueryOptions,
 	autoCloseActionKindsQueryOptions,
 	helmorQueryKeys,
+	providerCapabilitiesQueryOptions,
 	sessionCodexGoalQueryOptions,
 	slashCommandsQueryOptions,
 	workspaceCandidateDirectoriesQueryOptions,
 	workspaceDetailQueryOptions,
+	workspaceGroupsQueryOptions,
 	workspaceLinkedDirectoriesQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
@@ -53,7 +58,12 @@ import {
 	isNewSession,
 	resolveSessionSelectedModelId,
 } from "@/lib/workspace-helpers";
+import { publishShellEvent } from "@/shell/event-bus";
 import { CodexGoalBanner } from "../panel/codex-goal-banner";
+import {
+	type ComposerQuickAction,
+	ComposerQuickActions,
+} from "./composer-quick-actions";
 import type { AddDirPickerEntry } from "./editor/add-dir/typeahead-plugin";
 import { WorkspaceComposer } from "./index";
 import {
@@ -63,7 +73,9 @@ import {
 import type { PermissionPanelProps } from "./permission-panel";
 import type { StartSubmitMode } from "./start-submit-mode";
 import { SubmitQueueList } from "./submit-queue-list";
+import { TriageQuickActions } from "./triage-quick-actions";
 import type { UserInputResponseHandler } from "./user-input";
+import { WorkflowProgressPanel } from "./workflow-progress-panel";
 
 const EMPTY_MODEL_SECTIONS: AgentModelSection[] = [];
 const EMPTY_SLASH_COMMANDS: SlashCommandEntry[] = [];
@@ -88,6 +100,13 @@ const CODEX_COMPACT_COMMAND: SlashCommandEntry = {
 	providers: ["codex"],
 };
 
+const OPENCODE_COMPACT_COMMAND: SlashCommandEntry = {
+	name: "compact",
+	description: "Compact this conversation's context",
+	source: "builtin",
+	providers: ["opencode"],
+};
+
 const CODEX_GOAL_COMMAND: SlashCommandEntry = {
 	name: "goal",
 	description:
@@ -105,11 +124,20 @@ const CLAUDE_GOAL_COMMAND: SlashCommandEntry = {
 	providers: ["claude"],
 };
 
+const CLAUDE_WORKFLOWS_COMMAND: SlashCommandEntry = {
+	name: "workflows",
+	description: "View this conversation's workflow runs",
+	source: "client-action",
+	providers: ["claude"],
+};
+
 const BUILTIN_CLIENT_COMMANDS: readonly SlashCommandEntry[] = [
 	ADD_DIR_COMMAND,
 	CODEX_COMPACT_COMMAND,
+	OPENCODE_COMPACT_COMMAND,
 	CODEX_GOAL_COMMAND,
 	CLAUDE_GOAL_COMMAND,
+	CLAUDE_WORKFLOWS_COMMAND,
 ];
 
 type WorkspaceComposerContainerProps = {
@@ -139,6 +167,7 @@ type WorkspaceComposerContainerProps = {
 	restoreImages: string[];
 	restoreFiles: string[];
 	restoreCustomTags?: ComposerCustomTag[];
+	restoreEditorState?: SerializedEditorState | null;
 	restoreNonce: number;
 	pendingUserInput?: PendingUserInput | null;
 	onUserInputResponse?: UserInputResponseHandler;
@@ -202,6 +231,7 @@ type WorkspaceComposerContainerProps = {
 	queueItems?: readonly QueuedSubmit[];
 	onSteerQueued?: (itemId: string) => void;
 	onRemoveQueued?: (itemId: string) => void;
+	onEditQueued?: (itemId: string) => void;
 	contextPanelOpen?: boolean;
 	onToggleContextPanel?: () => void;
 	startSubmitMenu?: boolean;
@@ -242,6 +272,7 @@ export const WorkspaceComposerContainer = memo(
 		restoreImages,
 		restoreFiles,
 		restoreCustomTags = [],
+		restoreEditorState = null,
 		restoreNonce,
 		pendingUserInput = null,
 		onUserInputResponse = noopUserInputResponse,
@@ -267,6 +298,7 @@ export const WorkspaceComposerContainer = memo(
 		queueItems = EMPTY_QUEUE_ITEMS,
 		onSteerQueued,
 		onRemoveQueued,
+		onEditQueued,
 		contextPanelOpen = false,
 		onToggleContextPanel,
 		startSubmitMenu = false,
@@ -300,6 +332,28 @@ export const WorkspaceComposerContainer = memo(
 			[settings.startSurfacePreferences, updateSettings],
 		);
 		const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
+		// Stack-tip detection for the Restack quick action: the current
+		// workspace is a stack tip when it has a parent (is stacked on a layer
+		// below) AND no other workspace stacks on it. Reuses the cached sidebar
+		// workspace list.
+		// Narrow the cached sidebar workspace list down to the single boolean
+		// this composer needs, via `select`, so the query observer only
+		// re-renders when *that* flips — not on every workspace-list change
+		// (adds, status flips, reorders). Keeps non-stack composers free of
+		// churn-driven re-renders.
+		const isStackTip =
+			useQuery({
+				...workspaceGroupsQueryOptions(),
+				select: (groups) => {
+					if (!displayedWorkspaceId) return false;
+					const rows = groups.flatMap((group) => group.rows);
+					const current = rows.find((row) => row.id === displayedWorkspaceId);
+					if (!current?.parentWorkspaceId) return false;
+					return !rows.some(
+						(row) => row.parentWorkspaceId === displayedWorkspaceId,
+					);
+				},
+			}).data ?? false;
 		const workspaceDetailQuery = useQuery({
 			...workspaceDetailQueryOptions(displayedWorkspaceId ?? "__none__"),
 			enabled: Boolean(displayedWorkspaceId),
@@ -445,6 +499,17 @@ export const WorkspaceComposerContainer = memo(
 		const modelsLoading =
 			modelSectionsQuery.isLoading &&
 			modelSections.every((s) => s.options.length === 0);
+		// Drives the OpenCode "Add custom model…" jump; only fetched when an OpenCode section exists.
+		const opencodeSectionPresent = modelSections.some(
+			(s) => s.id === "opencode",
+		);
+		const opencodeCustomProvidersQuery = useQuery({
+			queryKey: helmorQueryKeys.opencodeCustomProviders,
+			queryFn: getOpencodeCustomProviders,
+			enabled: opencodeSectionPresent,
+		});
+		const hasOpencodeCustomProviders =
+			(opencodeCustomProvidersQuery.data?.length ?? 0) > 0;
 		const currentSession =
 			(sessionsQuery.data ?? []).find(
 				(session) => session.id === displayedSessionId,
@@ -475,6 +540,11 @@ export const WorkspaceComposerContainer = memo(
 		]
 			? null
 			: getShortcut(settings.shortcuts, "composer.togglePlanMode");
+		const toggleTerminalShortcut = shortcutConflicts.conflictById[
+			"composer.toggleTerminalMode"
+		]
+			? null
+			: getShortcut(settings.shortcuts, "composer.toggleTerminalMode");
 		const toggleFollowUpShortcut = shortcutConflicts.conflictById[
 			"composer.toggleFollowUpBehavior"
 		]
@@ -661,7 +731,9 @@ export const WorkspaceComposerContainer = memo(
 		// cursor sessions as claude — the Rust cache then served cached
 		// claude skills back to the cursor popup. Keep cursor explicit.
 		const slashProvider: AgentProvider =
-			provider === "codex" || provider === "cursor" ? provider : "claude";
+			provider === "codex" || provider === "cursor" || provider === "opencode"
+				? provider
+				: "claude";
 		// Prefer the repoId from a real workspace; on the start page there's no
 		// workspace yet, so fall back to the caller-supplied repoId hint.
 		const effectiveRepoId =
@@ -713,12 +785,31 @@ export const WorkspaceComposerContainer = memo(
 			void slashCommandsQuery.refetch();
 		}, [slashCommandsQuery]);
 
+		// Provider capability lookup — single source of truth for the
+		// active-goal interception below (composer needs to know whether
+		// the current provider has a `/goal` loop at all). Falls back to
+		// Claude defaults while the table is loading so unknown
+		// providers don't accidentally enable codex-only branches.
+		const providerCapabilitiesQuery = useQuery(
+			providerCapabilitiesQueryOptions(),
+		);
+		const providerCapabilities = useMemo(
+			() =>
+				findProviderCapabilities(
+					providerCapabilitiesQuery.data ?? [],
+					provider,
+				),
+			[providerCapabilitiesQuery.data, provider],
+		);
+		const supportsActiveGoal =
+			providerCapabilities?.supportsActiveGoal ?? false;
+
 		// Pull the active codex goal so we can intercept `/goal X` submissions
 		// when one is already in flight and ask the user for confirmation
 		// before replacing it.
 		const codexGoalQuery = useQuery({
 			...sessionCodexGoalQueryOptions(displayedSessionId ?? "__none__"),
-			enabled: Boolean(displayedSessionId) && provider === "codex",
+			enabled: Boolean(displayedSessionId) && supportsActiveGoal,
 		});
 		const activeGoal = codexGoalQuery.data ?? null;
 
@@ -728,6 +819,14 @@ export const WorkspaceComposerContainer = memo(
 		};
 		const [goalReplaceConfirm, setGoalReplaceConfirm] =
 			useState<PendingGoalReplace | null>(null);
+
+		// Terminal-Mode toggle: composer-local, off on every mount. Only offered
+		// when the General setting is on and the provider has a terminal agent
+		// spec (cursor has no TUI CLI, so it stays hidden there).
+		const [terminalMode, setTerminalMode] = useState(false);
+		const showTerminalToggle =
+			settings.enableTerminalMode &&
+			findTerminalAgent(effectiveModel?.provider) !== null;
 
 		const handleComposerSubmitInner = useCallback(
 			(
@@ -744,6 +843,23 @@ export const WorkspaceComposerContainer = memo(
 				},
 			) => {
 				if (!effectiveModel) {
+					return;
+				}
+				if (terminalMode && showTerminalToggle) {
+					// Terminal-Mode send: open the prompt in the provider's TUI
+					// instead of streaming a GUI turn. The shell listener creates
+					// the terminal session and boots it with the composer state.
+					publishShellEvent({
+						type: "create-terminal-session",
+						prompt,
+						provider: effectiveModel.provider,
+						modelId: effectiveModel.cliModel || null,
+						effortLevel: effortLevel || null,
+						permissionMode:
+							options?.permissionModeOverride ??
+							effectivePermissionMode ??
+							null,
+					});
 					return;
 				}
 				// Translate the per-submit "opposite" toggle into a concrete
@@ -780,6 +896,8 @@ export const WorkspaceComposerContainer = memo(
 				fastMode,
 				supportsFastMode,
 				settings.followUpBehavior,
+				terminalMode,
+				showTerminalToggle,
 			],
 		);
 
@@ -802,7 +920,7 @@ export const WorkspaceComposerContainer = memo(
 				//     the goal-continuation turn codex auto-spawns.
 				//   - `/goal <new objective>` while a goal already exists
 				//                                    → confirm-replace panel.
-				if (provider === "codex" && displayedSessionId) {
+				if (supportsActiveGoal && displayedSessionId) {
 					const match = prompt.trim().match(/^\/goal\s+([\s\S]+)$/);
 					const arg = match ? (match[1]?.trim() ?? "") : "";
 					if (arg === "pause" || arg === "clear") {
@@ -836,7 +954,12 @@ export const WorkspaceComposerContainer = memo(
 					options,
 				);
 			},
-			[provider, displayedSessionId, activeGoal, handleComposerSubmitInner],
+			[
+				supportsActiveGoal,
+				displayedSessionId,
+				activeGoal,
+				handleComposerSubmitInner,
+			],
 		);
 
 		const handleGoalReplaceConfirm = useCallback(() => {
@@ -859,6 +982,15 @@ export const WorkspaceComposerContainer = memo(
 		const handleResumeGoal = useCallback(() => {
 			handleComposerSubmitInner("/goal resume", [], [], []);
 		}, [handleComposerSubmitInner]);
+
+		// Quick-action tag clicked above the composer — fire its preset prompt
+		// straight through the normal submit path (e.g. `/helmor-cli restack`).
+		const handleQuickAction = useCallback(
+			(action: ComposerQuickAction) => {
+				handleComposerSubmitInner(action.prompt, [], [], []);
+			},
+			[handleComposerSubmitInner],
+		);
 
 		// Track which queued prompt we've already dispatched so a re-render
 		// (e.g. due to query invalidation refreshing the session list) can't
@@ -945,6 +1077,35 @@ export const WorkspaceComposerContainer = memo(
 		const autoCloseHelpText =
 			"When enabled, action sessions will close automatically when finished.";
 
+		// Start/Dismiss quick actions for un-engaged triage workspaces. Dismiss reuses the sidebar controller's archive path.
+		const [triageGraduating, setTriageGraduating] = useState(false);
+		const [triageDismissing, setTriageDismissing] = useState(false);
+		const [workflowsPanelOpen, setWorkflowsPanelOpen] = useState(false);
+		useEffect(() => {
+			setTriageGraduating(false);
+			setTriageDismissing(false);
+		}, [displayedWorkspaceId]);
+
+		const isTriagePriming =
+			workspaceDetailQuery.data?.triagePrimingUnconsumed === true &&
+			!triageGraduating &&
+			!triageDismissing;
+
+		const handleTriageStart = useCallback(() => {
+			setTriageGraduating(true);
+			handleComposerSubmitInner("Go ahead.", [], [], []);
+		}, [handleComposerSubmitInner]);
+
+		const handleTriageDismiss = useCallback(() => {
+			if (!displayedWorkspaceId || triageDismissing) return;
+			setTriageDismissing(true);
+			// Delegates archive to the sidebar controller (one optimistic path).
+			publishShellEvent({
+				type: "request-archive-workspace",
+				workspaceId: displayedWorkspaceId,
+			});
+		}, [displayedWorkspaceId, triageDismissing]);
+
 		return (
 			// `z-20` lifts the entire composer stacking context above the thread
 			// viewport's `z-10` root (`thread-viewport.tsx:99`). Without this the
@@ -953,7 +1114,13 @@ export const WorkspaceComposerContainer = memo(
 			// top edge, because the composer's `isolate` traps popup z-index
 			// inside a stacking context whose outer z defaults to `auto`.
 			<div className="relative isolate z-20 flex flex-col">
-				{isActionSession ? (
+				{isTriagePriming ? (
+					<TriageQuickActions
+						onStart={handleTriageStart}
+						onDismiss={handleTriageDismiss}
+						disabled={composerUnavailable || sending || triageDismissing}
+					/>
+				) : isActionSession ? (
 					<ActionRow
 						className={cn(
 							"relative z-0 mx-auto -mb-px w-[90%] rounded-t-2xl border-b-0",
@@ -1017,6 +1184,17 @@ export const WorkspaceComposerContainer = memo(
 
 				<div className="relative z-10">
 					<div className="pointer-events-none absolute inset-x-0 bottom-[calc(100%-1px)] z-20 flex flex-col items-center gap-1.5">
+						{isStackTip ? (
+							<ComposerQuickActions
+								onAction={handleQuickAction}
+								disabled={composerUnavailable || sending}
+							/>
+						) : null}
+						<WorkflowProgressPanel
+							sessionId={displayedSessionId}
+							open={workflowsPanelOpen}
+							onClose={() => setWorkflowsPanelOpen(false)}
+						/>
 						{displayedSessionId ? (
 							<CodexGoalBanner
 								sessionId={displayedSessionId}
@@ -1029,6 +1207,7 @@ export const WorkspaceComposerContainer = memo(
 							items={queueItems}
 							onSteer={(id) => onSteerQueued?.(id)}
 							onRemove={(id) => onRemoveQueued?.(id)}
+							onEdit={(id) => onEditQueued?.(id)}
 							disabled={composerUnavailable}
 						/>
 					</div>
@@ -1042,10 +1221,13 @@ export const WorkspaceComposerContainer = memo(
 								? "codex"
 								: effectiveModel?.provider === "cursor"
 									? "cursor"
-									: "claude"
+									: effectiveModel?.provider === "opencode"
+										? "opencode"
+										: "claude"
 						}
 						focusShortcut={focusShortcut}
 						togglePlanShortcut={togglePlanShortcut}
+						toggleTerminalShortcut={toggleTerminalShortcut}
 						toggleFollowUpShortcut={toggleFollowUpShortcut}
 						toggleContextPanelShortcut={toggleContextPanelShortcut}
 						alwaysShowContextUsage={settings.alwaysShowContextUsage}
@@ -1058,6 +1240,7 @@ export const WorkspaceComposerContainer = memo(
 						sending={sending}
 						selectedModelId={effectiveSelectedModelId}
 						modelSections={modelSections}
+						hasOpencodeCustomProviders={hasOpencodeCustomProviders}
 						modelsLoading={modelsLoading}
 						onSelectModel={handleSelectModelInner}
 						provider={provider}
@@ -1070,11 +1253,16 @@ export const WorkspaceComposerContainer = memo(
 						onChangeFastMode={
 							supportsFastMode ? handleChangeFastModeInner : undefined
 						}
+						terminalMode={terminalMode}
+						onChangeTerminalMode={
+							showTerminalToggle ? setTerminalMode : undefined
+						}
 						sendError={sendError}
 						restoreDraft={restoreDraft}
 						restoreImages={restoreImages}
 						restoreFiles={restoreFiles}
 						restoreCustomTags={restoreCustomTags}
+						restoreEditorState={restoreEditorState}
 						restoreNonce={restoreNonce}
 						pendingUserInput={pendingUserInput}
 						onUserInputResponse={onUserInputResponse}
@@ -1092,6 +1280,7 @@ export const WorkspaceComposerContainer = memo(
 								: null
 						}
 						hasPlanReview={hasPlanReview}
+						providerCapabilities={providerCapabilitiesQuery.data}
 						pendingInsertRequests={pendingInsertRequests}
 						onPendingInsertRequestsConsumed={onPendingInsertRequestsConsumed}
 						slashCommands={slashCommands}
@@ -1108,6 +1297,7 @@ export const WorkspaceComposerContainer = memo(
 						}
 						addDirCandidates={candidateDirectories}
 						onPickAddDir={handlePickAddDir}
+						onOpenWorkflows={() => setWorkflowsPanelOpen(true)}
 						contextPanelOpen={contextPanelOpen}
 						onToggleContextPanel={onToggleContextPanel}
 						startSubmitMenu={startSubmitMenu}

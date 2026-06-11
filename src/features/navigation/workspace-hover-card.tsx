@@ -659,7 +659,7 @@ export function WorkspaceHoverCard({
 								</span>
 							) : null}
 						</div>
-						{/* Chat workspaces have no git context and no kanban
+						{/* Chat workspaces have no git context and no workspace
 						 *  status — the entire right-side cluster (branch +
 						 *  diff chips + status dot) is meaningless for them. */}
 						{row.mode !== "chat" ? (

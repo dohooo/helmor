@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Embedded by the linker into every target on Windows/MSVC — app bins and
+  cargo test executables alike (see build.rs, embed_windows_manifest).
+
+  Equivalent to tauri-build's default Windows app manifest: declares the
+  comctl32 v6 dependency that tao/tauri dialogs need (TaskDialogIndirect).
+  Test executables especially rely on this — tauri-build never covers them,
+  and without it the loader binds comctl32 5.82 and every test exe aborts at
+  startup with STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139).
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+</assembly>

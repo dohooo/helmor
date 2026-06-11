@@ -74,7 +74,15 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		id: "session.reopenClosed",
 		title: "Reopen closed session",
 		group: "Session",
-		defaultHotkey: "Mod+Shift+T",
+		defaultHotkey: "Mod+Shift+R",
+		scopes: ["app"],
+		editable: true,
+	},
+	{
+		id: "window.close",
+		title: "Close window",
+		group: "System",
+		defaultHotkey: "Mod+Shift+W",
 		scopes: ["app"],
 		editable: true,
 	},
@@ -210,6 +218,14 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		editable: true,
 	},
 	{
+		id: "window.miniMode.toggle",
+		title: "Toggle mini mode",
+		group: "System",
+		defaultHotkey: "Mod+Control+M",
+		scopes: ["app"],
+		editable: true,
+	},
+	{
 		id: "sidebar.left.toggle",
 		title: "Toggle left sidebar",
 		group: "System",
@@ -277,6 +293,14 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		// no UI on the start surface. Bound to the narrower sibling scope so
 		// the start surface can reclaim Shift+Tab for cycling repositories
 		// without scope-overlap forcing both to disable each other.
+		scopes: ["workspace-composer"],
+		editable: true,
+	},
+	{
+		id: "composer.toggleTerminalMode",
+		title: "Toggle terminal mode",
+		group: "Composer",
+		defaultHotkey: "Mod+Shift+T",
 		scopes: ["workspace-composer"],
 		editable: true,
 	},

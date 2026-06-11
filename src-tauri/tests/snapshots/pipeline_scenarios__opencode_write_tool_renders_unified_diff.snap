@@ -1,0 +1,20 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: msg-1
+  content_length: 1
+  content:
+    - type: tool-call
+      tool_name: apply_patch
+      tool_call_id: c1
+      args_keys:
+        - changes
+      args_text_length: 82
+      has_result: false
+      result_kind: ~
+      result_preview: ~
+      streaming_status: done
+  status: ~
+  streaming: ~

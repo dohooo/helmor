@@ -392,15 +392,21 @@ export function useWorkspaceInspectorSidebar({
 		workspaceState !== "initializing" &&
 		workspaceState !== "archived";
 	const changesQuery = useQuery({
-		...workspaceChangesQueryOptions(workspaceRootPath ?? ""),
+		...workspaceChangesQueryOptions(workspaceRootPath ?? "", workspaceId),
 		enabled: changesQueryEnabled,
 	});
 	const changes: InspectorFileItem[] = changesQuery.data ?? EMPTY_CHANGES;
+	const changesLoaded = changesQueryEnabled && changesQuery.data !== undefined;
 
 	const prevChangesRef = useRef<Map<string, string> | null>(null);
 	const prevRootPathRef = useRef(workspaceRootPath);
-	if (prevRootPathRef.current !== workspaceRootPath) {
+	const prevWorkspaceIdRef = useRef(workspaceId);
+	if (
+		prevRootPathRef.current !== workspaceRootPath ||
+		prevWorkspaceIdRef.current !== workspaceId
+	) {
 		prevRootPathRef.current = workspaceRootPath;
+		prevWorkspaceIdRef.current = workspaceId;
 		prevChangesRef.current = null;
 	}
 	const nextChangesSnapshot = useMemo(() => {
@@ -417,7 +423,7 @@ export function useWorkspaceInspectorSidebar({
 	}, [changes]);
 	const flashingPaths = useMemo(() => {
 		const previous = prevChangesRef.current;
-		if (previous === null) {
+		if (previous === null || !changesLoaded) {
 			return new Set<string>();
 		}
 
@@ -433,10 +439,11 @@ export function useWorkspaceInspectorSidebar({
 			}
 		}
 		return flashing;
-	}, [changes, nextChangesSnapshot]);
+	}, [changes, changesLoaded, nextChangesSnapshot]);
 	useEffect(() => {
+		if (!changesLoaded) return;
 		prevChangesRef.current = nextChangesSnapshot;
-	}, [nextChangesSnapshot]);
+	}, [changesLoaded, nextChangesSnapshot]);
 
 	const handleToggleTabs = useCallback(() => {
 		setTabsOpen((open) => !open);
@@ -602,6 +609,7 @@ export function useWorkspaceInspectorSidebar({
 		actionsRef,
 		activeTab,
 		changes,
+		changesLoaded,
 		changesRef,
 		containerRef,
 		flashingPaths,

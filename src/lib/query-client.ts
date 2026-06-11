@@ -1,11 +1,11 @@
 import { createAsyncStoragePersister } from "@tanstack/query-async-storage-persister";
 import { focusManager, QueryClient, queryOptions } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
 import type { ThreadMessageLike } from "./api";
 import {
 	type ActionKind,
 	type AgentProvider,
 	type ChangeRequestInfo,
+	DEFAULT_PROVIDER_CAPABILITIES,
 	DEFAULT_WORKSPACE_GROUPS,
 	type DetectedEditor,
 	detectInstalledEditors,
@@ -19,6 +19,7 @@ import {
 	getLiveContextUsage,
 	getSessionCodexGoal,
 	getSessionContextUsage,
+	getSessionPlanState,
 	getWorkspaceAccountProfile,
 	getWorkspaceForge,
 	listActiveStreams,
@@ -35,6 +36,7 @@ import {
 	loadArchivedWorkspaces,
 	loadAutoCloseActionKinds,
 	loadAutoCloseOptInAsked,
+	loadProviderCapabilities,
 	loadSessionThreadMessages,
 	loadWorkspaceDetail,
 	loadWorkspaceForgeActionStatus,
@@ -44,6 +46,9 @@ import {
 	type PrSyncState,
 	refreshWorkspaceChangeRequest,
 } from "./api";
+// Routed through the transport shim so query-cache persistence works in the
+// mobile browser companion too (not just the Tauri webview).
+import { invoke } from "./ipc";
 import { parsePrUrl } from "./pr-url";
 import {
 	getSessionThreadPaginationState,
@@ -63,6 +68,10 @@ export const helmorQueryKeys = {
 	archivedWorkspaces: ["archivedWorkspaces"] as const,
 	repositories: ["repositories"] as const,
 	agentModelSections: ["agentModelSections"] as const,
+	opencodeCustomProviders: ["opencodeCustomProviders"] as const,
+	agentLoginStatus: ["agentLoginStatus"] as const,
+	agentVersions: ["agentVersions"] as const,
+	providerCapabilities: ["providerCapabilities"] as const,
 	workspaceDetail: (workspaceId: string) =>
 		["workspaceDetail", workspaceId] as const,
 	workspaceSessions: (workspaceId: string) =>
@@ -71,6 +80,8 @@ export const helmorQueryKeys = {
 		["sessionContextUsage", sessionId] as const,
 	sessionCodexGoal: (sessionId: string) =>
 		["sessionCodexGoal", sessionId] as const,
+	sessionPlanState: (sessionId: string) =>
+		["sessionPlanState", sessionId] as const,
 	codexRateLimits: ["codexRateLimits"] as const,
 	claudeRateLimits: ["claudeRateLimits"] as const,
 	claudeRichContextUsage: (
@@ -86,8 +97,8 @@ export const helmorQueryKeys = {
 		] as const,
 	sessionMessages: (sessionId: string) =>
 		["sessionMessages", sessionId] as const,
-	workspaceChanges: (workspaceRootPath: string) =>
-		["workspaceChanges", workspaceRootPath] as const,
+	workspaceChanges: (workspaceRootPath: string, workspaceId?: string | null) =>
+		["workspaceChanges", workspaceRootPath, workspaceId ?? ""] as const,
 	workspaceFiles: (workspaceRootPath: string) =>
 		["workspaceFiles", workspaceRootPath] as const,
 	workspaceChangeRequest: (workspaceId: string) =>
@@ -99,12 +110,6 @@ export const helmorQueryKeys = {
 	forgeAccountsAll: ["forgeAccounts"] as const,
 	workspaceAccountProfile: (workspaceId: string) =>
 		["workspaceAccountProfile", workspaceId] as const,
-	/// Lightweight per-host login set probe (no profile fetch). Used as
-	/// the focus-driven auth liveness check: account / repo settings
-	/// surfaces refetch this on window focus, and a delta in the set
-	/// invalidates the heavyweight `forgeAccounts` cache.
-	forgeLogins: (provider: string, host: string) =>
-		["forgeLogins", provider, host] as const,
 	inboxItemDetail: (
 		provider: string,
 		login: string,
@@ -153,6 +158,9 @@ export const helmorQueryKeys = {
 	slackThread: (teamId: string, channelId: string, anchorTs: string) =>
 		["slackThread", teamId, channelId, anchorTs] as const,
 	slackEmojiMap: (teamId: string) => ["slackEmojiMap", teamId] as const,
+	triageConfig: ["triage", "config"] as const,
+	triageActiveStatus: ["triage", "activeStatus"] as const,
+	pairedDevices: ["pairedDevices"] as const,
 };
 
 /** Persistence is opt-in per `queryOptions` via `meta: { persist: true }`.
@@ -418,6 +426,33 @@ export function agentModelSectionsQueryOptions() {
 	});
 }
 
+/** Provider-capability table. The shape is intentionally static across
+ *  the app's lifetime (no per-session inputs), persisted to disk like the
+ *  model catalog so first paint on cold start has the data ready.
+ *
+ *  `initialData` mirrors the Rust default table so consumers read the
+ *  correct flags synchronously — BEFORE the persisted cache or the
+ *  `list_provider_capabilities` IPC has hydrated. Without it (or with an
+ *  empty `[]`), Codex would read `supportsActiveGoal === false` during the
+ *  cold-start window, silently disabling `/goal` interception and the
+ *  stop-stream goal pause. `initialDataUpdatedAt: 0` + `staleTime: 0`
+ *  keeps the same "synchronous default, background-reconcile" contract the
+ *  model-catalog / workspace-groups queries use, so any drift between this
+ *  mirror and the live Rust table is corrected on the next mount. */
+export function providerCapabilitiesQueryOptions() {
+	return queryOptions({
+		queryKey: helmorQueryKeys.providerCapabilities,
+		queryFn: loadProviderCapabilities,
+		initialData: DEFAULT_PROVIDER_CAPABILITIES,
+		initialDataUpdatedAt: 0,
+		staleTime: 0,
+		gcTime: Number.POSITIVE_INFINITY,
+		refetchOnWindowFocus: false,
+		retry: false,
+		meta: PERSIST_META,
+	});
+}
+
 export function workspaceDetailQueryOptions(workspaceId: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
@@ -531,6 +566,17 @@ export function sessionCodexGoalQueryOptions(sessionId: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.sessionCodexGoal(sessionId),
 		queryFn: () => getSessionCodexGoal(sessionId),
+		staleTime: 0,
+	});
+}
+
+/** Normalised plan projection. Event-driven via `SessionPlanChanged`.
+ *  Same shape every time the underlying row mutates, so callers don't
+ *  need to dedupe — the bridge invalidates and the observer refetches. */
+export function sessionPlanStateQueryOptions(sessionId: string) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.sessionPlanState(sessionId),
+		queryFn: () => getSessionPlanState(sessionId),
 		staleTime: 0,
 	});
 }
@@ -917,10 +963,13 @@ export function workspaceForgeRefetchInterval(
 		: false;
 }
 
-export function workspaceChangesQueryOptions(workspaceRootPath: string) {
+export function workspaceChangesQueryOptions(
+	workspaceRootPath: string,
+	workspaceId?: string | null,
+) {
 	return queryOptions({
-		queryKey: helmorQueryKeys.workspaceChanges(workspaceRootPath),
-		queryFn: () => listWorkspaceChanges(workspaceRootPath),
+		queryKey: helmorQueryKeys.workspaceChanges(workspaceRootPath, workspaceId),
+		queryFn: () => listWorkspaceChanges(workspaceRootPath, workspaceId),
 		staleTime: CHANGES_STALE_TIME,
 		refetchOnWindowFocus: true,
 		refetchInterval: CHANGES_REFETCH_INTERVAL,

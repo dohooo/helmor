@@ -15,6 +15,8 @@ import {
 	type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { isAbortError, isQueryClosedTransient } from "./abort.js";
+import { ActiveTurnRegistry } from "./active-turn-registry.js";
+import { buildAgentProxyEnv } from "./agent-proxy.js";
 import { loadProjectMcpServers } from "./claude-project-mcp.js";
 import { buildClaudeRichMeta, buildClaudeStoredMeta } from "./context-usage.js";
 import type { SidecarEmitter, UserInputPayload } from "./emitter.js";
@@ -63,8 +65,15 @@ const CONTEXT_USAGE_TIMEOUT_MS = 30_000;
  * Prefers `HELMOR_CLAUDE_CODE_BIN_PATH` (release), then the platform
  * sub-package (dev/test); falls back to the wrapper bin for `--omit=optional`.
  * Mirrors the codex resolver in `codex-app-server-manager.ts`.
+ *
+ * MUST NOT throw: this runs at module load (before the ready signal), and
+ * inside a `bun build --compile` binary `require.resolve` always fails —
+ * if the host didn't pass the env override, an exception here kills the
+ * whole sidecar with "Invalid sidecar ready signal". Returning `undefined`
+ * lets the SDK attempt its own resolution lazily, scoping any failure to
+ * the individual Claude session instead of the entire process.
  */
-function resolveClaudeBinPath(): string {
+function resolveClaudeBinPath(): string | undefined {
 	const override = process.env.HELMOR_CLAUDE_CODE_BIN_PATH;
 	if (override) {
 		return override;
@@ -76,8 +85,16 @@ function resolveClaudeBinPath(): string {
 		const pkgJson = require.resolve(`${platformPkg}/package.json`);
 		return join(dirname(pkgJson), binName);
 	} catch {
+		// Platform sub-package missing — try the wrapper package below.
+	}
+	try {
 		const pkgJson = require.resolve("@anthropic-ai/claude-code/package.json");
 		return join(dirname(pkgJson), "bin", "claude.exe");
+	} catch {
+		logger.info(
+			"Claude Code binary not resolved (no HELMOR_CLAUDE_CODE_BIN_PATH and no resolvable package); deferring to SDK default resolution",
+		);
+		return undefined;
 	}
 }
 
@@ -116,6 +133,17 @@ function mergeQueryEnv(
 	return Object.assign({}, process.env, ...present);
 }
 
+// claude-agent-sdk v0.3.142 changed MCP servers to connect in the
+// BACKGROUND by default: the session starts immediately and a slow server
+// reports `status: "pending"` in the `init` event, so a turn-1 tool call can
+// race a not-yet-connected MCP. Helmor doesn't surface a "MCP loading" state,
+// and the pre-0.3 behavior was to block until MCP servers were ready — so we
+// pin the env flag back to blocking to keep behavior identical across the
+// upgrade. Revisit if/when the UI renders pending-MCP status.
+const MCP_BLOCKING_ENV: Record<string, string> = {
+	MCP_CONNECTION_NONBLOCKING: "0",
+};
+
 interface LiveSession {
 	readonly query: Query;
 	readonly abortController: AbortController;
@@ -138,14 +166,8 @@ interface LiveSession {
 	readonly emitter: SidecarEmitter;
 }
 
-const VALID_PERMISSION_MODES = [
-	"default",
-	"plan",
-	"bypassPermissions",
-	"acceptEdits",
-	"dontAsk",
-	"auto",
-] as const;
+// Helmor models permission as a binary: `plan` (read-only) or full access.
+const VALID_PERMISSION_MODES = ["plan", "bypassPermissions"] as const;
 type ClaudePermissionMode = (typeof VALID_PERMISSION_MODES)[number];
 
 const VALID_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
@@ -190,13 +212,7 @@ interface PermissionResolution {
 }
 
 function parsePermissionMode(value: string | undefined): ClaudePermissionMode {
-	if (
-		value !== undefined &&
-		(VALID_PERMISSION_MODES as readonly string[]).includes(value)
-	) {
-		return value as ClaudePermissionMode;
-	}
-	return "bypassPermissions";
+	return value === "plan" ? "plan" : "bypassPermissions";
 }
 
 function extractSessionPermissionMode(
@@ -301,6 +317,9 @@ async function buildUserMessageWithImages(
 
 export class ClaudeSessionManager implements SessionManager {
 	private readonly sessions = new Map<string, LiveSession>();
+	/** Shared Stop handling: instant `aborted` emit at any point (see
+	 *  ActiveTurnRegistry). Identical across all four providers. */
+	private readonly turns = new ActiveTurnRegistry();
 	private readonly pendingPermissions = new Map<
 		string,
 		(resolution: PermissionResolution) => void
@@ -360,10 +379,16 @@ export class ClaudeSessionManager implements SessionManager {
 			fastMode,
 			claudeThinkingDisplay,
 			claudeEnvironment,
+			agentProxy,
 			images,
 			sourceRepoPath,
 		} = params;
 		const abortController = new AbortController();
+		// Register the turn before any await so a Stop during SDK startup
+		// emits `aborted` instantly + aborts the query.
+		this.turns.begin(sessionId, requestId, emitter, () =>
+			abortController.abort(),
+		);
 		const additionalDirectories = [...(params.additionalDirectories ?? [])];
 		logger.info(`[${requestId}] claude additionalDirectories resolved`, {
 			directories: additionalDirectories,
@@ -388,6 +413,13 @@ export class ClaudeSessionManager implements SessionManager {
 
 		const effectiveFastMode =
 			fastMode === true && modelSupportsFastMode("claude", model);
+		if (fastMode === true) {
+			logger.info(`[${requestId}] fast-mode requested`, {
+				model: model ?? "(none)",
+				supportsFastMode: modelSupportsFastMode("claude", model),
+				effectiveFastMode,
+			});
+		}
 		const claudeEnv =
 			claudeEnvironment && Object.keys(claudeEnvironment).length > 0
 				? claudeEnvironment
@@ -396,7 +428,13 @@ export class ClaudeSessionManager implements SessionManager {
 			additionalDirectories.length > 0
 				? { CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: "1" }
 				: undefined;
-		const queryEnv = mergeQueryEnv(claudeEnv, additionalDirectoryEnv);
+		const proxyEnv = buildAgentProxyEnv(agentProxy);
+		const queryEnv = mergeQueryEnv(
+			proxyEnv,
+			claudeEnv,
+			additionalDirectoryEnv,
+			MCP_BLOCKING_ENV,
+		);
 		const projectMcpServers = loadProjectMcpServers(sourceRepoPath);
 		if (projectMcpServers) {
 			logger.info(`[${requestId}] claude project MCPs injected`, {
@@ -627,17 +665,56 @@ export class ClaudeSessionManager implements SessionManager {
 			},
 		});
 
-		this.sessions.set(sessionId, {
+		const live: LiveSession = {
 			query: q,
 			abortController,
 			promptSource,
 			requestId,
 			emitter,
-		});
+		};
+		this.sessions.set(sessionId, live);
 
 		try {
+			let lastRateLimitInfo: RateLimitOverageInfo | undefined;
+			let fastModeNoticeEmitted = false;
 			for await (const message of q) {
+				// stopSession already emitted the terminal `aborted` and tore the
+				// session down. The new SDK keeps the child alive ~2s after abort,
+				// so the iterator can still drain buffered events — even a natural
+				// `result`. Drop them and return: passing them through or emitting
+				// `end` here would violate the "exactly one terminal event" contract.
+				if (this.turns.isAbortRequested(sessionId)) return;
 				logger.sdkEvent(requestId, message);
+				if (message.type === "rate_limit_event") {
+					lastRateLimitInfo = (
+						message as { rate_limit_info?: RateLimitOverageInfo }
+					).rate_limit_info;
+				}
+				// Surface fast-mode-not-active off the init event (carries
+				// `fast_mode_state` right after send), once — not the terminal
+				// result, which never arrives on an aborted turn.
+				const fms = (message as { fast_mode_state?: FastModeState })
+					.fast_mode_state;
+				if (
+					effectiveFastMode &&
+					!fastModeNoticeEmitted &&
+					fms &&
+					fms !== "on"
+				) {
+					fastModeNoticeEmitted = true;
+					logger.info(`[${requestId}] fast-mode unavailable`, {
+						fastModeState: fms,
+						overageDisabledReason: lastRateLimitInfo?.overageDisabledReason,
+					});
+					emitter.passthrough(requestId, {
+						type: "system",
+						subtype: "fast_mode_unavailable",
+						reason: describeFastModeUnavailable(fms, lastRateLimitInfo),
+						fastModeState: fms,
+						session_id: sessionId,
+						uuid: randomUUID(),
+					});
+				}
 				const passthroughMessage = stripUserInputToolUseFromAssistant(message);
 				if (passthroughMessage) {
 					emitter.passthrough(requestId, passthroughMessage);
@@ -660,10 +737,13 @@ export class ClaudeSessionManager implements SessionManager {
 					return;
 				}
 			}
-			emitter.end(requestId);
+			if (!this.turns.isAbortRequested(sessionId)) emitter.end(requestId);
 		} catch (err) {
 			if (isAbortError(err)) {
-				emitter.aborted(requestId, "user_requested");
+				// stopSession already emitted `aborted` up front (see below) —
+				// don't double-emit when the iterator finally unwinds.
+				if (!this.turns.isAbortRequested(sessionId))
+					emitter.aborted(requestId, "user_requested");
 				return;
 			}
 			throw err;
@@ -684,6 +764,7 @@ export class ClaudeSessionManager implements SessionManager {
 			}
 			promptSource.close();
 			this.sessions.delete(sessionId);
+			this.turns.end(sessionId);
 			// Only cancel waiters belonging to THIS session — `pendingUserInputs`
 			// is manager-wide and other sessions may have parked AUQs / MCP
 			// elicitations on it.
@@ -802,14 +883,15 @@ export class ClaudeSessionManager implements SessionManager {
 			Object.keys(options.claudeEnvironment).length > 0
 				? options.claudeEnvironment
 				: undefined;
-
+		const proxyEnv = buildAgentProxyEnv(options?.agentProxy);
+		const queryEnv = mergeQueryEnv(proxyEnv, claudeEnv);
 		const generateBranch = options?.generateBranch ?? true;
 		const q = query({
 			prompt: buildTitlePrompt(userMessage, branchRenamePrompt, generateBranch),
 			options: {
 				abortController,
 				pathToClaudeCodeExecutable: CLAUDE_BIN_PATH,
-				...(claudeEnv ? { env: claudeEnv } : {}),
+				...(queryEnv ? { env: queryEnv } : {}),
 				model,
 				permissionMode: "bypassPermissions",
 				allowDangerouslySkipPermissions: true,
@@ -1065,6 +1147,8 @@ export class ClaudeSessionManager implements SessionManager {
 				yield* [];
 			})();
 
+		const proxyEnv = buildAgentProxyEnv(params.agentProxy);
+		const queryEnv = mergeQueryEnv(proxyEnv);
 		const q = query({
 			prompt: promptIter,
 			options: {
@@ -1073,6 +1157,7 @@ export class ClaudeSessionManager implements SessionManager {
 				cwd: cwd || undefined,
 				model: model || undefined,
 				...(providerSessionId ? { resume: providerSessionId } : {}),
+				...(queryEnv ? { env: queryEnv } : {}),
 				permissionMode: "bypassPermissions",
 				allowDangerouslySkipPermissions: true,
 				includePartialMessages: false,
@@ -1129,11 +1214,11 @@ export class ClaudeSessionManager implements SessionManager {
 	}
 
 	async stopSession(sessionId: string): Promise<void> {
-		const session = this.sessions.get(sessionId);
-		if (session) {
-			session.abortController.abort();
-			this.sessions.delete(sessionId);
-		}
+		// Instant `aborted` + abort the query (teardown) at any point in the
+		// turn, including SDK startup. The for-await/catch dedupe via the
+		// registry; the finally hard-closes the query in the background.
+		this.turns.requestStop(sessionId);
+		this.sessions.delete(sessionId);
 	}
 
 	async shutdown(): Promise<void> {
@@ -1174,6 +1259,30 @@ function isResultMessage(
  *  so any `result` we see here is genuinely terminal for this turn. */
 function isTerminalResult(message: SDKMessage): boolean {
 	return message.type === "result";
+}
+
+type FastModeState = "off" | "cooldown" | "on";
+
+interface RateLimitOverageInfo {
+	overageStatus?: string;
+	overageDisabledReason?: string;
+	isUsingOverage?: boolean;
+}
+
+// User-facing reason for a non-`on` fast-mode state.
+function describeFastModeUnavailable(
+	state: FastModeState,
+	rateLimit: RateLimitOverageInfo | undefined,
+): string {
+	if (state === "cooldown") {
+		return "Rate limited — fast mode is cooling down and will re-enable automatically.";
+	}
+	if (rateLimit?.overageDisabledReason === "out_of_credits") {
+		return "Fast mode is unavailable — your account is out of extra-usage credits.";
+	}
+	// `off`: extra usage (overage) isn't enabled. Default reason — the init
+	// event reports `off` before the rate-limit event arrives.
+	return "Fast mode isn't active — it runs on extra usage, which isn't enabled for your account.";
 }
 
 function stripUserInputToolUseFromAssistant(

@@ -9,6 +9,7 @@
 //! via `sysctlbyname` (cheap, no shell), and `productVersion` via the
 //! `sw_vers` CLI (no clean sysctl path for it on Apple Silicon).
 
+#[cfg(target_os = "macos")]
 use std::ffi::CString;
 use std::sync::OnceLock;
 
@@ -54,13 +55,41 @@ fn do_detect() -> HardwareSnapshot {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
 fn do_detect() -> HardwareSnapshot {
-    // Helmor only ships on macOS today, but keep the non-macOS branch
-    // compilable so unit tests and future Linux/Windows ports don't
-    // explode. Backend returns a "best-effort unknown" snapshot; the
-    // frontend already handles that gracefully (no recommended badge,
-    // muted "Your Mac" row).
+    use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+
+    let total_bytes = unsafe {
+        let mut status = MEMORYSTATUSEX {
+            dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+            ..Default::default()
+        };
+        if GlobalMemoryStatusEx(&mut status).is_ok() {
+            status.ullTotalPhys
+        } else {
+            0
+        }
+    };
+    let total_gb = bytes_to_rounded_gb(total_bytes);
+    // `PROCESSOR_IDENTIFIER` is always set on Windows (e.g. "Intel64 Family 6
+    // Model 170 Stepping 4, GenuineIntel"). It's coarser than the macOS brand
+    // string but needs no registry/WMI round-trip.
+    let cpu_brand =
+        std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_else(|_| "Unknown CPU".to_string());
+
+    HardwareSnapshot {
+        cpu_brand,
+        total_ram_gb: total_gb,
+        os_label: "Windows".to_string(),
+        arch: arch_label(),
+        recommended_entry_id: recommend_for_ram(total_gb),
+    }
+}
+
+#[cfg(all(not(target_os = "macos"), not(windows)))]
+fn do_detect() -> HardwareSnapshot {
+    // Linux / other: best-effort unknown snapshot. The frontend handles a
+    // zero-RAM, no-recommendation snapshot gracefully.
     HardwareSnapshot {
         cpu_brand: "Unknown CPU".to_string(),
         total_ram_gb: 0,

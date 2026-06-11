@@ -6,6 +6,7 @@
 	"permissions": [
 		"core:default",
 		"core:window:allow-start-dragging",
+		"core:window:allow-close",
 		"core:window:allow-set-badge-count",
 		"core:window:allow-set-badge-label",
 		"core:webview:allow-set-webview-zoom",

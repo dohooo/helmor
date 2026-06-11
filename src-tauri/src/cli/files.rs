@@ -61,8 +61,9 @@ fn resolve_absolute(workspace_root: &Path, path: &str) -> PathBuf {
 }
 
 fn changes(workspace_ref: &str, cli: &Cli) -> Result<()> {
-    let (_, root) = resolve_workspace(workspace_ref)?;
-    let items = editor_files::list_workspace_changes(&root.display().to_string())?;
+    let (id, root) = resolve_workspace(workspace_ref)?;
+    let items =
+        editor_files::list_workspace_changes_for_workspace(&root.display().to_string(), Some(&id))?;
     output::print(cli, &items, |items| format_list(items))
 }
 

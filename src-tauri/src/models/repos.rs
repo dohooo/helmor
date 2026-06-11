@@ -1349,6 +1349,10 @@ pub fn delete_repository_cascade(repo_id: &str) -> Result<()> {
         [repo_id],
     ).context("Failed to delete session messages for repository")?;
     tx.execute(
+        "DELETE FROM session_plan_state WHERE session_id IN (SELECT s.id FROM sessions s JOIN workspaces w ON s.workspace_id = w.id WHERE w.repository_id = ?1)",
+        [repo_id],
+    ).context("Failed to delete session plan state for repository")?;
+    tx.execute(
         "DELETE FROM sessions WHERE workspace_id IN (SELECT id FROM workspaces WHERE repository_id = ?1)",
         [repo_id],
     ).context("Failed to delete sessions for repository")?;
@@ -1425,13 +1429,16 @@ pub fn clone_repository_from_url(
     }
 
     let parent = Path::new(clone_directory.trim());
-    if !parent.exists() {
-        bail!(
-            "Clone location does not exist: {}. Please choose an existing directory.",
-            parent.display()
-        );
-    }
-    if !parent.is_dir() {
+    // Auto-create the clone location when missing so users don't have to mkdir
+    // up front. If the path exists but isn't a directory, that's a real
+    // conflict — keep erroring loudly. Track whether we created it so we can
+    // tear it back down if the clone fails and we'd otherwise leave an empty
+    // shell behind.
+    let parent_created = !parent.exists();
+    if parent_created {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create clone location: {}", parent.display()))?;
+    } else if !parent.is_dir() {
         bail!("Clone location is not a directory: {}", parent.display());
     }
 
@@ -1460,6 +1467,11 @@ pub fn clone_repository_from_url(
         if target_dir.exists() {
             let _ = fs::remove_dir_all(&target_dir);
         }
+        // If we created the parent just for this clone, remove it too so a
+        // failed attempt doesn't leave a stray empty folder on disk.
+        if parent_created && parent.exists() {
+            let _ = fs::remove_dir_all(parent);
+        }
         return Err(error.context("Failed to clone repository"));
     }
 
@@ -1467,9 +1479,13 @@ pub fn clone_repository_from_url(
 }
 
 fn infer_repo_name_from_url(url: &str) -> Option<String> {
-    let trimmed = url.trim().trim_end_matches('/');
+    // Trim either separator: remote URLs use `/`, but a local filesystem path
+    // used as the clone source on Windows uses `\` (e.g. `C:\…\repo`). Splitting
+    // only on `/` and `:` would otherwise treat the entire `\…\repo` tail as the
+    // repo name and corrupt the derived clone target.
+    let trimmed = url.trim().trim_end_matches(['/', '\\']);
     let without_git = trimmed.strip_suffix(".git").unwrap_or(trimmed);
-    let last = without_git.rsplit(['/', ':']).next()?;
+    let last = without_git.rsplit(['/', '\\', ':']).next()?;
     let cleaned = last.trim();
     if cleaned.is_empty() {
         None
@@ -1592,7 +1608,15 @@ fn resolve_git_root_path(folder_path: &str) -> Result<String> {
     )
     .map_err(|error| anyhow::anyhow!("Failed to resolve Git repository root: {error}"))?;
 
-    Ok(root.trim().to_string())
+    let root = root.trim();
+    // git emits forward-slash paths even on Windows (`C:/Users/…`). Run the
+    // result through the same canonicalizer the dedup lookup uses so the stored
+    // `repos.root_path` and every later lookup key are byte-for-byte identical
+    // (no `\\?\` prefix, OS-native separators). On Unix this is the existing
+    // behaviour. Fall back to the raw git output if canonicalize fails (e.g. the
+    // path was deleted between git and this call) so we never regress to bailing.
+    let normalized = normalize_filesystem_path(Path::new(root)).unwrap_or_else(|| root.to_string());
+    Ok(normalized)
 }
 
 // ---- Git remote / branch resolution helpers ----
@@ -1703,10 +1727,39 @@ fn resolve_head_from_ls_remote(repo_root: &Path, remote: &str) -> Result<String>
     bail!("Remote \"{remote}\" did not advertise a HEAD branch")
 }
 
+/// Canonicalize a filesystem path into the single string form used as a repo
+/// identity / dedup key.
+///
+/// We use `dunce::canonicalize` instead of `std::fs::canonicalize` so Windows
+/// does not hand back a verbatim extended-length path (the `\\?\C:\…` /
+/// `\\?\UNC\…` prefix). Those prefixes leak into `repos.root_path` and break
+/// equality: the same logical directory can be stored as `C:\…` (or git's
+/// forward-slash `C:/…`) yet looked up as `\\?\C:\…`, so dedup and the clone
+/// target-exists check silently miss. `dunce` returns the ordinary `C:\…` form
+/// whenever it is valid and only falls back to the verbatim form for paths that
+/// genuinely require it.
+///
+/// On Unix `dunce::canonicalize` is a direct passthrough to
+/// `std::fs::canonicalize`, so the output is byte-for-byte identical to before.
 pub(crate) fn normalize_filesystem_path(path: &Path) -> Option<String> {
-    fs::canonicalize(path)
+    dunce::canonicalize(path)
         .ok()
-        .map(|canonicalized| canonicalized.display().to_string())
+        .map(|canonicalized| normalize_path_separators(canonicalized.display().to_string()))
+}
+
+/// Force OS-native separators on a path string.
+///
+/// Git's `rev-parse --show-toplevel` emits forward slashes even on Windows
+/// (`C:/Users/…`), whereas `dunce::canonicalize` emits backslashes (`C:\Users\…`).
+/// Storing one form and looking up via the other would never compare equal, so
+/// we collapse both onto the platform separator before they become dedup keys.
+/// On Unix `MAIN_SEPARATOR` is `/`, so this is a no-op.
+fn normalize_path_separators(path: String) -> String {
+    if std::path::MAIN_SEPARATOR == '\\' {
+        path.replace('/', "\\")
+    } else {
+        path
+    }
 }
 
 #[cfg(test)]
@@ -2088,5 +2141,41 @@ mod tests {
         // String form never carries stop.
         let single = parse_project_run_actions(Some(&Value::String("npm dev".into())), repo_id);
         assert!(single[0].stop_command.is_none());
+    }
+
+    #[test]
+    fn clone_from_url_creates_missing_parent_directory() {
+        let env = crate::testkit::TestEnv::new("repos-clone-mkdir");
+        let origin = crate::testkit::GitTestRepo::init();
+        let origin_url = origin.path().display().to_string();
+
+        // Nested location that does not exist yet — the old behaviour bailed
+        // here; the new behaviour mkdirs -p.
+        let parent = env.root.join("nested").join("clones");
+        assert!(!parent.exists(), "precondition: target parent missing");
+
+        let response =
+            clone_repository_from_url(&origin_url, &parent.display().to_string()).unwrap();
+
+        assert!(parent.is_dir(), "parent directory was created");
+        assert!(response.created_repository, "new repo row was inserted");
+    }
+
+    #[test]
+    fn clone_from_url_rejects_path_that_is_a_file() {
+        let env = crate::testkit::TestEnv::new("repos-clone-file-conflict");
+        let file_path = env.root.join("not-a-dir");
+        fs::write(&file_path, b"hi").unwrap();
+
+        let err = clone_repository_from_url(
+            "https://example.com/repo.git",
+            &file_path.display().to_string(),
+        )
+        .unwrap_err();
+
+        assert!(
+            format!("{err:#}").contains("is not a directory"),
+            "expected non-directory error, got: {err:#}"
+        );
     }
 }

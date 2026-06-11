@@ -55,6 +55,7 @@ type WorkspacePanelContainerProps = {
 	modelSelections?: Record<string, string>;
 	workspaceChangeRequest?: ChangeRequestInfo | null;
 	onSelectSession: (sessionId: string | null) => void;
+	onSelectWorkspace?: (workspaceId: string) => void;
 	onResolveDisplayedSession: (sessionId: string | null) => void;
 	onQueuePendingPromptForSession?: (request: {
 		sessionId: string;
@@ -87,6 +88,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	modelSelections = {},
 	workspaceChangeRequest = null,
 	onSelectSession,
+	onSelectWorkspace,
 	onResolveDisplayedSession,
 	onQueuePendingPromptForSession,
 	onRequestCloseSession,
@@ -527,6 +529,11 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	const handleSelectSession = useCallback((sessionId: string) => {
 		onSelectSessionRef.current(sessionId);
 	}, []);
+	const onSelectWorkspaceRef = useRef(onSelectWorkspace);
+	onSelectWorkspaceRef.current = onSelectWorkspace;
+	const handleSelectWorkspace = useCallback((workspaceId: string) => {
+		onSelectWorkspaceRef.current?.(workspaceId);
+	}, []);
 	const handleSessionsChanged = useCallback(() => {
 		void invalidateSessionQueries();
 	}, [invalidateSessionQueries]);
@@ -650,6 +657,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			contextPreviewCard={contextPreviewCard}
 			contextPreviewActive={contextPreviewActive}
 			onSelectSession={handleSelectSession}
+			onSelectWorkspace={handleSelectWorkspace}
 			onSelectContextPreview={onSelectContextPreview}
 			onCloseContextPreview={onCloseContextPreview}
 			onPrefetchSession={handlePrefetchSession}

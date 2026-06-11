@@ -1,5 +1,4 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import {
 	Box,
 	CheckCircle2,
@@ -7,15 +6,10 @@ import {
 	SquareArrowOutUpRight,
 	Trash2,
 } from "lucide-react";
-import type { SVGProps } from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
-	DeepSeekIcon,
-	KimiIcon,
-	MinimaxIcon,
-	QwenIcon,
-	XiaomiMiMoIcon,
-	ZhipuIcon,
+	ProviderBrandIcon,
+	type ProviderBrandIconKey,
 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import {
@@ -26,8 +20,13 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { isMac } from "@/lib/platform";
+import { openUrl } from "@/lib/platform-bridge";
 import { helmorQueryKeys } from "@/lib/query-client";
-import type { ClaudeCustomProviderSettings } from "@/lib/settings";
+import type {
+	AgentProxySettings,
+	ClaudeCustomProviderSettings,
+} from "@/lib/settings";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { SettingsRow } from "../components/settings-row";
@@ -44,6 +43,79 @@ type Draft = {
 	apiKey: string;
 	models: string;
 };
+
+const AGENT_PROXY_MODES: Array<{
+	value: AgentProxySettings["mode"];
+	label: string;
+}> = [
+	{ value: "none", label: "Not set" },
+	{ value: "system", label: "System proxy" },
+	{ value: "custom", label: "Custom proxy" },
+];
+
+export function AgentProxyPanel() {
+	const { settings, updateSettings } = useSettings();
+	const value = settings.agentProxy;
+	const selected =
+		AGENT_PROXY_MODES.find((option) => option.value === value.mode) ??
+		AGENT_PROXY_MODES[0];
+	if (!isMac()) return null;
+
+	function updateProxy(patch: Partial<AgentProxySettings>) {
+		void updateSettings({
+			agentProxy: {
+				...value,
+				...patch,
+			},
+		});
+	}
+
+	return (
+		<SettingsRow
+			title="Proxy"
+			description="Routes all provider traffic — Claude Code, Codex, OpenCode, and Cursor."
+			align="start"
+			className="gap-8"
+		>
+			<div className="flex w-[360px] flex-col gap-2">
+				<DropdownMenu>
+					<DropdownMenuTrigger
+						className={cn(
+							"flex h-8 cursor-pointer items-center justify-between rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
+						)}
+					>
+						<span>{selected.label}</span>
+						<ChevronDown className="size-3 opacity-40" />
+					</DropdownMenuTrigger>
+					<DropdownMenuContent align="end" sideOffset={4} className="w-40">
+						{AGENT_PROXY_MODES.map((option) => (
+							<DropdownMenuItem
+								key={option.value}
+								onClick={() => updateProxy({ mode: option.value })}
+								className="justify-between gap-2"
+							>
+								<span>{option.label}</span>
+								<CheckCircle2
+									className={cn(
+										"size-3.5 shrink-0 text-emerald-500",
+										option.value !== value.mode && "invisible",
+									)}
+								/>
+							</DropdownMenuItem>
+						))}
+					</DropdownMenuContent>
+				</DropdownMenu>
+				<Input
+					value={value.customUrl}
+					onChange={(event) => updateProxy({ customUrl: event.target.value })}
+					placeholder="http://127.0.0.1:7890"
+					disabled={value.mode !== "custom"}
+					className="h-8 border-border/50 bg-muted/20 text-[13px]"
+				/>
+			</div>
+		</SettingsRow>
+	);
+}
 
 export function ClaudeCustomProvidersPanel() {
 	const queryClient = useQueryClient();
@@ -121,99 +193,92 @@ export function ClaudeCustomProvidersPanel() {
 		kind === "custom" ? null : findBuiltinClaudeProvider(kind);
 
 	return (
-		<SettingsRow
-			title="Claude Code custom providers"
-			description="Enter API keys here to use third-party models. They can be used alongside Claude Code's official models."
-			align="start"
-			className="gap-8"
-		>
-			<div className="flex w-[360px] flex-col gap-3">
-				<div className="grid gap-2">
-					<ProviderPicker
-						kind={kind}
-						configuredKinds={new Set(configuredItems.map((item) => item.kind))}
-						onChange={setKind}
-					/>
+		<div className="flex w-full flex-col gap-3">
+			<div className="grid gap-2">
+				<ProviderPicker
+					kind={kind}
+					configuredKinds={new Set(configuredItems.map((item) => item.kind))}
+					onChange={setKind}
+				/>
 
-					{builtinProvider ? (
-						<div className="flex items-center gap-2">
-							<Input
-								type="password"
-								value={draft.apiKey}
-								onBlur={saveDraftIfComplete}
-								onChange={(event) =>
-									setDraft((current) => ({
-										...current,
-										apiKey: event.target.value,
-									}))
-								}
-								placeholder={`${builtinProvider.label} API key`}
-								className="h-8 min-w-0 flex-1 border-border/50 bg-muted/20 text-ui"
-							/>
-							{!draft.apiKey && (
-								<Button
-									type="button"
-									variant="outline"
-									size="sm"
-									aria-label={`Get ${builtinProvider.label} API key`}
-									onClick={() => void openUrl(builtinProvider.apiKeyUrl)}
-								>
-									Get your API key
-									<SquareArrowOutUpRight className="size-3.5" />
-								</Button>
-							)}
-						</div>
-					) : (
-						<div className="grid gap-2">
-							<Input
-								value={draft.baseUrl}
-								onBlur={saveDraftIfComplete}
-								onChange={(event) =>
-									setDraft((current) => ({
-										...current,
-										baseUrl: event.target.value,
-									}))
-								}
-								placeholder="Base URL"
-								className="h-8 border-border/50 bg-muted/20 text-ui"
-							/>
-							<Input
-								type="password"
-								value={draft.apiKey}
-								onBlur={saveDraftIfComplete}
-								onChange={(event) =>
-									setDraft((current) => ({
-										...current,
-										apiKey: event.target.value,
-									}))
-								}
-								placeholder="API key"
-								className="h-8 border-border/50 bg-muted/20 text-ui"
-							/>
-							<Textarea
-								value={draft.models}
-								onBlur={saveDraftIfComplete}
-								onChange={(event) =>
-									setDraft((current) => ({
-										...current,
-										models: event.target.value,
-									}))
-								}
-								placeholder={`model-a
+				{builtinProvider ? (
+					<div className="flex items-center gap-2">
+						<Input
+							type="password"
+							value={draft.apiKey}
+							onBlur={saveDraftIfComplete}
+							onChange={(event) =>
+								setDraft((current) => ({
+									...current,
+									apiKey: event.target.value,
+								}))
+							}
+							placeholder={`${builtinProvider.label} API key`}
+							className="h-8 min-w-0 flex-1 border-border/50 bg-muted/20 text-ui"
+						/>
+						{!draft.apiKey && (
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								aria-label={`Get ${builtinProvider.label} API key`}
+								onClick={() => void openUrl(builtinProvider.apiKeyUrl)}
+							>
+								Get your API key
+								<SquareArrowOutUpRight className="size-3.5" />
+							</Button>
+						)}
+					</div>
+				) : (
+					<div className="grid gap-2">
+						<Input
+							value={draft.baseUrl}
+							onBlur={saveDraftIfComplete}
+							onChange={(event) =>
+								setDraft((current) => ({
+									...current,
+									baseUrl: event.target.value,
+								}))
+							}
+							placeholder="Base URL"
+							className="h-8 border-border/50 bg-muted/20 text-ui"
+						/>
+						<Input
+							type="password"
+							value={draft.apiKey}
+							onBlur={saveDraftIfComplete}
+							onChange={(event) =>
+								setDraft((current) => ({
+									...current,
+									apiKey: event.target.value,
+								}))
+							}
+							placeholder="API key"
+							className="h-8 border-border/50 bg-muted/20 text-ui"
+						/>
+						<Textarea
+							value={draft.models}
+							onBlur={saveDraftIfComplete}
+							onChange={(event) =>
+								setDraft((current) => ({
+									...current,
+									models: event.target.value,
+								}))
+							}
+							placeholder={`model-a
 model-b
 model-c`}
-								className="h-20 resize-none overflow-y-auto border-border/50 bg-muted/20 text-ui"
-							/>
-						</div>
-					)}
-				</div>
-
-				<ConfiguredProvidersList
-					items={configuredItems}
-					onRemove={removeProvider}
-				/>
+							className="h-20 resize-none overflow-y-auto border-border/50 bg-muted/20 text-ui"
+						/>
+					</div>
+				)}
 			</div>
-		</SettingsRow>
+
+			<ConfiguredProvidersList
+				items={configuredItems}
+				onRemove={removeProvider}
+			/>
+		</div>
 	);
 }
 function ProviderPicker({
@@ -237,10 +302,7 @@ function ProviderPicker({
 			>
 				<span className="flex min-w-0 items-center gap-2">
 					{builtinProvider ? (
-						<BuiltinProviderIcon
-							icon={builtinProvider.icon}
-							className="size-4"
-						/>
+						<ProviderBrandIcon icon={builtinProvider.icon} className="size-4" />
 					) : (
 						<Box className="size-4 text-muted-foreground" />
 					)}
@@ -256,7 +318,7 @@ function ProviderPicker({
 						className="flex items-center justify-between gap-3"
 					>
 						<span className="flex items-center gap-2">
-							<BuiltinProviderIcon icon={provider.icon} className="size-4" />
+							<ProviderBrandIcon icon={provider.icon} className="size-4" />
 							{provider.label}
 						</span>
 						{configuredKinds.has(provider.key) ? (
@@ -307,7 +369,10 @@ function ConfiguredProvidersList({
 					)}
 				>
 					<div className="flex size-4 shrink-0 items-center justify-center">
-						<ProviderIcon item={item} className="size-4" />
+						<ProviderBrandIcon
+							icon={item.icon ?? "generic"}
+							className="size-4"
+						/>
 					</div>
 					<div className="min-w-0 flex-1 truncate text-ui font-medium text-foreground">
 						{item.label}
@@ -334,7 +399,7 @@ function ConfiguredProvidersList({
 type ConfiguredItem = {
 	kind: ProviderKind;
 	label: string;
-	icon?: "minimax" | "moonshot" | "deepseek" | "zhipu" | "qwen" | "xiaomi";
+	icon?: ProviderBrandIconKey;
 	keyPreview: string;
 };
 
@@ -411,40 +476,4 @@ function maskSecret(value: string): string {
 	const trimmed = value.trim();
 	if (trimmed.length <= 8) return "••••";
 	return `${trimmed.slice(0, 4)}••••${trimmed.slice(-4)}`;
-}
-
-function ProviderIcon({
-	item,
-	className,
-}: {
-	item: ConfiguredItem;
-	className?: string;
-}) {
-	if (item.icon)
-		return <BuiltinProviderIcon icon={item.icon} className={className} />;
-	return <Box className={cn("text-muted-foreground", className)} />;
-}
-
-function BuiltinProviderIcon({
-	icon,
-	className,
-}: {
-	icon: "minimax" | "moonshot" | "deepseek" | "zhipu" | "qwen" | "xiaomi";
-	className?: string;
-}) {
-	const props: SVGProps<SVGSVGElement> = { className };
-	switch (icon) {
-		case "moonshot":
-			return <KimiIcon {...props} />;
-		case "deepseek":
-			return <DeepSeekIcon {...props} />;
-		case "zhipu":
-			return <ZhipuIcon {...props} />;
-		case "qwen":
-			return <QwenIcon {...props} />;
-		case "xiaomi":
-			return <XiaomiMiMoIcon {...props} />;
-		default:
-			return <MinimaxIcon {...props} />;
-	}
 }

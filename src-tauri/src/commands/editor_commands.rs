@@ -36,8 +36,15 @@ pub async fn list_workspace_files(
 #[tauri::command]
 pub async fn list_workspace_changes(
     workspace_root_path: String,
+    workspace_id: Option<String>,
 ) -> CmdResult<Vec<editor_files::EditorFileListItem>> {
-    run_blocking(move || editor_files::list_workspace_changes(&workspace_root_path)).await
+    run_blocking(move || {
+        editor_files::list_workspace_changes_for_workspace(
+            &workspace_root_path,
+            workspace_id.as_deref(),
+        )
+    })
+    .await
 }
 
 #[tauri::command]

@@ -4,6 +4,7 @@
  * missing or wrong-shaped field.
  */
 
+import type { AgentProxySettings } from "./agent-proxy.js";
 import type {
 	GetContextUsageParams,
 	ListSlashCommandsParams,
@@ -83,7 +84,12 @@ export function optionalObject(
 }
 
 export function parseProvider(value: unknown): Provider {
-	if (value === "claude" || value === "codex" || value === "cursor")
+	if (
+		value === "claude" ||
+		value === "codex" ||
+		value === "cursor" ||
+		value === "opencode"
+	)
 		return value;
 	throw new Error(`unknown provider: ${String(value)}`);
 }
@@ -104,6 +110,7 @@ export function parseSendMessageParams(
 			params.claudeThinkingDisplay,
 		),
 		claudeEnvironment: parseOptionalStringRecord(params, "claudeEnvironment"),
+		agentProxy: parseAgentProxySettings(params, "agentProxy"),
 		additionalDirectories: parseOptionalStringArray(
 			params,
 			"additionalDirectories",
@@ -115,6 +122,29 @@ export function parseSendMessageParams(
 		// list is the single source of truth (see `parseImageRefs`).
 		images: parseOptionalStringArray(params, "images") ?? [],
 	};
+}
+
+export function parseAgentProxySettings(
+	params: Record<string, unknown>,
+	key: string,
+): AgentProxySettings | undefined {
+	const value = params[key];
+	if (value === undefined || value === null) return undefined;
+	if (typeof value !== "object" || Array.isArray(value)) {
+		throw new Error(`params.${key} must be an object`);
+	}
+	const mode = (value as Record<string, unknown>).mode;
+	if (mode === "system") {
+		return { mode };
+	}
+	if (mode === "custom") {
+		const customUrl = (value as Record<string, unknown>).customUrl;
+		if (typeof customUrl !== "string" || !customUrl.trim()) {
+			throw new Error(`params.${key}.customUrl must be a non-empty string`);
+		}
+		return { mode, customUrl: customUrl.trim() };
+	}
+	throw new Error(`params.${key}.mode must be system or custom`);
 }
 
 export function parseOptionalStringRecord(
@@ -176,6 +206,7 @@ export function parseGetContextUsageParams(
 		providerSessionId: optionalString(params, "providerSessionId") ?? null,
 		model: requireString(params, "model"),
 		cwd: optionalString(params, "cwd"),
+		agentProxy: parseAgentProxySettings(params, "agentProxy"),
 	};
 }
 

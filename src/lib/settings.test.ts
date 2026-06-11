@@ -211,6 +211,42 @@ describe("settings", () => {
 		);
 	});
 
+	it("hydrates and saves agent proxy settings", async () => {
+		invokeMock.mockResolvedValue({
+			"app.agent_proxy": JSON.stringify({
+				mode: "custom",
+				customUrl: "http://127.0.0.1:7890",
+			}),
+		});
+
+		const settings = await loadSettings();
+
+		expect(settings.agentProxy).toEqual({
+			mode: "custom",
+			customUrl: "http://127.0.0.1:7890",
+		});
+
+		invokeMock.mockResolvedValue(undefined);
+		await saveSettings({
+			agentProxy: {
+				mode: "system",
+				customUrl: "",
+			},
+		});
+
+		expect(invokeMock).toHaveBeenLastCalledWith(
+			"update_app_settings",
+			expect.objectContaining({
+				settingsMap: expect.objectContaining({
+					"app.agent_proxy": JSON.stringify({
+						mode: "system",
+						customUrl: "",
+					}),
+				}),
+			}),
+		);
+	});
+
 	it("readRepoPreference returns record entry, falls back, and tolerates missing repoId", () => {
 		const record = { "repo-1": "local" as const };
 		expect(readRepoPreference(record, "repo-1", "worktree")).toBe("local");
@@ -349,5 +385,52 @@ describe("settings", () => {
 		expect(settings.defaultModelId).toBe("gpt-5.5");
 		expect(settings.reviewModelId).toBe("default");
 		expect(settings.prModelId).toBe("default");
+	});
+
+	it("flags an opencode cache without cacheVersion as stale (→ migration)", async () => {
+		invokeMock.mockResolvedValue({
+			"app.opencode_provider": JSON.stringify({
+				status: "ready",
+				connected: ["openai"],
+				cachedModels: [{ slug: "openai/gpt-5.5", label: "OpenAI · GPT-5.5" }],
+				enabledModelIds: ["openai/gpt-5.5"],
+			}),
+		});
+
+		const settings = await loadSettings();
+
+		expect(settings.opencodeProvider.cacheVersion).toBe(0);
+		expect(
+			settings.opencodeProvider.cachedModels?.[0]?.effortLevels,
+		).toBeUndefined();
+	});
+
+	it("parses a current opencode cache with cacheVersion + effortLevels", async () => {
+		invokeMock.mockResolvedValue({
+			"app.opencode_provider": JSON.stringify({
+				status: "ready",
+				connected: ["openai"],
+				cachedModels: [
+					{
+						slug: "openai/gpt-5.5",
+						label: "OpenAI · GPT-5.5",
+						effortLevels: ["none", "low", "medium", "high", "xhigh"],
+					},
+				],
+				enabledModelIds: ["openai/gpt-5.5"],
+				cacheVersion: 1,
+			}),
+		});
+
+		const settings = await loadSettings();
+
+		expect(settings.opencodeProvider.cacheVersion).toBe(1);
+		expect(settings.opencodeProvider.cachedModels?.[0]?.effortLevels).toEqual([
+			"none",
+			"low",
+			"medium",
+			"high",
+			"xhigh",
+		]);
 	});
 });

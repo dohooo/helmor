@@ -1,4 +1,3 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { Loader2, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -10,6 +9,7 @@ import {
 	installDownloadedAppUpdate,
 	listenAppUpdateStatus,
 } from "@/lib/api";
+import { openUrl } from "@/lib/platform-bridge";
 import { SettingsNotice, SettingsRow } from "../components/settings-row";
 
 function formatStatusDescription(status: AppUpdateStatus): string {
@@ -92,6 +92,14 @@ export function AppUpdatesPanel() {
 		void listenAppUpdateStatus((nextStatus) => {
 			if (mounted) setStatus(nextStatus);
 		}).then((unlisten) => {
+			// If the panel unmounted before listen() resolved, the cleanup
+			// below already ran with cleanup still undefined, so detach this
+			// unlisten now instead of leaking a backend listener. Mirrors
+			// use-ui-sync-bridge.ts.
+			if (!mounted) {
+				unlisten();
+				return;
+			}
 			cleanup = unlisten;
 		});
 

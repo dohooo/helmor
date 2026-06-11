@@ -1,0 +1,11 @@
+{"type":"opencode/session_init","session_id":"ses_1","model":"anthropic/claude-sonnet-4-6"}
+{"type":"opencode/message.updated","session_id":"ses_1","info":{"id":"mu","role":"user"}}
+{"type":"opencode/message.part.updated","session_id":"ses_1","part":{"type":"text","text":"summarize the repository","messageID":"mu","id":"pu"}}
+{"type":"opencode/session.status","session_id":"ses_1","status":{"type":"busy"}}
+{"type":"opencode/message.updated","session_id":"ses_1","info":{"id":"ma","role":"assistant","model":{"providerID":"anthropic","modelID":"claude-sonnet-4-6"}}}
+{"type":"opencode/message.part.updated","session_id":"ses_1","part":{"type":"compaction","auto":true,"messageID":"ma","id":"pc1"}}
+{"type":"opencode/message.part.updated","session_id":"ses_1","part":{"type":"retry","attempt":2,"message":"provider rate limited, retrying","messageID":"ma","id":"pr1"}}
+{"type":"opencode/message.part.updated","session_id":"ses_1","part":{"type":"text","text":"Done — this is a Tauri desktop app.","messageID":"ma","id":"pt1"}}
+{"type":"opencode/message.part.updated","session_id":"ses_1","part":{"type":"step-finish","messageID":"ma","id":"sf1","tokens":{"input":1200,"output":40,"reasoning":0,"cache":{"read":800,"write":0}}}}
+{"type":"opencode/session.idle","session_id":"ses_1"}
+{"id":"req","type":"end"}

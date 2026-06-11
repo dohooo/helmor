@@ -1,7 +1,12 @@
-use super::support::GitRepoHarness;
+use std::{fs, path::Path};
+
+use crate::{git_ops, workspace::agent_contexts::ensure_agent_contexts_in_worktree};
+
+use super::{list_workspace_changes, support::GitRepoHarness};
 
 #[test]
 fn classification_unstaged_modification() {
+    let _env = crate::testkit::TestEnv::new("classification-unstaged-modification");
     let repo = GitRepoHarness::new();
 
     repo.write_file("src/app.ts", "const v1 = true;\n");
@@ -20,6 +25,7 @@ fn classification_unstaged_modification() {
 
 #[test]
 fn classification_staged_modification() {
+    let _env = crate::testkit::TestEnv::new("classification-staged-modification");
     let repo = GitRepoHarness::new();
 
     repo.write_file("src/app.ts", "const v1 = true;\n");
@@ -42,6 +48,7 @@ fn classification_staged_modification() {
 
 #[test]
 fn classification_untracked_file() {
+    let _env = crate::testkit::TestEnv::new("classification-untracked-file");
     let repo = GitRepoHarness::new();
 
     repo.write_file("new-file.txt", "hello\n");
@@ -63,7 +70,70 @@ fn classification_untracked_file() {
 }
 
 #[test]
+fn agent_contexts_is_ignored_in_real_git_worktree_changes() {
+    let _env = crate::testkit::TestEnv::new("agent-contexts-is-ignored-in-real-git-wo");
+    let repo = GitRepoHarness::new();
+    let worktree_parent = tempfile::tempdir().unwrap();
+    let worktree_dir = worktree_parent.path().join("workspace");
+    let worktree_arg = worktree_dir.display().to_string();
+
+    git_ops::run_git(
+        [
+            "worktree",
+            "add",
+            "-b",
+            "feature/agent-contexts-ignore",
+            worktree_arg.as_str(),
+            "main",
+        ],
+        Some(Path::new(repo.path_str())),
+    )
+    .unwrap();
+    assert!(
+        worktree_dir.join(".git").is_file(),
+        "test must cover a real linked worktree"
+    );
+
+    ensure_agent_contexts_in_worktree(&worktree_dir).unwrap();
+    fs::write(worktree_dir.join(".agent-contexts/note.md"), "note\n").unwrap();
+    fs::write(worktree_dir.join("visible.txt"), "visible\n").unwrap();
+
+    let ignored = git_ops::run_git(
+        ["check-ignore", ".agent-contexts/note.md"],
+        Some(&worktree_dir),
+    );
+    assert!(ignored.is_ok(), "Git itself should ignore .agent-contexts");
+
+    let untracked = git_ops::run_git(
+        ["ls-files", "--others", "--exclude-standard"],
+        Some(&worktree_dir),
+    )
+    .unwrap();
+    assert!(
+        untracked.contains("visible.txt"),
+        "positive control should be untracked: {untracked:?}"
+    );
+    assert!(
+        !untracked.contains(".agent-contexts/"),
+        ".agent-contexts should be excluded by git: {untracked:?}"
+    );
+
+    let items = list_workspace_changes(worktree_dir.to_str().unwrap()).unwrap();
+    assert!(
+        items.iter().any(|item| item.path == "visible.txt"),
+        "positive control should appear in Changes: {items:?}"
+    );
+    assert!(
+        items
+            .iter()
+            .all(|item| !item.path.starts_with(".agent-contexts/")),
+        ".agent-contexts files must not appear in Changes: {items:?}"
+    );
+}
+
+#[test]
 fn classification_staged_new_file() {
+    let _env = crate::testkit::TestEnv::new("classification-staged-new-file");
     let repo = GitRepoHarness::new();
 
     repo.write_file("new-file.txt", "hello\n");
@@ -83,6 +153,7 @@ fn classification_staged_new_file() {
 
 #[test]
 fn classification_committed_on_branch() {
+    let _env = crate::testkit::TestEnv::new("classification-committed-on-branch");
     let repo = GitRepoHarness::new();
 
     repo.write_file("feature.ts", "export const feature = true;\n");
@@ -107,6 +178,7 @@ fn classification_committed_on_branch() {
 
 #[test]
 fn classification_both_staged_and_unstaged() {
+    let _env = crate::testkit::TestEnv::new("classification-both-staged-and-unstaged");
     let repo = GitRepoHarness::new();
 
     repo.write_file("mixed.ts", "v1\n");
@@ -131,6 +203,7 @@ fn classification_both_staged_and_unstaged() {
 
 #[test]
 fn classification_after_commit_changes_clear() {
+    let _env = crate::testkit::TestEnv::new("classification-after-commit-changes-clea");
     let repo = GitRepoHarness::new();
 
     repo.write_file("done.ts", "done\n");
@@ -154,6 +227,7 @@ fn classification_after_commit_changes_clear() {
 
 #[test]
 fn classification_no_changes_empty_result() {
+    let _env = crate::testkit::TestEnv::new("classification-no-changes-empty-result");
     let repo = GitRepoHarness::new();
 
     let items = repo.changes();
@@ -165,6 +239,7 @@ fn classification_no_changes_empty_result() {
 
 #[test]
 fn classification_discard_removes_from_changes() {
+    let _env = crate::testkit::TestEnv::new("classification-discard-removes-from-chan");
     let repo = GitRepoHarness::new();
 
     repo.write_file("README.md", "modified\n");
@@ -187,6 +262,7 @@ fn classification_discard_removes_from_changes() {
 
 #[test]
 fn line_counts_unstaged_only() {
+    let _env = crate::testkit::TestEnv::new("line-counts-unstaged-only");
     let repo = GitRepoHarness::new();
     repo.write_file("app.ts", "line1\nline2\nline3\n");
     repo.git(&["add", "app.ts"]);
@@ -203,6 +279,7 @@ fn line_counts_unstaged_only() {
 
 #[test]
 fn line_counts_staged_and_unstaged_kept_separate() {
+    let _env = crate::testkit::TestEnv::new("line-counts-staged-and-unstaged-kept-sep");
     let repo = GitRepoHarness::new();
     repo.write_file("app.ts", "v1\n");
     repo.git(&["add", "app.ts"]);
@@ -223,6 +300,7 @@ fn line_counts_staged_and_unstaged_kept_separate() {
 
 #[test]
 fn line_counts_committed_and_unstaged_kept_separate() {
+    let _env = crate::testkit::TestEnv::new("line-counts-committed-and-unstaged-kept-");
     let repo = GitRepoHarness::new();
     // 5 lines committed on the branch (relative to main).
     repo.write_file("feature.ts", "a\nb\nc\nd\ne\n");
@@ -243,6 +321,7 @@ fn line_counts_committed_and_unstaged_kept_separate() {
 
 #[test]
 fn line_counts_untracked_file_reports_unstaged_lines() {
+    let _env = crate::testkit::TestEnv::new("line-counts-untracked-file-reports-unsta");
     let repo = GitRepoHarness::new();
     // Brand-new file, nothing staged. Without explicit handling these
     // would all be zero (numstat doesn't see untracked).
@@ -258,6 +337,7 @@ fn line_counts_untracked_file_reports_unstaged_lines() {
 
 #[test]
 fn line_counts_untracked_no_trailing_newline_still_counts_last_line() {
+    let _env = crate::testkit::TestEnv::new("line-counts-untracked-no-trailing-newlin");
     let repo = GitRepoHarness::new();
     repo.write_file("oneliner.txt", "no newline at end");
 
@@ -267,6 +347,7 @@ fn line_counts_untracked_no_trailing_newline_still_counts_last_line() {
 
 #[test]
 fn line_counts_binary_file_marked_and_zeroed() {
+    let _env = crate::testkit::TestEnv::new("line-counts-binary-file-marked-and-zeroe");
     let repo = GitRepoHarness::new();
     // Bytes that aren't valid UTF-8 — both git numstat and our untracked
     // line counter should classify this as binary.

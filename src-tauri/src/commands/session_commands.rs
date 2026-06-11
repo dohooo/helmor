@@ -39,6 +39,7 @@ pub async fn list_session_thread_messages(
 
 /// `seed_session_id`: see `sessions::CreateSessionOverrides::seed_session_id` —
 /// frontend-provided UUID used as the new `sessions.id` when present.
+#[allow(clippy::too_many_arguments)] // Tauri IPC command — args mirror the frontend call.
 #[tauri::command]
 pub async fn create_session(
     workspace_id: String,
@@ -48,6 +49,8 @@ pub async fn create_session(
     effort_level: Option<String>,
     fast_mode: Option<bool>,
     seed_session_id: Option<String>,
+    session_kind: Option<String>,
+    agent_type: Option<String>,
 ) -> CmdResult<sessions::CreateSessionResponse> {
     run_blocking(move || {
         sessions::create_session(
@@ -59,6 +62,8 @@ pub async fn create_session(
                 effort_level: effort_level.as_deref(),
                 fast_mode,
                 seed_session_id: seed_session_id.as_deref(),
+                session_kind: session_kind.as_deref(),
+                agent_type: agent_type.as_deref(),
             },
         )
     })
@@ -121,6 +126,20 @@ pub async fn set_session_context_usage(
 #[tauri::command]
 pub async fn get_session_codex_goal(session_id: String) -> CmdResult<Option<String>> {
     run_blocking(move || sessions::get_session_codex_goal(&session_id)).await
+}
+
+/// Latest normalised plan projection for `session_id`. Backed by
+/// `session_plan_state`; populated by the streaming bridge when
+/// Codex emits `turn/plan/updated` or Claude emits `ExitPlanMode`.
+/// `Ok(None)` means the session has never carried a plan (or the
+/// stored row failed validation — the loader logs and returns
+/// `None` instead of bubbling the error so the pinned-plan UI can
+/// degrade gracefully).
+#[tauri::command]
+pub async fn get_session_plan_state(
+    session_id: String,
+) -> CmdResult<Option<crate::agents::session_plan::SessionPlanState>> {
+    run_blocking(move || crate::agents::session_plan::load_session_plan_state(&session_id)).await
 }
 
 /// Out-of-band Codex `/goal` lifecycle control. The banner buttons

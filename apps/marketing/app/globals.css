@@ -156,7 +156,8 @@ html {
 body {
 	font-size: 13px;
 	line-height: 1.5;
-	min-height: 100vh;
+	/* dvh tracks mobile browser chrome (address/nav bars); == vh on desktop. */
+	min-height: 100dvh;
 }
 a {
 	color: inherit;

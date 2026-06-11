@@ -11,15 +11,19 @@
 import { createInterface } from "node:readline";
 import type { PermissionUpdate } from "@anthropic-ai/claude-agent-sdk";
 import { isAbortError } from "./abort.js";
+import { applyAgentProxyToProcessEnv } from "./agent-proxy.js";
 import { ClaudeSessionManager } from "./claude-session-manager.js";
 import { CodexAppServerManager } from "./codex-app-server-manager.js";
 import { CursorSessionManager } from "./cursor-session-manager.js";
 import { createSidecarEmitter } from "./emitter.js";
+import { resolveHostResponse, setHostWriter } from "./host-bridge.js";
 import { errorDetails, logger } from "./logger.js";
+import { OpencodeSessionManager } from "./opencode-session-manager.js";
 import {
 	errorMessage,
 	optionalObject,
 	optionalString,
+	parseAgentProxySettings,
 	parseGetContextUsageParams,
 	parseListSlashCommandsParams,
 	parseOptionalStringRecord,
@@ -39,14 +43,17 @@ import {
 	TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
 	TITLE_GENERATION_TIMEOUT_MS,
 } from "./title.js";
+import { handleRunTriageTick, handleStopTriageTick } from "./triage/index.js";
 
 const claudeManager = new ClaudeSessionManager();
 const codexManager = new CodexAppServerManager();
 const cursorManager = new CursorSessionManager();
+const opencodeManager = new OpencodeSessionManager();
 const managers: Record<Provider, SessionManager> = {
 	claude: claudeManager,
 	codex: codexManager,
 	cursor: cursorManager,
+	opencode: opencodeManager,
 };
 
 // `parentGone` flips to true only when stdin EOFs — that's the
@@ -79,9 +86,12 @@ function handleStdioError(stream: "stdout" | "stderr") {
 process.stdout.on("error", handleStdioError("stdout"));
 process.stderr.on("error", handleStdioError("stderr"));
 
-const emitter = createSidecarEmitter((event) => {
+const writeStdoutEvent = (event: object): void => {
 	process.stdout.write(`${JSON.stringify(event)}\n`);
-});
+};
+const emitter = createSidecarEmitter(writeStdoutEvent);
+// Wire reverse IPC so triage providers can `callHost(...)` into Rust.
+setHostWriter(writeStdoutEvent);
 
 // ---------------------------------------------------------------------------
 // Heartbeat — emit a lightweight keepalive every 15s for every in-flight
@@ -179,6 +189,12 @@ function collectErrorChainCodes(err: Error): string[] {
 	return codes;
 }
 
+function buildTitleProviderOrder(provider: Provider | null): Provider[] {
+	if (provider === "codex") return ["codex", "claude", "cursor"];
+	if (provider === "cursor") return ["cursor", "claude", "codex"];
+	return ["claude", "codex", "cursor"];
+}
+
 logger.info("Sidecar starting", { pid: process.pid });
 emitter.ready(1);
 
@@ -198,6 +214,7 @@ async function handleSendMessage(
 	try {
 		const provider = parseProvider(params.provider);
 		const sendParams = parseSendMessageParams(params);
+		applyAgentProxyToProcessEnv(sendParams.agentProxy);
 		logger.debug(`[${id}] sendMessage`, {
 			prompt: sendParams.prompt?.slice(0, 100),
 			model: sendParams.model ?? "(default)",
@@ -233,77 +250,80 @@ async function handleGenerateTitle(
 				? params.branchRenamePrompt
 				: null;
 		const claudeModel = optionalString(params, "claudeModel");
+		const provider =
+			typeof params.provider === "string" &&
+			(params.provider === "claude" ||
+				params.provider === "codex" ||
+				params.provider === "cursor")
+				? params.provider
+				: null;
 		const claudeEnvironment = parseOptionalStringRecord(
 			params,
 			"claudeEnvironment",
 		);
+		const agentProxy = parseAgentProxySettings(params, "agentProxy");
 		// Default true so older clients without the field keep getting both
 		// title and branch. Pass `false` to skip the branch slug entirely.
 		const generateBranch =
 			typeof params.generateBranch === "boolean" ? params.generateBranch : true;
 		logger.debug(`[${id}] generateTitle`, {
 			userMessage: userMessage.slice(0, 100),
+			provider: provider ?? "default",
 			claudeModel: claudeModel ?? "haiku",
 			customClaudeEnvironment: Boolean(claudeEnvironment),
 			generateBranch,
 		});
 
-		// Try the configured Claude-compatible model first when available;
-		// otherwise use official Claude, then fall back to Codex, then
-		// fall back to Cursor. The chain order is by ascending cost-of-
-		// last-resort: Claude/Codex pay nothing per-call (their CLI
-		// auth covers it), Cursor inference is metered against the
-		// user's plan, so it stays at the end.
-		try {
-			await managers.claude.generateTitle(
-				id,
-				userMessage,
-				branchRenamePrompt,
-				emitter,
-				TITLE_GENERATION_TIMEOUT_MS,
-				{ model: claudeModel, claudeEnvironment, generateBranch },
-			);
-			logger.debug(`[${id}] generateTitle completed (claude)`);
-		} catch (claudeErr) {
-			if (claudeModel || claudeEnvironment) {
-				logger.debug(
-					`[${id}] generateTitle custom claude failed, trying official claude: ${errorMessage(claudeErr)}`,
-				);
-				try {
-					await managers.claude.generateTitle(
+		const order = buildTitleProviderOrder(provider);
+		let lastError: unknown = null;
+
+		for (const titleProvider of order) {
+			try {
+				if (titleProvider === "claude") {
+					try {
+						await managers.claude.generateTitle(
+							id,
+							userMessage,
+							branchRenamePrompt,
+							emitter,
+							TITLE_GENERATION_TIMEOUT_MS,
+							{
+								model: claudeModel,
+								claudeEnvironment,
+								agentProxy,
+								generateBranch,
+							},
+						);
+						logger.debug(`[${id}] generateTitle completed (claude)`);
+					} catch (claudeErr) {
+						if (!claudeModel && !claudeEnvironment) throw claudeErr;
+						logger.debug(
+							`[${id}] generateTitle custom claude failed, trying official claude: ${errorMessage(claudeErr)}`,
+						);
+						await managers.claude.generateTitle(
+							id,
+							userMessage,
+							branchRenamePrompt,
+							emitter,
+							TITLE_GENERATION_TIMEOUT_MS,
+							{ agentProxy, generateBranch },
+						);
+						logger.debug(`[${id}] generateTitle completed (official claude)`);
+					}
+					return;
+				}
+				if (titleProvider === "codex") {
+					await managers.codex.generateTitle(
 						id,
 						userMessage,
 						branchRenamePrompt,
 						emitter,
-						TITLE_GENERATION_TIMEOUT_MS,
-						{ generateBranch },
+						TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
+						{ agentProxy, generateBranch },
 					);
-					logger.debug(`[${id}] generateTitle completed (official claude)`);
+					logger.debug(`[${id}] generateTitle completed (codex)`);
 					return;
-				} catch (officialClaudeErr) {
-					logger.debug(
-						`[${id}] generateTitle official claude failed, trying codex: ${errorMessage(officialClaudeErr)}`,
-					);
 				}
-			} else {
-				logger.debug(
-					`[${id}] generateTitle claude failed, trying codex: ${errorMessage(claudeErr)}`,
-				);
-			}
-			try {
-				await managers.codex.generateTitle(
-					id,
-					userMessage,
-					branchRenamePrompt,
-					emitter,
-					TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
-					{ generateBranch },
-				);
-				logger.debug(`[${id}] generateTitle completed (codex fallback)`);
-			} catch (codexErr) {
-				logger.debug(
-					`[${id}] generateTitle codex failed, trying cursor: ${errorMessage(codexErr)}`,
-				);
 				await managers.cursor.generateTitle(
 					id,
 					userMessage,
@@ -312,9 +332,20 @@ async function handleGenerateTitle(
 					TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
 					{ generateBranch },
 				);
-				logger.debug(`[${id}] generateTitle completed (cursor fallback)`);
+				logger.debug(`[${id}] generateTitle completed (cursor)`);
+				return;
+			} catch (err) {
+				lastError = err;
+				const nextProvider = order[order.indexOf(titleProvider) + 1];
+				if (nextProvider) {
+					logger.debug(
+						`[${id}] generateTitle ${titleProvider} failed, trying ${nextProvider}: ${errorMessage(err)}`,
+					);
+				}
 			}
 		}
+
+		throw lastError ?? new Error("No title generation provider was available");
 	} catch (err) {
 		const msg = errorMessage(err);
 		logger.error(`[${id}] generateTitle FAILED: ${msg}`, errorDetails(err));
@@ -334,9 +365,16 @@ async function handleListModels(
 			typeof params.apiKey === "string" && params.apiKey.length > 0
 				? params.apiKey
 				: undefined;
-		logger.debug(`[${id}] listModels`, { provider, override: Boolean(apiKey) });
+		const forceReload = params.forceReload === true;
+		logger.debug(`[${id}] listModels`, {
+			provider,
+			override: Boolean(apiKey),
+			forceReload,
+		});
 		const models = await managers[provider].listModels(
-			apiKey ? { apiKey } : undefined,
+			apiKey || forceReload
+				? { ...(apiKey ? { apiKey } : {}), forceReload }
+				: undefined,
 		);
 		emitter.modelsListed(id, provider, models);
 		logger.debug(`[${id}] listModels → ${models.length} entries (${provider})`);
@@ -533,6 +571,24 @@ let requestCount = 0;
 for await (const line of rl) {
 	if (!line.trim()) continue;
 
+	// Sniff reverse-channel hostResponse before the JSON-RPC parser sees it.
+	let pre: unknown;
+	try {
+		pre = JSON.parse(line);
+	} catch {
+		// parseRequest will surface the error.
+	}
+	if (
+		pre !== null &&
+		typeof pre === "object" &&
+		(pre as { type?: unknown }).type === "hostResponse"
+	) {
+		resolveHostResponse(
+			pre as { callbackId?: unknown; ok?: unknown; error?: unknown },
+		);
+		continue;
+	}
+
 	let request: RawRequest;
 	try {
 		request = parseRequest(line);
@@ -587,6 +643,14 @@ for await (const line of rl) {
 			case "shutdown":
 				await handleShutdown(id);
 				break;
+			case "runTriageTick":
+				trackHandler(
+					handleRunTriageTick(id, params, emitter, writeStdoutEvent),
+				);
+				break;
+			case "stopTriageTick":
+				handleStopTriageTick(id, params, emitter);
+				break;
 			case "permissionResponse": {
 				const permissionId = params.permissionId as string;
 				const behavior = params.behavior as "allow" | "deny";
@@ -596,9 +660,11 @@ for await (const line of rl) {
 				const message =
 					typeof params.message === "string" ? params.message : undefined;
 				logger.debug(`[${id}] permissionResponse`, { permissionId, behavior });
-				// Route to the right provider — Codex permissions use "codex-" prefix
+				// Route by id prefix: `codex-`, `opencode-`, else Claude.
 				if (permissionId.startsWith("codex-")) {
 					codexManager.resolvePermission(permissionId, behavior);
+				} else if (permissionId.startsWith("opencode-")) {
+					opencodeManager.resolvePermission(permissionId, behavior);
 				} else {
 					claudeManager.resolvePermission(
 						permissionId,
@@ -639,7 +705,8 @@ for await (const line of rl) {
 							: { action: "cancel" };
 				const claimed =
 					claudeManager.resolveUserInput(userInputId, resolution) ||
-					codexManager.resolveUserInput(userInputId, resolution);
+					codexManager.resolveUserInput(userInputId, resolution) ||
+					opencodeManager.resolveUserInput(userInputId, resolution);
 				if (!claimed) {
 					// No live waiter — the parked promise was lost (sidecar
 					// restart, session ended, or duplicate submit). Surface

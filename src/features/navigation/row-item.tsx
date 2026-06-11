@@ -55,6 +55,7 @@ import {
 	humanizeBranch,
 	STATUS_OPTIONS,
 } from "./shared";
+import { TriageSourceBadge, triageSourceMeta } from "./triage-source-badge";
 import { WorkspaceHoverCard } from "./workspace-hover-card";
 
 const rowVariants = cva(
@@ -87,6 +88,7 @@ export type WorkspaceRowItemProps = {
 	hideRepoAvatar?: boolean;
 	rowRef?: (element: HTMLDivElement | null) => void;
 	onSelect?: (workspaceId: string) => void;
+	onPreviewSelect?: (workspaceId: string) => void;
 	onPrefetch?: (workspaceId: string) => void;
 	onArchiveWorkspace?: (workspaceId: string) => void;
 	onMoveLocalToWorktree?: (workspaceId: string) => void;
@@ -149,6 +151,7 @@ export const WorkspaceRowItem = memo(
 		hideRepoAvatar = false,
 		rowRef,
 		onSelect,
+		onPreviewSelect,
 		onPrefetch,
 		onArchiveWorkspace,
 		onMoveLocalToWorktree,
@@ -272,13 +275,25 @@ export const WorkspaceRowItem = memo(
 		});
 		const statusDotLabel = isInteractionRequired
 			? "Interaction required"
-			: row.hasUnread
-				? "Unread"
-				: null;
+			: row.triagePrimingUnconsumed
+				? "AI proposal — open to review"
+				: row.hasUnread
+					? "Unread"
+					: null;
 		const statusDotClassName = isInteractionRequired
 			? "bg-yellow-500"
-			: "bg-chart-2";
-		const showStatusDot = statusDotLabel !== null;
+			: row.triagePrimingUnconsumed
+				? "bg-destructive"
+				: "bg-chart-2";
+		// AI-proposed (triage) rows swap their red proposal dot for the
+		// originating platform's logo — pinned bottom-right and a touch
+		// larger. Falls back to the red dot when the source is unknown.
+		const triageSourceType =
+			row.triagePrimingUnconsumed && !isInteractionRequired
+				? (row.triageSourceType ?? null)
+				: null;
+		const hasSourceBadge = triageSourceMeta(triageSourceType) !== null;
+		const showStatusDot = statusDotLabel !== null && !hasSourceBadge;
 		// Local & Chat workspaces don't carry a meaningful per-row branch
 		// label (locals share the repo's HEAD; chats have no branch at
 		// all), so always fall back to the auto-titled session title.
@@ -304,6 +319,22 @@ export const WorkspaceRowItem = memo(
 				onPointerLeave={handleRowPointerLeave}
 				onPointerDown={(event) => {
 					cancelPendingPrefetch();
+					const target = event.target;
+					const inRowActions =
+						target instanceof Element
+							? target.closest("[data-workspace-row-actions]") !== null
+							: false;
+					if (
+						event.button === 0 &&
+						!dragPreview &&
+						!event.metaKey &&
+						!event.ctrlKey &&
+						!event.altKey &&
+						!event.shiftKey &&
+						!inRowActions
+					) {
+						onPreviewSelect?.(row.id);
+					}
 					if (onDragPointerDown && groupId) {
 						onDragPointerDown({ event, row, groupId, title: displayTitle });
 					}
@@ -443,6 +474,11 @@ export const WorkspaceRowItem = memo(
 								title={displayTitle}
 								badgeClassName={showStatusDot ? statusDotClassName : null}
 								badgeAriaLabel={statusDotLabel ?? undefined}
+								sourceBadge={
+									hasSourceBadge ? (
+										<TriageSourceBadge sourceType={triageSourceType} />
+									) : null
+								}
 								isRunning={isRunScriptRunning}
 							/>
 							{/* Fade is on an inner wrapper so the avatar's overflowing badge isn't clipped by mask-image. */}

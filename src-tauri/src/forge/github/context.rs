@@ -10,7 +10,7 @@ use anyhow::{bail, Result};
 use crate::{models::workspaces as workspace_models, workspace_state::WorkspaceState};
 
 use super::api::parse_github_remote;
-use crate::forge::branch::forge_head_branch_for;
+use crate::forge::branch::{forge_head_branch_for, ForgeHeadRef};
 
 /// Snapshot of every value the GitHub backend needs once we've decided
 /// the workspace looks viable enough to query. The pre-flight in
@@ -26,10 +26,11 @@ pub(super) struct GithubContext {
     /// gh account login bound to this repo. Always non-empty (NULL
     /// rows short-circuit before a context is ever produced).
     pub login: String,
-    /// `true` when the workspace's branch has a remote-tracking ref
-    /// resolvable via `git rev-parse`. Drives the
-    /// "branch never published" short-circuit.
-    pub has_remote_tracking: bool,
+    /// `true` when the workspace's branch is published on the remote — a
+    /// queryable ref exists, via the local remote-tracking ref or an
+    /// `ls-remote` fallback. Drives the "branch never published"
+    /// short-circuit. (See `forge::branch::ForgeHeadRef::published`.)
+    pub published: bool,
 }
 
 /// Outcome of pre-flight resolution. Each non-`Ready` arm tells the
@@ -52,16 +53,10 @@ pub(super) enum GithubResolution {
     Unauthenticated,
 }
 
-/// Run the pre-flight against the workspace row + gh auth state.
-/// `host_authenticated` controls whether the resolver also consults
-/// `gh auth status` to invalidate the binding when the bound login no
-/// longer has a token. We pass `false` from internal callers that
-/// already need to handle auth errors themselves (the action-status
-/// path runs the probe earlier so it can mirror the GitLab flow).
-pub(super) fn load_github_context(
-    workspace_id: &str,
-    host_authenticated: HostAuthCheck,
-) -> Result<GithubResolution> {
+/// Resolve owner/repo, PR head branch, bound login, and remote-tracking
+/// state. NULL/blank `forge_login` → `Unauthenticated`. No auth probe:
+/// logout surfaces lazily (API 401 / create-PR check).
+pub(super) fn load_github_context(workspace_id: &str) -> Result<GithubResolution> {
     let Some(record) = workspace_models::load_workspace_record_by_id(workspace_id)? else {
         bail!("Workspace not found: {workspace_id}");
     };
@@ -89,10 +84,8 @@ pub(super) fn load_github_context(
         ));
     };
 
-    // Auth-binding check runs BEFORE the remote-tracking short-circuit
-    // so an externally-logged-out account surfaces a Connect CTA even
-    // on workspaces that never published their branch (mirrors the
-    // GitLab pre-flight in forge::gitlab::lookup_workspace_mr_action_status).
+    // NULL/blank binding → Connect CTA. A bound-but-logged-out account is
+    // not probed here; it surfaces lazily (API 401 / create-PR check).
     let persisted_login = record
         .forge_login
         .as_deref()
@@ -101,43 +94,16 @@ pub(super) fn load_github_context(
     let Some(login) = persisted_login else {
         return Ok(GithubResolution::Unauthenticated);
     };
-    if matches!(host_authenticated, HostAuthCheck::Probe) && login_definitely_logged_out(login) {
-        return Ok(GithubResolution::Unauthenticated);
-    }
 
-    let (branch, has_remote_tracking) = forge_head_branch_for(&record, &branch);
+    let ForgeHeadRef { branch, published } = forge_head_branch_for(&record, &branch);
 
     Ok(GithubResolution::Ready(GithubContext {
         owner,
         name,
         branch,
         login: login.to_string(),
-        has_remote_tracking,
+        published,
     }))
-}
-
-/// Whether the action-status pre-flight should consult `gh auth status`.
-/// Lookup paths skip the probe (they tolerate an auth fall-through and
-/// degrade to `None`); the action-status entry runs it because that's
-/// the surface the inspector reads to decide whether to show Connect.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum HostAuthCheck {
-    Skip,
-    Probe,
-}
-
-/// Routes through `check_auth`; `Indeterminate` and `LoggedIn`
-/// preserve the binding.
-fn login_definitely_logged_out(login: &str) -> bool {
-    let Some(backend) = crate::forge::accounts::backend_for(crate::forge::ForgeProvider::Github)
-    else {
-        // Backend missing (Unknown provider): preserve binding,
-        // we can't probe.
-        return false;
-    };
-    backend
-        .check_auth(super::api::GITHUB_HOST, login)
-        .is_definitely_logged_out()
 }
 
 #[cfg(test)]
@@ -203,7 +169,7 @@ mod tests {
         insert_workspace(&conn, "w-1", "r-1", "initializing", Some("feature"));
         drop(conn);
 
-        let resolution = load_github_context("w-1", HostAuthCheck::Skip).unwrap();
+        let resolution = load_github_context("w-1").unwrap();
         assert!(matches!(resolution, GithubResolution::Initializing));
     }
 
@@ -215,7 +181,7 @@ mod tests {
         insert_workspace(&conn, "w-2", "r-2", "ready", Some("feature"));
         drop(conn);
 
-        let resolution = load_github_context("w-2", HostAuthCheck::Skip).unwrap();
+        let resolution = load_github_context("w-2").unwrap();
         assert!(matches!(
             resolution,
             GithubResolution::Unavailable("Workspace has no remote")
@@ -236,7 +202,7 @@ mod tests {
         insert_workspace(&conn, "w-3", "r-3", "ready", Some("feature"));
         drop(conn);
 
-        let resolution = load_github_context("w-3", HostAuthCheck::Skip).unwrap();
+        let resolution = load_github_context("w-3").unwrap();
         assert!(matches!(
             resolution,
             GithubResolution::Unavailable("Workspace remote is not a GitHub repository")
@@ -257,7 +223,7 @@ mod tests {
         insert_workspace(&conn, "w-4", "r-4", "ready", None);
         drop(conn);
 
-        let resolution = load_github_context("w-4", HostAuthCheck::Skip).unwrap();
+        let resolution = load_github_context("w-4").unwrap();
         assert!(matches!(
             resolution,
             GithubResolution::Unavailable("Workspace has no current branch")
@@ -278,7 +244,7 @@ mod tests {
         insert_workspace(&conn, "w-5", "r-5", "ready", Some("feature"));
         drop(conn);
 
-        let resolution = load_github_context("w-5", HostAuthCheck::Skip).unwrap();
+        let resolution = load_github_context("w-5").unwrap();
         assert!(matches!(resolution, GithubResolution::Unauthenticated));
     }
 
@@ -298,30 +264,7 @@ mod tests {
         insert_workspace(&conn, "w-6", "r-6", "ready", Some("feature"));
         drop(conn);
 
-        let resolution = load_github_context("w-6", HostAuthCheck::Skip).unwrap();
-        assert!(matches!(resolution, GithubResolution::Unauthenticated));
-    }
-
-    /// `Probe` mode also returns `Unauthenticated` for NULL forge_login
-    /// without ever calling `gh auth status` (that branch short-circuits
-    /// before the probe). Critical for the inspector auth-removal
-    /// fix: the probe is added work, never a regression for the
-    /// already-handled NULL case.
-    #[test]
-    fn probe_mode_short_circuits_on_null_forge_login() {
-        let env = crate::testkit::TestEnv::new("github-ctx-probe-null");
-        let conn = env.db_connection();
-        insert_repo(
-            &conn,
-            "r-7",
-            "Repo",
-            Some("git@github.com:octocat/hello-world.git"),
-            None,
-        );
-        insert_workspace(&conn, "w-7", "r-7", "ready", Some("feature"));
-        drop(conn);
-
-        let resolution = load_github_context("w-7", HostAuthCheck::Probe).unwrap();
+        let resolution = load_github_context("w-6").unwrap();
         assert!(matches!(resolution, GithubResolution::Unauthenticated));
     }
 
@@ -339,7 +282,7 @@ mod tests {
         insert_workspace(&conn, "w-8", "r-8", "ready", Some("feature/auth"));
         drop(conn);
 
-        let resolution = load_github_context("w-8", HostAuthCheck::Skip).unwrap();
+        let resolution = load_github_context("w-8").unwrap();
         let GithubResolution::Ready(ctx) = resolution else {
             panic!("expected Ready, got something else");
         };
@@ -347,11 +290,11 @@ mod tests {
         assert_eq!(ctx.name, "hello-world");
         assert_eq!(ctx.branch, "feature/auth");
         assert_eq!(ctx.login, "octocat");
-        // No worktree on disk → no remote-tracking ref. Real workspaces
+        // No worktree on disk → branch not published. Real workspaces
         // populate this via git, but the resolver still hands a Ready
         // context back so the caller can decide whether to short-circuit
-        // on `has_remote_tracking`.
-        assert!(!ctx.has_remote_tracking);
+        // on `published`.
+        assert!(!ctx.published);
     }
 
     #[test]
@@ -408,12 +351,82 @@ mod tests {
         );
         drop(conn);
 
-        let resolution = load_github_context("w-renamed", HostAuthCheck::Skip).unwrap();
+        let resolution = load_github_context("w-renamed").unwrap();
         let GithubResolution::Ready(ctx) = resolution else {
             panic!("expected Ready");
         };
         assert_eq!(ctx.branch, "feature/remote-name");
-        assert!(ctx.has_remote_tracking);
+        assert!(ctx.published);
+    }
+
+    /// Branch is published on the remote, but the local worktree has neither
+    /// upstream config nor a `refs/remotes/origin/<branch>` ref (e.g. a push
+    /// that never updated the local ref). The remote fallback must keep
+    /// `published` true so the open PR still surfaces.
+    #[test]
+    fn ready_with_remote_tracking_when_branch_published_but_local_ref_missing() {
+        let env = crate::testkit::TestEnv::new("github-ctx-published-no-local-ref");
+        let origin = crate::testkit::GitTestRepo::init();
+        let workspace_dir = crate::data_dir::workspace_dir("Repo", "workspace-dir").unwrap();
+        std::fs::create_dir_all(workspace_dir.parent().unwrap()).unwrap();
+        git_ops::run_git(
+            [
+                "clone",
+                &origin.path().display().to_string(),
+                &workspace_dir.display().to_string(),
+            ],
+            None,
+        )
+        .unwrap();
+        git_ops::run_git(
+            ["config", "user.email", "helmor@example.com"],
+            Some(&workspace_dir),
+        )
+        .unwrap();
+        git_ops::run_git(["config", "user.name", "Helmor Test"], Some(&workspace_dir)).unwrap();
+        git_ops::run_git(
+            ["checkout", "-b", "feature/published"],
+            Some(&workspace_dir),
+        )
+        .unwrap();
+        git_ops::run_git(
+            ["push", "origin", "HEAD:refs/heads/feature/published"],
+            Some(&workspace_dir),
+        )
+        .unwrap();
+        // Erase every local trace of the push so only the remote knows.
+        git_ops::run_git(
+            ["update-ref", "-d", "refs/remotes/origin/feature/published"],
+            Some(&workspace_dir),
+        )
+        .unwrap();
+
+        let conn = env.db_connection();
+        insert_repo(
+            &conn,
+            "r-published",
+            "Repo",
+            Some("git@github.com:octocat/hello-world.git"),
+            Some("octocat"),
+        );
+        insert_workspace(
+            &conn,
+            "w-published",
+            "r-published",
+            "ready",
+            Some("feature/published"),
+        );
+        drop(conn);
+
+        let resolution = load_github_context("w-published").unwrap();
+        let GithubResolution::Ready(ctx) = resolution else {
+            panic!("expected Ready");
+        };
+        assert_eq!(ctx.branch, "feature/published");
+        assert!(
+            ctx.published,
+            "remote fallback should recognise the published branch",
+        );
     }
 
     #[test]
@@ -430,7 +443,7 @@ mod tests {
         insert_workspace(&conn, "w-9", "r-9", "ready", Some("main"));
         drop(conn);
 
-        let resolution = load_github_context("w-9", HostAuthCheck::Skip).unwrap();
+        let resolution = load_github_context("w-9").unwrap();
         let GithubResolution::Ready(ctx) = resolution else {
             panic!("expected Ready");
         };
@@ -444,7 +457,7 @@ mod tests {
     #[test]
     fn errors_when_workspace_does_not_exist() {
         let _env = crate::testkit::TestEnv::new("github-ctx-missing");
-        let result = load_github_context("does-not-exist", HostAuthCheck::Skip);
+        let result = load_github_context("does-not-exist");
         assert!(result.is_err());
     }
 }

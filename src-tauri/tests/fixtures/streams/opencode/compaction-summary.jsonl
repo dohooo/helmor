@@ -1,0 +1,10 @@
+{"type":"opencode/session_init","session_id":"ses_1","model":"anthropic/claude-sonnet-4-6"}
+{"type":"opencode/message.updated","session_id":"ses_1","info":{"id":"mc","role":"user"}}
+{"type":"opencode/message.part.updated","session_id":"ses_1","part":{"type":"compaction","id":"pcmp","messageID":"mc","auto":false}}
+{"type":"opencode/session.status","session_id":"ses_1","status":{"type":"busy"}}
+{"type":"opencode/message.updated","session_id":"ses_1","info":{"id":"ms","role":"assistant","summary":true,"model":{"providerID":"anthropic","modelID":"claude-sonnet-4-6"}}}
+{"type":"opencode/message.part.updated","session_id":"ses_1","part":{"type":"reasoning","id":"pr","messageID":"ms","text":"Deciding what to keep."}}
+{"type":"opencode/message.part.updated","session_id":"ses_1","part":{"type":"text","id":"pt","messageID":"ms","text":"## Summary\n- Implemented the feature.\n- Tests pass."}}
+{"type":"opencode/message.part.updated","session_id":"ses_1","part":{"type":"step-finish","id":"sf","messageID":"ms","tokens":{"input":5000,"output":120,"reasoning":80,"cache":{"read":0,"write":0}}}}
+{"type":"opencode/session.idle","session_id":"ses_1"}
+{"id":"req","type":"end"}

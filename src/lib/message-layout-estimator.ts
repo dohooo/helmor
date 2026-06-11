@@ -167,6 +167,9 @@ function estimateAssistantPartHeight(
 		case "todo-list":
 			// Header (~22px) + per-row line-height (24px) + padding.
 			return 22 + part.items.length * 24 + 16;
+		case "workflow":
+			// Header (~22px) + per-agent rows (24px) + footer (~18px) + padding.
+			return 22 + (part.agents?.length ?? 0) * 24 + 18 + 16;
 		case "image":
 			// Cap matches the rendered max-height; small slack for margin.
 			return 440;

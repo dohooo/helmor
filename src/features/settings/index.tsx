@@ -66,14 +66,16 @@ import { SettingsSelect } from "./components/settings-select";
 import { AccountPanel } from "./panels/account";
 import { AppUpdatesPanel } from "./panels/app-updates";
 import { AppearancePanel } from "./panels/appearance";
-import { CliInstallPanel } from "./panels/cli-install";
+import { ArchiveCleanupPanel } from "./panels/archive-cleanup";
+import { ComponentsPanel } from "./panels/components";
 import { ConductorImportPanel } from "./panels/conductor-import";
-import { CursorProviderPanel } from "./panels/cursor-provider";
 import { DevToolsPanel } from "./panels/dev-tools";
 import { InboxSettingsPanel } from "./panels/inbox";
 import { LocalLlmPanel } from "./panels/local-llm";
-import { ClaudeCustomProvidersPanel } from "./panels/model-providers";
+import { MobileCompanionPanel } from "./panels/mobile-companion";
+import { ProvidersPanel } from "./panels/providers";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
+import { TriagePanel } from "./panels/triage";
 
 const FALLBACK_EFFORT_LEVELS = ["low", "medium", "high"];
 
@@ -82,14 +84,15 @@ const NOTIFICATION_SOUND_OPTIONS = VALID_NOTIFICATION_SOUNDS.map((value) => ({
 	label: NOTIFICATION_SOUND_LABELS[value],
 })) satisfies readonly { value: NotificationSound; label: string }[];
 
-export type { SettingsSection } from "./types";
+export type { ContextProviderTab, SettingsSection } from "./types";
 
-import type { SettingsSection } from "./types";
+import type { ContextProviderTab, SettingsSection } from "./types";
 
 /// Display labels for settings sections in the sidebar / dialog title.
 /// Most match the section key with a leading capital, but a few names
 /// don't pluralise nicely under that rule — keep the overrides explicit.
 const SECTION_LABEL_OVERRIDES: Partial<Record<SettingsSection, string>> = {
+	model: "Models",
 	account: "Accounts",
 	inbox: "Contexts",
 };
@@ -127,12 +130,14 @@ export const SettingsDialog = memo(function SettingsDialog({
 	workspaceId,
 	workspaceRepoId,
 	initialSection,
+	initialInboxProvider,
 	onClose,
 }: {
 	open: boolean;
 	workspaceId: string | null;
 	workspaceRepoId: string | null;
 	initialSection?: SettingsSection;
+	initialInboxProvider?: ContextProviderTab;
 	onClose: () => void;
 }) {
 	const { settings, updateSettings } = useSettings();
@@ -178,12 +183,17 @@ export const SettingsDialog = memo(function SettingsDialog({
 		"general",
 		"appearance",
 		"model",
+		"providers",
 		"shortcuts",
 		...(conductorEnabled ? (["import"] as const) : []),
-		...(isDev ? (["developer"] as const) : []),
 		"account",
 		"inbox",
 		"experimental",
+		// Developer is intentionally last in the fixed group — it sits
+		// directly above the dynamic repository entries in the sidebar
+		// (so the bottom of the static nav reads: experimental →
+		// developer → <repos>). Hidden in non-dev builds.
+		...(isDev ? (["developer"] as const) : []),
 	];
 
 	const activeRepoId = activeSection.startsWith("repo:")
@@ -270,8 +280,11 @@ export const SettingsDialog = memo(function SettingsDialog({
 							) : null}
 						</div>
 
-						{/* Content area */}
-						<div className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-8 pt-1 pb-6">
+						{/* Content area — `scrollbar-stable` reserves the scrollbar
+						    gutter so expanding/collapsing a provider row (which
+						    toggles the vertical scrollbar) never reflows the body
+						    width, matching the nav's stable gutter. */}
+						<div className="scrollbar-stable min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-8 pt-1 pb-6">
 							{activeSection === "general" && (
 								<SettingsGroup>
 									<SettingsRow
@@ -332,6 +345,18 @@ export const SettingsDialog = memo(function SettingsDialog({
 										/>
 									</SettingsRow>
 									<SettingsRow
+										title="Terminal Mode"
+										releaseMarker={{ kind: "feature" }}
+										description="Adds a composer toggle that opens your prompt in the agent's terminal UI instead of a chat session. Claude and Codex only."
+									>
+										<Switch
+											checked={settings.enableTerminalMode}
+											onCheckedChange={(checked) =>
+												updateSettings({ enableTerminalMode: checked })
+											}
+										/>
+									</SettingsRow>
+									<SettingsRow
 										title="Always show context usage"
 										description="By default, context usage is only shown when more than 70% is used."
 									>
@@ -355,7 +380,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 									</SettingsRow>
 									<SettingsRow
 										title="Auto-archive on merge"
-										releaseMarker={{ kind: "feature" }}
 										description="When a workspace's linked PR/MR is merged, archive the workspace automatically."
 									>
 										<Switch
@@ -490,7 +514,9 @@ export const SettingsDialog = memo(function SettingsDialog({
 											</ToggleGroupItem>
 										</ToggleGroup>
 									</SettingsRow>
+									<ArchiveCleanupPanel />
 									<AppUpdatesPanel />
+									<ComponentsPanel />
 								</SettingsGroup>
 							)}
 
@@ -577,10 +603,10 @@ export const SettingsDialog = memo(function SettingsDialog({
 											void updateSettings(patch);
 										}}
 									/>
-									<ClaudeCustomProvidersPanel />
-									<CursorProviderPanel />
 								</SettingsGroup>
 							)}
+
+							{activeSection === "providers" && <ProvidersPanel />}
 
 							{activeSection === "experimental" && (
 								<SettingsGroup>
@@ -588,7 +614,8 @@ export const SettingsDialog = memo(function SettingsDialog({
 										settings={settings}
 										updateSettings={updateSettings}
 									/>
-									<CliInstallPanel />
+									{settings.localLlm.enabled ? <TriagePanel /> : null}
+									<MobileCompanionPanel />
 								</SettingsGroup>
 							)}
 
@@ -596,12 +623,13 @@ export const SettingsDialog = memo(function SettingsDialog({
 
 							{activeSection === "developer" && <DevToolsPanel />}
 
-							{activeSection === "account" && (
-								<AccountPanel repositories={repositories} />
-							)}
+							{activeSection === "account" && <AccountPanel />}
 
 							{activeSection === "inbox" && (
-								<InboxSettingsPanel repositories={repositories} />
+								<InboxSettingsPanel
+									repositories={repositories}
+									initialProvider={initialInboxProvider}
+								/>
 							)}
 
 							{activeRepo && (

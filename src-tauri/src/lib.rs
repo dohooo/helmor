@@ -2,6 +2,7 @@ pub mod agents;
 pub mod cli;
 pub(crate) mod codex_config;
 pub(crate) mod commands;
+pub mod companion;
 pub mod data_dir;
 pub mod downloads;
 pub mod error;
@@ -11,19 +12,23 @@ pub mod git;
 pub mod global_hotkey;
 pub mod image_store;
 mod import;
+pub mod lark;
 pub mod local_llm;
 pub mod logging;
 pub mod maintenance;
 pub mod mcp;
 pub mod models;
 pub mod pipeline;
+pub(crate) mod platform;
 pub mod rate_limits;
 pub mod schema;
 pub mod service;
 mod shell_env;
 pub mod sidecar;
+pub mod sidecar_host;
 pub mod slack;
 mod system_limits;
+pub mod triage;
 pub mod ui_sync;
 pub mod updater;
 pub mod workspace;
@@ -57,6 +62,24 @@ fn empty_404() -> tauri::http::Response<Vec<u8>> {
         .status(404)
         .body(Vec::new())
         .expect("404 response builder is infallible")
+}
+
+/// Extension-based MIME sniff for the `helmor-attachment` protocol.
+fn mime_for_path(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("bmp") => "image/bmp",
+        Some("svg") => "image/svg+xml",
+        _ => "application/octet-stream",
+    }
 }
 
 /// Initialise the database schema (call once at startup).
@@ -104,7 +127,49 @@ pub fn run() {
                 };
                 responder.respond(response);
             });
-        });
+        })
+        // Triage priming attachments. Custom scheme so rehype-sanitize can opt it in.
+        .register_asynchronous_uri_scheme_protocol(
+            "helmor-attachment",
+            |_app, request, responder| {
+                let uri = request.uri().to_string();
+                std::thread::spawn(move || {
+                    let response = match triage::attachments::resolve_attachment_url(&uri) {
+                        Ok(Some(path)) => match std::fs::read(&path) {
+                            Ok(bytes) => {
+                                let content_type = mime_for_path(&path);
+                                tauri::http::Response::builder()
+                                    .header("Content-Type", content_type)
+                                    // Attachment files are content-stable
+                                    // (uuid-named, never rewritten); cache
+                                    // hard so re-renders don't pay disk IO.
+                                    .header("Cache-Control", "public, max-age=2592000, immutable")
+                                    .body(bytes)
+                                    .unwrap_or_else(|_| empty_404())
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    uri = %uri,
+                                    error = %error,
+                                    "helmor-attachment read failed",
+                                );
+                                empty_404()
+                            }
+                        },
+                        Ok(None) => empty_404(),
+                        Err(error) => {
+                            tracing::warn!(
+                                uri = %uri,
+                                error = %format!("{error:#}"),
+                                "helmor-attachment resolve failed",
+                            );
+                            empty_404()
+                        }
+                    };
+                    responder.respond(response);
+                });
+            },
+        );
 
     #[cfg(debug_assertions)]
     let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
@@ -112,6 +177,7 @@ pub fn run() {
     let app = builder
         .manage(sidecar::ManagedSidecar::new())
         .manage(agents::ActiveStreams::new())
+        .manage(agents::SessionStreamHub::new())
         .manage(agents::SlashCommandCache::new())
         .manage(workspace::archive::ArchiveJobManager::new())
         .manage(local_llm::Manager::default())
@@ -124,8 +190,11 @@ pub fn run() {
         .manage(git_watcher::GitWatcherManager::new())
         .manage(workspace::scripts::ScriptProcessManager::new())
         .manage(ui_sync::UiSyncManager::new())
+        .manage(triage::ActiveStatusStore::new())
         .manage(global_hotkey::GlobalHotkeyState::default())
         .manage(commands::forge_commands::ForgeAuthEdgeStore::default())
+        .manage(companion::CompanionState::new())
+        .manage(companion::TunnelState::new())
         .setup(|app| {
             // Ensure data directory structure exists
             data_dir::ensure_directory_structure()?;
@@ -201,6 +270,20 @@ pub fn run() {
                 Err(e) => tracing::warn!("Failed to reconcile orphaned workspaces: {e:#}"),
             }
 
+            // Terminal sessions left at 'streaming' from a prior run have dead
+            // PTYs; reset them so the sidebar doesn't show a phantom spinner.
+            if let Err(e) = models::sessions::reset_stale_terminal_statuses() {
+                tracing::warn!("Failed to reset stale terminal statuses: {e:#}");
+            }
+
+            // Repair `.agent-contexts/` provisioning for existing worktree
+            // workspaces. This is best-effort because a missing scratch dir
+            // should never block the app from starting.
+            match workspace::agent_contexts::ensure_existing_worktree_contexts() {
+                Ok(_) => {}
+                Err(e) => tracing::warn!("Failed to repair .agent-contexts/ excludes: {e:#}"),
+            }
+
             // Clear rows stuck in `initializing` state past the cutoff —
             // happens when the app is force-quit mid-create (Phase 2 never
             // gets to flip the state to ready/setup_pending). Five minutes
@@ -212,6 +295,19 @@ pub fn run() {
                 Ok(0) => {}
                 Ok(n) => tracing::info!(count = n, "Cleaned up orphan initializing workspaces"),
                 Err(e) => tracing::warn!("Failed to clean up initializing orphans: {e:#}"),
+            }
+
+            // Runtime registry crash-recovery sweep. Probes every
+            // still-open row from a prior launch via `kill(pid, 0)`,
+            // stamps dead rows ended, and logs the "maybe alive"
+            // ones. Strictly diagnostic — we never auto-kill on this
+            // path because PIDs can be reused and a free port is not
+            // proof of process identity.
+            if let Err(error) = workspace::runtime_registry::run_startup_classification() {
+                tracing::warn!(
+                    %error,
+                    "Runtime registry: startup classification sweep failed"
+                );
             }
 
             // On macOS, GUI-launched apps only see the minimal system PATH.
@@ -260,6 +356,58 @@ pub fn run() {
             updater::configure()?;
             updater::spawn_startup_check(app.handle().clone());
             updater::spawn_interval_worker(app.handle().clone());
+
+            // Install reverse-IPC dispatcher early to skip early-boot warnings; ordering isn't load-bearing.
+            let host_rx = app
+                .state::<sidecar::ManagedSidecar>()
+                .install_host_dispatcher();
+            let dispatcher_handle = app.handle().clone();
+            std::thread::Builder::new()
+                .name("sidecar-host-dispatcher".into())
+                .spawn(move || {
+                    while let Ok(env) = host_rx.recv() {
+                        let app_clone = dispatcher_handle.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let response = match sidecar_host::dispatch(
+                                app_clone.clone(),
+                                &env.method,
+                                env.params,
+                            )
+                            .await
+                            {
+                                Ok(value) => sidecar_host::HostResponse::success(
+                                    env.callback_id.clone(),
+                                    value,
+                                ),
+                                Err(error) => sidecar_host::HostResponse::failure(
+                                    env.callback_id.clone(),
+                                    format!("{error:#}"),
+                                ),
+                            };
+                            let sidecar_state = app_clone.state::<sidecar::ManagedSidecar>();
+                            if let Err(error) = sidecar_state.send_host_response(&response) {
+                                tracing::warn!(
+                                    error = %format!("{error:#}"),
+                                    method = %env.method,
+                                    "hostResponse write failed"
+                                );
+                            }
+                        });
+                    }
+                    tracing::debug!("host dispatcher channel closed");
+                })
+                .ok();
+
+            // Per-version silent re-check of the Helmor CLI symlink and
+            // the Helmor Skills package. Runs once per app version
+            // (cached by version string in app_settings); a clean pass
+            // updates the cache, a failure leaves it untouched so the
+            // next launch retries. Gated on onboarding_completed inside
+            // the spawn so the onboarding auto-install owns the
+            // first-run path. Must come AFTER
+            // `shell_env::inherit_login_shell_env()` above so the
+            // spawned `npx` call resolves through the user's login PATH.
+            commands::system_commands::spawn_startup_components_check();
 
             agents::prewarm_slash_command_cache(app.handle());
 
@@ -322,6 +470,76 @@ pub fn run() {
                 tracing::error!(error = %error, "Failed to start UI sync listener");
             }
 
+            // Triage: fetcher + auto-fire tick on the same 5-min thread.
+            triage::fetcher::spawn_scheduler(app.handle().clone());
+
+            // Mobile browser companion (experimental, opt-in via env). Starts a
+            // loopback-bound HTTP/SSE server that mirrors the IPC surface so the
+            // same frontend can be served to a phone browser. Default app
+            // behaviour is unchanged unless `HELMOR_COMPANION` is set.
+            if std::env::var_os("HELMOR_COMPANION").is_some() {
+                let companion_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let streamer = companion::build_stream_starter(companion_handle.clone());
+                    let dispatcher = companion::build_dispatcher(companion_handle.clone());
+                    let verifier = companion::paired_device_verifier();
+                    let state = companion_handle.state::<companion::CompanionState>();
+                    match state
+                        .start(companion_handle.clone(), streamer, dispatcher, verifier)
+                        .await
+                    {
+                        // Loopback-only, opt-in dev gate: logging the token here
+                        // is what lets a same-machine `curl` / browser pair in
+                        // Slice 0. The public-tunnel slice replaces this with QR
+                        // pairing and never logs the token.
+                        Ok(info) => tracing::info!(
+                            addr = %info.addr,
+                            token = %info.token,
+                            "companion enabled (HELMOR_COMPANION) — listening on loopback",
+                        ),
+                        Err(error) => {
+                            tracing::error!(error = %format!("{error:#}"), "companion start failed")
+                        }
+                    }
+                });
+            }
+
+            // Auto-start the companion when a stable URL has been provisioned,
+            // so a paired phone reconnects at its permanent hostname after a
+            // desktop restart. No-op when the user never allocated one.
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    match companion::stable_url::load() {
+                        Ok(Some(record)) => {
+                            let companion_state = handle.state::<companion::CompanionState>();
+                            let tunnel_state = handle.state::<companion::TunnelState>();
+                            match companion::start_with_tunnel(
+                                handle.clone(),
+                                &companion_state,
+                                &tunnel_state,
+                            )
+                            .await
+                            {
+                                Ok(()) => tracing::info!(
+                                    host = %record.hostname,
+                                    "companion stable URL auto-started",
+                                ),
+                                Err(error) => tracing::error!(
+                                    error = %format!("{error:#}"),
+                                    host = %record.hostname,
+                                    "companion stable-url auto-start failed",
+                                ),
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            tracing::warn!(error = %error, "failed to read companion stable url")
+                        }
+                    }
+                });
+            }
+
             // On macOS, the default app-menu Quit item goes straight to
             // NSApplication.terminate:, which bypasses our event loop.
             // Install a custom menu so Cmd+Q flows through the same
@@ -334,7 +552,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             agents::list_agent_model_sections,
             agents::list_cursor_models,
+            agents::list_opencode_models,
+            agents::list_provider_capabilities,
             agents::send_agent_message_stream,
+            agents::subscribe_session_stream,
+            agents::unsubscribe_session_stream,
             agents::stop_agent_stream,
             agents::list_active_streams,
             agents::steer_agent_stream,
@@ -355,6 +577,9 @@ pub fn run() {
             commands::workspace_commands::finalize_workspace_from_repo,
             commands::repository_commands::get_add_repository_defaults,
             commands::settings_commands::get_app_settings,
+            commands::opencode_config_commands::get_opencode_custom_providers,
+            commands::opencode_config_commands::upsert_opencode_custom_provider,
+            commands::opencode_config_commands::delete_opencode_custom_provider,
             commands::settings_commands::get_claude_rate_limits,
             commands::settings_commands::get_codex_rate_limits,
             commands::local_llm_commands::detect_local_llm_hardware,
@@ -375,14 +600,20 @@ pub fn run() {
             commands::system_commands::get_cli_status,
             commands::system_commands::get_data_info,
             commands::system_commands::get_agent_login_status,
+            commands::system_commands::get_agent_versions,
             commands::system_commands::get_helmor_skills_status,
             commands::system_commands::install_cli,
             commands::system_commands::read_query_cache,
             commands::system_commands::write_query_cache,
             commands::system_commands::delete_query_cache,
             commands::system_commands::install_helmor_skills,
+            commands::system_commands::get_helmor_components_update_check,
+            commands::system_commands::recheck_helmor_components,
             commands::system_commands::enter_onboarding_window_mode,
             commands::system_commands::exit_onboarding_window_mode,
+            commands::system_commands::enter_mini_window_mode,
+            commands::system_commands::exit_mini_window_mode,
+            commands::system_commands::toggle_mini_window_mode,
             commands::system_commands::open_agent_login_terminal,
             commands::system_commands::spawn_agent_login_terminal,
             commands::system_commands::stop_agent_login_terminal,
@@ -390,6 +621,7 @@ pub fn run() {
             commands::system_commands::resize_agent_login_terminal,
             commands::forge_commands::get_workspace_forge,
             commands::forge_commands::list_forge_accounts,
+            commands::forge_commands::check_workspace_forge_auth,
             commands::forge_commands::list_inbox_items,
             commands::forge_commands::list_inbox_kind_labels,
             commands::forge_commands::list_forge_labels,
@@ -426,6 +658,7 @@ pub fn run() {
             commands::repository_commands::move_repository_in_sidebar,
             commands::repository_commands::retry_repo_forge_binding,
             commands::script_commands::execute_repo_script,
+            commands::script_commands::execute_repo_stop_command,
             commands::script_commands::stop_repo_script,
             commands::script_commands::write_repo_script_stdin,
             commands::script_commands::resize_repo_script,
@@ -438,6 +671,21 @@ pub fn run() {
             commands::terminal_commands::stop_terminal,
             commands::terminal_commands::write_terminal_stdin,
             commands::terminal_commands::resize_terminal,
+            commands::terminal_commands::set_terminal_session_busy,
+            commands::triage_commands::get_triage_config,
+            commands::triage_commands::update_triage_config,
+            commands::triage_commands::get_triage_active_status,
+            commands::triage_commands::trigger_triage_tick_now,
+            commands::triage_commands::cancel_triage_tick,
+            commands::triage_commands::list_open_triage_candidates,
+            commands::triage_commands::count_open_triage_candidates,
+            commands::triage_commands::read_triage_candidate,
+            commands::triage_commands::record_triage_decision,
+            commands::triage_commands::get_triage_source_health,
+            commands::triage_lark_cli_commands::spawn_lark_cli_auth_terminal,
+            commands::triage_lark_cli_commands::stop_lark_cli_auth_terminal,
+            commands::triage_lark_cli_commands::write_lark_cli_auth_terminal_stdin,
+            commands::triage_lark_cli_commands::resize_lark_cli_auth_terminal,
             commands::session_commands::list_session_thread_messages,
             commands::workspace_commands::list_workspace_groups,
             commands::session_commands::list_workspace_sessions,
@@ -450,6 +698,7 @@ pub fn run() {
             commands::session_commands::get_session_context_usage,
             commands::session_commands::set_session_context_usage,
             commands::session_commands::get_session_codex_goal,
+            commands::session_commands::get_session_plan_state,
             commands::session_commands::mutate_codex_goal,
             commands::session_commands::list_session_drafts,
             commands::session_commands::set_session_draft,
@@ -492,6 +741,7 @@ pub fn run() {
             commands::editors::open_workspace_in_editor,
             commands::editors::open_workspace_in_finder,
             commands::workspace_commands::permanently_delete_workspace,
+            commands::workspace_commands::cleanup_archived_workspaces,
             commands::workspace_commands::restore_workspace,
             commands::editor_commands::stat_editor_file,
             commands::conductor_commands::conductor_source_available,
@@ -528,21 +778,35 @@ pub fn run() {
             commands::slack_commands::slack_search_messages,
             commands::slack_commands::slack_get_thread_detail,
             commands::slack_commands::slack_list_emoji,
-            commands::slack_commands::slack_prepare_thread_context
+            commands::slack_commands::slack_prepare_thread_context,
+            commands::companion_commands::companion_status,
+            commands::companion_commands::companion_enable,
+            commands::companion_commands::companion_disable,
+            commands::companion_commands::companion_pair_device,
+            commands::companion_commands::companion_list_devices,
+            commands::companion_commands::companion_revoke_device,
+            commands::companion_commands::companion_sign_in_cloudflare,
+            commands::companion_commands::companion_allocate_stable_url,
+            commands::companion_commands::companion_destroy_stable_url
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    // Every user-initiated app-exit path is intercepted here and routed
-    // through a single `helmor://quit-requested` event. The frontend's
-    // QuitConfirmDialog listens for that event, checks for in-flight
-    // tasks, and calls back into the `request_quit` IPC command — which
-    // cleans up (stops git watchers, SIGTERM's the sidecar) and then
-    // invokes `app.exit(0)`.
+    // App-exit paths are intercepted here. On macOS, closing the window
+    // (red button, Cmd+W on the last tab, Cmd+Shift+W) does NOT quit the
+    // app — it hides the window and the app keeps running in the Dock.
+    // Clicking the Dock icon (RunEvent::Reopen) shows it again. Only true
+    // quit paths (Cmd+Q, Dock Quit) route through the single
+    // `helmor://quit-requested` event, which the frontend's
+    // QuitConfirmDialog listens for, checks for in-flight tasks, and calls
+    // back into the `request_quit` IPC command — which cleans up (stops
+    // git watchers, SIGTERM's the sidecar) and then invokes `app.exit(0)`.
     //
     //   Source                                  | Rust branch
     //   ----------------------------------------|-------------------------
-    //   Red close button / Cmd+W (main window)  | WindowEvent::CloseRequested
+    //   Red close button / close-window (macOS) | WindowEvent::CloseRequested -> hide
+    //   Red close button / close (other OS)     | WindowEvent::CloseRequested -> quit
+    //   Dock icon click (macOS)                 | RunEvent::Reopen -> show
     //   Cmd+Q, app-menu Quit (macOS)            | on_menu_event helmor-quit
     //   Dock Quit / system shutdown / SIGINT    | RunEvent::ExitRequested { code: None }
     //   Our own request_quit -> app.exit(0)     | ExitRequested { code: Some(_) }  (passthrough)
@@ -569,7 +833,26 @@ pub fn run() {
             ..
         } if label == "main" => {
             api.prevent_close();
+            // macOS: closing the window just hides it; the app stays alive
+            // in the Dock and re-shows on Dock-icon click (RunEvent::Reopen).
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
+            // Other platforms keep the legacy behavior: closing the main
+            // window quits the app.
+            #[cfg(not(target_os = "macos"))]
             emit_quit_requested(app_handle);
+        }
+        // macOS Dock-icon click while the window is hidden: show it again.
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen { .. } => {
+            if let Some(window) = app_handle.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
         }
         #[cfg(target_os = "macos")]
         tauri::RunEvent::ExitRequested {
@@ -582,6 +865,11 @@ pub fn run() {
         // new version. By this point `request_quit` has stopped watchers
         // and torn down the sidecar, so blocking briefly here is safe.
         tauri::RunEvent::Exit => {
+            // Best-effort graceful shutdown of the companion server + tunnel
+            // (no-op when never started). The tasks also die with the process.
+            app_handle.state::<companion::TunnelState>().shutdown();
+            let companion = app_handle.state::<companion::CompanionState>();
+            tauri::async_runtime::block_on(companion.shutdown());
             updater::install_pending_on_exit_blocking();
         }
         _ => {}
@@ -602,12 +890,18 @@ fn emit_quit_requested(app_handle: &tauri::AppHandle) {
     }
 }
 
+#[cfg(target_os = "macos")]
 const HELMOR_QUIT_MENU_ID: &str = "helmor-quit";
+#[cfg(target_os = "macos")]
 const HELMOR_CLOSE_CURRENT_SESSION_MENU_ID: &str = "helmor-close-current-session";
+#[cfg(target_os = "macos")]
+const HELMOR_ALWAYS_ON_TOP_MENU_ID: &str = "helmor-always-on-top";
 
 #[cfg(target_os = "macos")]
 fn install_macos_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
-    use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+    use tauri::menu::{
+        AboutMetadataBuilder, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder,
+    };
 
     let close_current_session_item = MenuItemBuilder::with_id(
         HELMOR_CLOSE_CURRENT_SESSION_MENU_ID,
@@ -615,6 +909,13 @@ fn install_macos_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     )
     .accelerator("Cmd+W")
     .build(app)?;
+
+    // Lets the user float the window above other apps. Decoupled from mini
+    // mode — purely a manual toggle, the check mark is the source of truth.
+    let always_on_top_item =
+        CheckMenuItemBuilder::with_id(HELMOR_ALWAYS_ON_TOP_MENU_ID, "Always on Top")
+            .checked(false)
+            .build(app)?;
 
     let quit_item = MenuItemBuilder::with_id(HELMOR_QUIT_MENU_ID, "Quit Helmor")
         .accelerator("Cmd+Q")
@@ -651,6 +952,7 @@ fn install_macos_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         .minimize()
         .maximize()
         .separator()
+        .item(&always_on_top_item)
         .item(&close_current_session_item)
         .build()?;
 
@@ -664,12 +966,23 @@ fn install_macos_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     app.on_menu_event(move |_, event| match event.id().0.as_str() {
         HELMOR_QUIT_MENU_ID => emit_quit_requested(&handle),
         HELMOR_CLOSE_CURRENT_SESSION_MENU_ID => emit_close_current_session_requested(&handle),
+        HELMOR_ALWAYS_ON_TOP_MENU_ID => {
+            // muda toggles the check mark before firing, so is_checked() is
+            // already the desired post-click state.
+            let checked = always_on_top_item.is_checked().unwrap_or(false);
+            if let Some(window) = handle.get_webview_window("main") {
+                if let Err(error) = window.set_always_on_top(checked) {
+                    tracing::warn!(error = %error, "Failed to set always-on-top from menu");
+                }
+            }
+        }
         _ => {}
     });
 
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn emit_close_current_session_requested(app_handle: &tauri::AppHandle) {
     if let Err(e) = app_handle.emit("helmor://close-current-session", ()) {
         tracing::warn!(error = %e, "Failed to emit close-current-session event");

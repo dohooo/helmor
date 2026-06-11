@@ -14,7 +14,12 @@ import {
 } from "@/lib/api";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
-import { ImageBlock, PlanReviewCard, TodoList } from "./content-parts";
+import {
+	ImageBlock,
+	PlanReviewCard,
+	TodoList,
+	WorkflowCard,
+} from "./content-parts";
 import {
 	CursorSubagentToolCall,
 	isCursorSubagentToolName,
@@ -25,9 +30,11 @@ import {
 	isImagePart,
 	isPlanReviewPart,
 	isReasoningPart,
+	isSystemNoticePart,
 	isTextPart,
 	isTodoListPart,
 	isToolCallPart,
+	isWorkflowPart,
 	reasoningLifecycle,
 } from "./shared";
 import {
@@ -36,6 +43,7 @@ import {
 	SubAgentSpawnGroup,
 	SubAgentToolCall,
 } from "./subagent-tool";
+import { SystemNotice } from "./system-message";
 import { AssistantToolCall, CollapsedToolGroup } from "./tool-call";
 
 // --- AssistantText ---
@@ -276,8 +284,21 @@ export function ChatAssistantMessage({
 				if (isTodoListPart(part)) {
 					return <TodoList key={key} part={part} />;
 				}
+				if (isWorkflowPart(part)) {
+					return <WorkflowCard key={key} part={part} />;
+				}
 				if (isImagePart(part)) {
 					return <ImageBlock key={key} part={part} />;
+				}
+				if (isSystemNoticePart(part)) {
+					return (
+						<div
+							key={key}
+							className="min-w-0 py-1 text-mini leading-snug text-muted-foreground"
+						>
+							<SystemNotice part={part} wrap />
+						</div>
+					);
 				}
 				if (isPlanReviewPart(part)) {
 					return <PlanReviewCard key={key} part={part} />;

@@ -4,13 +4,13 @@ This file provides guidance to AI coding agents working with code in this reposi
 
 ## What is Helmor
 
-Helmor is a local-first desktop app built with **Tauri v2** (Rust backend) + **React 19** + **Vite** + **TypeScript**. It provides a workspace management UI with its own SQLite database (`~/helmor/` in release, `~/helmor-dev/` in debug), letting users browse workspaces/sessions/messages and send prompts to AI agents (Claude Code CLI, OpenAI Codex CLI) via streaming IPC.
+Helmor is a local-first desktop app built with **Tauri v2** (Rust backend) + **React 19** + **Vite** + **TypeScript**. It provides a workspace management UI with its own SQLite database (`~/helmor/` in release, `~/helmor-dev/` in debug), letting users browse workspaces/sessions/messages and send prompts to AI agents (Claude Code CLI, OpenAI Codex CLI, OpenCode) via streaming IPC.
 
 ## Commands
 
 ```bash
 bun install                  # Install deps (bun 1.3+). Also runs `bun install` in sidecar/ via postinstall.
-bun run dev                  # Full desktop app: Tauri + Vite (localhost:1420 in webview)
+bun run dev                  # dev:prepare + vite build + tauri dev (builds dist/ so companion serves current bundle)
 bun run dev:analyze          # Same as dev, with perf HUD (VITE_HELMOR_PERF_HUD=1)
 bun run build                # tsc + vite build (frontend bundle to dist/)
 bun run typecheck            # tsc --noEmit for frontend AND sidecar
@@ -35,9 +35,9 @@ Single test file: `bun x vitest run src/App.test.tsx` | `cd sidecar && bun test 
 
 ### Three-process model
 
-- **Frontend** (`src/`): React 19 SPA in Tauri webview. Root state in `App.tsx` via `useState` + TanStack React Query + context providers.
+- **Frontend** (`src/`): React 19 SPA in Tauri webview. State managed by focused hooks in `shell/hooks/` (`useAppShellState`, `useSelectionController`, `useEditorEditMode`, `useGlobalShortcutHandlers`, `useAppBootstrap`) + TanStack React Query + context providers.
 - **Rust backend** (`src-tauri/src/`): Tauri host, SQLite database, spawns and supervises the sidecar.
-- **Sidecar** (`sidecar/`): Bun + TypeScript, wraps `@anthropic-ai/claude-agent-sdk` and `@openai/codex-sdk`. Built to `sidecar/dist/helmor-sidecar` via `bun build --compile`. JSON event stream over stdout.
+- **Sidecar** (`sidecar/`): Bun + TypeScript, wraps `@anthropic-ai/claude-agent-sdk`, `@openai/codex-sdk`, and `@opencode-ai/sdk`. Built to `sidecar/dist/helmor-sidecar` via `bun build --compile`. JSON event stream over stdout.
 
 Message flow: user prompt -> Rust `agents::streaming` -> sidecar -> SDK -> stdout events -> Rust accumulator -> adapter + collapse -> `ThreadMessageLike[]` -> `tauri::ipc::Channel` -> React.
 
@@ -47,7 +47,7 @@ Feature-based layout. Each feature folder follows: `index.tsx` (main) + `contain
 
 | Path | Role |
 | --- | --- |
-| `App.tsx` | Root. Owns selection state, view mode, sending status. |
+| `App.tsx` | Root (~18 lines). Composition layer that delegates to AppProviders and AppShell. |
 | `features/panel/` | Chat thread container, header, message components, thread viewport. |
 | `features/conversation/` | Conversation renderer + `use-streaming` hook. |
 | `features/composer/` | Lexical-based message input. Plugins in `editor/plugins/`. |
@@ -55,10 +55,12 @@ Feature-based layout. Each feature folder follows: `index.tsx` (main) + `contain
 | `features/inspector/` | Right-side inspector (actions, changes sections). |
 | `features/navigation/` | Sidebar workspace groups. |
 | `features/commit/` | Commit button + lifecycle hook. |
+| `features/terminal/` | Terminal Mode session panel, presets (boot command builders), session store with PTY lifecycle. |
 | `features/settings/` | Settings dialog + panels (CLI install, repo settings, Conductor import). |
-| `shell/` | Top-level layout, GitHub identity gate, panel resize hooks. |
+| `shell/` | Top-level layout, GitHub identity gate, panel resize hooks. State orchestration in `hooks/`: `use-app-shell-state.tsx` (central hub), `use-selection-controllers.ts` (selection/context/start TDZ ring), `use-editor-edit-mode.ts`, `use-global-shortcut-handlers.ts`, and `use-app-bootstrap.ts` (app initialization). All <300 lines/file. |
 | `components/ai/` | AI-specific components (code block, file tree, reasoning). |
 | `components/ui/` | shadcn/ui primitives (base-nova). |
+| `components/terminal-output-scheduler.ts` | PTY output coalescing (8ms flush window, 16KB threshold) to reduce IPC cost. |
 | `lib/api.ts` | IPC bridge -- every Tauri `invoke()` call wrapped as a typed function. |
 | `lib/query-client.ts` | React Query keys + query options factories. |
 | `lib/settings.ts` | App settings context with Tauri storage. |
@@ -68,13 +70,14 @@ Feature-based layout. Each feature folder follows: `index.tsx` (main) + `contain
 | Module | Role |
 | --- | --- |
 | `lib.rs` | Tauri app builder. Registers commands, runs setup hook. |
-| `commands/` | Tauri command handlers split by domain (session, repository, workspace, editor, github, conductor, settings, system). |
+| `commands/` | Tauri command handlers split by domain (session, repository, workspace, editor, github, conductor, settings, system). `terminal_commands.rs` includes `set_terminal_session_busy` and `create_session` (now accepts `session_kind` and `agent_type` parameters). |
 | `agents/` | Agent streaming + persistence (catalog, persistence, queries, streaming, support). |
+| `cli/` | CLI entry point + subcommands. `terminal_hook.rs` provides the hidden `terminal-hook` command used by agent CLIs to communicate PTY lifecycle events (session id, busy/idle, prompt capture). |
 | `pipeline/` | Message pipeline: `accumulator/` -> `adapter/` + `collapse` -> `ThreadMessageLike[]`. Includes `event_filter.rs`, `classify.rs`, `types.rs`. |
-| `workspace/` | Workspace operations (branching, lifecycle, helpers) + `files/` sub-module (editor, changes, types). |
+| `workspace/` | Workspace operations (branching, lifecycle, helpers) + `files/` sub-module (editor, changes, types). `scripts.rs` includes PTY output coalescing (8ms flush window, 16KB threshold, UTF-8 safe flush). |
 | `git/` | Git operations (ops, watcher). |
 | `github/` | GitHub integration (auth, CLI, GraphQL). |
-| `models/` | Persistence layer (db, repos, sessions, settings, workspaces). |
+| `models/` | Persistence layer (db, repos, sessions, settings, workspaces). Sessions table now has `session_kind` (distinguishes terminal vs GUI sessions) and `agent_type` (tracks which agent is being used). |
 | `service.rs` | Service layer. |
 | `sidecar.rs` | Sidecar process manager (spawn, stdio, graceful SIGTERM). |
 | `schema.rs` | DB schema + idempotent migrations. |
@@ -85,7 +88,7 @@ Feature-based layout. Each feature folder follows: `index.tsx` (main) + `contain
 
 ### Sidecar structure (`sidecar/src/`)
 
-`index.ts` (entry, stdin/stdout JSON) | `session-manager.ts` (base lifecycle) | `claude-session-manager.ts` | `codex-session-manager.ts` | `codex-skill-scanner.ts` | `request-parser.ts` | `emitter.ts` | `abort.ts` | `images.ts` | `title.ts` | `logger.ts`
+`index.ts` (entry, stdin/stdout JSON) | `session-manager.ts` (base lifecycle) | `claude-session-manager.ts` | `codex-session-manager.ts` | `opencode-session-manager.ts` | `opencode-server.ts` | `codex-skill-scanner.ts` | `request-parser.ts` | `emitter.ts` | `abort.ts` | `images.ts` | `title.ts` | `logger.ts`
 
 ### Message data flow
 
@@ -112,7 +115,7 @@ Three insta-based targets sharing `tests/common/mod.rs`:
 cd src-tauri && cargo test --tests                                           # All integration tests
 cd src-tauri && INSTA_UPDATE=always cargo test --tests                       # Accept new snapshots
 cd src-tauri && cargo insta review                                           # Interactive accept/reject
-cd src-tauri && cargo run --bin gen_pipeline_fixture -- <session_id> <name>  # Capture real fixture
+cd src-tauri && cargo run --example gen_pipeline_fixture -- <session_id> <name>  # Capture real fixture
 ```
 
 When a snapshot drifts: look at the diff first. Only accept after confirming the new shape is intended, not a regression.
@@ -141,30 +144,48 @@ When a snapshot drifts: look at the diff first. Only accept after confirming the
 - **macOS chrome**: Overlay title bar, traffic lights at (16, 24). Drag via `data-tauri-drag-region`.
 - **Serde**: `#[serde(rename_all = "camelCase")]` -- JSON fields match TypeScript directly.
 - **Persisting React Query data**: Every query is **in-memory only by default**. To persist a query across app restarts, set `meta: PERSIST_META` (alias for `{ persist: true }`) on its `queryOptions` / `useQuery` call. Only do this for data the user must see *immediately on cold start* (sidebar lists, identity chips). Never opt in large or fast-refetching queries — the persisted blob is read synchronously on boot. See `src/lib/query-client.ts` for the wiring; the `react-query.d.ts` augmentation closes `meta`'s shape so typos like `presist` fail at compile time.
-- **Backend → frontend notifications**: Always go through `UiMutationEvent` (`src-tauri/src/ui_sync/events.rs`). Add a typed variant, broadcast with `crate::ui_sync::publish(&app, ...)`, mirror the variant in `UiMutationEvent` in `src/lib/api.ts`, and handle it in `src/shell/hooks/use-ui-sync-bridge.ts` to invalidate the right React Query keys. Do NOT add ad-hoc `app.emit("custom-event", ...)` channels with their own component-level `listen(...)` -- they fragment cache invalidation, skip the global bridge, and are easy to leak.
+- **Backend → frontend notifications**: Always go through `UiMutationEvent` (`src-tauri/src/ui_sync/events.rs`). Add a typed variant, broadcast with `crate::ui_sync::publish(&app, ...)`, mirror the variant in `UiMutationEvent` in `src/lib/api.ts`, and handle it in `src/shell/hooks/use-ui-sync-bridge.ts` to invalidate the right React Query keys. Do NOT add ad-hoc `app.emit("custom-event", ...)` channels with their own component-level `listen(...)` -- they fragment cache invalidation, skip the global bridge, and are easy to leak. Terminal session lifecycle uses `TerminalActivityChanged` (busy/idle transitions), `TerminalSessionIdle` (completion notification), and `TerminalPromptCaptured` (title and branch-rename generation).
+- **Adding a Triage provider**: A provider lives in `sidecar/src/triage/providers/<id>.ts` implementing `TriageProvider` from `providers/types.ts` (`preflight()` → `buildTools(ctx)` → `promptHint(ctx)`), registered in `providers/registry.ts`, and mirrored by a `PROVIDER_SPECS` row in `src/features/settings/panels/triage.tsx` so the toggle shows up in Settings → Experimental → Local LLM → Auto-triage. Provider tools must write fetched data as Markdown into the per-tick `ScratchSession`; the agent then uses the built-in `scratch_grep` / `scratch_read` to fish out slices instead of stuffing raw API JSON into the context window.
 - **Clippy**: Must pass `cargo clippy --all-targets -- -D warnings` with zero warnings.
 - **Perf**: `VITE_HELMOR_PERF_HUD=1` enables HUD + react-scan + long-frame tracker.
 - **Logging**: Dev defaults to `debug`. Override: `HELMOR_LOG=info|debug|error`. JSONL logs in `{data_dir}/logs/`.
-- **Bundled forge CLIs (`gh`, `glab`)**: Pinned + SHA256-verified in `sidecar/scripts/stage-vendor.ts`. To upgrade:
-  1. Bump `GH_VERSION` / `GLAB_VERSION`.
-  2. Pull the new SHA256 from `…/checksums.txt` (URLs in the file's header comment) and update `GH_SHA256` / `GLAB_SHA256`.
-  3. Wipe `sidecar/.bundle-cache/` and re-run `bun run build` in `sidecar/` to force re-download + verify.
+- **Bundled forge CLIs (`gh`, `glab`, `cloudflared`)**: Pinned + SHA256-verified in `sidecar/scripts/vendor-platform.ts`. `cloudflared` powers the mobile-companion tunnel feature. To upgrade:
+  1. Bump `GH_VERSION` / `GLAB_VERSION` / `CLOUDFLARED_VERSION`.
+  2. Pull the new SHA256 from `…/checksums.txt` (URLs in the file's header comment) and update `GH_SHA256` / `GLAB_SHA256` / `CLOUDFLARED_SHA256`.
+  3. Re-run `bun run build` in `sidecar/` — the changed SHA256 auto-forces a re-download + verify (no manual wipe). Downloaded archives now live in a shared, cross-worktree cache (the main worktree's `sidecar/.bundle-cache`, override `HELMOR_BUNDLE_CACHE`); wipe that only if you want a forced clean fetch.
   Bump cadence: every release cycle if upstream has shipped a notable fix; immediately on security advisories. Pin so the auth-status JSON shape Helmor parses doesn't drift unexpectedly.
-- **Bundled agent CLIs (`claude-code`, `codex`)**: Pulled in via `sidecar/package.json` and staged into `sidecar/dist/vendor/{claude-code,codex}/` as platform-native binaries. Both upstreams ship per-platform npm sub-packages (`@anthropic-ai/claude-code-darwin-{arm64,x64}`, `@openai/codex-darwin-{arm64,x64}`). Cross-arch CI staging downloads the tarball straight from the npm registry and verifies against `CLAUDE_CODE_SHA256` / `CODEX_SHA256` in `stage-vendor.ts`. To upgrade:
+- **Bundled agent CLIs (`claude-code`, `codex`, `opencode`)**: Pulled in via `sidecar/package.json` and staged into `sidecar/dist/vendor/{claude-code,codex,opencode}/` as platform-native binaries. All three upstreams ship per-platform npm sub-packages (`@anthropic-ai/claude-code-darwin-{arm64,x64}`, `@openai/codex-darwin-{arm64,x64}`, `opencode-darwin-{arm64,x64}`). Cross-arch CI staging downloads the tarball straight from the npm registry and verifies against `CLAUDE_CODE_SHA256` / `CODEX_SHA256` / `OPENCODE_SHA256` in `vendor-platform.ts`. The `stage-vendor.ts` script stages claude-code, codex, opencode, gh, glab, and cloudflared CLIs. To upgrade:
   1. Bump the version in `sidecar/package.json`, `cd sidecar && bun install`.
   2. Compute the SHA256 of both arch tarballs (`shasum -a 256` on the cached `.tgz`) and update the table in `stage-vendor.ts` (key it under the new version string).
-  3. Wipe `sidecar/.bundle-cache/` and run `bun run build` in `sidecar/` to verify.
+  3. Run `bun run build` in `sidecar/` to verify — a changed SHA256 auto-forces a re-download (shared cache at the main worktree's `sidecar/.bundle-cache`, override `HELMOR_BUNDLE_CACHE`; no manual wipe needed).
   Both binaries are `bun build --compile` output (~200 MB each on macOS), so `maybeSignMacBinary(_, true)` is required — JSC needs `allow-jit` / `allow-unsigned-executable-memory` under hardened runtime. Run pipeline snapshot tests after every claude-code bump (`cd src-tauri && cargo test --tests`); the SDK event shape is the contract Helmor's accumulator depends on.
 
 ## 🚨 Code organization rules
 
-**Never let a single file grow into a monolith.** This codebase just went through a painful refactoring precisely because too much logic was crammed into too few files. Follow these rules strictly:
+**Never let a single file grow into a monolith.** In early 2026 the codebase went through a full refactor precisely because too much logic had been crammed into too few files (App.tsx alone was 1976 lines). The split delivered 22 focused files (all <300 lines, largest 299) that isolate re-render scopes and keep responsibilities clear. Follow these rules strictly:
 
 1. **One responsibility per file.** If a file handles two unrelated concerns, split it.
 2. **Use module directories.** When a module grows beyond ~300 lines, convert `foo.rs` to `foo/mod.rs` + sub-files, or split `foo.tsx` into a `foo/` folder with `index.tsx` + focused sub-modules. The `agents/`, `pipeline/`, `workspace/`, `commands/` directories are the reference pattern.
 3. **Frontend: feature folders.** New features go into `src/features/<name>/` with `index.tsx`, optional `container.tsx`, `hooks/`, and tests. Shared components go into `src/components/`. Do NOT put feature-specific logic in `src/lib/` or `App.tsx`.
 4. **Backend: commands vs. domain logic.** Tauri `#[command]` handlers go in `commands/`. Business logic and domain operations go in their own modules (`workspace/`, `agents/`, `git/`, etc.). Do not mix IPC glue with domain logic.
 5. **When in doubt, split.** It is always easier to merge two small files than to untangle a 1000-line monolith.
+
+## Terminal Mode
+
+Terminal Mode is a composer toggle (settings opt-in) that sends prompts directly to Claude Code or Codex CLI in a live PTY terminal session, bypassing the SDK streaming pipeline. Terminal sessions render in the main panel alongside GUI chat sessions.
+
+**Key features:**
+
+- WebGL context management: only visible terminals hold GPU contexts, staying within Chromium/WebKit budget limits.
+- Coalesced PTY output: 8ms flush window, 16KB threshold to reduce per-event IPC cost on high-throughput output.
+- Lifecycle hooks: idle detection, title generation, and completion notifications matching GUI behavior. Hooks inject `helmor terminal-hook` as a callback command into the agent's session lifecycle events (SessionStart, UserPromptSubmit, Stop).
+- Resume support: the agent's real session id is persisted via hooks, enabling `--resume` on relaunch.
+
+**Structure:**
+
+- Frontend: `src/features/terminal/` (session panel, presets, boot command builder, session store with PTY lifecycle).
+- Backend: `src-tauri/src/cli/terminal_hook.rs` (hook callback command), `src-tauri/src/commands/terminal_commands.rs` (spawn, resize, busy-state commands), `src-tauri/src/workspace/scripts.rs` (PTY output coalescing).
+- Components: `src/components/terminal-output-scheduler.ts` (output coalescing).
 
 ## Debugging (Tauri MCP only)
 

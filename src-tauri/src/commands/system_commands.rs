@@ -7,7 +7,8 @@ use anyhow::Context;
 use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::{
-    LogicalSize, LogicalUnit, Manager, PixelUnit, Size, State, Window, WindowSizeConstraints,
+    LogicalSize, LogicalUnit, Manager, PhysicalPosition, PhysicalSize, PixelUnit, Position, Size,
+    State, Window, WindowSizeConstraints,
 };
 
 use crate::workspace::scripts::{ScriptContext, ScriptEvent, ScriptProcessManager};
@@ -19,11 +20,43 @@ use super::common::{run_blocking, CmdResult};
 // Resizing is restored when onboarding exits.
 const ONBOARDING_WINDOW_WIDTH: f64 = 1300.0;
 const ONBOARDING_WINDOW_HEIGHT: f64 = 810.0;
+const MINI_WINDOW_WIDTH: f64 = 430.0;
+const MINI_WINDOW_HEIGHT: f64 = 760.0;
 const HELMOR_SKILL_NAME: &str = "helmor-cli";
 const HELMOR_SKILL_SOURCE: &str = "dohooo/helmor/.agents/skills/helmor-cli";
 
+// --- Per-version startup update check (CLI + Skills) -----------------------
+//
+// Keys live in the generic KV settings table:
+//
+//   `app.last_update_check_version`  — last Helmor version we ran the
+//                                      startup check for. Cache key — when
+//                                      this matches the current app
+//                                      version we skip the check entirely.
+//   `app.update_check_cli_error`     — last error from the silent CLI
+//                                      install attempt. Cleared on success.
+//   `app.update_check_skills_error`  — last error from the silent skills
+//                                      install attempt. Cleared on success.
+//
+// The cache key is **only** written when both halves of the check
+// finished cleanly (or had nothing to do). A transient failure (e.g. no
+// network for skills install) leaves the key untouched so the next
+// launch retries automatically.
+const LAST_UPDATE_CHECK_VERSION_KEY: &str = "app.last_update_check_version";
+const UPDATE_CHECK_CLI_ERROR_KEY: &str = "app.update_check_cli_error";
+const UPDATE_CHECK_SKILLS_ERROR_KEY: &str = "app.update_check_skills_error";
+const ONBOARDING_COMPLETED_KEY: &str = "app.onboarding_completed";
+
 static ONBOARDING_WINDOW_STATE: LazyLock<Mutex<HashMap<String, bool>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+static MINI_WINDOW_STATE: LazyLock<Mutex<HashMap<String, MiniWindowRestoreState>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Debug, Clone, Copy)]
+struct MiniWindowRestoreState {
+    size: PhysicalSize<u32>,
+    resizable: bool,
+}
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -47,10 +80,20 @@ pub struct AgentLoginStatus {
     pub claude: bool,
     pub codex: bool,
     pub cursor: bool,
+    pub opencode: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codex_provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codex_auth_method: Option<String>,
+}
+
+// `None` when the binary couldn't be resolved or `--version` failed. Cursor is SDK-only.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentVersions {
+    pub claude: Option<String>,
+    pub codex: Option<String>,
+    pub opencode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -71,22 +114,46 @@ pub struct HelmorSkillsStatus {
     pub command: String,
 }
 
-/// Where Helmor installs its managed CLI entrypoint on macOS.
-fn cli_install_target() -> std::path::PathBuf {
-    std::path::PathBuf::from(format!("/usr/local/bin/{}", installed_cli_name()))
+/// Combined snapshot used by the Settings → General "Helmor components"
+/// row. Pure read — never triggers an install. Pairs CLI + Skills status
+/// with whatever was cached by the last per-version startup check so the
+/// panel can render a single coherent state ("up to date", "needs
+/// attention", or per-component error).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentsUpdateCheck {
+    pub cli: CliStatus,
+    pub skills: HelmorSkillsStatus,
+    /// Helmor version (`CARGO_PKG_VERSION`) for which the silent startup
+    /// check last completed successfully. `None` means we've never
+    /// finished a clean pass — the panel reads that as "first run".
+    pub last_checked_version: Option<String>,
+    /// Current Helmor version. The panel compares this to
+    /// `last_checked_version` to decide whether to nudge the user that a
+    /// re-check is pending.
+    pub current_version: String,
+    /// Last silent-install failure message for the CLI, if any. Cleared
+    /// when a subsequent attempt (silent or user-initiated) succeeds.
+    pub cli_error: Option<String>,
+    /// Last silent-install failure message for the skills, if any.
+    /// Cleared on success.
+    pub skills_error: Option<String>,
 }
 
-fn installed_cli_name() -> &'static str {
-    if crate::data_dir::is_dev() {
-        "helmor-dev"
-    } else {
-        "helmor"
-    }
+/// Where Helmor installs its managed CLI entrypoint. The OS-specific target
+/// path lives behind the `platform::cli_install` seam.
+fn cli_install_target() -> std::path::PathBuf {
+    crate::platform::cli_install::install_target(crate::cli::installed_cli_name())
 }
 
 /// Name of the compiled CLI binary produced by `cargo build --bin helmor-cli`.
+/// Windows appends the `.exe` extension that cargo emits.
 fn cli_source_binary_name() -> &'static str {
-    "helmor-cli"
+    if cfg!(windows) {
+        "helmor-cli.exe"
+    } else {
+        "helmor-cli"
+    }
 }
 
 fn bundled_cli_binary(app_exe: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
@@ -105,48 +172,22 @@ fn cli_install_remediation(cli_binary: &std::path::Path, install_path: &std::pat
 }
 
 fn shell_quote(path: &std::path::Path) -> String {
-    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+    crate::platform::shell::quote_path(path)
 }
 
 fn shell_quote_arg(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
+    crate::platform::shell::quote_posix_arg(value)
 }
 
 fn classify_cli_install(
     install_path: &std::path::Path,
     bundled_cli: &std::path::Path,
 ) -> CliInstallState {
-    let metadata = match std::fs::symlink_metadata(install_path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return CliInstallState::Missing;
-        }
-        Err(_) => return CliInstallState::Stale,
-    };
-
-    if !metadata.file_type().is_symlink() {
-        return CliInstallState::Stale;
-    }
-
-    let target = match std::fs::read_link(install_path) {
-        Ok(target) => target,
-        Err(_) => return CliInstallState::Stale,
-    };
-    let resolved_target = if target.is_absolute() {
-        target
-    } else {
-        install_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("/"))
-            .join(target)
-    };
-
-    match (
-        std::fs::canonicalize(resolved_target),
-        std::fs::canonicalize(bundled_cli),
-    ) {
-        (Ok(installed), Ok(expected)) if installed == expected => CliInstallState::Managed,
-        _ => CliInstallState::Stale,
+    use crate::platform::cli_install::ManagedCliStatus;
+    match crate::platform::cli_install::classify(install_path, bundled_cli) {
+        ManagedCliStatus::Managed => CliInstallState::Managed,
+        ManagedCliStatus::Stale => CliInstallState::Stale,
+        ManagedCliStatus::Missing => CliInstallState::Missing,
     }
 }
 
@@ -238,18 +279,9 @@ fn try_install_symlink_unprivileged(
         }
     }
 
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(bundled_cli, install_path)
-            .with_context(|| format!("Failed to install CLI at {}", install_path.display()))?;
-        Ok(())
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = bundled_cli;
-        anyhow::bail!("CLI installation via symlink is only supported on Unix.")
-    }
+    crate::platform::cli_install::create_managed_link(bundled_cli, install_path)
+        .with_context(|| format!("Failed to install CLI at {}", install_path.display()))?;
+    Ok(())
 }
 
 fn is_permission_denied(error: &anyhow::Error) -> bool {
@@ -307,13 +339,14 @@ fn build_elevated_install_script(
     );
     format!(
         "do shell script \"{inner}\" with prompt \"Helmor wants to install the {name} command line tool to {display}.\" with administrator privileges",
-        name = installed_cli_name(),
+        name = crate::cli::installed_cli_name(),
         display = install_path.display(),
     )
 }
 
 /// Quote a path so it survives both `do shell script "..."` (AppleScript string
 /// literal) and the shell that AppleScript hands the script to.
+#[cfg(target_os = "macos")]
 fn applescript_shell_arg(path: &std::path::Path) -> String {
     let raw = path.display().to_string();
     // 1. Single-quote for the shell, escaping embedded single quotes via `'\''`.
@@ -323,9 +356,7 @@ fn applescript_shell_arg(path: &std::path::Path) -> String {
 }
 
 fn home_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
+    crate::platform::paths::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
 fn claude_skills_dir() -> PathBuf {
@@ -375,6 +406,17 @@ fn helmor_skills_install_args(agents: &[&str]) -> Vec<String> {
     args
 }
 
+/// A `Command` that runs `npx` cross-platform. `resolve_for_spawn` finds the
+/// real executable (on Windows `npx` is a `.cmd`/`.ps1` shim that
+/// `CreateProcess` can't resolve from the bare name), and
+/// `configure_background_cli` keeps it from flashing a console window — this
+/// runs during the silent startup check.
+fn npx_command() -> Command {
+    let mut cmd = Command::new(crate::platform::executable::resolve_for_spawn("npx"));
+    crate::platform::process::configure_background_cli(&mut cmd);
+    cmd
+}
+
 fn helmor_skills_install_command(agents: &[&str]) -> String {
     let command_agents = if agents.is_empty() {
         vec!["claude-code", "codex"]
@@ -394,6 +436,8 @@ fn helmor_skills_status() -> anyhow::Result<HelmorSkillsStatus> {
             claude: claude_login_ready(),
             codex: codex_auth_status().ready,
             cursor: cursor_login_ready(),
+            // opencode readiness comes from the login-status path, not here.
+            opencode: false,
             codex_provider: None,
             codex_auth_method: None,
         },
@@ -513,6 +557,9 @@ pub async fn install_cli() -> CmdResult<CliStatus> {
         let cli_binary = bundled_cli_binary(&source)?;
         let install_path = cli_install_target();
         install_cli_symlink(&cli_binary, &install_path)?;
+        // A successful user-initiated install means the Settings panel's
+        // "red dot" for the CLI is no longer accurate — clear it.
+        persist_error(UPDATE_CHECK_CLI_ERROR_KEY, None);
         Ok(cli_status_for_paths(&install_path, &cli_binary))
     })
     .await
@@ -530,6 +577,8 @@ pub async fn install_helmor_skills() -> CmdResult<HelmorSkillsStatus> {
             claude: claude_login_ready(),
             codex: codex_auth_status().ready,
             cursor: cursor_login_ready(),
+            // opencode readiness comes from the login-status path, not here.
+            opencode: false,
             codex_provider: None,
             codex_auth_method: None,
         };
@@ -543,7 +592,7 @@ pub async fn install_helmor_skills() -> CmdResult<HelmorSkillsStatus> {
             );
         }
 
-        let output = Command::new("npx")
+        let output = npx_command()
             .args(helmor_skills_install_args(&agents))
             .output()
             .with_context(|| format!("Failed to start skills installer. Try:\n  {command}"))?;
@@ -559,9 +608,307 @@ pub async fn install_helmor_skills() -> CmdResult<HelmorSkillsStatus> {
             );
         }
 
+        // Clear the panel's "red dot" — a user-initiated install just
+        // succeeded, so the cached error from the silent startup pass
+        // (if any) is no longer accurate.
+        persist_error(UPDATE_CHECK_SKILLS_ERROR_KEY, None);
         Ok(helmor_skills_status_for_agents(&agents))
     })
     .await
+}
+
+// ---------------------------------------------------------------------------
+// Per-version startup component update check
+// ---------------------------------------------------------------------------
+//
+// The Helmor app ships with two ancillary surfaces:
+//
+//   1. The `helmor` CLI binary, installed as a symlink at /usr/local/bin/.
+//      Because it's a symlink to a binary inside `Helmor.app`, the CLI
+//      already auto-tracks app upgrades — but a user who upgraded across
+//      the pre-symlink era can still be stuck with a stale file copy at
+//      that path, and brand-new users who skipped the "Power up Helmor"
+//      onboarding step have nothing at all there.
+//
+//   2. The "helmor-cli" skill, copied from the dohooo/helmor repo into
+//      ~/.claude/skills/ and ~/.agents/skills/ via `npx skills add`.
+//      The `--copy` install snapshots the source files locally, so
+//      app upgrades **never** refresh the skill content.
+//
+// This check runs once per Helmor version after onboarding completes.
+// Cache key is the app version string itself, so the work is exactly
+// "once per upgrade". Both halves are silent: CLI install only attempts
+// the unprivileged path (no sudo prompt at startup), and skills install
+// is skipped entirely if no agent is signed in. Failures don't update
+// the cache, so a transient network blip will be retried on the next
+// launch automatically.
+
+/// Read whatever the panel needs to render the components row, without
+/// triggering any install. Always safe to call.
+fn read_components_update_check() -> anyhow::Result<ComponentsUpdateCheck> {
+    let install_path = cli_install_target();
+    let source = std::env::current_exe().context("Cannot determine app executable path")?;
+    let cli_binary = bundled_cli_binary(&source)?;
+    let cli = cli_status_for_paths(&install_path, &cli_binary);
+    let skills = helmor_skills_status()?;
+    let last_checked_version =
+        crate::models::settings::load_setting_value(LAST_UPDATE_CHECK_VERSION_KEY).unwrap_or(None);
+    let cli_error =
+        crate::models::settings::load_setting_value(UPDATE_CHECK_CLI_ERROR_KEY).unwrap_or(None);
+    let skills_error =
+        crate::models::settings::load_setting_value(UPDATE_CHECK_SKILLS_ERROR_KEY).unwrap_or(None);
+    Ok(ComponentsUpdateCheck {
+        cli,
+        skills,
+        last_checked_version,
+        current_version: env!("CARGO_PKG_VERSION").to_string(),
+        cli_error,
+        skills_error,
+    })
+}
+
+/// True iff the user has completed onboarding. Onboarding has its own
+/// silent install path (`SkillsStep`); the startup check would race with
+/// it on a first run, so we gate on the same flag the frontend uses.
+fn onboarding_completed() -> bool {
+    matches!(
+        crate::models::settings::load_setting_value(ONBOARDING_COMPLETED_KEY),
+        Ok(Some(ref v)) if v == "true"
+    )
+}
+
+/// Silent CLI install — only attempts the unprivileged path. If the
+/// target needs sudo, we bail with a friendly message instead of
+/// surprising the user with a password prompt at app launch. The user
+/// can still hit "Retry" in the Settings panel, which routes through
+/// `install_cli` and is allowed to escalate.
+fn try_install_cli_silent_at(
+    bundled_cli: &std::path::Path,
+    install_path: &std::path::Path,
+) -> anyhow::Result<()> {
+    if !bundled_cli.is_file() {
+        anyhow::bail!("CLI binary not found at {}.", bundled_cli.display());
+    }
+    if let Ok(metadata) = std::fs::symlink_metadata(install_path) {
+        if metadata.file_type().is_dir() {
+            anyhow::bail!(
+                "Install path {} is a directory. Remove it manually first.",
+                install_path.display()
+            );
+        }
+    }
+
+    match try_install_symlink_unprivileged(bundled_cli, install_path) {
+        Ok(()) => Ok(()),
+        Err(error) if is_permission_denied(&error) => {
+            anyhow::bail!(
+                "Helmor needs administrator access to install the CLI at {}. Open Settings → General and click Retry to authorize.",
+                install_path.display()
+            )
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Verify the managed CLI symlink and silently re-point it if it is stale
+/// or missing. Returns the silent-install error (if any) for the panel.
+///
+/// This runs on EVERY components check — never gated by the per-version
+/// cache — because the symlink is cheap to fix (a stat + an unprivileged
+/// symlink rewrite) and can go stale WITHIN a single version whenever the
+/// dev build switches worktrees. Caching it behind the version key is
+/// exactly what used to leave a dangling `/usr/local/bin/helmor-dev`
+/// pointing at a worktree whose binary was rebuilt or removed.
+fn check_and_heal_cli_symlink(
+    install_path: &std::path::Path,
+    bundled_cli: &std::path::Path,
+) -> Option<String> {
+    match classify_cli_install(install_path, bundled_cli) {
+        CliInstallState::Managed => None,
+        CliInstallState::Missing | CliInstallState::Stale => {
+            match try_install_cli_silent_at(bundled_cli, install_path) {
+                Ok(()) => None,
+                Err(error) => {
+                    let msg = format!("{error:#}");
+                    tracing::info!(error = %msg, "Components check: silent CLI install deferred to user");
+                    Some(msg)
+                }
+            }
+        }
+    }
+}
+
+/// One pass of the silent startup check. Returns the post-check snapshot
+/// regardless of whether either half failed; failure details are written
+/// into `cli_error` / `skills_error` for the panel to surface.
+fn run_components_check_inner(force: bool) -> ComponentsUpdateCheck {
+    let current_version = env!("CARGO_PKG_VERSION").to_string();
+
+    // --- CLI half: ALWAYS run, BEFORE the per-version cache gate ---------
+    // Self-heal the managed CLI symlink on every launch (see
+    // `check_and_heal_cli_symlink`): it can go stale within a single
+    // version when the dev build switches worktrees, and re-pointing it is
+    // cheap and (on a user-writable install dir) needs no sudo, so a plain
+    // restart fixes it instead of forcing a manual `ln -sfn`.
+    let install_path = cli_install_target();
+    let cli_error: Option<String> = match std::env::current_exe()
+        .context("Cannot determine app executable path")
+        .and_then(|exe| bundled_cli_binary(&exe))
+    {
+        Ok(cli_binary) => check_and_heal_cli_symlink(&install_path, &cli_binary),
+        Err(error) => {
+            tracing::warn!(error = %format!("{error:#}"), "Components check: bundled CLI lookup failed");
+            None
+        }
+    };
+    persist_error(UPDATE_CHECK_CLI_ERROR_KEY, cli_error.as_deref());
+
+    // --- Skills install is expensive (`npx skills add`): gate it behind
+    // the per-version cache. The CLI half above is independent of this.
+    if !force {
+        if let Ok(Some(last)) =
+            crate::models::settings::load_setting_value(LAST_UPDATE_CHECK_VERSION_KEY)
+        {
+            if last == current_version {
+                return read_components_update_check()
+                    .unwrap_or_else(|_| empty_components_check(current_version));
+            }
+        }
+    }
+
+    // --- Skills half -----------------------------------------------------
+    //
+    // No-agent → not an error. Treat it as "nothing to install" so we
+    // don't keep retrying every launch within the same app version.
+    let login = AgentLoginStatus {
+        claude: claude_login_ready(),
+        codex: codex_auth_status().ready,
+        cursor: cursor_login_ready(),
+        opencode: false,
+        codex_provider: None,
+        codex_auth_method: None,
+    };
+    let agents = ready_skill_agents(&login);
+    let skills_error: Option<String> = if agents.is_empty() {
+        tracing::debug!("Components check: no signed-in agent, skipping skills install");
+        None
+    } else {
+        match install_skills_silent(&agents) {
+            Ok(()) => None,
+            Err(error) => {
+                let msg = format!("{error:#}");
+                tracing::warn!(error = %msg, "Components check: silent skills install failed");
+                Some(msg)
+            }
+        }
+    };
+    persist_error(UPDATE_CHECK_SKILLS_ERROR_KEY, skills_error.as_deref());
+
+    // Advance the cache key (which gates the expensive skills install) only
+    // when the skills half is clean — a transient failure (no network, npx
+    // not on PATH yet) auto-retries on the next launch. The CLI half is
+    // independent and always runs, so it no longer gates this key.
+    if skills_error.is_none() {
+        if let Err(error) = crate::models::settings::upsert_setting_value(
+            LAST_UPDATE_CHECK_VERSION_KEY,
+            &current_version,
+        ) {
+            tracing::warn!(
+                error = %format!("{error:#}"),
+                "Components check: failed to persist last-checked version",
+            );
+        }
+    }
+
+    read_components_update_check().unwrap_or_else(|_| empty_components_check(current_version))
+}
+
+fn install_skills_silent(agents: &[&str]) -> anyhow::Result<()> {
+    let command = helmor_skills_install_command(agents);
+    let output = npx_command()
+        .args(helmor_skills_install_args(agents))
+        .output()
+        .with_context(|| format!("Failed to start skills installer. Try:\n  {command}"))?;
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "Helmor skills setup failed.\n{}\n{}",
+            stdout.trim(),
+            stderr.trim(),
+        );
+    }
+    Ok(())
+}
+
+fn persist_error(key: &str, value: Option<&str>) {
+    let result = match value {
+        Some(message) => crate::models::settings::upsert_setting_value(key, message),
+        None => crate::models::settings::delete_setting_value(key),
+    };
+    if let Err(error) = result {
+        tracing::warn!(
+            key = key,
+            error = %format!("{error:#}"),
+            "Failed to persist components-check error state",
+        );
+    }
+}
+
+fn empty_components_check(current_version: String) -> ComponentsUpdateCheck {
+    ComponentsUpdateCheck {
+        cli: CliStatus {
+            installed: false,
+            install_path: None,
+            build_mode: crate::data_dir::data_mode_label().to_string(),
+            install_state: CliInstallState::Missing,
+        },
+        skills: HelmorSkillsStatus {
+            installed: false,
+            claude: false,
+            codex: false,
+            command: helmor_skills_install_command(&[]),
+        },
+        last_checked_version: None,
+        current_version,
+        cli_error: None,
+        skills_error: None,
+    }
+}
+
+/// Fire-and-forget startup hook called from `lib.rs setup()`. Yields
+/// immediately; the actual install runs on a blocking task so a slow
+/// `npx` invocation can't stall the rest of setup. Gated on
+/// `onboarding_completed` so a brand-new install doesn't race the
+/// onboarding step's own auto-install.
+pub fn spawn_startup_components_check() {
+    tauri::async_runtime::spawn(async move {
+        let _ = tauri::async_runtime::spawn_blocking(|| {
+            if !onboarding_completed() {
+                tracing::debug!("Components check: skipped (onboarding not completed yet)");
+                return;
+            }
+            let snapshot = run_components_check_inner(false);
+            tracing::debug!(
+                cli_state = ?snapshot.cli.install_state,
+                skills_installed = snapshot.skills.installed,
+                cli_error = ?snapshot.cli_error,
+                skills_error = ?snapshot.skills_error,
+                "Components check: completed"
+            );
+        })
+        .await;
+    });
+}
+
+#[tauri::command]
+pub async fn get_helmor_components_update_check() -> CmdResult<ComponentsUpdateCheck> {
+    run_blocking(read_components_update_check).await
+}
+
+#[tauri::command]
+pub async fn recheck_helmor_components() -> CmdResult<ComponentsUpdateCheck> {
+    run_blocking(|| Ok(run_components_check_inner(true))).await
 }
 
 #[tauri::command]
@@ -624,6 +971,103 @@ pub fn exit_onboarding_window_mode(window: Window) -> CmdResult<()> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn enter_mini_window_mode(window: Window) -> CmdResult<()> {
+    let label = window.label().to_string();
+    let restore_state = MiniWindowRestoreState {
+        size: window
+            .outer_size()
+            .context("Failed to read current window size")?,
+        resizable: window
+            .is_resizable()
+            .context("Failed to read window resizable state")?,
+    };
+    MINI_WINDOW_STATE
+        .lock()
+        .expect("mini window state mutex poisoned")
+        .entry(label)
+        .or_insert(restore_state);
+
+    let size = mini_window_size();
+    window
+        .set_size(size)
+        .context("Failed to set mini window size")?;
+    window.center().context("Failed to center mini window")?;
+    window
+        .set_min_size(Some(size))
+        .context("Failed to set mini minimum window size")?;
+    window
+        .set_max_size(Some(size))
+        .context("Failed to set mini maximum window size")?;
+    window
+        .set_size_constraints(mini_window_constraints())
+        .context("Failed to set mini window size constraints")?;
+    window
+        .set_resizable(false)
+        .context("Failed to disable mini window resizing")?;
+    // Resizing/centering drops the webview's keyboard focus on macOS, which
+    // kills the JS keydown listener until the user clicks back in. Re-focus
+    // so the toggle shortcut keeps working without a manual click.
+    let _ = window.set_focus();
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn exit_mini_window_mode(window: Window) -> CmdResult<()> {
+    let label = window.label().to_string();
+    let restore_state = MINI_WINDOW_STATE
+        .lock()
+        .expect("mini window state mutex poisoned")
+        .remove(&label);
+
+    window
+        .set_size_constraints(WindowSizeConstraints::default())
+        .context("Failed to clear mini window size constraints")?;
+    window
+        .set_min_size(None::<Size>)
+        .context("Failed to clear mini minimum window size")?;
+    window
+        .set_max_size(None::<Size>)
+        .context("Failed to clear mini maximum window size")?;
+
+    if let Some(state) = restore_state {
+        window
+            .set_size(Size::Physical(state.size))
+            .context("Failed to restore window size")?;
+        center_window_for_size(&window, state.size).context("Failed to center restored window")?;
+        window
+            .set_resizable(state.resizable)
+            .context("Failed to restore window resizing")?;
+    } else {
+        window
+            .set_resizable(true)
+            .context("Failed to restore window resizing")?;
+    }
+    // See enter_mini_window_mode: restore keyboard focus after resizing so the
+    // toggle shortcut stays live.
+    let _ = window.set_focus();
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn toggle_mini_window_mode(window: Window) -> CmdResult<bool> {
+    let label = window.label().to_string();
+    let is_mini = MINI_WINDOW_STATE
+        .lock()
+        .expect("mini window state mutex poisoned")
+        .contains_key(&label);
+
+    if is_mini {
+        exit_mini_window_mode(window)?;
+        Ok(false)
+    } else {
+        enter_mini_window_mode(window)?;
+        Ok(true)
+    }
+}
+
 fn onboarding_window_size() -> Size {
     Size::Logical(LogicalSize {
         width: ONBOARDING_WINDOW_WIDTH,
@@ -648,6 +1092,43 @@ fn onboarding_window_constraints() -> WindowSizeConstraints {
     }
 }
 
+fn mini_window_size() -> Size {
+    Size::Logical(LogicalSize {
+        width: MINI_WINDOW_WIDTH,
+        height: MINI_WINDOW_HEIGHT,
+    })
+}
+
+fn mini_window_constraints() -> WindowSizeConstraints {
+    WindowSizeConstraints {
+        min_width: Some(PixelUnit::Logical(LogicalUnit::new(MINI_WINDOW_WIDTH))),
+        min_height: Some(PixelUnit::Logical(LogicalUnit::new(MINI_WINDOW_HEIGHT))),
+        max_width: Some(PixelUnit::Logical(LogicalUnit::new(MINI_WINDOW_WIDTH))),
+        max_height: Some(PixelUnit::Logical(LogicalUnit::new(MINI_WINDOW_HEIGHT))),
+    }
+}
+
+fn center_window_for_size(window: &Window, size: PhysicalSize<u32>) -> anyhow::Result<()> {
+    let Some(monitor) = window
+        .current_monitor()
+        .context("Failed to read current monitor")?
+    else {
+        window.center().context("Failed to center window")?;
+        return Ok(());
+    };
+
+    let monitor_position = *monitor.position();
+    let monitor_size = *monitor.size();
+    let x = monitor_position.x + ((monitor_size.width as i32 - size.width as i32) / 2);
+    let y = monitor_position.y + ((monitor_size.height as i32 - size.height as i32) / 2);
+
+    window
+        .set_position(Position::Physical(PhysicalPosition::new(x, y)))
+        .context("Failed to set centered window position")?;
+
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn open_agent_login_terminal(provider: String) -> CmdResult<()> {
     run_blocking(move || open_agent_login_terminal_impl(&provider)).await
@@ -661,11 +1142,58 @@ pub async fn get_agent_login_status() -> CmdResult<AgentLoginStatus> {
             claude: claude_login_ready(),
             codex: codex.ready,
             cursor: cursor_login_ready(),
+            opencode: opencode_login_ready(),
             codex_provider: codex.provider,
             codex_auth_method: codex.auth_method.map(str::to_string),
         })
     })
     .await
+}
+
+#[tauri::command]
+pub async fn get_agent_versions() -> CmdResult<AgentVersions> {
+    run_blocking(|| {
+        Ok(AgentVersions {
+            claude: agent_cli_version("claude"),
+            codex: agent_cli_version("codex"),
+            opencode: agent_cli_version("opencode"),
+        })
+    })
+    .await
+}
+
+fn agent_cli_version(provider: &str) -> Option<String> {
+    let mut command = std::process::Command::new(resolve_agent_binary(provider));
+    crate::platform::process::configure_background_cli(&mut command);
+    let output = command.arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    parse_semver(&text)
+}
+
+// Extract the first `MAJOR.MINOR.PATCH(-suffix)?` token; CLI `--version` layouts vary.
+fn parse_semver(text: &str) -> Option<String> {
+    for token in text.split(|c: char| c.is_whitespace() || c == '(' || c == ')') {
+        let trimmed = token.trim_start_matches('v');
+        let mut dots = 0;
+        let valid = !trimmed.is_empty()
+            && trimmed.chars().all(|c| {
+                if c == '.' {
+                    dots += 1;
+                    true
+                } else {
+                    c.is_ascii_digit() || c == '-' || c.is_ascii_alphabetic()
+                }
+            })
+            && dots >= 2
+            && trimmed.chars().next().is_some_and(|c| c.is_ascii_digit());
+        if valid {
+            return Some(trimmed.to_string());
+        }
+    }
+    None
 }
 
 /// Cursor "ready" = non-empty `app.cursor_provider.apiKey`.
@@ -700,16 +1228,42 @@ fn resolve_agent_binary(provider: &str) -> PathBuf {
     let bundled_path = match provider {
         "claude" => bundled.claude_bin,
         "codex" => bundled.codex_bin,
+        "opencode" => bundled.opencode_bin,
         _ => None,
     };
-    bundled_path.unwrap_or_else(|| PathBuf::from(provider))
+    bundled_path.unwrap_or_else(|| crate::platform::executable::resolve_for_spawn(provider))
+}
+
+// Read from the sidecar-computed settings row, NOT `auth.json` (which misses env/config/Zen providers).
+fn opencode_login_ready() -> bool {
+    let raw = match crate::models::settings::load_setting_value("app.opencode_provider") {
+        Ok(Some(value)) => value,
+        Ok(None) => return false,
+        Err(error) => {
+            tracing::debug!("Failed to read app.opencode_provider: {error}");
+            return false;
+        }
+    };
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return false;
+    };
+    let status_ready = parsed
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .map(|status| status == "ready")
+        .unwrap_or(false);
+    let connected_nonempty = parsed
+        .get("connected")
+        .and_then(serde_json::Value::as_array)
+        .map(|arr| !arr.is_empty())
+        .unwrap_or(false);
+    status_ready || connected_nonempty
 }
 
 fn claude_login_ready() -> bool {
-    match std::process::Command::new(resolve_agent_binary("claude"))
-        .args(["auth", "status"])
-        .output()
-    {
+    let mut command = std::process::Command::new(resolve_agent_binary("claude"));
+    crate::platform::process::configure_background_cli(&mut command);
+    match command.args(["auth", "status"]).output() {
         Ok(output) if output.status.success() => parse_claude_login_status(&output.stdout),
         Ok(output) => {
             // Claude exits non-zero when the user isn't authenticated —
@@ -760,10 +1314,9 @@ fn codex_auth_status() -> CodexAuthStatus {
 }
 
 fn codex_login_ready() -> bool {
-    match std::process::Command::new(resolve_agent_binary("codex"))
-        .args(["login", "status"])
-        .output()
-    {
+    let mut command = std::process::Command::new(resolve_agent_binary("codex"));
+    crate::platform::process::configure_background_cli(&mut command);
+    match command.args(["login", "status"]).output() {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -817,6 +1370,7 @@ fn agent_login_command(provider: &str) -> anyhow::Result<String> {
     let args = match provider {
         "claude" => "auth login",
         "codex" => "login",
+        "opencode" => "auth login",
         _ => anyhow::bail!("Unknown agent provider: {provider}"),
     };
     // Quote the resolved binary path so spaces in `Helmor.app` survive
@@ -861,15 +1415,9 @@ pub async fn spawn_agent_login_terminal(
         let _ = window.set_focus();
     }
 
-    let working_dir = std::env::var("HOME")
-        .ok()
-        .filter(|home| !home.trim().is_empty())
-        .or_else(|| {
-            std::env::current_dir()
-                .ok()
-                .map(|path| path.display().to_string())
-        })
-        .unwrap_or_else(|| "/".to_string());
+    let working_dir = crate::platform::paths::home_dir_or_current_or_root()
+        .display()
+        .to_string();
     let context = ScriptContext {
         root_path: working_dir.clone(),
         workspace_path: None,
@@ -887,11 +1435,12 @@ pub async fn spawn_agent_login_terminal(
             instance_id = %instance_id,
             "spawn_agent_login_terminal: entering run_terminal_session"
         );
-        // Auto-type the login command via the run_terminal_session boot
+        // Auto-type the login command via the run_terminal_session boot input,
+        // in the active shell's syntax (PowerShell needs the call operator).
         // input — written synchronously to the PTY master right after
         // the shell registers, so a frontend re-render-driven
         // cleanup→respawn can't drop the bytes.
-        let boot_input = format!("{command}; exit\n");
+        let boot_input = crate::platform::shell::boot_input(&command);
         if let Err(error) = crate::workspace::scripts::run_terminal_session(
             &mgr,
             AGENT_LOGIN_REPO_ID,
@@ -1207,6 +1756,7 @@ fn copy_image_file_to_clipboard(_path: &std::path::Path) -> anyhow::Result<()> {
     anyhow::bail!("Copying images is only supported on macOS")
 }
 
+#[cfg(target_os = "macos")]
 fn applescript_escape(input: &str) -> String {
     input.replace('\\', "\\\\").replace('"', "\\\"")
 }
@@ -1256,6 +1806,25 @@ pub async fn request_quit(app: tauri::AppHandle, force: bool) {
             signaled,
             "request_quit: signaled live script/terminal handles"
         );
+    }
+
+    // Belt-and-suspenders: stamp every still-open runtime registry
+    // row as ended, so the next launch's classification sweep
+    // doesn't waste cycles probing PIDs we've already terminated.
+    // The per-process `record_ended` calls in `run_script_with_shell`
+    // cover the common case; this catches handles that didn't make
+    // it through their reaper before app exit.
+    match crate::workspace::runtime_registry::record_all_ended() {
+        Ok(0) => {}
+        Ok(stamped) => tracing::debug!(
+            stamped,
+            "request_quit: stamped runtime registry rows as ended"
+        ),
+        Err(error) => tracing::warn!(
+            %error,
+            "request_quit: failed to stamp runtime registry rows ended; \
+             next launch's sweep will reclassify"
+        ),
     }
 
     // 4. Cooperative sidecar teardown: shutdown RPC → SIGTERM → SIGKILL.
@@ -1334,6 +1903,9 @@ pub async fn dev_reset_all_data(app: tauri::AppHandle) -> CmdResult<DevResetResu
             .context("Failed to start dev-reset transaction")?;
 
         let messages_deleted: usize = tx.execute("DELETE FROM session_messages", []).unwrap_or(0);
+        let _plan_state: usize = tx
+            .execute("DELETE FROM session_plan_state", [])
+            .unwrap_or(0);
         let sessions_deleted: usize = tx.execute("DELETE FROM sessions", []).unwrap_or(0);
         let _pending: usize = tx.execute("DELETE FROM pending_cli_sends", []).unwrap_or(0);
         let workspaces_deleted: usize = tx.execute("DELETE FROM workspaces", []).unwrap_or(0);
@@ -1394,6 +1966,26 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn parse_semver_extracts_version_from_varied_cli_output() {
+        assert_eq!(
+            parse_semver("2.1.154 (Claude Code)").as_deref(),
+            Some("2.1.154")
+        );
+        assert_eq!(
+            parse_semver("codex-cli 0.137.0").as_deref(),
+            Some("0.137.0")
+        );
+        assert_eq!(parse_semver("1.16.2\n").as_deref(), Some("1.16.2"));
+        assert_eq!(parse_semver("v3.4.5").as_deref(), Some("3.4.5"));
+        assert_eq!(
+            parse_semver("1.2.3-beta.1").as_deref(),
+            Some("1.2.3-beta.1")
+        );
+        assert_eq!(parse_semver("opencode cli"), None);
+        assert_eq!(parse_semver("version 1.2"), None);
+    }
+
+    #[test]
     fn classify_cli_install_reports_missing_when_path_absent() {
         let tmp = tempdir().unwrap();
         let bundled_cli = tmp.path().join("Helmor.app/Contents/MacOS/helmor-cli");
@@ -1407,6 +1999,28 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn classify_cli_install_reports_managed_for_matching_shim() {
+        let tmp = tempdir().unwrap();
+        let bundled_cli = tmp.path().join("Helmor/helmor-cli.exe");
+        let install_path = tmp.path().join("bin/helmor.cmd");
+        fs::create_dir_all(bundled_cli.parent().unwrap()).unwrap();
+        fs::create_dir_all(install_path.parent().unwrap()).unwrap();
+        fs::write(&bundled_cli, "").unwrap();
+        fs::write(
+            &install_path,
+            format!("@echo off\r\n\"{}\" %*\r\n", bundled_cli.display()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            classify_cli_install(&install_path, &bundled_cli),
+            CliInstallState::Managed
+        );
+    }
+
+    #[cfg(unix)]
     #[test]
     fn classify_cli_install_reports_managed_for_matching_symlink() {
         let tmp = tempdir().unwrap();
@@ -1439,6 +2053,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn install_cli_symlink_replaces_stale_copy_with_managed_symlink() {
         let tmp = tempdir().unwrap();
@@ -1451,6 +2066,40 @@ mod tests {
 
         install_cli_symlink(&bundled_cli, &install_path).unwrap();
 
+        assert_eq!(
+            classify_cli_install(&install_path, &bundled_cli),
+            CliInstallState::Managed
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn check_and_heal_cli_symlink_repoints_a_stale_link() {
+        let tmp = tempdir().unwrap();
+        let bundled_cli = tmp.path().join("Helmor.app/Contents/MacOS/helmor-cli");
+        let old_cli = tmp.path().join("old-worktree/helmor-cli");
+        let install_path = tmp.path().join("usr/local/bin/helmor-dev");
+        fs::create_dir_all(bundled_cli.parent().unwrap()).unwrap();
+        fs::create_dir_all(old_cli.parent().unwrap()).unwrap();
+        fs::create_dir_all(install_path.parent().unwrap()).unwrap();
+        fs::write(&bundled_cli, "#!/bin/sh\n").unwrap();
+        fs::write(&old_cli, "#!/bin/sh\n").unwrap();
+
+        // Reproduce the dev-CLI breakage: the managed symlink points at a
+        // different worktree's binary, so it reads as Stale.
+        std::os::unix::fs::symlink(&old_cli, &install_path).unwrap();
+        assert_eq!(
+            classify_cli_install(&install_path, &bundled_cli),
+            CliInstallState::Stale
+        );
+
+        // The plain (un-forced) heal a restart triggers re-points it with no
+        // error and no sudo — the whole point of moving this out of the
+        // per-version cache gate.
+        assert_eq!(
+            check_and_heal_cli_symlink(&install_path, &bundled_cli),
+            None
+        );
         assert_eq!(
             classify_cli_install(&install_path, &bundled_cli),
             CliInstallState::Managed
@@ -1470,6 +2119,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn applescript_shell_arg_quotes_plain_path() {
         assert_eq!(
@@ -1478,6 +2128,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn applescript_shell_arg_escapes_single_quote_for_shell_then_applescript() {
         // Shell-quote turns `'` into `'\''`; the embedded backslash then needs
@@ -1488,6 +2139,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn applescript_shell_arg_escapes_double_quote_and_backslash() {
         assert_eq!(
@@ -1519,6 +2171,93 @@ mod tests {
         assert!(
             script.contains("with prompt \""),
             "script missing prompt clause: {script}"
+        );
+    }
+
+    // --- silent components-check helpers -----------------------------------
+
+    #[test]
+    fn try_install_cli_silent_at_creates_symlink_when_target_writable() {
+        let tmp = tempdir().unwrap();
+        let bundled_cli = tmp.path().join("Helmor.app/Contents/MacOS/helmor-cli");
+        let install_path = tmp.path().join("usr/local/bin/helmor");
+        fs::create_dir_all(bundled_cli.parent().unwrap()).unwrap();
+        fs::write(&bundled_cli, "#!/bin/sh\n").unwrap();
+
+        // No existing install path — the function should mkdir + symlink
+        // without any escalation.
+        try_install_cli_silent_at(&bundled_cli, &install_path).unwrap();
+
+        assert_eq!(
+            classify_cli_install(&install_path, &bundled_cli),
+            CliInstallState::Managed
+        );
+    }
+
+    #[test]
+    fn try_install_cli_silent_at_replaces_stale_copy_in_writable_dir() {
+        let tmp = tempdir().unwrap();
+        let bundled_cli = tmp.path().join("Helmor.app/Contents/MacOS/helmor-cli");
+        let install_path = tmp.path().join("usr/local/bin/helmor");
+        fs::create_dir_all(bundled_cli.parent().unwrap()).unwrap();
+        fs::create_dir_all(install_path.parent().unwrap()).unwrap();
+        fs::write(&bundled_cli, "#!/bin/sh\n").unwrap();
+        fs::write(&install_path, "#!/bin/sh\n# stale\n").unwrap();
+
+        try_install_cli_silent_at(&bundled_cli, &install_path).unwrap();
+
+        assert_eq!(
+            classify_cli_install(&install_path, &bundled_cli),
+            CliInstallState::Managed
+        );
+    }
+
+    #[test]
+    fn try_install_cli_silent_at_bails_when_target_is_directory() {
+        let tmp = tempdir().unwrap();
+        let bundled_cli = tmp.path().join("Helmor.app/Contents/MacOS/helmor-cli");
+        let install_path = tmp.path().join("usr/local/bin/helmor");
+        fs::create_dir_all(bundled_cli.parent().unwrap()).unwrap();
+        fs::create_dir_all(&install_path).unwrap();
+        fs::write(&bundled_cli, "#!/bin/sh\n").unwrap();
+
+        let err = try_install_cli_silent_at(&bundled_cli, &install_path).unwrap_err();
+        assert!(
+            err.to_string().contains("is a directory"),
+            "expected directory-guard message, got: {err}"
+        );
+    }
+
+    // macOS-only: exercises the `/usr/local/bin` sudo-elevation install path and
+    // asserts the macOS "administrator access / Retry" message. Windows installs
+    // a `.cmd` shim under %LOCALAPPDATA% with no elevation flow, so this scenario
+    // doesn't apply there.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn try_install_cli_silent_at_bails_with_friendly_message_on_permission_denied() {
+        // Pick a parent that almost certainly isn't writable to the test
+        // user. macOS test runners can't write to /usr/local/bin in CI
+        // without sudo — exactly the condition we want to exercise.
+        // Skip the test if for some reason we CAN write there (e.g. dev
+        // with broken perms) — passing in either case is wrong.
+        let install_path = std::path::PathBuf::from("/usr/local/bin/__helmor_test_silent_probe");
+        if install_path.exists() || std::fs::write(&install_path, b"x").is_ok() {
+            // Cleanup so a future run isn't polluted.
+            let _ = std::fs::remove_file(&install_path);
+            eprintln!("skipping permission-denied test: /usr/local/bin is writable here");
+            return;
+        }
+
+        let tmp = tempdir().unwrap();
+        let bundled_cli = tmp.path().join("Helmor.app/Contents/MacOS/helmor-cli");
+        fs::create_dir_all(bundled_cli.parent().unwrap()).unwrap();
+        fs::write(&bundled_cli, "#!/bin/sh\n").unwrap();
+
+        let err = try_install_cli_silent_at(&bundled_cli, &install_path).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("administrator access") && message.contains("Retry"),
+            "expected friendly sudo message, got: {message}"
         );
     }
 }

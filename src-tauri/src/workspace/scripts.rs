@@ -1,8 +1,5 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::os::fd::AsRawFd;
-use std::os::unix::io::FromRawFd;
-use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -13,6 +10,9 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use tauri::ipc::Channel;
+
+use crate::platform::process::Pid;
+use crate::platform::pty::PtyWriter;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -50,6 +50,12 @@ const PTY_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const PTY_WRITE_RETRY: Duration = Duration::from_millis(5);
 const PTY_WRITE_DEADLINE: Duration = Duration::from_millis(500);
 const STOP_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// PTY reader output coalescing: buffer bytes and emit one Stdout event per
+/// flush window or byte threshold (whichever first) to cut per-event IPC cost
+/// on high-throughput output.
+const PTY_FLUSH_INTERVAL: Duration = Duration::from_millis(8);
+const PTY_FLUSH_BYTES: usize = 16 * 1024;
+const PTY_READ_BUF_BYTES: usize = 16 * 1024;
 
 /// Graceful-stop bundle: the user-provided cleanup command + everything
 /// `graceful_kill` needs to spawn it (same env, same cwd, output piped
@@ -70,8 +76,8 @@ pub struct ScriptStop {
 /// point of this split. `kill()` only signals; reaping stays with `run_script`.
 #[derive(Clone)]
 struct ProcessHandle {
-    pid: libc::pid_t,
-    pgid: libc::pid_t,
+    pid: Pid,
+    pgid: Pid,
     /// Shared with `run_script`'s local handle; set by `kill()` or by a
     /// concurrent `register()` that replaces us. `run_script` reads this
     /// after wait() to decide whether to report a real exit code or None.
@@ -80,7 +86,7 @@ struct ProcessHandle {
     /// `&mut self`; actual contention is negligible (one writer per keypress
     /// burst). Keeping this alive is what makes Ctrl+C and typing work —
     /// without it, the PTY master would close right after the initial command.
-    stdin: Arc<Mutex<std::fs::File>>,
+    stdin: Arc<Mutex<Box<dyn PtyWriter>>>,
     /// Per-action graceful-stop config. `None` keeps today's behavior:
     /// SIGTERM → 200ms → SIGKILL with no detour through stop.command.
     stop: Option<Arc<ScriptStop>>,
@@ -96,7 +102,7 @@ struct ProcessHandle {
     /// `killpg(SIGKILL)` it so the cleanup process doesn't outlive the
     /// user's intent — otherwise restarting a workspace or quitting
     /// Helmor would leak the background sleep / docker compose down.
-    stop_pgid: Arc<Mutex<Option<libc::pid_t>>>,
+    stop_pgid: Arc<Mutex<Option<Pid>>>,
 }
 
 #[derive(Clone, Default)]
@@ -124,9 +130,9 @@ impl ScriptProcessManager {
     fn register(
         &self,
         key: ProcessKey,
-        pid: libc::pid_t,
-        pgid: libc::pid_t,
-        stdin: Arc<Mutex<std::fs::File>>,
+        pid: Pid,
+        pgid: Pid,
+        stdin: Arc<Mutex<Box<dyn PtyWriter>>>,
         stop: Option<ScriptStop>,
     ) -> Arc<AtomicBool> {
         let killed = Arc::new(AtomicBool::new(false));
@@ -150,7 +156,7 @@ impl ScriptProcessManager {
 
     /// Remove our handle from the map once `child.wait()` has returned.
     /// No-op if we were already replaced by a rerun.
-    fn unregister(&self, key: &ProcessKey, pid: libc::pid_t) {
+    fn unregister(&self, key: &ProcessKey, pid: Pid) {
         let mut map = self.processes.lock().expect("process map poisoned");
         if let Some(h) = map.get(key) {
             if h.pid == pid {
@@ -298,22 +304,7 @@ impl ScriptProcessManager {
             return Ok(false);
         };
         let file = stdin.lock().expect("stdin mutex poisoned");
-        let ws = libc::winsize {
-            ws_row: rows,
-            ws_col: cols,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
-        let ret = unsafe {
-            libc::ioctl(
-                file.as_raw_fd(),
-                libc::TIOCSWINSZ as libc::c_ulong,
-                &ws as *const libc::winsize,
-            )
-        };
-        if ret != 0 {
-            bail!("TIOCSWINSZ failed: {}", std::io::Error::last_os_error());
-        }
+        file.resize(cols, rows)?;
         Ok(true)
     }
 }
@@ -324,67 +315,17 @@ impl ScriptProcessManager {
 /// a separate thread. When the script owns a separate process group, also wait
 /// for that group to disappear so a fast leader exit cannot leave descendants
 /// running after Stop returns.
-fn escalating_kill(pid: libc::pid_t, pgid: libc::pid_t) {
-    let current_pgrp = unsafe { libc::getpgrp() };
-    let can_signal_group = pgid > 0 && pgid != current_pgrp;
+fn escalating_kill(pid: Pid, pgid: Pid) {
+    let tree = crate::platform::process::ProcessTree::new(pid, pgid);
+    crate::platform::process::terminate_tree(tree);
 
-    unsafe {
-        if can_signal_group {
-            libc::killpg(pgid, libc::SIGTERM);
-        }
-        libc::kill(pid, libc::SIGTERM);
-    }
-
-    if wait_for_processes_gone(pid, pgid, can_signal_group, PROCESS_TERM_TIMEOUT) {
+    if crate::platform::process::wait_for_tree_gone(tree, PROCESS_TERM_TIMEOUT, PTY_POLL_INTERVAL) {
         return;
     }
 
-    unsafe {
-        if can_signal_group {
-            libc::killpg(pgid, libc::SIGKILL);
-        }
-        libc::kill(pid, libc::SIGKILL);
-    }
-
-    let _ = wait_for_processes_gone(pid, pgid, can_signal_group, PROCESS_KILL_TIMEOUT);
-}
-
-fn wait_for_processes_gone(
-    pid: libc::pid_t,
-    pgid: libc::pid_t,
-    can_signal_group: bool,
-    timeout: Duration,
-) -> bool {
-    let deadline = Instant::now() + timeout;
-    loop {
-        let pid_gone = is_pid_gone(pid);
-        let group_gone = !can_signal_group || is_process_group_gone(pgid);
-        if pid_gone && group_gone {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(PTY_POLL_INTERVAL);
-    }
-}
-
-fn is_pid_gone(pid: libc::pid_t) -> bool {
-    let ret = unsafe { libc::kill(pid, 0) };
-    if ret == -1 {
-        let err = std::io::Error::last_os_error();
-        return err.raw_os_error() == Some(libc::ESRCH);
-    }
-    false
-}
-
-fn is_process_group_gone(pgid: libc::pid_t) -> bool {
-    let ret = unsafe { libc::killpg(pgid, 0) };
-    if ret == -1 {
-        let err = std::io::Error::last_os_error();
-        return err.raw_os_error() == Some(libc::ESRCH);
-    }
-    false
+    crate::platform::process::kill_tree(tree);
+    let _ =
+        crate::platform::process::wait_for_tree_gone(tree, PROCESS_KILL_TIMEOUT, PTY_POLL_INTERVAL);
 }
 
 /// SIGKILL any `stop.command` cleanup tree currently published in
@@ -393,12 +334,10 @@ fn is_process_group_gone(pgid: libc::pid_t) -> bool {
 /// not leak one that's already in flight from a prior Stop click. No-op
 /// when no cleanup is running. Mirrors the Force Stop short-circuit at
 /// the top of `graceful_kill`.
-fn kill_in_flight_stop_command(pgid_slot: &Mutex<Option<libc::pid_t>>) {
+fn kill_in_flight_stop_command(pgid_slot: &Mutex<Option<Pid>>) {
     let stop_pgid = *pgid_slot.lock().expect("stop_pgid mutex poisoned");
-    if let Some(pgid) = stop_pgid {
-        unsafe {
-            libc::killpg(pgid, libc::SIGKILL);
-        }
+    if let Some(pgid) = stop_pgid.filter(|pgid| *pgid > 0) {
+        crate::platform::process::kill_tree(crate::platform::process::ProcessTree::new(pgid, pgid));
     }
 }
 
@@ -433,12 +372,10 @@ fn run_stop_command(
     working_dir: &str,
     ctx: &ScriptContext,
     event_tx: &Channel<ScriptEvent>,
-    pgid_slot: &Mutex<Option<libc::pid_t>>,
+    pgid_slot: &Mutex<Option<Pid>>,
 ) -> StopOutcome {
-    let mut cmd = Command::new("/bin/sh");
-    cmd.arg("-c")
-        .arg(command)
-        .current_dir(working_dir)
+    let mut cmd = shell_command_for(command);
+    cmd.current_dir(working_dir)
         .env("TERM", "xterm-256color")
         .env("FORCE_COLOR", "1")
         .env("CLICOLOR_FORCE", "1")
@@ -461,25 +398,28 @@ fn run_stop_command(
         cmd.env("HELMOR_PORT_COUNT", count.to_string());
     }
 
-    unsafe {
-        cmd.pre_exec(|| {
-            if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    // Own process group (Unix) so a concurrent Force Stop can SIGKILL the whole
+    // cleanup tree; on Windows `taskkill /T` reaches the tree by PID. The
+    // OS-specific spawn flags live behind the `platform::process` seam.
+    crate::platform::process::configure_tree_root(&mut cmd);
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => return StopOutcome::SpawnFailed(format!("{e}")),
     };
-    let pid = child.id() as libc::pid_t;
+    let pid = child.id() as Pid;
+    // Process-group id of the cleanup tree's root. On Unix the child is its own
+    // session leader (`configure_tree_root` → `setsid`), so pgid == pid; we read
+    // it back to be robust. On Windows there is no pgid concept — `taskkill /T`
+    // walks the tree by PID — so the pid is the tree-root key.
+    #[cfg(unix)]
     let pgid = unsafe { libc::getpgid(pid) };
+    #[cfg(windows)]
+    let pgid = pid;
 
-    // Publish pgid so a concurrent Force Stop can SIGKILL the cleanup
-    // tree. Always cleared before return (deferred via the `outcome`
-    // binding below).
+    // Publish the tree-root id so a concurrent Force Stop can kill the cleanup
+    // tree. Always cleared before return (deferred via the `outcome` binding
+    // below).
     *pgid_slot.lock().expect("stop_pgid mutex poisoned") = Some(pgid);
 
     // Pipe stdout / stderr through dedicated reader threads so the user
@@ -532,12 +472,9 @@ fn run_stop_command(
                 // Don't leak the child + its reader threads on a
                 // try_wait failure — SIGKILL the pgid (or pid as
                 // fallback) and reap so the pipe ends close.
-                unsafe {
-                    if pgid > 0 {
-                        libc::killpg(pgid, libc::SIGKILL);
-                    }
-                    libc::kill(pid, libc::SIGKILL);
-                }
+                crate::platform::process::kill_tree(crate::platform::process::ProcessTree::new(
+                    pid, pgid,
+                ));
                 let _ = child.wait();
                 break StopOutcome::SpawnFailed(format!("try_wait failed: {e}"));
             }
@@ -636,42 +573,6 @@ pub struct ScriptContext {
     pub port_count: Option<u16>,
 }
 
-/// Allocate a PTY pair via `openpty`. Returns (master_fd, slave_fd).
-fn open_pty() -> Result<(libc::c_int, libc::c_int)> {
-    let mut master: libc::c_int = 0;
-    let mut slave: libc::c_int = 0;
-    let ws = libc::winsize {
-        ws_row: 30,
-        ws_col: 120,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    let ret = unsafe {
-        libc::openpty(
-            &mut master,
-            &mut slave,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &ws as *const libc::winsize as *mut libc::winsize,
-        )
-    };
-    if ret != 0 {
-        bail!("openpty failed: {}", std::io::Error::last_os_error());
-    }
-    Ok((master, slave))
-}
-
-fn set_nonblocking(fd: libc::c_int) -> Result<()> {
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags == -1 {
-        bail!("fcntl(F_GETFL) failed: {}", std::io::Error::last_os_error());
-    }
-    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
-        bail!("fcntl(F_SETFL) failed: {}", std::io::Error::last_os_error());
-    }
-    Ok(())
-}
-
 /// Escape a string for safe embedding inside single quotes.
 fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
@@ -689,19 +590,83 @@ fn fish_shell_escape(s: &str) -> String {
 fn wrapped_script_for_shell(shell_path: &str, script: &str) -> String {
     let shell_name = std::path::Path::new(shell_path)
         .file_name()
-        .and_then(|name| name.to_str());
+        .and_then(|name| name.to_str())
+        .map(|n| n.trim_end_matches(".exe"));
 
-    if shell_name == Some("fish") {
-        return format!(
+    match shell_name {
+        Some("fish") => format!(
             "eval {}; set __helmor_ec $status; printf '\\r\\n\\033[2m[Completed with exit code %d]\\033[0m\\r\\n' $__helmor_ec; exit $__helmor_ec\n",
             fish_shell_escape(script),
-        );
+        ),
+        Some("powershell") | Some("pwsh") => format!(
+            // Run the user's command, then capture the exit code. $LASTEXITCODE
+            // is set by native executables; for pure-PowerShell statements it
+            // stays null, so fall back to 0 on success ($?), 1 otherwise.
+            "{script}\r\n$__helmor_ec = if ($null -ne $LASTEXITCODE) {{ $LASTEXITCODE }} elseif ($?) {{ 0 }} else {{ 1 }}; Write-Host (\"`r`n{esc}[2m[Completed with exit code {{0}}]{esc}[0m`r`n\" -f $__helmor_ec); exit $__helmor_ec\r\n",
+            script = script,
+            esc = "$([char]27)"
+        ),
+        _ => format!(
+            "eval {}; __helmor_ec=$?; printf '\\r\\n\\033[2m[Completed with exit code %d]\\033[0m\\r\\n' $__helmor_ec; exit $__helmor_ec\n",
+            shell_escape(script),
+        ),
     }
+}
 
-    format!(
-        "eval {}; __helmor_ec=$?; printf '\\r\\n\\033[2m[Completed with exit code %d]\\033[0m\\r\\n' $__helmor_ec; exit $__helmor_ec\n",
-        shell_escape(script),
-    )
+/// Build the platform shell command that runs an arbitrary `command` string:
+/// `/bin/sh -c` on Unix, PowerShell `-Command` on Windows.
+fn shell_command_for(command: &str) -> Command {
+    #[cfg(unix)]
+    {
+        let mut cmd = Command::new("/bin/sh");
+        cmd.arg("-c").arg(command);
+        cmd
+    }
+    #[cfg(windows)]
+    {
+        let mut cmd = Command::new(powershell_path());
+        cmd.args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            command,
+        ]);
+        cmd
+    }
+}
+
+/// Locate PowerShell on Windows: prefer PowerShell 7 (`pwsh`), fall back to the
+/// in-box Windows PowerShell.
+#[cfg(windows)]
+fn powershell_path() -> String {
+    if which_in_path("pwsh.exe") {
+        "pwsh.exe".to_string()
+    } else {
+        "powershell.exe".to_string()
+    }
+}
+
+#[cfg(windows)]
+fn which_in_path(exe: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(exe).is_file()))
+        .unwrap_or(false)
+}
+
+/// The platform default interactive shell and its arguments.
+/// Unix: the user's `$SHELL` as an interactive login shell.
+/// Windows: PowerShell (no logo/profile banner; reads commands from the PTY).
+fn default_shell() -> (String, Vec<String>) {
+    #[cfg(unix)]
+    {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        (shell, vec!["-i".to_string(), "-l".to_string()])
+    }
+    #[cfg(windows)]
+    {
+        (powershell_path(), vec!["-NoLogo".to_string()])
+    }
 }
 
 /// Spawn an interactive login shell on a PTY and feed it `script`.
@@ -726,7 +691,8 @@ pub fn run_script(
     channel: Channel<ScriptEvent>,
     stop: Option<ScriptStop>,
 ) -> Result<Option<i32>> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let (shell, args) = default_shell();
+    let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
     run_script_with_shell(
         manager,
         repo_id,
@@ -737,7 +703,7 @@ pub fn run_script(
         context,
         channel,
         &shell,
-        &["-i", "-l"],
+        &args_ref,
         None,
         stop,
     )
@@ -765,7 +731,8 @@ pub fn run_terminal_session(
     channel: Channel<ScriptEvent>,
     boot_input: Option<&str>,
 ) -> Result<Option<i32>> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let (shell, args) = default_shell();
+    let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
     run_script_with_shell(
         manager,
         repo_id,
@@ -776,7 +743,7 @@ pub fn run_terminal_session(
         context,
         channel,
         &shell,
-        &["-i", "-l"],
+        &args_ref,
         boot_input,
         None,
     )
@@ -817,37 +784,22 @@ pub(crate) fn run_script_with_shell(
         }
     }
 
-    let (master_fd, slave_fd) = open_pty()?;
-    set_nonblocking(master_fd)?;
-
-    // Dup master for stdin writing. Kept alive in `ProcessHandle` for the
-    // lifetime of the child so `write_stdin` / `resize` can reach the PTY.
-    let stdin_fd = unsafe { libc::dup(master_fd) };
-    if stdin_fd < 0 {
-        let err = std::io::Error::last_os_error();
-        unsafe {
-            libc::close(master_fd);
-            libc::close(slave_fd);
-        }
-        bail!("dup(master_fd) failed: {err}");
-    }
-    let stdin_file = unsafe { std::fs::File::from_raw_fd(stdin_fd) };
-    let stdin = Arc::new(Mutex::new(stdin_file));
-
-    // Dup slave for the pre_exec closure (Stdio::from_raw_fd takes ownership).
-    let slave_for_session = unsafe { libc::dup(slave_fd) };
-
     let mut cmd = Command::new(shell_path);
     cmd.args(shell_args)
         .current_dir(working_dir)
         .env("TERM", "xterm-256color")
         .env("FORCE_COLOR", "1")
         .env("CLICOLOR_FORCE", "1")
-        // Prevent history pollution from the interactive shell.
-        .env("HISTFILE", "/dev/null")
-        .env("SAVEHIST", "0")
-        .env("HISTSIZE", "0")
         .env("HELMOR_ROOT_PATH", &context.root_path);
+
+    // Prevent history pollution from the interactive shell (Unix shells only;
+    // these variables are POSIX-shell concepts and the value is a Unix path).
+    #[cfg(unix)]
+    {
+        cmd.env("HISTFILE", "/dev/null")
+            .env("SAVEHIST", "0")
+            .env("HISTSIZE", "0");
+    }
 
     if let Some(wp) = &context.workspace_path {
         cmd.env("HELMOR_WORKSPACE_PATH", wp);
@@ -866,35 +818,18 @@ pub(crate) fn run_script_with_shell(
         cmd.env("HELMOR_PORT_COUNT", count.to_string());
     }
 
-    // Set up the child's session and controlling terminal before exec.
-    unsafe {
-        cmd.pre_exec(move || {
-            if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            if libc::ioctl(slave_for_session, libc::TIOCSCTTY as libc::c_ulong, 0) == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            libc::close(slave_for_session);
-            Ok(())
-        });
-    }
-
-    // Attach PTY slave as stdin/stdout/stderr.
-    let mut child = unsafe {
-        cmd.stdin(Stdio::from_raw_fd(slave_fd))
-            .stdout(Stdio::from_raw_fd(libc::dup(slave_fd)))
-            .stderr(Stdio::from_raw_fd(libc::dup(slave_fd)))
-            .spawn()
-            .with_context(|| format!("Failed to spawn {shell_path}"))?
-    };
-
-    // Drop cmd to close all parent copies of slave fds. Without this the
-    // master never sees EIO because the slave reference count stays > 0.
-    drop(cmd);
-
-    let pid = child.id() as libc::pid_t;
-    let pgid = unsafe { libc::getpgid(pid) };
+    // Open a PTY, make the child a session + controlling-terminal leader, and
+    // attach it. The OS-specific PTY mechanics live behind the
+    // `platform::pty` seam; macOS/Unix is the reference, Windows fills ConPTY.
+    let session = crate::platform::pty::spawn(cmd)
+        .with_context(|| format!("Failed to spawn {shell_path}"))?;
+    // Writable PTY master, kept alive in `ProcessHandle` for the lifetime of
+    // the child so `write_stdin` / `resize` can reach the PTY.
+    let stdin = Arc::new(Mutex::new(session.writer));
+    let reader_file = session.reader;
+    let mut child = session.child;
+    let pid = child.id() as Pid;
+    let pgid = session.pgid;
 
     let _ = channel.send(ScriptEvent::Started {
         pid: pid as u32,
@@ -912,6 +847,39 @@ pub(crate) fn run_script_with_shell(
     );
     let killed = manager.register(key.clone(), pid, pgid, stdin.clone(), stop);
 
+    // Persist a registry row so the next launch's crash-recovery
+    // sweep can classify this PID if the app dies before
+    // `record_ended` runs below. Best-effort — a registry write
+    // failure must NOT block the actual script run, so we log and
+    // continue. Returns `None` on failure; `record_ended` no-ops
+    // when the id is missing.
+    // The registry stores PIDs as i32 (Unix `pid_t`). On Unix `Pid` is already
+    // i32; on Windows it is u32, so reinterpret the bits. Crash recovery only
+    // compares this against live PIDs read back through the same path. The
+    // cfg-gated rebinds keep the cast a no-op on Unix (no `unnecessary_cast`).
+    #[cfg(unix)]
+    let (pid_i32, pgid_i32): (i32, i32) = (pid, pgid);
+    #[cfg(windows)]
+    let (pid_i32, pgid_i32): (i32, i32) = (pid as i32, pgid as i32);
+    let registry_id = match super::runtime_registry::record_started(
+        repo_id,
+        workspace_id,
+        script_type,
+        pid_i32,
+        pgid_i32,
+    ) {
+        Ok(id) => Some(id),
+        Err(error) => {
+            tracing::warn!(
+                pid,
+                pgid,
+                %error,
+                "runtime registry: failed to record process start; crash recovery will miss this row"
+            );
+            None
+        }
+    };
+
     // Single reader on the PTY master — stdout+stderr are merged by the PTY.
     // Uses poll(2) so the kernel wakes the thread the instant data is
     // readable instead of the legacy 25ms `sleep` loop. The PTY master keeps
@@ -924,39 +892,86 @@ pub(crate) fn run_script_with_shell(
     let reader = std::thread::Builder::new()
         .name("script-pty".into())
         .spawn(move || {
-            let mut master = unsafe { std::fs::File::from_raw_fd(master_fd) };
-            let mut buf = [0u8; 4096];
+            let mut master = reader_file;
+            let mut buf = [0u8; PTY_READ_BUF_BYTES];
             // 100ms tick is just a stop-flag fallback — kill() also closes
             // the PTY which triggers EIO/POLLHUP and wakes us instantly.
-            const POLL_TIMEOUT_MS: libc::c_int = 100;
+            const POLL_TIMEOUT_MS: i32 = 100;
+
+            // Coalesce output: buffer bytes and emit one Stdout event per flush
+            // window instead of one per read, collapsing a chatty producer's
+            // hundreds of tiny IPC sends into a few large ones.
+            let mut pending: Vec<u8> = Vec::with_capacity(PTY_READ_BUF_BYTES);
+            let mut last_flush = Instant::now();
+
+            // Emit the valid UTF-8 prefix, keeping any trailing incomplete
+            // multi-byte sequence buffered until its remaining bytes arrive.
+            let flush_pending = |pending: &mut Vec<u8>, last_flush: &mut Instant| {
+                if pending.is_empty() {
+                    return;
+                }
+                let valid = match std::str::from_utf8(pending) {
+                    Ok(_) => pending.len(),
+                    Err(e) => e.valid_up_to(),
+                };
+                if valid == 0 {
+                    // Incomplete leading sequence — wait for the rest. Guard
+                    // against genuine garbage stalling the buffer by flushing
+                    // lossily once it exceeds the max UTF-8 sequence length.
+                    if pending.len() > 4 {
+                        let data = String::from_utf8_lossy(pending).into_owned();
+                        let _ = ch.send(ScriptEvent::Stdout { data });
+                        pending.clear();
+                        *last_flush = Instant::now();
+                    }
+                    return;
+                }
+                let data = String::from_utf8_lossy(&pending[..valid]).into_owned();
+                let _ = ch.send(ScriptEvent::Stdout { data });
+                pending.drain(..valid);
+                *last_flush = Instant::now();
+            };
             loop {
                 if stop_reader_in_thread.load(Ordering::Relaxed) {
                     break;
                 }
 
-                let mut pfd = libc::pollfd {
-                    fd: master_fd,
-                    events: libc::POLLIN,
-                    revents: 0,
-                };
-                let ret = unsafe { libc::poll(&mut pfd, 1, POLL_TIMEOUT_MS) };
-                if ret < 0 {
-                    let err = std::io::Error::last_os_error();
-                    if err.kind() == std::io::ErrorKind::Interrupted {
-                        continue;
+                // While bytes are buffered, cap the wait at the time left in
+                // the flush window — otherwise a lone small burst (a keystroke
+                // echo, a spinner frame) sits unflushed for the full 100ms
+                // idle tick and typing feels laggy.
+                let timeout_ms: i32 = if pending.is_empty() {
+                    POLL_TIMEOUT_MS
+                } else {
+                    let elapsed = last_flush.elapsed();
+                    if elapsed >= PTY_FLUSH_INTERVAL {
+                        // Past the window with bytes still buffered — only an
+                        // unflushable incomplete UTF-8 tail does that (the loop
+                        // tail flushes everything else). Wait for its rest at
+                        // the idle tick instead of spinning at 0ms.
+                        POLL_TIMEOUT_MS
+                    } else {
+                        (PTY_FLUSH_INTERVAL - elapsed).as_millis().max(1) as i32
                     }
-                    tracing::debug!(error = %err, "PTY poll failed");
-                    break;
-                }
-                if ret == 0 {
-                    // Timeout — re-check stop flag and re-poll.
-                    continue;
-                }
+                };
+
                 // POLLHUP / POLLERR fire when the slave fd is closed (child
                 // exited). We still try to read first so any pending bytes
                 // ahead of the hangup are delivered.
-                let revents = pfd.revents;
-                let hung_up = revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0;
+                let hung_up = match master.poll_readable(timeout_ms) {
+                    Ok(crate::platform::pty::PollResult::TimedOut) => {
+                        // Idle wake — flush any buffered tail so a quiet PTY
+                        // doesn't sit on coalesced bytes until the next read.
+                        flush_pending(&mut pending, &mut last_flush);
+                        continue;
+                    }
+                    Ok(crate::platform::pty::PollResult::Interrupted) => continue,
+                    Ok(crate::platform::pty::PollResult::Ready { hung_up }) => hung_up,
+                    Err(err) => {
+                        tracing::debug!(error = %err, "PTY poll failed");
+                        break;
+                    }
+                };
 
                 // Drain everything available in this wake cycle.
                 let mut should_exit = hung_up;
@@ -967,8 +982,12 @@ pub(crate) fn run_script_with_shell(
                             break;
                         }
                         Ok(n) => {
-                            let data = String::from_utf8_lossy(&buf[..n]).into_owned();
-                            let _ = ch.send(ScriptEvent::Stdout { data });
+                            pending.extend_from_slice(&buf[..n]);
+                            // Bound buffer growth within one drain so a fast
+                            // producer can't balloon memory before the timer.
+                            if pending.len() >= PTY_FLUSH_BYTES {
+                                flush_pending(&mut pending, &mut last_flush);
+                            }
                         }
                         Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                             // Drained for now — back to poll().
@@ -976,7 +995,7 @@ pub(crate) fn run_script_with_shell(
                         }
                         Err(e) => {
                             // EIO is expected when the child exits and slave closes.
-                            if e.raw_os_error() != Some(libc::EIO) {
+                            if !crate::platform::pty::is_session_disconnect(&e) {
                                 tracing::debug!(error = %e, "PTY read error");
                             }
                             should_exit = true;
@@ -984,9 +1003,22 @@ pub(crate) fn run_script_with_shell(
                         }
                     }
                 }
+
+                // Time-based flush once this wake cycle is drained.
+                if last_flush.elapsed() >= PTY_FLUSH_INTERVAL {
+                    flush_pending(&mut pending, &mut last_flush);
+                }
+
                 if should_exit {
                     break;
                 }
+            }
+
+            // Final flush — emit remaining bytes (lossy for an incomplete
+            // trailing sequence) so the tail isn't dropped on exit.
+            if !pending.is_empty() {
+                let data = String::from_utf8_lossy(&pending).into_owned();
+                let _ = ch.send(ScriptEvent::Stdout { data });
             }
         })
         .ok();
@@ -1025,6 +1057,20 @@ pub(crate) fn run_script_with_shell(
 
     manager.unregister(&key, pid);
 
+    // Mark the registry row ended once the child has been reaped.
+    // Failure here logs and continues — the next launch's
+    // classifier will probe the PID and stamp it as dead anyway.
+    if let Some(id) = registry_id.as_deref() {
+        if let Err(error) = super::runtime_registry::record_ended(id) {
+            tracing::warn!(
+                pid,
+                registry_id = id,
+                %error,
+                "runtime registry: failed to mark process ended; will be cleaned up on next startup sweep"
+            );
+        }
+    }
+
     stop_reader.store(true, Ordering::Release);
     if let Some(h) = reader {
         let _ = h.join();
@@ -1040,7 +1086,12 @@ pub(crate) fn run_script_with_shell(
     Ok(exit_code)
 }
 
-#[cfg(test)]
+// Unix-only test suite: these exercise the PTY/process-group lifecycle through
+// libc primitives (`setsid`, `getpgid`, `kill`), `/bin/sh`, and the Unix PTY
+// writer, so they only compile and run on Unix. The cross-platform pure-logic
+// tests (shell escaping, wrapper selection, unknown-key no-ops) live in the
+// `cross_platform_tests` module below and run on every target.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::process::CommandExt;
@@ -1048,33 +1099,9 @@ mod tests {
     use std::sync::mpsc;
     use tempfile::NamedTempFile;
 
-    // ── shell_escape ───────────────────────────────────────────────────────
-
-    #[test]
-    fn shell_escape_plain() {
-        assert_eq!(shell_escape("echo hello"), "'echo hello'");
-    }
-
-    #[test]
-    fn shell_escape_single_quotes() {
-        assert_eq!(shell_escape("it's"), "'it'\\''s'");
-    }
-
-    #[test]
-    fn fish_shell_escape_handles_fish_expansion_chars() {
-        assert_eq!(
-            fish_shell_escape("printf \"%s\" '$value' \\ done"),
-            "\"printf \\\"%s\\\" '\\$value' \\\\ done\"",
-        );
-    }
-
-    #[test]
-    fn wrapped_script_uses_fish_status_for_fish_shell() {
-        assert_eq!(
-            wrapped_script_for_shell("/opt/homebrew/bin/fish", "echo \"it's\""),
-            "eval \"echo \\\"it's\\\"\"; set __helmor_ec $status; printf '\\r\\n\\033[2m[Completed with exit code %d]\\033[0m\\r\\n' $__helmor_ec; exit $__helmor_ec\n",
-        );
-    }
+    // Pure string-logic tests (shell_escape, fish/powershell wrapping) and the
+    // unknown-key no-op tests live in `cross_platform_tests` below so they run
+    // on every target; this module keeps only the Unix PTY/process-group tests.
 
     // ── Test helpers ───────────────────────────────────────────────────────
 
@@ -1108,7 +1135,9 @@ mod tests {
             .write(true)
             .open("/dev/null")
             .expect("open /dev/null");
-        let stdin_arc = Arc::new(Mutex::new(stdin));
+        let stdin_arc: Arc<Mutex<Box<dyn crate::platform::pty::PtyWriter>>> = Arc::new(Mutex::new(
+            Box::new(crate::platform::pty::UnixPtyWriter(stdin)),
+        ));
         let killed = mgr.register(key, pid, pgid, stdin_arc, None);
         (child, pid, pgid, killed)
     }
@@ -1267,6 +1296,7 @@ mod tests {
     /// invariant.
     #[test]
     fn kill_all_does_not_deadlock_against_concurrent_unregister() {
+        let _env = crate::testkit::TestEnv::new("kill-all-does-not-deadlock-against-concu");
         let mgr = std::sync::Arc::new(ScriptProcessManager::new());
         let ctx = ScriptContext {
             root_path: std::env::temp_dir().display().to_string(),
@@ -1281,7 +1311,7 @@ mod tests {
         let mgr_c = mgr.clone();
         let key_c = key.clone();
         let tempdir = std::env::temp_dir().display().to_string();
-        let runner = std::thread::spawn(move || {
+        let mut runner = Some(std::thread::spawn(move || {
             run_script_with_shell(
                 &mgr_c,
                 &key_c.0,
@@ -1296,13 +1326,17 @@ mod tests {
                 None,
                 None,
             )
-        });
+        }));
 
         // Wait for run_script to register before we issue kill_all.
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(15);
         loop {
             if mgr.processes.lock().unwrap().contains_key(&key) {
                 break;
+            }
+            if runner.as_ref().is_some_and(|runner| runner.is_finished()) {
+                let result = runner.take().unwrap().join().unwrap();
+                panic!("run_script exited before registration: {result:?}");
             }
             assert!(Instant::now() < deadline, "run_script never registered");
             std::thread::sleep(Duration::from_millis(10));
@@ -1313,7 +1347,7 @@ mod tests {
         // run_script's reaper must have unregistered + returned. If
         // kill_all held the map lock past the signal, the unregister
         // would have blocked and this join would hang.
-        let _ = runner.join().unwrap();
+        let _ = runner.unwrap().join().unwrap();
         // Real path is sub-second (PROCESS_TERM + PROCESS_KILL = 700ms
         // upper bound). 5s headroom for CI load; a real regression
         // (deadlock / missed signal) hangs indefinitely and still trips.
@@ -1387,6 +1421,7 @@ mod tests {
 
     #[test]
     fn kill_terminates_running_script_quickly() {
+        let _env = crate::testkit::TestEnv::new("kill-terminates-running-script-quickly");
         let mgr = Arc::new(ScriptProcessManager::new());
         let ctx = ScriptContext {
             root_path: std::env::temp_dir().display().to_string(),
@@ -1453,6 +1488,7 @@ mod tests {
 
     #[test]
     fn write_stdin_delivers_bytes_to_running_script() {
+        let _env = crate::testkit::TestEnv::new("write-stdin-delivers-bytes-to-running-sc");
         let mgr = Arc::new(ScriptProcessManager::new());
         let ctx = ScriptContext {
             root_path: std::env::temp_dir().display().to_string(),
@@ -1544,6 +1580,7 @@ mod tests {
 
     #[test]
     fn resize_updates_pty_winsize() {
+        let _env = crate::testkit::TestEnv::new("resize-updates-pty-winsize");
         let mgr = Arc::new(ScriptProcessManager::new());
         let ctx = ScriptContext {
             root_path: std::env::temp_dir().display().to_string(),
@@ -1669,11 +1706,13 @@ mod tests {
 
     #[test]
     fn run_script_true_exits_zero() {
+        let _env = crate::testkit::TestEnv::new("run-script-true-exits-zero");
         assert_eq!(run_simple("true"), Some(0));
     }
 
     #[test]
     fn run_script_failing_command_exits_nonzero() {
+        let _env = crate::testkit::TestEnv::new("run-script-failing-command-exits-nonzero");
         assert_eq!(run_simple("exit 42"), Some(42));
     }
 
@@ -1705,6 +1744,7 @@ mod tests {
     /// keep working alongside the new ones.
     #[test]
     fn script_env_includes_helmor_port_vars_when_range_present() {
+        let _env = crate::testkit::TestEnv::new("script-env-includes-helmor-port-vars-whe");
         let mgr = ScriptProcessManager::new();
         let dir = std::env::temp_dir();
         let ctx = ScriptContext {
@@ -1782,6 +1822,7 @@ mod tests {
     /// `${HELMOR_PORT:-3000}` keep their default.
     #[test]
     fn script_env_omits_helmor_port_vars_when_range_missing() {
+        let _env = crate::testkit::TestEnv::new("script-env-omits-helmor-port-vars-when-r");
         let mgr = ScriptProcessManager::new();
         let dir = std::env::temp_dir();
         let ctx = ScriptContext {
@@ -1852,53 +1893,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn run_script_rejects_empty() {
-        let mgr = ScriptProcessManager::new();
-        let ctx = ScriptContext {
-            root_path: "/tmp".into(),
-            workspace_path: None,
-            workspace_name: None,
-            default_branch: None,
-            port_base: None,
-            port_count: None,
-        };
-        let result = run_script(
-            &mgr,
-            "r",
-            "s",
-            None,
-            "  ",
-            "/tmp",
-            &ctx,
-            make_channel(),
-            None,
-        );
-        assert!(result.is_err());
-    }
-
-    // ── write_stdin/resize on unknown key silently succeed ─────────────────
-
-    #[test]
-    fn write_stdin_unknown_key_is_noop() {
-        let mgr = ScriptProcessManager::new();
-        let key: ProcessKey = ("nope".into(), "run".into(), None);
-        assert!(!mgr.write_stdin(&key, b"x").unwrap());
-    }
-
-    #[test]
-    fn resize_unknown_key_is_noop() {
-        let mgr = ScriptProcessManager::new();
-        let key: ProcessKey = ("nope".into(), "run".into(), None);
-        assert!(!mgr.resize(&key, 80, 24).unwrap());
-    }
-
-    #[test]
-    fn kill_unknown_key_returns_false() {
-        let mgr = ScriptProcessManager::new();
-        let key: ProcessKey = ("nope".into(), "run".into(), None);
-        assert!(!mgr.kill(&key));
-    }
+    // `run_script_rejects_empty` and the unknown-key no-op tests are
+    // cross-platform and live in `cross_platform_tests` below.
 
     // ── graceful_kill (stop.command) ───────────────────────────────────────
 
@@ -2121,5 +2117,91 @@ mod tests {
         );
 
         let _ = handle.join();
+    }
+}
+
+/// Cross-platform pure-logic tests. These run on every target — they don't
+/// spawn a PTY or touch any OS process primitives, so they validate the shell
+/// escaping / wrapper selection and the manager's unknown-key no-op behavior
+/// on both Unix and Windows.
+#[cfg(test)]
+mod cross_platform_tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    fn make_channel() -> Channel<ScriptEvent> {
+        let (tx, _rx) = mpsc::channel::<()>();
+        Channel::<ScriptEvent>::new(move |_| {
+            let _ = tx.send(());
+            Ok(())
+        })
+    }
+
+    // ── shell_escape / wrapper selection (string logic) ────────────────────
+
+    #[test]
+    fn shell_escape_plain() {
+        assert_eq!(shell_escape("echo hello"), "'echo hello'");
+    }
+
+    #[test]
+    fn shell_escape_single_quotes() {
+        assert_eq!(shell_escape("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn fish_shell_escape_handles_fish_expansion_chars() {
+        assert_eq!(
+            fish_shell_escape("printf \"%s\" '$value' \\ done"),
+            "\"printf \\\"%s\\\" '\\$value' \\\\ done\"",
+        );
+    }
+
+    #[test]
+    fn wrapped_script_uses_fish_status_for_fish_shell() {
+        assert_eq!(
+            wrapped_script_for_shell("/opt/homebrew/bin/fish", "echo \"it's\""),
+            "eval \"echo \\\"it's\\\"\"; set __helmor_ec $status; printf '\\r\\n\\033[2m[Completed with exit code %d]\\033[0m\\r\\n' $__helmor_ec; exit $__helmor_ec\n",
+        );
+    }
+
+    #[test]
+    fn wrapped_script_uses_powershell_form_for_pwsh() {
+        let w = wrapped_script_for_shell("C:/Program Files/PowerShell/7/pwsh.exe", "echo hi");
+        assert!(w.starts_with("echo hi"));
+        assert!(w.contains("$LASTEXITCODE"));
+        assert!(w.contains("exit $__helmor_ec"));
+    }
+
+    // ── unknown-key operations are silent no-ops ───────────────────────────
+
+    #[test]
+    fn write_stdin_unknown_key_is_noop() {
+        let mgr = ScriptProcessManager::new();
+        let key: ProcessKey = ("nope".into(), "run".into(), None);
+        assert!(!mgr.write_stdin(&key, b"x").unwrap());
+    }
+
+    #[test]
+    fn resize_unknown_key_is_noop() {
+        let mgr = ScriptProcessManager::new();
+        let key: ProcessKey = ("nope".into(), "run".into(), None);
+        assert!(!mgr.resize(&key, 80, 24).unwrap());
+    }
+
+    #[test]
+    fn kill_unknown_key_returns_false() {
+        let mgr = ScriptProcessManager::new();
+        let key: ProcessKey = ("nope".into(), "run".into(), None);
+        assert!(!mgr.kill(&key));
+    }
+
+    #[test]
+    fn run_script_rejects_empty() {
+        let mgr = ScriptProcessManager::new();
+        let ctx = ScriptContext::default();
+        let dir = std::env::temp_dir().display().to_string();
+        let result = run_script(&mgr, "r", "s", None, "  ", &dir, &ctx, make_channel(), None);
+        assert!(result.is_err());
     }
 }

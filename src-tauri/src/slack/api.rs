@@ -163,6 +163,49 @@ fn cookie_header(creds: &SlackCreds) -> String {
 /// `http_runtime()` above — see that function's doc for why we don't
 /// reuse Tauri's runtime.
 fn call(creds: &SlackCreds, method: &str, params: &[(&str, &str)]) -> Result<Value> {
+    // Bounded retry for transient failures only: transport errors (DNS,
+    // connection-refused/reset, timeout) and HTTP 5xx. Auth errors, other
+    // 4xx, bad JSON and Slack `{ok:false}` codes are permanent and returned
+    // immediately. We don't yet honour Retry-After, so 429/`ratelimited`
+    // is treated as permanent rather than hammered.
+    const MAX_ATTEMPTS: u32 = 3;
+    let mut attempt: u32 = 0;
+    loop {
+        attempt += 1;
+        match call_once(creds, method, params) {
+            Ok(value) => return Ok(value),
+            Err(CallError::Retryable(error)) if attempt < MAX_ATTEMPTS => {
+                let delay = Duration::from_millis(200 * 2u64.pow(attempt - 1));
+                tracing::debug!(
+                    method = %method,
+                    attempt,
+                    delay_ms = delay.as_millis() as u64,
+                    error = %format!("{error:#}"),
+                    "slack api: transient error, retrying",
+                );
+                std::thread::sleep(delay);
+            }
+            Err(CallError::Retryable(error) | CallError::Fatal(error)) => return Err(error),
+        }
+    }
+}
+
+/// Retry classification for [`call_once`]. The inner `anyhow::Error` is
+/// returned to the caller unchanged (so `SlackApiError` downcasts such as
+/// [`is_invalid_auth`] still work); the variant only decides whether
+/// [`call`] retries.
+enum CallError {
+    Retryable(anyhow::Error),
+    Fatal(anyhow::Error),
+}
+
+/// One HTTP attempt. Urlencoded body + browser-shaped headers — see the
+/// module docs for why.
+fn call_once(
+    creds: &SlackCreds,
+    method: &str,
+    params: &[(&str, &str)],
+) -> std::result::Result<Value, CallError> {
     let url = format!("{SLACK_API_BASE}/{method}");
     let mut form: Vec<(&str, &str)> = Vec::with_capacity(params.len() + 1);
     form.push(("token", creds.xoxc.as_str()));
@@ -174,7 +217,7 @@ fn call(creds: &SlackCreds, method: &str, params: &[(&str, &str)]) -> Result<Val
     let client = client();
 
     let body: Value = http_runtime().block_on(async move {
-        let response = client
+        let response = match client
             .post(&url)
             .header("Cookie", cookie)
             // Origin pins the request to Slack's own SPA; without it
@@ -185,21 +228,32 @@ fn call(creds: &SlackCreds, method: &str, params: &[(&str, &str)]) -> Result<Val
             .form(&form)
             .send()
             .await
-            .with_context(|| format!("Failed to POST {method}"))?;
+        {
+            Ok(response) => response,
+            // Transport failure: exactly the transient class worth retrying.
+            Err(error) => {
+                return Err(CallError::Retryable(
+                    anyhow::Error::new(error).context(format!("Failed to POST {method}")),
+                ));
+            }
+        };
 
-        if !response.status().is_success() {
-            bail!(
-                "Slack API {} returned HTTP {}",
-                method,
-                response.status().as_u16()
-            );
+        let status = response.status();
+        if !status.is_success() {
+            let error = anyhow!("Slack API {method} returned HTTP {}", status.as_u16());
+            return if status.is_server_error() {
+                Err(CallError::Retryable(error))
+            } else {
+                Err(CallError::Fatal(error))
+            };
         }
 
-        let body: Value = response
-            .json()
-            .await
-            .with_context(|| format!("Failed to decode JSON from {method}"))?;
-        Ok::<Value, anyhow::Error>(body)
+        match response.json::<Value>().await {
+            Ok(body) => Ok(body),
+            Err(error) => Err(CallError::Fatal(
+                anyhow::Error::new(error).context(format!("Failed to decode JSON from {method}")),
+            )),
+        }
     })?;
 
     let ok = body.get("ok").and_then(Value::as_bool).unwrap_or(false);
@@ -210,11 +264,13 @@ fn call(creds: &SlackCreds, method: &str, params: &[(&str, &str)]) -> Result<Val
             .unwrap_or("unknown")
             .to_string();
         tracing::warn!(method = %method, error = %error, "Slack API call failed");
-        return Err(SlackApiError {
-            method: method.to_string(),
-            error,
-        }
-        .into());
+        return Err(CallError::Fatal(
+            SlackApiError {
+                method: method.to_string(),
+                error,
+            }
+            .into(),
+        ));
     }
 
     Ok(body)
@@ -288,6 +344,79 @@ pub fn users_info(team_id: &str, creds: &SlackCreds, user_id: &str) -> Result<Us
     Ok(info)
 }
 
+/// Resolve every `<@U…>` user-mention token in a Slack message body to
+/// the labeled form `<@U…|display_name>` using the cached `users.info`
+/// lookup. Idempotent — already-labeled mentions (`<@U…|name>`) and
+/// non-mention tokens are passed through unchanged.
+///
+/// Why this lives in the backend: the only way to resolve a Slack user
+/// id to a display name without nuking the workspace token is
+/// `users.info` (bulk `users.list` triggers Slack's anti-enumeration
+/// rule and revokes the xoxc/xoxd pair — see the module-level note).
+/// Per-id lookups are TTL-cached in this process, so a refresh of an
+/// active thread re-uses the 5 min cache hit instead of refetching
+/// each author. Frontend then renders the labeled form via
+/// `inlineMentionsForMarkdown` / `formatSlackTextPlain` which both
+/// already understood `<@U…|name>`.
+///
+/// On failure (network blip, deactivated account, etc.) we keep the
+/// raw `<@U…>` token rather than substituting a confusing fallback —
+/// frontend will still render it as `@U…`, matching today's behavior.
+pub fn resolve_mentions(team_id: &str, creds: &SlackCreds, text: &str) -> String {
+    // Cheap precheck: skip the scan entirely when no mention syntax is
+    // present. Most messages have no mentions so the inbox refresh
+    // shouldn't pay the cost of walking each body line.
+    if !text.contains("<@") {
+        return text.to_string();
+    }
+
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start_rel) = rest.find("<@") {
+        // Copy the segment before the token (UTF-8 safe — `find` returns
+        // a valid byte boundary).
+        out.push_str(&rest[..start_rel]);
+        let after_marker = &rest[start_rel + 2..];
+        if let Some(end_rel) = after_marker.find('>') {
+            let inner = &after_marker[..end_rel];
+            // Slack user ids: `U` or `W` then uppercase ASCII
+            // alphanumerics. Already-labeled (`U…|name`) and non-user
+            // tokens (e.g. broadcasts) pass through verbatim.
+            let is_user_id = !inner.contains('|')
+                && inner.starts_with(['U', 'W'])
+                && inner
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
+            if is_user_id {
+                let resolved = users_info(team_id, creds, inner)
+                    .map(|info| info.display_name)
+                    .ok();
+                if let Some(name) = resolved {
+                    out.push_str("<@");
+                    out.push_str(inner);
+                    out.push('|');
+                    out.push_str(&name);
+                    out.push('>');
+                    rest = &after_marker[end_rel + 1..];
+                    continue;
+                }
+            }
+            // Pass through the original token verbatim.
+            out.push_str("<@");
+            out.push_str(inner);
+            out.push('>');
+            rest = &after_marker[end_rel + 1..];
+        } else {
+            // No closing `>` — bail out and append the remainder as-is.
+            out.push_str("<@");
+            rest = after_marker;
+            break;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// `users.conversations` — lists conversations (channels, DMs, MPIMs) the
 /// authed user is a member of. We filter to `im` + `mpim` for the unread
 /// DM feed.
@@ -301,6 +430,10 @@ pub struct ConversationRow {
     #[serde(default)]
     pub is_mpim: bool,
     #[serde(default)]
+    pub is_channel: bool,
+    #[serde(default)]
+    pub is_private: bool,
+    #[serde(default)]
     pub user: Option<String>,
     #[serde(default)]
     pub unread_count_display: u32,
@@ -309,13 +442,26 @@ pub struct ConversationRow {
 }
 
 pub fn users_conversations_dms(creds: &SlackCreds) -> Result<Vec<ConversationRow>> {
+    users_conversations(creds, "im,mpim", 100)
+}
+
+/// Generic `users.conversations` listing. `types` is a Slack-side
+/// comma-separated whitelist (`im`, `mpim`, `public_channel`,
+/// `private_channel`). Used by the triage fetcher to enumerate every
+/// conversation the user is a member of for smart-discovery filtering.
+pub fn users_conversations(
+    creds: &SlackCreds,
+    types: &str,
+    limit: u32,
+) -> Result<Vec<ConversationRow>> {
+    let limit_str = limit.clamp(1, 1000).to_string();
     let body = call(
         creds,
         "users.conversations",
         &[
-            ("types", "im,mpim"),
+            ("types", types),
             ("exclude_archived", "true"),
-            ("limit", "100"),
+            ("limit", &limit_str),
         ],
     )?;
     let raw = body

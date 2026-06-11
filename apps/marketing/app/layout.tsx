@@ -14,6 +14,12 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
 	themeColor: "#2a2a2a",
 	colorScheme: "dark light",
+	// Mobile/tablet-only concerns — desktop browsers ignore these.
+	width: "device-width",
+	initialScale: 1,
+	maximumScale: 1,
+	userScalable: false,
+	viewportFit: "cover",
 };
 
 // Inlined to run before first paint. Preference order:

@@ -132,11 +132,21 @@ describe("ForgeConnectDialog", () => {
 		);
 		expect(apiMocks.retryRepoForgeBinding).toHaveBeenCalledWith("repo-1");
 		expect(invalidateSpy).toHaveBeenCalledWith({
-			queryKey: helmorQueryKeys.forgeLogins("github", "github.com"),
-		});
-		expect(invalidateSpy).toHaveBeenCalledWith({
 			queryKey: helmorQueryKeys.forgeAccountsAll,
 		});
+		// Chip header (`workspaceAccountProfile`, staleTime:Infinity) must be
+		// invalidated too, else it keeps the old avatar/login after reconnect.
+		const flippedAccountProfile = invalidateSpy.mock.calls.some((call) => {
+			const filters = call[0] as
+				| { predicate?: (q: { queryKey: readonly unknown[] }) => boolean }
+				| undefined;
+			return (
+				filters?.predicate?.({
+					queryKey: helmorQueryKeys.workspaceAccountProfile("workspace-1"),
+				}) ?? false
+			);
+		});
+		expect(flippedAccountProfile).toBe(true);
 	});
 
 	it("eventually surfaces a delayed login that lands during the polling window", async () => {

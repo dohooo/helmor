@@ -21,6 +21,7 @@ pub struct BuildSendMessageParamsInput<'a> {
     pub helmor_session_id: Option<&'a str>,
     pub claude_base_url: Option<&'a str>,
     pub claude_auth_token: Option<&'a str>,
+    pub agent_proxy: Option<&'a Value>,
     /// Forwarded as `claudeThinkingDisplay` to the sidecar. Expected
     /// values: `"summarized"` or `"omitted"`. Omitted from the wire
     /// payload when `None` so the sidecar falls back to its default.
@@ -85,6 +86,11 @@ pub fn build_send_message_params(input: BuildSendMessageParamsInput<'_>) -> Valu
                     "ANTHROPIC_AUTH_TOKEN": auth_token,
                 }),
             );
+        }
+    }
+    if let Some(proxy) = input.agent_proxy {
+        if let Some(obj) = params.as_object_mut() {
+            obj.insert("agentProxy".to_string(), proxy.clone());
         }
     }
     params

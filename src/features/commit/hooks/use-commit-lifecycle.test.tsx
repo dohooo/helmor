@@ -13,6 +13,7 @@ import { helmorQueryKeys } from "@/lib/query-client";
 import { useWorkspaceCommitLifecycle } from "./use-commit-lifecycle";
 
 const apiMocks = vi.hoisted(() => ({
+	checkWorkspaceForgeAuth: vi.fn(),
 	closeWorkspaceChangeRequest: vi.fn(),
 	createSession: vi.fn(),
 	hideSession: vi.fn(),
@@ -21,6 +22,7 @@ const apiMocks = vi.hoisted(() => ({
 	refreshWorkspaceChangeRequest: vi.fn(),
 	mergeWorkspaceChangeRequest: vi.fn(),
 	pushWorkspaceToRemote: vi.fn(),
+	stopAgentStream: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -28,6 +30,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 	return {
 		...actual,
+		checkWorkspaceForgeAuth: apiMocks.checkWorkspaceForgeAuth,
 		closeWorkspaceChangeRequest: apiMocks.closeWorkspaceChangeRequest,
 		createSession: apiMocks.createSession,
 		hideSession: apiMocks.hideSession,
@@ -36,6 +39,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		refreshWorkspaceChangeRequest: apiMocks.refreshWorkspaceChangeRequest,
 		mergeWorkspaceChangeRequest: apiMocks.mergeWorkspaceChangeRequest,
 		pushWorkspaceToRemote: apiMocks.pushWorkspaceToRemote,
+		stopAgentStream: apiMocks.stopAgentStream,
 	};
 });
 
@@ -87,6 +91,8 @@ function getConfirmDialogProps(node: ReactNode): ConfirmDialogProbe {
 
 describe("useWorkspaceCommitLifecycle", () => {
 	beforeEach(() => {
+		apiMocks.checkWorkspaceForgeAuth.mockReset();
+		apiMocks.checkWorkspaceForgeAuth.mockResolvedValue("loggedIn");
 		apiMocks.closeWorkspaceChangeRequest.mockReset();
 		apiMocks.createSession.mockReset();
 		apiMocks.hideSession.mockReset();
@@ -95,6 +101,8 @@ describe("useWorkspaceCommitLifecycle", () => {
 		apiMocks.refreshWorkspaceChangeRequest.mockReset();
 		apiMocks.mergeWorkspaceChangeRequest.mockReset();
 		apiMocks.pushWorkspaceToRemote.mockReset();
+		apiMocks.stopAgentStream.mockReset();
+		apiMocks.stopAgentStream.mockResolvedValue(undefined);
 
 		apiMocks.createSession.mockResolvedValue({ sessionId: "session-action" });
 		apiMocks.loadRepoPreferences.mockResolvedValue({});
@@ -116,6 +124,60 @@ describe("useWorkspaceCommitLifecycle", () => {
 	afterEach(() => {
 		vi.clearAllMocks();
 		vi.restoreAllMocks();
+	});
+
+	// Both forge-mutating agent actions (create + reopen) dispatch
+	// immediately, then abort in the background if the account is logged out.
+	it.each([
+		"create-pr",
+		"open-pr",
+	] as const)("dispatches %s immediately, then aborts the turn when logged out", async (mode) => {
+		apiMocks.checkWorkspaceForgeAuth.mockResolvedValue("loggedOut");
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const pushToast = vi.fn();
+		const onSelectSession = vi.fn();
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					getSelectedWorkspaceId: () => "workspace-1",
+					selectedRepoId: "repo-1",
+					selectedWorkspaceTargetBranch: "main",
+					changeRequest: null,
+					forgeActionStatus: EMPTY_FORGE_ACTION_STATUS,
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
+					onSelectSession,
+					pushToast,
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await act(async () => {
+			await result.current.handleInspectorCommitAction(mode);
+		});
+
+		// Dispatched with zero delay — session created + selected up front.
+		expect(apiMocks.createSession).toHaveBeenCalled();
+		expect(onSelectSession).toHaveBeenCalledWith("session-action");
+		expect(apiMocks.checkWorkspaceForgeAuth).toHaveBeenCalledWith(
+			"workspace-1",
+		);
+
+		// Background guard aborts the just-started turn but KEEPS the session
+		// (no hide, stays selected).
+		await waitFor(() => {
+			expect(apiMocks.stopAgentStream).toHaveBeenCalledWith("session-action");
+		});
+		expect(apiMocks.hideSession).not.toHaveBeenCalled();
+		expect(onSelectSession).not.toHaveBeenCalledWith(null);
+		expect(pushToast).toHaveBeenCalled();
 	});
 
 	it("verifies and auto-closes an action session once it has completed", async () => {
@@ -283,6 +345,190 @@ describe("useWorkspaceCommitLifecycle", () => {
 		});
 		await waitFor(() => {
 			expect(onSelectSession).toHaveBeenCalledWith("session-after-close");
+		});
+	});
+
+	it("auto-closes without stealing selection when the user is on another workspace", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		queryClient.setQueryData<WorkspaceDetail | null>(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			{
+				id: "workspace-1",
+				activeSessionId: "session-after-close",
+				status: "in-progress",
+			} as unknown as WorkspaceDetail,
+		);
+
+		// Dispatch happens on workspace-1; the user then navigates away.
+		let liveWorkspaceId: string | null = "workspace-1";
+		const onSelectSession = vi.fn();
+
+		const { result, rerender } = renderHook(
+			({
+				completedSessionIds,
+				busySessionIds,
+			}: {
+				completedSessionIds: Set<string>;
+				busySessionIds: Set<string>;
+			}) =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					getSelectedWorkspaceId: () => liveWorkspaceId,
+					selectedRepoId: "repo-1",
+					selectedWorkspaceTargetBranch: "main",
+					changeRequest: null,
+					forgeActionStatus: EMPTY_FORGE_ACTION_STATUS,
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds,
+					interactionRequiredSessionIds: new Set<string>(),
+					busySessionIds,
+					onSelectSession,
+				}),
+			{
+				initialProps: {
+					completedSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
+				},
+				wrapper: createWrapper(queryClient),
+			},
+		);
+
+		await act(async () => {
+			await result.current.handleInspectorCommitAction("create-pr");
+		});
+		act(() => {
+			result.current.handlePendingPromptConsumed();
+		});
+		onSelectSession.mockClear();
+
+		// User switches to a different workspace while the action runs.
+		liveWorkspaceId = "workspace-2";
+
+		rerender({
+			completedSessionIds: new Set<string>(),
+			busySessionIds: new Set(["session-action"]),
+		});
+		rerender({
+			completedSessionIds: new Set(["session-action"]),
+			busySessionIds: new Set<string>(),
+		});
+
+		// Session still auto-closes, but selection stays untouched.
+		await waitFor(() => {
+			expect(apiMocks.hideSession).toHaveBeenCalledWith("session-action");
+		});
+		await waitFor(() => {
+			expect(result.current.commitButtonState).toBe("idle");
+		});
+		expect(onSelectSession).not.toHaveBeenCalled();
+	});
+
+	it("settles two workspaces' Create-PR actions dispatched back-to-back", async () => {
+		// Regression: a single-slot lifecycle let the second Create-PR clobber
+		// the first, so the first workspace never got its refresh + auto-close
+		// (stuck showing "Create PR" with an un-hidden session). Both must settle.
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		for (const id of ["workspace-1", "workspace-2"]) {
+			queryClient.setQueryData<WorkspaceDetail | null>(
+				helmorQueryKeys.workspaceDetail(id),
+				{
+					id,
+					activeSessionId: `${id}-after-close`,
+					status: "in-progress",
+				} as unknown as WorkspaceDetail,
+			);
+		}
+
+		let liveWorkspaceId: string | null = "workspace-1";
+		const onSelectSession = vi.fn();
+
+		const { result, rerender } = renderHook(
+			({
+				selectedWorkspaceId,
+				completedSessionIds,
+				busySessionIds,
+			}: {
+				selectedWorkspaceId: string;
+				completedSessionIds: Set<string>;
+				busySessionIds: Set<string>;
+			}) =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId,
+					getSelectedWorkspaceId: () => liveWorkspaceId,
+					selectedRepoId: "repo-1",
+					selectedWorkspaceTargetBranch: "main",
+					changeRequest: null,
+					forgeActionStatus: EMPTY_FORGE_ACTION_STATUS,
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds,
+					interactionRequiredSessionIds: new Set<string>(),
+					busySessionIds,
+					onSelectSession,
+				}),
+			{
+				initialProps: {
+					selectedWorkspaceId: "workspace-1",
+					completedSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
+				},
+				wrapper: createWrapper(queryClient),
+			},
+		);
+
+		// Dispatch on workspace-1.
+		apiMocks.createSession.mockResolvedValueOnce({ sessionId: "session-w1" });
+		await act(async () => {
+			await result.current.handleInspectorCommitAction("create-pr");
+		});
+		act(() => {
+			result.current.handlePendingPromptConsumed();
+		});
+		rerender({
+			selectedWorkspaceId: "workspace-1",
+			completedSessionIds: new Set<string>(),
+			busySessionIds: new Set(["session-w1"]),
+		});
+
+		// User switches to workspace-2 and dispatches there before w1 finishes.
+		liveWorkspaceId = "workspace-2";
+		apiMocks.createSession.mockResolvedValueOnce({ sessionId: "session-w2" });
+		await act(async () => {
+			await result.current.handleInspectorCommitAction("create-pr");
+		});
+		act(() => {
+			result.current.handlePendingPromptConsumed();
+		});
+		rerender({
+			selectedWorkspaceId: "workspace-2",
+			completedSessionIds: new Set<string>(),
+			busySessionIds: new Set(["session-w1", "session-w2"]),
+		});
+
+		// Both sessions complete.
+		rerender({
+			selectedWorkspaceId: "workspace-2",
+			completedSessionIds: new Set(["session-w1", "session-w2"]),
+			busySessionIds: new Set<string>(),
+		});
+
+		// Neither lifecycle was orphaned: both refresh and both auto-close.
+		await waitFor(() => {
+			expect(apiMocks.refreshWorkspaceChangeRequest).toHaveBeenCalledWith(
+				"workspace-1",
+			);
+			expect(apiMocks.refreshWorkspaceChangeRequest).toHaveBeenCalledWith(
+				"workspace-2",
+			);
+		});
+		await waitFor(() => {
+			expect(apiMocks.hideSession).toHaveBeenCalledWith("session-w1");
+			expect(apiMocks.hideSession).toHaveBeenCalledWith("session-w2");
 		});
 	});
 

@@ -29,6 +29,22 @@ const workspaceGroups: WorkspaceGroup[] = [
 	},
 ];
 
+const twoWorkspaceGroups: WorkspaceGroup[] = [
+	{
+		id: "progress",
+		label: "In Progress",
+		tone: "progress",
+		rows: [
+			workspaceRow,
+			{
+				...workspaceRow,
+				id: "workspace-2",
+				title: "Workspace 2",
+			},
+		],
+	},
+];
+
 const repositoryOptions = [
 	{ id: "repo-alpha", name: "Alpha" },
 	{ id: "repo-beta", name: "Beta" },
@@ -131,6 +147,38 @@ describe("WorkspacesSidebar", () => {
 		);
 
 		expect(screen.getByLabelText("Unread")).toBeInTheDocument();
+	});
+
+	it("previews row selection on pointerdown before notifying the parent", () => {
+		const onSelectWorkspace = vi.fn();
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={twoWorkspaceGroups}
+					archivedRows={[]}
+					selectedWorkspaceId="workspace-1"
+					onSelectWorkspace={onSelectWorkspace}
+				/>
+			</TooltipProvider>,
+		);
+
+		const currentRow = screen.getByRole("button", { name: "Workspace 1" });
+		const nextRow = screen.getByRole("button", { name: "Workspace 2" });
+
+		expect(currentRow).toHaveClass("workspace-row-selected");
+		expect(nextRow).not.toHaveClass("workspace-row-selected");
+
+		fireEvent.pointerDown(nextRow, { button: 0, pointerId: 1 });
+
+		expect(currentRow).not.toHaveClass("workspace-row-selected");
+		expect(nextRow).toHaveClass("workspace-row-selected");
+		expect(onSelectWorkspace).not.toHaveBeenCalled();
+
+		fireEvent.click(nextRow);
+
+		expect(onSelectWorkspace).toHaveBeenCalledTimes(1);
+		expect(onSelectWorkspace).toHaveBeenCalledWith("workspace-2");
 	});
 
 	it("opens the workspace start page from the new workspace button", async () => {

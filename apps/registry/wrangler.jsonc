@@ -1,0 +1,22 @@
+{
+	// Helmor companion device registry. Deploy with `bun run deploy`.
+	//
+	// Non-secret IDs (KV id, zone id) are intentionally left as placeholders so
+	// the repo stays fork-friendly — fill them in locally (they are identifiers,
+	// not credentials). The CF API token is a Worker secret, never committed:
+	//   wrangler secret put CF_API_TOKEN
+	// account_id is read from the CLOUDFLARE_ACCOUNT_ID env var.
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "helmor-registry",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-06-01",
+	"workers_dev": false,
+	"routes": [{ "pattern": "registry.helmor.ai", "custom_domain": true }],
+	"kv_namespaces": [{ "binding": "DEVICES", "id": "<YOUR_KV_NAMESPACE_ID>" }],
+	"vars": {
+		"CF_ZONE_ID": "<YOUR_HELMOR_AI_ZONE_ID>",
+		"ROOT_DOMAIN": "helmor.ai",
+		"HOSTNAME_PREFIX": "remote-",
+		"REGISTER_RATE_LIMIT": "10"
+	}
+}

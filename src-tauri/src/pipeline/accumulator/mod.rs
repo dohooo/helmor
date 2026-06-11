@@ -11,6 +11,7 @@
 
 mod codex;
 mod cursor;
+mod opencode;
 mod streaming;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -135,6 +136,12 @@ pub struct StreamAccumulator {
     /// `__part_id` indices when the SDK delivers finalized blocks in
     /// separate per-block `assistant` events (delta-style).
     cur_asst_block_count: usize,
+    /// `parent_tool_use_id` of the turn currently streaming into `blocks`.
+    /// Set from the `stream_event` envelope so `build_partial_from_blocks`
+    /// can tag a subagent's mid-stream partial as `child:<pt>:<turn>` —
+    /// matching the finalized render so the live partial nests under its
+    /// parent Task/Agent tool call instead of flashing as a top-level bubble.
+    pub(super) cur_streaming_parent_id: Option<String>,
     local_bash_task_refs: HashSet<String>,
     // ── Codex state ──────────────────────────────────────────────────
     /// Per-item delta accumulation for Codex App Server streaming.
@@ -150,6 +157,12 @@ pub struct StreamAccumulator {
     // ── Cursor state ─────────────────────────────────────────────────
     /// Per-run cursor state; see `cursor.rs`.
     cursor_state: cursor::CursorRunState,
+
+    // ── opencode state ───────────────────────────────────────────────
+    /// Per-turn opencode part accumulation; see `opencode.rs`.
+    opencode_state: opencode::OpencodeRunState,
+    /// Index into `collected[]` driving `build_opencode_partial`.
+    opencode_partial_idx: Option<usize>,
 
     // ── Coverage guard ───────────────────────────────────────────────
     /// Top-level event types that fell through `push_event`'s match
@@ -254,6 +267,34 @@ fn strip_is_streaming_markers(blocks: &mut [Value]) {
     }
 }
 
+/// Whether `next` re-sends the SAME block as `prev` (cumulative snapshot)
+/// rather than a NEW block of the same type (delta-style). Type alone is
+/// not enough: omitted-thinking turns deliver several distinct thinking
+/// blocks per message — judging those cumulative reuses the first block's
+/// `__part_id` and inherits its `__duration_ms`, rendering N identical
+/// "Thought for Ns" chips.
+fn assistant_block_is_same(prev: &Value, next: &Value) -> bool {
+    let ty = assistant_block_type(prev);
+    if ty != assistant_block_type(next) {
+        return false;
+    }
+    match ty {
+        Some("tool_use" | "server_tool_use" | "mcp_tool_use") => {
+            prev.get("id").and_then(Value::as_str) == next.get("id").and_then(Value::as_str)
+        }
+        Some("thinking") => {
+            prev.get("signature").and_then(Value::as_str)
+                == next.get("signature").and_then(Value::as_str)
+                && prev.get("thinking").and_then(Value::as_str)
+                    == next.get("thinking").and_then(Value::as_str)
+        }
+        Some("text") => {
+            prev.get("text").and_then(Value::as_str) == next.get("text").and_then(Value::as_str)
+        }
+        _ => true,
+    }
+}
+
 fn cumulative_assistant_snapshot_prefix_matches(prev: &[Value], next: &[Value]) -> bool {
     if next.len() < prev.len() {
         return false;
@@ -261,9 +302,7 @@ fn cumulative_assistant_snapshot_prefix_matches(prev: &[Value], next: &[Value]) 
 
     prev.iter()
         .zip(next.iter())
-        .all(|(prev_block, next_block)| {
-            assistant_block_type(prev_block) == assistant_block_type(next_block)
-        })
+        .all(|(prev_block, next_block)| assistant_block_is_same(prev_block, next_block))
 }
 
 fn collect_resolved_id(block: &Value, resolved: &mut HashSet<String>) {
@@ -305,11 +344,14 @@ impl StreamAccumulator {
             cur_asst_blocks: Vec::new(),
             cur_asst_template: None,
             cur_asst_block_count: 0,
+            cur_streaming_parent_id: None,
             local_bash_task_refs: HashSet::new(),
             codex_items: codex::new_item_states(),
             codex_partial_idx: None,
             codex_turn_started_at: None,
             cursor_state: cursor::new_run_state(),
+            opencode_state: opencode::new_run_state(),
+            opencode_partial_idx: None,
             dropped_event_types: Vec::new(),
         }
     }
@@ -492,6 +534,34 @@ impl StreamAccumulator {
             Some("cursor/tool_call_start") => cursor::handle_tool_call_start(self, value),
             Some("cursor/tool_call_end") => cursor::handle_tool_call_end(self, value),
 
+            // ── opencode events (namespaced by the sidecar manager) ───
+            Some("opencode/session_init") => PushOutcome::NoOp,
+            Some("opencode/message.updated") => opencode::handle_message_updated(self, value),
+            Some("opencode/message.part.updated") => opencode::handle_part_updated(self, value),
+            // Token-by-token text/reasoning deltas (parallel to part.updated snapshots).
+            Some("opencode/message.part.delta") => opencode::handle_part_delta(self, value),
+            // Subagent (`task` tool) parts, tagged with the parent `callID`.
+            Some("opencode/subtask.message.updated") => {
+                opencode::handle_subtask_message_updated(self, value)
+            }
+            Some("opencode/subtask.message.part.updated") => {
+                opencode::handle_subtask_part_updated(self, value)
+            }
+            Some("opencode/subtask.message.part.delta") => {
+                opencode::handle_subtask_part_delta(self, value)
+            }
+            // A turn finalizes when its session goes idle.
+            Some("opencode/session.idle") => opencode::handle_session_idle(self),
+            Some("opencode/session.status") => opencode::handle_session_status(self, value),
+            // Redundant/informational forms — handled as NoOps for the coverage guard.
+            Some("opencode/session.error") => opencode::handle_session_error(self, value),
+            Some("opencode/session.created")
+            | Some("opencode/session.updated")
+            | Some("opencode/session.diff")
+            | Some("opencode/todo.updated")
+            | Some("opencode/message.removed")
+            | Some("opencode/message.part.removed") => PushOutcome::NoOp,
+
             // ── Codex informational notifications (no render) ────────
             Some("thread/status/changed")
             | Some("thread/tokenUsage/updated")
@@ -551,9 +621,7 @@ impl StreamAccumulator {
     ) -> Option<IntermediateMessage> {
         if !self.blocks.is_empty() {
             let (partial_id, created_at) = self.get_or_create_turn_identity();
-            Some(streaming::build_partial_from_blocks(
-                self, session_id, partial_id, created_at,
-            ))
+            streaming::build_partial_from_blocks(self, session_id, partial_id, created_at)
         } else {
             let text = self.fallback_text.trim();
             let thinking = self.fallback_thinking.trim();
@@ -599,12 +667,27 @@ impl StreamAccumulator {
         })
     }
 
+    /// Streaming partial = clone of the last opencode `collected[]` snapshot.
+    pub fn build_opencode_partial(&mut self) -> Option<IntermediateMessage> {
+        let idx = self.opencode_partial_idx.take()?;
+        let entry = self.collected.get(idx)?;
+        Some(IntermediateMessage {
+            id: entry.id.clone(),
+            role: entry.role,
+            raw_json: entry.raw_json.clone(),
+            parsed: entry.parsed.clone(),
+            created_at: entry.created_at.clone(),
+            is_streaming: true,
+        })
+    }
+
     /// Whether the accumulator has an active streaming partial.
     pub fn has_active_partial(&self) -> bool {
         !self.blocks.is_empty()
             || !self.fallback_text.trim().is_empty()
             || !self.fallback_thinking.trim().is_empty()
             || self.codex_partial_idx.is_some()
+            || self.opencode_partial_idx.is_some()
     }
 
     // ── Persistence accessors ───────────────────────────────────────
@@ -734,6 +817,11 @@ impl StreamAccumulator {
     /// Idempotent.
     pub fn flush_cursor_in_progress(&mut self) {
         cursor::flush_in_progress(self);
+    }
+
+    /// Finalize the in-flight opencode message on abort. Idempotent.
+    pub fn flush_opencode_in_progress(&mut self) {
+        opencode::flush_in_progress(self);
     }
 
     /// Convert any active streaming partial into a finalized assistant

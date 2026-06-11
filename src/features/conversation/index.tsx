@@ -15,12 +15,16 @@ import type { SessionCloseRequest } from "@/features/panel/use-confirm-session-c
 import {
 	type ActiveStreamSummary,
 	type ChangeRequestInfo,
+	subscribeUiMutations,
 	updateSessionSettings,
 } from "@/lib/api";
 import type { ResolvedComposerInsertRequest } from "@/lib/composer-insert";
 import { insertRequestMatchesComposer } from "@/lib/composer-insert";
 import { hasUnresolvedPlanReview } from "@/lib/plan-review";
-import { sessionThreadMessagesQueryOptions } from "@/lib/query-client";
+import {
+	sessionThreadMessagesQueryOptions,
+	workspaceSessionsQueryOptions,
+} from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import type { ContextCard } from "@/lib/sources/types";
 import {
@@ -36,6 +40,7 @@ import {
 	type ComposerSubmitPayload,
 	useConversationStreaming,
 } from "./hooks/use-streaming";
+import { useWatchSessionStream } from "./hooks/use-watch-session-stream";
 
 export type { ComposerSubmitPayload } from "./hooks/use-streaming";
 
@@ -66,6 +71,9 @@ export type PendingCreatedWorkspaceSubmit = {
 	id: string;
 	workspaceId: string;
 	sessionId: string;
+	/** New workspace's repo, forwarded into the first-turn send so the
+	 *  preference prefix stays correct even after navigating away. */
+	repoId?: string | null;
 	payload: ComposerSubmitPayload;
 	/** False until `await finalizePromise` resolves. The optimistic user
 	 *  bubble is rendered as soon as the pending submit is queued, but the
@@ -75,7 +83,7 @@ export type PendingCreatedWorkspaceSubmit = {
 	finalized: boolean;
 };
 
-type WorkspaceConversationContainerProps = {
+export type WorkspaceConversationContainerProps = {
 	selectedWorkspaceId: string | null;
 	displayedWorkspaceId: string | null;
 	selectedSessionId: string | null;
@@ -84,6 +92,7 @@ type WorkspaceConversationContainerProps = {
 	sessionSelectionHistory?: string[];
 	onSelectSession: (sessionId: string | null) => void;
 	onResolveDisplayedSession: (sessionId: string | null) => void;
+	onSelectWorkspace?: (workspaceId: string) => void;
 	onInteractionSessionsChange?: (
 		sessionWorkspaceMap: Map<string, string>,
 		interactionCounts: Map<string, number>,
@@ -179,6 +188,7 @@ export const WorkspaceConversationContainer = memo(
 		sessionSelectionHistory = [],
 		onSelectSession,
 		onResolveDisplayedSession,
+		onSelectWorkspace,
 		onInteractionSessionsChange,
 		activeStreams,
 		busySessionIds,
@@ -227,6 +237,15 @@ export const WorkspaceConversationContainer = memo(
 		const [composerFastModes, setComposerFastModes] = useState<
 			Record<string, boolean>
 		>({});
+		// P0-B: this file is `"use no memo"` (intentional render-phase ref
+		// mutation near the top), so the React Compiler will NOT memoize the
+		// FileLink context value for us. An inline object literal would change
+		// the context identity on every render of this container and cascade to
+		// every file-link consumer in the thread. Memoize by hand.
+		const fileLinkValue = useMemo(
+			() => ({ openInEditor: onOpenFileReference, workspaceRootPath }),
+			[onOpenFileReference, workspaceRootPath],
+		);
 		const composerContextKey =
 			composerContextKeyOverride ??
 			getComposerContextKey(displayedWorkspaceId, displayedSessionId);
@@ -250,16 +269,19 @@ export const WorkspaceConversationContainer = memo(
 			handleStopStream,
 			handleSteerQueued,
 			handleRemoveQueued,
+			handleEditQueued,
 			userInputResponsePending,
 			isSending,
 			pendingUserInput,
 			pendingPermissions,
 			restoreCustomTags,
 			restoreDraft,
+			restoreEditorState,
 			restoreFiles,
 			restoreImages,
 			restoreNonce,
 			activeFastPreludes,
+			clearFastPrelude,
 			busySessionIds: localBusySessionIds,
 		} = useConversationStreaming({
 			composerContextKey,
@@ -276,12 +298,30 @@ export const WorkspaceConversationContainer = memo(
 			onSessionAborted,
 		});
 
+		// Mirror live turns this client didn't start (driven by another window
+		// or the phone via the mobile companion) into the shared thread cache,
+		// so the desktop streams in real time instead of needing a reload.
+		useWatchSessionStream({ sessionId: displayedSessionId, activeStreams });
+
 		const queueItems = useSubmitQueueForSession(displayedSessionId);
+
+		// Terminal sessions render a live PTY (no SDK thread): skip the message
+		// query + composer for them.
+		const sessionsQuery = useQuery({
+			...workspaceSessionsQueryOptions(displayedWorkspaceId ?? "__none__"),
+			enabled: Boolean(displayedWorkspaceId),
+		});
+		const isTerminalSession = useMemo(
+			() =>
+				(sessionsQuery.data ?? []).find((s) => s.id === displayedSessionId)
+					?.sessionKind === "terminal",
+			[sessionsQuery.data, displayedSessionId],
+		);
 
 		// Derived from thread messages — survives refresh / session switch.
 		const threadQuery = useQuery({
 			...sessionThreadMessagesQueryOptions(displayedSessionId ?? "__none__"),
-			enabled: Boolean(displayedSessionId),
+			enabled: Boolean(displayedSessionId) && !isTerminalSession,
 		});
 		const hasPlanReview = useMemo(
 			() => hasUnresolvedPlanReview(threadQuery.data ?? []),
@@ -421,6 +461,34 @@ export const WorkspaceConversationContainer = memo(
 			[persistSessionSetting],
 		);
 
+		// Fast mode didn't engage: flip the toggle off and clear the prelude
+		// animation (this turn never ran fast — unlike a mid-stream manual
+		// toggle, which keeps the cue).
+		useEffect(() => {
+			let disposed = false;
+			let unlisten: (() => void) | null = null;
+			subscribeUiMutations((event) => {
+				if (disposed || event.type !== "fastModeUnavailable") return;
+				const contextKey = `session:${event.sessionId}`;
+				handleChangeFastMode(contextKey, false);
+				clearFastPrelude(contextKey);
+			})
+				.then((cleanup) => {
+					if (disposed) cleanup();
+					else unlisten = cleanup;
+				})
+				.catch((error) => {
+					console.error(
+						"[conversation] fast-mode sync subscribe failed",
+						error,
+					);
+				});
+			return () => {
+				disposed = true;
+				unlisten?.();
+			};
+		}, [handleChangeFastMode, clearFastPrelude]);
+
 		const handleComposerSubmitWrapper = useCallback(
 			(payload: Parameters<typeof handleComposerSubmit>[0]) => {
 				if (composerCreateContext) {
@@ -448,16 +516,10 @@ export const WorkspaceConversationContainer = memo(
 				dispatchedCreatedWorkspaceSubmitRef.current = null;
 				return;
 			}
-			if (
-				pendingCreatedWorkspaceSubmit.workspaceId !== displayedWorkspaceId ||
-				pendingCreatedWorkspaceSubmit.sessionId !== displayedSessionId
-			) {
-				return;
-			}
-			// Hold off until the App-level handler has awaited finalize. The
-			// backend has already written `state=ready` / `setup_pending` by
-			// the time `finalized` flips true — no React Query round-trip
-			// needed before firing the submit.
+			// Not gated on the displayed workspace: the send targets the
+			// pending session via `override`, so it must fire even if the user
+			// navigated away during finalize. Wait for `finalized` though —
+			// the backend row is operational only once it flips true.
 			if (!pendingCreatedWorkspaceSubmit.finalized) {
 				return;
 			}
@@ -482,14 +544,15 @@ export const WorkspaceConversationContainer = memo(
 						pendingCreatedWorkspaceSubmit.workspaceId,
 						pendingCreatedWorkspaceSubmit.sessionId,
 					),
+					...(pendingCreatedWorkspaceSubmit.repoId !== undefined
+						? { repoId: pendingCreatedWorkspaceSubmit.repoId }
+						: {}),
 				});
 				onPendingCreatedWorkspaceSubmitConsumed?.(
 					pendingCreatedWorkspaceSubmit.id,
 				);
 			})();
 		}, [
-			displayedSessionId,
-			displayedWorkspaceId,
 			handleComposerSubmit,
 			onPendingCreatedWorkspaceSubmitConsumed,
 			pendingCreatedWorkspaceSubmit,
@@ -521,12 +584,7 @@ export const WorkspaceConversationContainer = memo(
 		const userInputResponse: UserInputResponseHandler = handleUserInputResponse;
 
 		return (
-			<FileLinkProvider
-				value={{
-					openInEditor: onOpenFileReference,
-					workspaceRootPath,
-				}}
-			>
+			<FileLinkProvider value={fileLinkValue}>
 				{composerOnly ? null : (
 					<WorkspacePanelContainer
 						selectedWorkspaceId={selectedWorkspaceId}
@@ -540,6 +598,7 @@ export const WorkspaceConversationContainer = memo(
 						modelSelections={composerModelSelections}
 						workspaceChangeRequest={workspaceChangeRequest}
 						onSelectSession={onSelectSession}
+						onSelectWorkspace={onSelectWorkspace}
 						onResolveDisplayedSession={onResolveDisplayedSession}
 						onQueuePendingPromptForSession={onQueuePendingPromptForSession}
 						onRequestCloseSession={onRequestCloseSession}
@@ -566,6 +625,7 @@ export const WorkspaceConversationContainer = memo(
 					className={cn(
 						composerOnly ? "w-full" : "mt-auto px-4 pb-4 pt-0",
 						composerWrapperClassName,
+						isTerminalSession && "hidden",
 					)}
 				>
 					<WorkspaceComposerContainer
@@ -582,6 +642,7 @@ export const WorkspaceConversationContainer = memo(
 						restoreImages={restoreImages}
 						restoreFiles={restoreFiles}
 						restoreCustomTags={restoreCustomTags}
+						restoreEditorState={restoreEditorState}
 						restoreNonce={restoreNonce}
 						pendingUserInput={pendingUserInput}
 						onUserInputResponse={userInputResponse}
@@ -608,6 +669,7 @@ export const WorkspaceConversationContainer = memo(
 						queueItems={queueItems}
 						onSteerQueued={handleSteerQueued}
 						onRemoveQueued={handleRemoveQueued}
+						onEditQueued={handleEditQueued}
 						contextPanelOpen={contextPanelOpen}
 						onToggleContextPanel={onToggleContextPanel}
 						startSubmitMenu={composerStartSubmitMenu}

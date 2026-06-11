@@ -9,11 +9,9 @@
 //! - Multi-account: every API call routes through
 //!   `accounts::run_cli_with_login`, which sets `GH_TOKEN` per-spawn so
 //!   we never mutate gh's "active account" pointer.
-//! - Logout detection: the action-status path runs a `list_logins`
-//!   probe BEFORE the published-branch short-circuit, mirroring the
-//!   GitLab pre-flight. That way an unpublished workspace whose bound
-//!   account has been logged out still surfaces the inspector
-//!   "Connect" CTA — instead of getting stuck at `no_change_request`.
+//! - Logout detection is lazy: no background `gh auth status` probe.
+//!   Published workspaces surface "Connect" via the API call's 401
+//!   (`GraphqlOutcome::Auth`); unpublished ones only on create-PR.
 
 use anyhow::{bail, Context, Result};
 
@@ -33,7 +31,7 @@ mod types;
 use self::actions::{
     build_check_insert_text, query_check_run_detail, query_workspace_pr_action_status,
 };
-use self::context::{load_github_context, GithubContext, GithubResolution, HostAuthCheck};
+use self::context::{load_github_context, GithubContext, GithubResolution};
 use self::pull_request::{
     close_pull_request, fetch_open_pr_node_id, find_workspace_pr, merge_pull_request,
 };
@@ -49,13 +47,13 @@ use self::pull_request::{
 ///   - `Err(_)` only for unexpected transport / parse failures (so the
 ///     caller can surface a distinct "something went wrong" state).
 pub fn lookup_workspace_pr(workspace_id: &str) -> Result<Option<ChangeRequestInfo>> {
-    let context = match load_github_context(workspace_id, HostAuthCheck::Skip)? {
-        GithubResolution::Ready(ctx) if ctx.has_remote_tracking => ctx,
+    let context = match load_github_context(workspace_id)? {
+        GithubResolution::Ready(ctx) if ctx.published => ctx,
         // Anything else short-circuits to "no PR linked":
-        //   - Initializing / unavailable / unauthenticated / no
-        //     remote-tracking → caller sees `None` and renders the
-        //     empty-PR state. Auth is not surfaced here because the
-        //     primary auth surface is the action-status path.
+        //   - Initializing / unavailable / unauthenticated / unpublished
+        //     branch → caller sees `None` and renders the empty-PR state.
+        //     Auth is not surfaced here because the primary auth surface
+        //     is the action-status path.
         _ => return Ok(None),
     };
 
@@ -70,7 +68,7 @@ pub fn lookup_workspace_pr(workspace_id: &str) -> Result<Option<ChangeRequestInf
 /// keeps the local Git rows usable even when remote status cannot be
 /// queried.
 pub fn lookup_workspace_pr_action_status(workspace_id: &str) -> Result<ForgeActionStatus> {
-    let resolution = load_github_context(workspace_id, HostAuthCheck::Probe)?;
+    let resolution = load_github_context(workspace_id)?;
     let context = match resolution {
         GithubResolution::Ready(ctx) => ctx,
         GithubResolution::Initializing => {
@@ -86,20 +84,57 @@ pub fn lookup_workspace_pr_action_status(workspace_id: &str) -> Result<ForgeActi
         }
     };
 
-    if !context.has_remote_tracking {
+    // Persistent logout: a prior real signal said this account is logged
+    // out → keep surfacing Connect without re-probing (covers unpublished
+    // + sibling workspaces + refocus).
+    if crate::forge::accounts::forge_auth_known_logged_out(api::GITHUB_HOST, &context.login) {
+        return Ok(ForgeActionStatus::unauthenticated(
+            "GitHub account is not connected for this repository",
+        ));
+    }
+
+    if !context.published {
         return Ok(ForgeActionStatus::no_change_request());
     }
 
     let status = query_workspace_pr_action_status(&context)
         .unwrap_or_else(|error| ForgeActionStatus::error(format!("{error:#}")));
+    // Feed the live API verdict back into the cache so siblings + refocus
+    // stay consistent.
+    match status.remote_state {
+        crate::forge::RemoteState::Unauthenticated => {
+            if !crate::forge::accounts::confirm_forge_logged_out(
+                crate::forge::types::ForgeProvider::Github,
+                api::GITHUB_HOST,
+                &context.login,
+            ) {
+                tracing::warn!(
+                    workspace_id,
+                    login = %context.login,
+                    "GitHub API returned 401 but live auth probe does not confirm logout; treating as transient"
+                );
+                return Ok(ForgeActionStatus::error(
+                    "GitHub API rejected the request (401) but the account still appears logged in",
+                ));
+            }
+        }
+        crate::forge::RemoteState::Ok | crate::forge::RemoteState::NoPr => {
+            crate::forge::accounts::note_forge_auth(
+                api::GITHUB_HOST,
+                &context.login,
+                crate::forge::accounts::AuthCheck::LoggedIn,
+            )
+        }
+        crate::forge::RemoteState::Unavailable | crate::forge::RemoteState::Error => {}
+    }
 
     Ok(status)
 }
 
 pub fn lookup_workspace_pr_check_insert_text(workspace_id: &str, item_id: &str) -> Result<String> {
-    let resolution = load_github_context(workspace_id, HostAuthCheck::Probe)?;
+    let resolution = load_github_context(workspace_id)?;
     let context = match resolution {
-        GithubResolution::Ready(ctx) if ctx.has_remote_tracking => ctx,
+        GithubResolution::Ready(ctx) if ctx.published => ctx,
         GithubResolution::Ready(_) | GithubResolution::Initializing => {
             bail!("Workspace branch is not published");
         }
@@ -183,8 +218,8 @@ pub fn close_workspace_pr(workspace_id: &str) -> Result<Option<ChangeRequestInfo
 /// call wrapping these has already returned a PR, which means a token
 /// just worked.
 fn mutation_context(workspace_id: &str) -> Result<Option<GithubContext>> {
-    match load_github_context(workspace_id, HostAuthCheck::Skip)? {
-        GithubResolution::Ready(ctx) if ctx.has_remote_tracking => Ok(Some(ctx)),
+    match load_github_context(workspace_id)? {
+        GithubResolution::Ready(ctx) if ctx.published => Ok(Some(ctx)),
         _ => Ok(None),
     }
 }

@@ -2,6 +2,183 @@
 	"_readme": "AUTO-GENERATED from .announcements during `bun run release:version`. Each item is one released version's in-app announcement. Do not edit released entries by hand.",
 	"items": [
 		{
+			"releaseVersion": "0.34.0",
+			"items": [
+				{
+					"text": "You can now clean up all archived workspaces at once from Settings → General to free up disk space.",
+					"action": {
+						"label": "Open General",
+						"value": {
+							"type": "openSettings",
+							"section": "general"
+						}
+					}
+				},
+				{
+					"text": "Claude Fable 5 (1M context) is now available at the top of the Claude Code model list — Anthropic's most capable model for the hardest, longest-running tasks. Opus 4.8 remains the default."
+				},
+				{
+					"text": "⚡ Major performance improvements across the app."
+				}
+			]
+		},
+		{
+			"releaseVersion": "0.33.0",
+			"items": [
+				{
+					"text": "Cursor now supports Plan mode — it drafts a read-only plan first, then lets you approve it or request changes before it touches your code."
+				}
+			]
+		},
+		{
+			"releaseVersion": "0.32.0",
+			"items": [
+				{
+					"text": "OpenCode is now a built-in coding agent — start a session and pick from any model it can reach, then connect your own providers in Settings.",
+					"action": {
+						"label": "Open Providers",
+						"value": {
+							"type": "openSettings",
+							"section": "providers"
+						}
+					}
+				}
+			]
+		},
+		{
+			"releaseVersion": "0.31.0",
+			"items": [
+				{
+					"text": "Open Helmor from your phone or any browser — pair a device once, then drive your desktop's workspaces and agents from a stable URL.",
+					"action": {
+						"label": "Open Mobile companion",
+						"value": {
+							"type": "openSettings",
+							"section": "experimental"
+						}
+					}
+				},
+				{
+					"text": "You can now build stacked PRs — a chain of small, dependent PRs. Plan one with /helmor-cli stack, or split a change you've already written with /helmor-cli break; the sidebar groups each stack together."
+				}
+			]
+		},
+		{
+			"releaseVersion": "0.30.0",
+			"items": [
+				{
+					"text": "Agents now keep research notes and other scratch artifacts out of workspace Changes."
+				},
+				{
+					"text": "Gemma 4 12B is now available in the Local LLM installer.",
+					"action": {
+						"label": "Open Experimental",
+						"value": {
+							"type": "openSettings",
+							"section": "experimental"
+						}
+					}
+				},
+				{
+					"text": "On macOS, closing the window (or Cmd+Shift+W) now keeps Helmor running in the Dock instead of quitting — click the Dock icon to bring it back. Cmd+Q still quits.",
+					"action": {
+						"label": "Open Shortcuts",
+						"value": {
+							"type": "openSettings",
+							"section": "shortcuts"
+						}
+					}
+				},
+				{
+					"text": "Use Command+Control+M or the header resize button to switch Helmor between desktop and mini window sizes."
+				},
+				{
+					"text": "On narrow windows, the sidebars now peek in from the edges so the workspace stays full width."
+				},
+				{
+					"text": "Smart Triage now reasons more deeply before suggesting tasks, so its proposed tasks are more accurate.",
+					"action": {
+						"label": "Open Experimental",
+						"value": {
+							"type": "openSettings",
+							"section": "experimental"
+						}
+					}
+				},
+				{
+					"text": "Proposed tasks now show a source badge (GitHub, GitLab, Slack, or Lark) on their avatar, so you can see where each one came from at a glance."
+				}
+			]
+		},
+		{
+			"releaseVersion": "0.29.0",
+			"items": [
+				{
+					"text": "Smart triage now surfaces only items that actually involve you (assigned, review-requested, @-mentioned, or your own work) and automatically archives proposed tasks once their pull request or issue is merged or closed — so the list stays relevant and cleans itself up.",
+					"action": {
+						"label": "Open Experimental",
+						"value": {
+							"type": "openSettings",
+							"section": "experimental"
+						}
+					}
+				}
+			]
+		},
+		{
+			"releaseVersion": "0.28.0",
+			"items": [
+				{
+					"text": "Claude's dynamic workflows now appear as a live card, and the new /workflows command opens a keyboard-navigable drill-down into each run's phases, agents, and results."
+				},
+				{
+					"text": "Typing \"workflow\" or \"ultrathink\" in the composer now highlights the word to cue the matching mode."
+				},
+				{
+					"text": "Claude Opus 4.8 (1M context) is now the default model, listed above 4.7 and 4.6 in the picker."
+				}
+			]
+		},
+		{
+			"releaseVersion": "0.27.0",
+			"items": [
+				{
+					"text": "Queued messages now have an Edit button — click it to pull a queued message back into the composer for revision, leaving the rest of the queue in place."
+				},
+				{
+					"text": "Smart Triage: let the local LLM scan Slack / Lark / GitHub / GitLab and pre-fill AI workspaces for actionable items.",
+					"action": {
+						"label": "Open Experimental",
+						"value": {
+							"type": "openSettings",
+							"section": "experimental"
+						}
+					}
+				}
+			]
+		},
+		{
+			"releaseVersion": "0.26.0",
+			"items": [
+				{
+					"text": "Coding agents in Helmor can now drive Helmor itself — spawn sibling workspaces, dispatch ship actions, and read other agents' transcripts. Just ask them in any chat. Helmor CLI and skills install automatically in the background."
+				},
+				{
+					"text": "Every new workspace now has a gitignored `.agent-contexts/` directory agents can use to share files across sessions without polluting diffs."
+				},
+				{
+					"text": "Slack, GitHub, and GitLab context detail panels now refresh automatically when you open them or refocus Helmor, and there's a manual refresh button in the toolbar.",
+					"action": {
+						"label": "Open Context",
+						"value": {
+							"type": "setRightSidebarMode",
+							"mode": "context"
+						}
+					}
+				}
+			]
+		},
+		{
 			"releaseVersion": "0.25.0",
 			"items": [
 				{

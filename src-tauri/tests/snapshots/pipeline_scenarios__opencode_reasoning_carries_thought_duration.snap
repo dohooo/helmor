@@ -1,0 +1,17 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: msg-1
+  content_length: 2
+  content:
+    - type: reasoning
+      text_length: 12
+      text_preview: let me think
+      streaming: ~
+      duration_ms: 4000
+    - type: text
+      text: Answer
+  status: ~
+  streaming: ~

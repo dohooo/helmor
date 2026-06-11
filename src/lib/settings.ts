@@ -1,6 +1,8 @@
-import { invoke } from "@tauri-apps/api/core";
 import { createContext, useContext } from "react";
 import type { WorkspaceBranchIntent } from "./api";
+// Routed through the transport shim so settings load works in the mobile
+// browser companion too (not just the Tauri webview).
+import { invoke } from "./ipc";
 
 export type ThemeMode = "system" | "light" | "dark";
 
@@ -135,6 +137,32 @@ export type CursorProviderSettings = {
 	cachedModels: CursorCachedModel[] | null;
 };
 
+// `slug` = `<providerID>/<modelID>`.
+export type OpencodeCachedModel = {
+	slug: string;
+	label: string;
+	// Effort tiers (the model's `variants` keys). Empty ⟺ no effort switch.
+	effortLevels?: string[];
+};
+
+// Bump when the cached model schema changes so older caches refetch once.
+export const OPENCODE_CACHE_VERSION = 1;
+
+export type OpencodeProviderSettings = {
+	status: "ready" | "unavailable";
+	connected: string[];
+	cachedModels: OpencodeCachedModel[] | null;
+	// `null` = auto-fill all connected on first fetch; `[]` = user cleared.
+	enabledModelIds: string[] | null;
+	// Older/absent → one-time refetch to backfill new per-model metadata.
+	cacheVersion?: number;
+};
+
+export type AgentProxySettings = {
+	mode: "none" | "system" | "custom";
+	customUrl: string;
+};
+
 export type LocalLlmSettings = {
 	enabled: boolean;
 	model: string;
@@ -243,6 +271,9 @@ export type AppSettings = {
 	notificationSound: NotificationSound;
 	/** When true, hovering a terminal-like inspector tab body expands it. */
 	terminalHoverExpansion: boolean;
+	/** Shows the Terminal-Mode toggle in the composer; sending with it on
+	 *  opens the prompt in an agent TUI instead of a GUI session. */
+	enableTerminalMode: boolean;
 	lastWorkspaceId: string | null;
 	lastSessionId: string | null;
 	lastSurface: AppSurface;
@@ -289,6 +320,8 @@ export type AppSettings = {
 	shortcuts: ShortcutOverrides;
 	claudeCustomProviders: ClaudeCustomProviderSettings;
 	cursorProvider: CursorProviderSettings;
+	opencodeProvider: OpencodeProviderSettings;
+	agentProxy: AgentProxySettings;
 	localLlm: LocalLlmSettings;
 	inboxSourceConfig: InboxSourceConfig;
 	startSurfacePreferences: StartSurfacePreferences;
@@ -355,6 +388,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	notifications: true,
 	notificationSound: "off",
 	terminalHoverExpansion: true,
+	enableTerminalMode: false,
 	lastWorkspaceId: null,
 	lastSessionId: null,
 	lastSurface: "workspace",
@@ -387,6 +421,16 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		apiKey: "",
 		enabledModelIds: null,
 		cachedModels: null,
+	},
+	opencodeProvider: {
+		status: "unavailable",
+		connected: [],
+		cachedModels: null,
+		enabledModelIds: null,
+	},
+	agentProxy: {
+		mode: "none",
+		customUrl: "",
 	},
 	localLlm: {
 		enabled: false,
@@ -523,6 +567,7 @@ const SETTINGS_KEY_MAP: Record<
 	notifications: "app.notifications",
 	notificationSound: "app.notification_sound",
 	terminalHoverExpansion: "app.terminal_hover_expansion",
+	enableTerminalMode: "app.enable_terminal_mode",
 	lastWorkspaceId: "app.last_workspace_id",
 	lastSessionId: "app.last_session_id",
 	lastSurface: "app.last_surface",
@@ -547,6 +592,8 @@ const SETTINGS_KEY_MAP: Record<
 	shortcuts: "app.shortcuts",
 	claudeCustomProviders: "app.claude_custom_providers",
 	cursorProvider: "app.cursor_provider",
+	opencodeProvider: "app.opencode_provider",
+	agentProxy: "app.agent_proxy",
 	localLlm: "app.local_llm",
 	inboxSourceConfig: "app.inbox_source_config",
 	startSurfacePreferences: "app.start_surface_preferences",
@@ -913,6 +960,51 @@ function parseCursorProviderSettings(
 	}
 }
 
+function parseOpencodeProviderSettings(
+	raw: string | undefined,
+): OpencodeProviderSettings {
+	if (!raw) return DEFAULT_SETTINGS.opencodeProvider;
+	try {
+		const parsed = JSON.parse(raw) as Record<string, unknown>;
+		return {
+			status: parsed.status === "ready" ? "ready" : "unavailable",
+			connected: parseStringArray(parsed.connected),
+			cachedModels: parseOpencodeCachedModels(parsed.cachedModels),
+			enabledModelIds: parseEnabledModelIds(parsed.enabledModelIds),
+			cacheVersion:
+				typeof parsed.cacheVersion === "number" ? parsed.cacheVersion : 0,
+		};
+	} catch {
+		return DEFAULT_SETTINGS.opencodeProvider;
+	}
+}
+
+function parseStringArray(value: unknown): string[] {
+	if (!Array.isArray(value)) return [];
+	return value.filter((item): item is string => typeof item === "string");
+}
+
+function parseOpencodeCachedModels(
+	value: unknown,
+): OpencodeCachedModel[] | null {
+	if (!Array.isArray(value)) return null;
+	const models: OpencodeCachedModel[] = [];
+	for (const entry of value) {
+		if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+		const obj = entry as Record<string, unknown>;
+		if (typeof obj.slug !== "string" || typeof obj.label !== "string") continue;
+		const effortLevels = Array.isArray(obj.effortLevels)
+			? obj.effortLevels.filter((v): v is string => typeof v === "string")
+			: undefined;
+		models.push({
+			slug: obj.slug,
+			label: obj.label,
+			...(effortLevels && effortLevels.length > 0 ? { effortLevels } : {}),
+		});
+	}
+	return models;
+}
+
 function parseEnabledModelIds(value: unknown): string[] | null {
 	if (value === null) return null;
 	if (!Array.isArray(value)) return null;
@@ -998,6 +1090,23 @@ function parseClaudeCustomProviderSettings(
 		};
 	} catch {
 		return DEFAULT_SETTINGS.claudeCustomProviders;
+	}
+}
+
+function parseAgentProxySettings(raw: string | undefined): AgentProxySettings {
+	if (!raw) return DEFAULT_SETTINGS.agentProxy;
+	try {
+		const parsed = JSON.parse(raw) as Record<string, unknown>;
+		const mode =
+			parsed.mode === "system" || parsed.mode === "custom"
+				? parsed.mode
+				: DEFAULT_SETTINGS.agentProxy.mode;
+		return {
+			mode,
+			customUrl: typeof parsed.customUrl === "string" ? parsed.customUrl : "",
+		};
+	} catch {
+		return DEFAULT_SETTINGS.agentProxy;
 	}
 }
 
@@ -1122,6 +1231,7 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.terminalHoverExpansion] !== undefined
 					? raw[SETTINGS_KEY_MAP.terminalHoverExpansion] === "true"
 					: DEFAULT_SETTINGS.terminalHoverExpansion,
+			enableTerminalMode: raw[SETTINGS_KEY_MAP.enableTerminalMode] === "true",
 			lastWorkspaceId: raw[SETTINGS_KEY_MAP.lastWorkspaceId] || null,
 			lastSessionId: raw[SETTINGS_KEY_MAP.lastSessionId] || null,
 			lastSurface:
@@ -1203,6 +1313,10 @@ export async function loadSettings(): Promise<AppSettings> {
 			cursorProvider: parseCursorProviderSettings(
 				raw[SETTINGS_KEY_MAP.cursorProvider],
 			),
+			opencodeProvider: parseOpencodeProviderSettings(
+				raw[SETTINGS_KEY_MAP.opencodeProvider],
+			),
+			agentProxy: parseAgentProxySettings(raw[SETTINGS_KEY_MAP.agentProxy]),
 			localLlm: parseLocalLlmSettings(raw[SETTINGS_KEY_MAP.localLlm]),
 			inboxSourceConfig: parseInboxSourceConfig(
 				raw[SETTINGS_KEY_MAP.inboxSourceConfig],
@@ -1249,6 +1363,8 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 				key === "shortcuts" ||
 				key === "claudeCustomProviders" ||
 				key === "cursorProvider" ||
+				key === "opencodeProvider" ||
+				key === "agentProxy" ||
 				key === "localLlm" ||
 				key === "inboxSourceConfig" ||
 				key === "startSurfacePreferences"

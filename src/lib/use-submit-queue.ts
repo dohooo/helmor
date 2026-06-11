@@ -15,6 +15,7 @@
  * targets across re-renders.
  */
 
+import type { SerializedEditorState } from "lexical";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import type { AgentModelOption } from "./api";
@@ -33,6 +34,11 @@ export type QueuedSubmitPayload = {
 	effortLevel: string;
 	permissionMode: string;
 	fastMode: boolean;
+	/** Full Lexical editor state at enqueue time. Lets `Edit` round-trip the
+	 *  queued message back into the composer without lossy reverse-parsing
+	 *  of `prompt` (which has `@<path>` references inlined and would otherwise
+	 *  collide with badge metadata on restore). */
+	editorStateSnapshot?: SerializedEditorState;
 };
 
 /** Context captured at enqueue time so drain / Steer can replay

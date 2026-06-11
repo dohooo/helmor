@@ -6,13 +6,14 @@
 //! document parsing, server-tool result attachment, and the lookahead
 //! merge that pairs `tool_result` payloads with their owning `tool_use`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde_json::Value;
 
 use crate::pipeline::types::{
     ExtendedMessagePart, ImageSource, IntermediateMessage, MessagePart, NoticeSeverity,
-    StreamingStatus, ThreadMessageLike, TodoItem, TodoStatus,
+    StreamingStatus, ThreadMessageLike, TodoItem, TodoStatus, WorkflowAgent, WorkflowAgentStatus,
+    WorkflowStatus,
 };
 
 /// Returns true when an assistant message contains at least one
@@ -69,7 +70,376 @@ fn resolve_part_id(obj: &serde_json::Map<String, Value>, msg_id: &str, idx: usiz
         .unwrap_or_else(|| format!("{msg_id}:blk:{idx}"))
 }
 
+/// Id prefix stamped onto every `TodoList` part synthesized from the Claude
+/// Task family. `collapse_task_todo_lists` keys off this so it folds the
+/// whole Task sequence into one evolving widget while leaving TodoWrite- and
+/// Codex-sourced lists untouched.
+pub(super) const CLAUDE_TASK_LIST_ID_PREFIX: &str = "claude-task:";
+
+/// Cross-message accumulator for the Claude Task tool family
+/// (`TaskCreate` / `TaskUpdate`), which replaced `TodoWrite` for SDK and
+/// headless sessions in claude-agent-sdk v0.3.142.
+///
+/// Unlike `TodoWrite` (a full snapshot per call), the Task family is
+/// incremental: `TaskCreate` adds a task and the CLI assigns it a
+/// sequential id (`"1"`, `"2"`, `"3"`…) by creation order; `TaskUpdate`
+/// patches a task by that id. To present the same single evolving plan
+/// widget the user saw with `TodoWrite`, the adapter threads one of these
+/// across the whole message list, emitting a cumulative `TodoList` on each
+/// state-changing call. `convert` then folds consecutive `TodoList` parts
+/// into one (see `collapse_consecutive_todo_lists`).
+#[derive(Default)]
+pub(super) struct TaskListState {
+    /// Task ids in creation order — drives the rendered row order.
+    order: Vec<String>,
+    /// id → (text, status). Text is the task `subject`.
+    tasks: std::collections::HashMap<String, (String, TodoStatus)>,
+    /// Count of `TaskCreate` seen → the next sequential id.
+    created: usize,
+}
+
+fn parse_task_status(s: &str) -> TodoStatus {
+    match s {
+        "completed" => TodoStatus::Completed,
+        "in_progress" => TodoStatus::InProgress,
+        _ => TodoStatus::Pending,
+    }
+}
+
+impl TaskListState {
+    /// Apply a Task-family `tool_use` and return the cumulative TodoList
+    /// items if the block was a recognized, complete state mutation.
+    /// Returns `None` when the caller should fall back to a plain ToolCall:
+    /// a `TaskCreate` still streaming its input (no `subject`), or a
+    /// `TaskUpdate` referencing a task we never saw created.
+    fn apply(&mut self, name: &str, input: &Value) -> Option<Vec<TodoItem>> {
+        match name {
+            "TaskCreate" => {
+                let subject = input.get("subject").and_then(Value::as_str)?;
+                self.created += 1;
+                let id = self.created.to_string();
+                let status = input
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .map(parse_task_status)
+                    .unwrap_or(TodoStatus::Pending);
+                self.order.push(id.clone());
+                self.tasks.insert(id, (subject.to_string(), status));
+                Some(self.snapshot())
+            }
+            "TaskUpdate" => {
+                let id = input.get("taskId").and_then(Value::as_str)?;
+                if !self.tasks.contains_key(id) {
+                    return None;
+                }
+                let new_status = input.get("status").and_then(Value::as_str);
+                let new_subject = input.get("subject").and_then(Value::as_str);
+                // A TaskUpdate that touches neither a field we render (status,
+                // subject) — e.g. an owner-only or addBlocks-only update —
+                // doesn't change the list. Fall back to a plain ToolCall
+                // rather than re-emit an identical snapshot.
+                if new_status.is_none() && new_subject.is_none() {
+                    return None;
+                }
+                // A `deleted` status drops the task from the list entirely.
+                if new_status == Some("deleted") {
+                    self.tasks.remove(id);
+                    self.order.retain(|x| x != id);
+                    return Some(self.snapshot());
+                }
+                if let Some((text, status)) = self.tasks.get_mut(id) {
+                    if let Some(s) = new_status {
+                        *status = parse_task_status(s);
+                    }
+                    if let Some(subj) = new_subject {
+                        *text = subj.to_string();
+                    }
+                }
+                Some(self.snapshot())
+            }
+            _ => None,
+        }
+    }
+
+    fn snapshot(&self) -> Vec<TodoItem> {
+        self.order
+            .iter()
+            .filter_map(|id| {
+                self.tasks.get(id).map(|(text, status)| TodoItem {
+                    text: text.clone(),
+                    status: status.clone(),
+                })
+            })
+            .collect()
+    }
+}
+
+/// Id prefix stamped onto a `MessagePart::Workflow` so the post-pass
+/// `finalize_workflow_widgets` can find the part and rewrite it with the
+/// final aggregated run state, keyed by the originating tool_use id.
+pub(super) const WORKFLOW_ID_PREFIX: &str = "workflow:";
+
+/// Cross-message accumulator for Claude Code "Dynamic Workflow" runs. The
+/// `Workflow` tool call anchors a run (keyed by its tool_use id); the
+/// `task_*` lifecycle system events (`task_type = "local_workflow"`) that
+/// follow carry the phase/agent tree, token usage, and terminal status —
+/// all matched back by `tool_use_id` (or `task_id`, linked via
+/// `task_started`). Mirrors `TaskListState`: accumulate across the message
+/// walk, then `finalize_workflow_widgets` writes the merged result into the
+/// anchored `MessagePart::Workflow`.
+#[derive(Default)]
+pub(super) struct WorkflowAccumulator {
+    /// tool_use_id → run.
+    runs: HashMap<String, WorkflowRun>,
+    /// task_id → tool_use_id (recorded from `task_started`, which carries
+    /// both; later `task_updated` events arrive with only `task_id`).
+    task_to_tool: HashMap<String, String>,
+}
+
+struct WorkflowRun {
+    name: String,
+    status: WorkflowStatus,
+    /// Agents keyed by their `workflow_progress` index so deltas upsert.
+    agents: BTreeMap<u64, WorkflowAgent>,
+    total_tokens: Option<u64>,
+    duration_ms: Option<u64>,
+}
+
+/// Final fields written back into a `MessagePart::Workflow` by
+/// `finalize_workflow_widgets`: (name, status, agents, total_tokens, duration_ms).
+pub(super) type WorkflowWidget = (
+    String,
+    WorkflowStatus,
+    Vec<WorkflowAgent>,
+    Option<u64>,
+    Option<u64>,
+);
+
+fn map_workflow_status(s: &str) -> WorkflowStatus {
+    match s {
+        "completed" => WorkflowStatus::Completed,
+        "failed" => WorkflowStatus::Failed,
+        "stopped" | "cancelled" => WorkflowStatus::Stopped,
+        _ => WorkflowStatus::Running,
+    }
+}
+
+/// Cap on a stored agent result preview. Generous so the drill-down detail
+/// view renders a meaningful, scrollable chunk of markdown; the in-thread card
+/// and the L1 agent row still show only a single CSS-truncated line.
+const PREVIEW_CAP: usize = 4000;
+
+fn truncate_preview(s: &str) -> String {
+    let s = s.trim();
+    if s.chars().count() <= PREVIEW_CAP {
+        s.to_string()
+    } else {
+        let cut: String = s.chars().take(PREVIEW_CAP - 1).collect();
+        format!("{cut}…")
+    }
+}
+
+impl WorkflowAccumulator {
+    /// Register the run for a `Workflow` tool call (idempotent).
+    pub(super) fn register_tool(&mut self, tool_use_id: &str) {
+        self.runs
+            .entry(tool_use_id.to_string())
+            .or_insert_with(|| WorkflowRun {
+                name: "Workflow".to_string(),
+                status: WorkflowStatus::Running,
+                agents: BTreeMap::new(),
+                total_tokens: None,
+                duration_ms: None,
+            });
+    }
+
+    /// Fold a `task_*` system event into its run. Returns `true` when the
+    /// event belonged to a tracked workflow — the caller then suppresses the
+    /// generic subagent notice so the events render only inside the widget.
+    pub(super) fn on_task_event(&mut self, value: &Value) -> bool {
+        let subtype = value.get("subtype").and_then(Value::as_str).unwrap_or("");
+        if !matches!(
+            subtype,
+            "task_started" | "task_progress" | "task_updated" | "task_notification"
+        ) {
+            return false;
+        }
+        let task_type = value.get("task_type").and_then(Value::as_str);
+        let task_id = value.get("task_id").and_then(Value::as_str);
+        let tool_use_id = value.get("tool_use_id").and_then(Value::as_str);
+
+        // Record the task_id → tool_use_id link as soon as both are present.
+        if let (Some(tid), Some(tu)) = (task_id, tool_use_id) {
+            self.task_to_tool.insert(tid.to_string(), tu.to_string());
+        }
+
+        // Resolve which run this event targets.
+        let key = tool_use_id
+            .map(str::to_string)
+            .or_else(|| task_id.and_then(|t| self.task_to_tool.get(t).cloned()));
+        let key = match key {
+            // A workflow-typed event for a tool we haven't anchored yet (the
+            // Workflow tool_use is normally seen first, but be defensive).
+            Some(k) if task_type == Some("local_workflow") => {
+                self.register_tool(&k);
+                k
+            }
+            // Non-typed events (task_updated) only fold when the run exists.
+            Some(k) if self.runs.contains_key(&k) => k,
+            _ => return false,
+        };
+
+        let Some(run) = self.runs.get_mut(&key) else {
+            return false;
+        };
+        match subtype {
+            "task_started" => {
+                if let Some(n) = value.get("workflow_name").and_then(Value::as_str) {
+                    run.name = n.to_string();
+                }
+            }
+            "task_progress" => {
+                merge_usage(run, value);
+                if let Some(arr) = value.get("workflow_progress").and_then(Value::as_array) {
+                    for entry in arr {
+                        if entry.get("type").and_then(Value::as_str) == Some("workflow_agent") {
+                            merge_agent(run, entry);
+                        }
+                    }
+                }
+            }
+            "task_updated" => {
+                if let Some(s) = value
+                    .get("patch")
+                    .and_then(|p| p.get("status"))
+                    .and_then(Value::as_str)
+                {
+                    run.status = map_workflow_status(s);
+                }
+            }
+            "task_notification" => {
+                if let Some(s) = value.get("status").and_then(Value::as_str) {
+                    run.status = map_workflow_status(s);
+                }
+                merge_usage(run, value);
+            }
+            _ => {}
+        }
+        true
+    }
+
+    /// Look up the final aggregated widget fields for a `MessagePart::Workflow`
+    /// part id. `None` when the id isn't a tracked workflow.
+    pub(super) fn finalize(&self, part_id: &str) -> Option<WorkflowWidget> {
+        let tool_use_id = part_id.strip_prefix(WORKFLOW_ID_PREFIX)?;
+        let run = self.runs.get(tool_use_id)?;
+        Some((
+            run.name.clone(),
+            run.status.clone(),
+            run.agents.values().cloned().collect(),
+            run.total_tokens,
+            run.duration_ms,
+        ))
+    }
+}
+
+fn merge_usage(run: &mut WorkflowRun, value: &Value) {
+    let Some(usage) = value.get("usage") else {
+        return;
+    };
+    if let Some(t) = usage.get("total_tokens").and_then(Value::as_u64) {
+        run.total_tokens = Some(t);
+    }
+    if let Some(d) = usage.get("duration_ms").and_then(Value::as_u64) {
+        run.duration_ms = Some(d);
+    }
+}
+
+fn merge_agent(run: &mut WorkflowRun, entry: &Value) {
+    let Some(index) = entry.get("index").and_then(Value::as_u64) else {
+        return;
+    };
+    let label = entry
+        .get("label")
+        .and_then(Value::as_str)
+        .unwrap_or("agent")
+        .to_string();
+    let done = entry.get("state").and_then(Value::as_str) == Some("done");
+    let preview = entry
+        .get("resultPreview")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(truncate_preview);
+
+    let agent = run.agents.entry(index).or_insert_with(|| WorkflowAgent {
+        label: label.clone(),
+        status: WorkflowAgentStatus::Running,
+        result_preview: None,
+        phase_index: None,
+        phase_title: None,
+        model: None,
+        tokens: None,
+        tool_calls: None,
+        duration_ms: None,
+    });
+    agent.label = label;
+    // Never downgrade a finished agent back to running on a stale delta.
+    if done {
+        agent.status = WorkflowAgentStatus::Done;
+    }
+    if preview.is_some() {
+        agent.result_preview = preview;
+    }
+    // Merge phase grouping + per-agent metrics when present. Deltas may omit
+    // these, so only overwrite on a non-empty value (never clobber back to None).
+    if let Some(v) = entry.get("phaseIndex").and_then(Value::as_u64) {
+        agent.phase_index = Some(v);
+    }
+    if let Some(v) = entry
+        .get("phaseTitle")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+    {
+        agent.phase_title = Some(v.to_string());
+    }
+    if let Some(v) = entry
+        .get("model")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+    {
+        agent.model = Some(v.to_string());
+    }
+    if let Some(v) = entry.get("tokens").and_then(Value::as_u64) {
+        agent.tokens = Some(v);
+    }
+    if let Some(v) = entry.get("toolCalls").and_then(Value::as_u64) {
+        agent.tool_calls = Some(v);
+    }
+    if let Some(v) = entry.get("durationMs").and_then(Value::as_u64) {
+        agent.duration_ms = Some(v);
+    }
+}
+
+/// Stateless convenience wrapper for unit tests that exercise a single
+/// message in isolation. Production code (and the streaming-partial path via
+/// `convert`) always goes through `parse_assistant_parts_stateful` with a
+/// `TaskListState` shared across the whole message list — Task-family
+/// accumulation is inherently cross-message. With a fresh state here an
+/// isolated `TaskCreate` still collapses, but a bare `TaskUpdate` falls back
+/// to a ToolCall (no prior task to patch).
+#[cfg(test)]
 pub(super) fn parse_assistant_parts(parsed: Option<&Value>, msg_id: &str) -> Vec<MessagePart> {
+    let mut task_state = TaskListState::default();
+    let mut workflow_acc = WorkflowAccumulator::default();
+    parse_assistant_parts_stateful(parsed, msg_id, &mut task_state, &mut workflow_acc)
+}
+
+pub(super) fn parse_assistant_parts_stateful(
+    parsed: Option<&Value>,
+    msg_id: &str,
+    task_state: &mut TaskListState,
+    workflow_acc: &mut WorkflowAccumulator,
+) -> Vec<MessagePart> {
     let parsed = match parsed {
         Some(p) => p,
         None => return Vec::new(),
@@ -171,7 +541,15 @@ pub(super) fn parse_assistant_parts(parsed: Option<&Value>, msg_id: &str) -> Vec
                 let server_name = obj.get("server_name").and_then(Value::as_str).unwrap_or("");
                 let mcp_tool_short = obj.get("name").and_then(Value::as_str).unwrap_or("");
                 let synthesized = format!("mcp__{server_name}__{mcp_tool_short}");
-                push_tool_use(&mut parts, obj, idx, Some(synthesized), msg_id);
+                push_tool_use(
+                    &mut parts,
+                    obj,
+                    idx,
+                    Some(synthesized),
+                    msg_id,
+                    task_state,
+                    workflow_acc,
+                );
             }
             // BetaContainerUploadBlock { file_id }. The user explicitly
             // asked us NOT to render these — model-side container file
@@ -200,7 +578,7 @@ pub(super) fn parse_assistant_parts(parsed: Option<&Value>, msg_id: &str) -> Vec
                 });
             }
             "tool_use" | "server_tool_use" => {
-                push_tool_use(&mut parts, obj, idx, None, msg_id);
+                push_tool_use(&mut parts, obj, idx, None, msg_id, task_state, workflow_acc);
             }
             _ => {}
         }
@@ -221,6 +599,8 @@ fn push_tool_use(
     idx: usize,
     name_override: Option<String>,
     msg_id: &str,
+    task_state: &mut TaskListState,
+    workflow_acc: &mut WorkflowAccumulator,
 ) {
     let args = obj
         .get("input")
@@ -259,6 +639,51 @@ fn push_tool_use(
             });
             return;
         }
+    }
+
+    // claude-agent-sdk v0.3.142 replaced TodoWrite with the incremental
+    // Task family (TaskCreate / TaskUpdate) for SDK/headless sessions.
+    // Fold each state-changing call into a cumulative TodoList so the user
+    // still sees the same single evolving plan widget. `TaskListState`
+    // carries the running list across messages; a still-streaming
+    // TaskCreate (no `subject`) or a TaskUpdate for an unknown id returns
+    // None and falls through to a regular ToolCall. TaskGet / TaskList are
+    // read-only and intentionally NOT handled here — they render as plain
+    // ToolCalls.
+    if tool_name == "TaskCreate" || tool_name == "TaskUpdate" {
+        if let Some(items) = task_state.apply(&tool_name, &args) {
+            // Prefix the part id so `collapse_task_todo_lists` can fold the
+            // whole Task sequence into one evolving widget without ever
+            // touching TodoWrite/Codex-sourced lists.
+            parts.push(MessagePart::TodoList {
+                id: format!(
+                    "{CLAUDE_TASK_LIST_ID_PREFIX}{}",
+                    resolve_part_id(obj, msg_id, idx)
+                ),
+                items,
+            });
+            return;
+        }
+    }
+
+    // Claude Code "Dynamic Workflow" (claude-agent-sdk 0.3.x): the Workflow
+    // tool kicks off a background multi-agent run. Anchor a Workflow widget
+    // here keyed by this tool_use id; the following task_* lifecycle events
+    // (folded in by `WorkflowAccumulator::on_task_event`) populate the
+    // phase/agent tree + status, and `finalize_workflow_widgets` rewrites
+    // this part with the final state. The widget renders fine even empty
+    // (e.g. during streaming before any task event arrives).
+    if tool_name == "Workflow" {
+        workflow_acc.register_tool(&tool_call_id);
+        parts.push(MessagePart::Workflow {
+            id: format!("{WORKFLOW_ID_PREFIX}{tool_call_id}"),
+            name: "Workflow".to_string(),
+            status: WorkflowStatus::Running,
+            agents: Vec::new(),
+            total_tokens: None,
+            duration_ms: None,
+        });
+        return;
     }
 
     parts.push(MessagePart::ToolCall {

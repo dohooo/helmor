@@ -413,7 +413,7 @@ export function AskUserQuestionRenderer({
 
 			<InteractionOptionalInput
 				icon={ClipboardList}
-				placeholder="Optional note for Claude"
+				placeholder="Optional note for the agent"
 				value={currentResponse.notes}
 				onChange={(value) => {
 					updateResponse(currentQuestion.key, (current) => ({

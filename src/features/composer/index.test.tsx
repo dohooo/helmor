@@ -268,7 +268,7 @@ describe("WorkspaceComposer", () => {
 					provider="claude"
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
-					permissionMode="acceptEdits"
+					permissionMode="bypassPermissions"
 					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
@@ -341,7 +341,7 @@ describe("WorkspaceComposer", () => {
 					provider="claude"
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
-					permissionMode="acceptEdits"
+					permissionMode="bypassPermissions"
 					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
@@ -388,7 +388,7 @@ describe("WorkspaceComposer", () => {
 					provider="claude"
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
-					permissionMode="acceptEdits"
+					permissionMode="bypassPermissions"
 					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
@@ -436,7 +436,7 @@ describe("WorkspaceComposer", () => {
 					provider="claude"
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
-					permissionMode="acceptEdits"
+					permissionMode="bypassPermissions"
 					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
@@ -471,7 +471,7 @@ describe("WorkspaceComposer", () => {
 					provider="claude"
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
-					permissionMode="acceptEdits"
+					permissionMode="bypassPermissions"
 					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
@@ -546,7 +546,7 @@ describe("WorkspaceComposer", () => {
 					provider="claude"
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
-					permissionMode="acceptEdits"
+					permissionMode="bypassPermissions"
 					onChangePermissionMode={vi.fn()}
 					restoreDraft="stale restore payload"
 					restoreImages={[]}
@@ -576,7 +576,7 @@ describe("WorkspaceComposer", () => {
 					provider="claude"
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
-					permissionMode="acceptEdits"
+					permissionMode="bypassPermissions"
 					onChangePermissionMode={vi.fn()}
 					restoreDraft="stale restore payload"
 					restoreImages={[]}
@@ -622,7 +622,7 @@ describe("WorkspaceComposer", () => {
 					provider="claude"
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
-					permissionMode="acceptEdits"
+					permissionMode="bypassPermissions"
 					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
@@ -693,7 +693,7 @@ describe("WorkspaceComposer", () => {
 						provider="claude"
 						effortLevel="high"
 						onSelectEffort={vi.fn()}
-						permissionMode="acceptEdits"
+						permissionMode="bypassPermissions"
 						onChangePermissionMode={vi.fn()}
 						fastMode={false}
 						onChangeFastMode={vi.fn()}
@@ -738,7 +738,7 @@ describe("WorkspaceComposer", () => {
 						provider="codex"
 						effortLevel="high"
 						onSelectEffort={vi.fn()}
-						permissionMode="acceptEdits"
+						permissionMode="bypassPermissions"
 						onChangePermissionMode={vi.fn()}
 						fastMode={false}
 						onChangeFastMode={vi.fn()}
@@ -771,7 +771,7 @@ describe("WorkspaceComposer", () => {
 						provider="claude"
 						effortLevel="high"
 						onSelectEffort={vi.fn()}
-						permissionMode="acceptEdits"
+						permissionMode="bypassPermissions"
 						onChangePermissionMode={vi.fn()}
 						fastMode
 						showFastModePrelude
@@ -813,7 +813,7 @@ describe("WorkspaceComposer", () => {
 						provider="claude"
 						effortLevel="high"
 						onSelectEffort={vi.fn()}
-						permissionMode="acceptEdits"
+						permissionMode="bypassPermissions"
 						onChangePermissionMode={vi.fn()}
 						fastMode
 						onChangeFastMode={vi.fn()}
@@ -853,7 +853,7 @@ describe("WorkspaceComposer", () => {
 						provider="claude"
 						effortLevel="high"
 						onSelectEffort={vi.fn()}
-						permissionMode="acceptEdits"
+						permissionMode="bypassPermissions"
 						onChangePermissionMode={vi.fn()}
 						fastMode={false}
 						onChangeFastMode={vi.fn()}
@@ -893,7 +893,7 @@ describe("WorkspaceComposer", () => {
 					provider="claude"
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
-					permissionMode="acceptEdits"
+					permissionMode="bypassPermissions"
 					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
@@ -939,7 +939,7 @@ describe("WorkspaceComposer", () => {
 					provider="claude"
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
-					permissionMode="acceptEdits"
+					permissionMode="bypassPermissions"
 					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
@@ -999,7 +999,7 @@ describe("WorkspaceComposer", () => {
 					provider="claude"
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
-					permissionMode="acceptEdits"
+					permissionMode="bypassPermissions"
 					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
@@ -1025,10 +1025,10 @@ describe("WorkspaceComposer", () => {
 		).toBeInTheDocument();
 		await user.click(screen.getByRole("tab", { name: "UI" }));
 		await user.type(
-			screen.getByLabelText("Optional note for Claude"),
+			screen.getByLabelText("Optional note for the agent"),
 			"Prefer the dedicated approval surface.",
 		);
-		expect(screen.getByLabelText("Optional note for Claude")).toHaveValue(
+		expect(screen.getByLabelText("Optional note for the agent")).toHaveValue(
 			"Prefer the dedicated approval surface.",
 		);
 		await user.click(screen.getByRole("tab", { name: "Checks" }));
@@ -1076,7 +1076,7 @@ describe("WorkspaceComposer", () => {
 					provider="claude"
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
-					permissionMode="acceptEdits"
+					permissionMode="bypassPermissions"
 					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
@@ -1119,7 +1119,7 @@ describe("WorkspaceComposer", () => {
 					provider="claude"
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
-					permissionMode="acceptEdits"
+					permissionMode="bypassPermissions"
 					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
@@ -1166,7 +1166,7 @@ describe("WorkspaceComposer", () => {
 					provider="claude"
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
-					permissionMode="acceptEdits"
+					permissionMode="bypassPermissions"
 					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
@@ -1234,7 +1234,7 @@ describe("WorkspaceComposer", () => {
 					provider="claude"
 					effortLevel="high"
 					onSelectEffort={vi.fn()}
-					permissionMode="acceptEdits"
+					permissionMode="bypassPermissions"
 					onChangePermissionMode={vi.fn()}
 					restoreImages={[]}
 					restoreFiles={[]}
@@ -1587,5 +1587,49 @@ describe("WorkspaceComposer", () => {
 
 		await userEvent.click(planButton);
 		expect(onChangePermissionMode).toHaveBeenCalledWith("bypassPermissions");
+	});
+
+	it("plan keyboard shortcut exits plan into bypassPermissions (matches the button), not default (#733)", () => {
+		const queryClient = createHelmorQueryClient();
+		const onChangePermissionMode = vi.fn();
+
+		const { container } = render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceComposer
+					contextKey="session:session-1"
+					onSubmit={vi.fn()}
+					disabled={false}
+					submitDisabled={false}
+					sending={false}
+					selectedModelId="opus-1m"
+					modelSections={MODEL_SECTIONS}
+					onSelectModel={vi.fn()}
+					provider="codex"
+					effortLevel="high"
+					onSelectEffort={vi.fn()}
+					permissionMode="plan"
+					onChangePermissionMode={onChangePermissionMode}
+					togglePlanShortcut="Mod+Shift+P"
+					focusScope="workspace-composer"
+					restoreImages={[]}
+					restoreFiles={[]}
+					restoreCustomTags={[]}
+				/>
+			</QueryClientProvider>,
+		);
+
+		const root = container.querySelector(
+			'[data-focus-scope="workspace-composer"]',
+		);
+		expect(root).not.toBeNull();
+		fireEvent.keyDown(root as Element, {
+			code: "KeyP",
+			key: "p",
+			metaKey: true,
+			shiftKey: true,
+		});
+
+		expect(onChangePermissionMode).toHaveBeenCalledWith("bypassPermissions");
+		expect(onChangePermissionMode).not.toHaveBeenCalledWith("default");
 	});
 });

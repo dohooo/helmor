@@ -80,6 +80,12 @@ struct SidecarProcess {
 pub struct BundledAgentPaths {
     pub claude_bin: Option<PathBuf>,
     pub codex_bin: Option<PathBuf>,
+    pub opencode_bin: Option<PathBuf>,
+    /// Node runtime that runs the cursor worker (Cursor's `@cursor/sdk` can't
+    /// run on Bun — its HTTP/2 hits `NGHTTP2_FRAME_SIZE_ERROR` in git repos).
+    pub node_bin: Option<PathBuf>,
+    /// Built `cursor-worker.mjs` entry, run by `node_bin`.
+    pub cursor_worker: Option<PathBuf>,
 }
 
 /// Resolve the bundled Claude/Codex CLI binaries shipped inside the
@@ -110,21 +116,41 @@ pub fn load_cursor_api_key() -> Option<String> {
 
 fn resolve_bundled_agent_paths_for_exe(exe: &std::path::Path) -> Option<BundledAgentPaths> {
     let exe_dir = exe.parent()?;
-    let contents_dir = exe_dir.parent()?;
-    let resources_dir = contents_dir.join("Resources");
+    // Resource layouts differ per platform: Windows (NSIS/MSI) installs
+    // resources next to the exe, while macOS puts them in
+    // `<bundle>/Contents/Resources`. Probe both roots so the same logic
+    // works everywhere (mirrors `forge::bundled`).
+    let mut resource_roots = vec![exe_dir.to_path_buf()];
+    if let Some(contents_dir) = exe_dir.parent() {
+        resource_roots.push(contents_dir.join("Resources"));
+    }
+
     let claude_bin_name = if cfg!(windows) {
         "claude.exe"
     } else {
         "claude"
     };
     let codex_bin_name = if cfg!(windows) { "codex.exe" } else { "codex" };
+    let opencode_bin_name = if cfg!(windows) {
+        "opencode.exe"
+    } else {
+        "opencode"
+    };
+    let node_bin_name = if cfg!(windows) { "node.exe" } else { "node" };
 
-    let claude_bin = resources_dir.join(format!("vendor/claude-code/{claude_bin_name}"));
-    let codex_bin = resources_dir.join(format!("vendor/codex/{codex_bin_name}"));
+    let find = |relative: String| {
+        resource_roots
+            .iter()
+            .map(|root| root.join(&relative))
+            .find(|path| path.is_file())
+    };
 
     Some(BundledAgentPaths {
-        claude_bin: claude_bin.is_file().then_some(claude_bin),
-        codex_bin: codex_bin.is_file().then_some(codex_bin),
+        claude_bin: find(format!("vendor/claude-code/{claude_bin_name}")),
+        codex_bin: find(format!("vendor/codex/{codex_bin_name}")),
+        opencode_bin: find(format!("vendor/opencode/{opencode_bin_name}")),
+        node_bin: find(format!("vendor/node/{node_bin_name}")),
+        cursor_worker: find("vendor/cursor-worker/cursor-worker.mjs".to_string()),
     })
 }
 
@@ -140,13 +166,12 @@ impl SidecarProcess {
         let is_dev = sidecar_path.extension().is_some_and(|ext| ext == "ts");
 
         let mut cmd = if is_dev {
-            let mut c = Command::new("bun");
+            let mut c = Command::new(crate::platform::executable::resolve_for_spawn("bun"));
             c.arg("run").arg(&sidecar_path);
-            // Anchor cwd to sidecar/ so Bun discovers `bunfig.toml` and
-            // applies the preload that registers our build-time plugins
-            // (sqlite3 shim + cursor SDK chunk) at runtime. Without this
-            // the sidecar inherits Tauri's cwd and the preload never runs,
-            // so loading @cursor/sdk crashes on the native sqlite3 addon.
+            // Anchor cwd to sidecar/ so the cursor proxy resolves the worker at
+            // `dist/cursor-worker.mjs` and Node finds @cursor/sdk in
+            // `sidecar/node_modules`. Without this the sidecar inherits Tauri's
+            // cwd and the dev worker can't be located.
             if let Some(sidecar_root) = sidecar_path.parent().and_then(|p| p.parent()) {
                 c.current_dir(sidecar_root);
             }
@@ -159,11 +184,9 @@ impl SidecarProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
 
-        // Put the sidecar in its own process group so SIGTERM/SIGKILL
-        // reaches all child processes (Claude CLI, Codex CLI) instead
-        // of only hitting the Bun parent.
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
+        // Put the sidecar in its own process tree so termination reaches
+        // Claude/Codex/OpenCode children instead of only hitting Bun.
+        crate::platform::process::configure_tree_root(&mut cmd);
 
         // Pass log config to the sidecar process
         if let Ok(dir) = crate::data_dir::logs_dir() {
@@ -182,6 +205,9 @@ impl SidecarProcess {
                 exe = ?exe,
                 claude_bin = ?bundled_paths.claude_bin,
                 codex_bin = ?bundled_paths.codex_bin,
+                opencode_bin = ?bundled_paths.opencode_bin,
+                node_bin = ?bundled_paths.node_bin,
+                cursor_worker = ?bundled_paths.cursor_worker,
                 "Resolved bundled agent paths"
             );
             if let Some(path) = bundled_paths.claude_bin {
@@ -189,6 +215,18 @@ impl SidecarProcess {
             }
             if let Some(path) = bundled_paths.codex_bin {
                 cmd.env("HELMOR_CODEX_BIN_PATH", &path);
+            }
+            if let Some(path) = bundled_paths.opencode_bin {
+                cmd.env("HELMOR_OPENCODE_BIN_PATH", &path);
+            }
+            // Cursor runs in a Node child process spawned by the sidecar; point
+            // it at the bundled Node + worker entry. Dev resolves both itself
+            // (node on PATH, sidecar/dist/cursor-worker.mjs).
+            if let Some(path) = bundled_paths.node_bin {
+                cmd.env("HELMOR_NODE_BIN_PATH", &path);
+            }
+            if let Some(path) = bundled_paths.cursor_worker {
+                cmd.env("HELMOR_CURSOR_WORKER_PATH", &path);
             }
         }
         // Cursor key is NOT env-passed — pushed via `updateConfig` RPC
@@ -272,9 +310,10 @@ impl SidecarProcess {
     /// `ManagedSidecar::shutdown`. Kill the whole process group first so
     /// child CLIs don't get reparented to launchd as orphans.
     fn kill(&mut self) {
-        unsafe {
-            libc::kill(-(self.pid() as libc::pid_t), libc::SIGKILL);
-        }
+        // Kill the whole tree first so child CLIs aren't reparented as orphans.
+        crate::platform::process::kill_tree(crate::platform::process::ProcessTree::from_child_pid(
+            self.pid(),
+        ));
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -301,11 +340,10 @@ impl SidecarProcess {
     /// (negative PID) ensures child CLIs spawned by Bun also receive the
     /// signal.
     fn send_sigterm(&self) {
-        // SAFETY: `pid()` is the live child's PID (== PGID since we set
-        // process_group(0) at spawn). Negative PID targets the whole group.
-        unsafe {
-            libc::kill(-(self.pid() as libc::pid_t), libc::SIGTERM);
-        }
+        // Graceful tree stop: Unix SIGTERM to the group, Windows taskkill /T.
+        crate::platform::process::terminate_tree(
+            crate::platform::process::ProcessTree::from_child_pid(self.pid()),
+        );
     }
 }
 
@@ -327,11 +365,23 @@ impl Drop for SidecarProcess {
 
 type Listeners = Arc<Mutex<HashMap<String, mpsc::Sender<SidecarEvent>>>>;
 
+/// One `hostRequest` envelope routed from the reader thread to the host dispatcher.
+#[derive(Debug)]
+pub struct HostRequestEnvelope {
+    pub callback_id: String,
+    pub method: String,
+    pub params: serde_json::Value,
+}
+
+/// `Mutex<Option<Sender>>` (Sender is !Sync); reader looks up per event so install order doesn't matter.
+type HostRequestSenderSlot = Arc<Mutex<Option<mpsc::Sender<HostRequestEnvelope>>>>;
+
 pub struct ManagedSidecar {
     process: Mutex<Option<SidecarProcess>>,
     listeners: Listeners,
     /// Shared flag so the reader thread can signal its own exit.
     reader_running: Arc<Mutex<bool>>,
+    host_request_tx: HostRequestSenderSlot,
 }
 
 impl Default for ManagedSidecar {
@@ -346,7 +396,36 @@ impl ManagedSidecar {
             process: Mutex::new(None),
             listeners: Arc::new(Mutex::new(HashMap::new())),
             reader_running: Arc::new(Mutex::new(false)),
+            host_request_tx: Arc::new(Mutex::new(None)),
         }
+    }
+
+    // Called once from Tauri setup; later calls are no-ops.
+    pub fn install_host_dispatcher(&self) -> mpsc::Receiver<HostRequestEnvelope> {
+        let (tx, rx) = mpsc::channel();
+        if let Ok(mut slot) = self.host_request_tx.lock() {
+            *slot = Some(tx);
+        }
+        rx
+    }
+
+    // Shares the stdin lock with `send()` so request/response writes can't interleave.
+    pub fn send_host_response(&self, response: &crate::sidecar_host::HostResponse) -> Result<()> {
+        let guard = self
+            .process
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Sidecar lock poisoned"))?;
+        let Some(process) = guard.as_ref() else {
+            anyhow::bail!("Sidecar not running (hostResponse dropped)");
+        };
+        let mut stdin = process
+            .stdin
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Sidecar stdin lock poisoned"))?;
+        let json = serde_json::to_string(response).context("Failed to serialize hostResponse")?;
+        writeln!(stdin, "{json}").context("Failed to write hostResponse")?;
+        stdin.flush().context("Failed to flush hostResponse")?;
+        Ok(())
     }
 
     /// Register a listener for events matching `request_id`.
@@ -391,8 +470,9 @@ impl ManagedSidecar {
             let (process, reader) = SidecarProcess::start()?;
             *guard = Some(process);
 
-            // Start the reader/dispatcher thread (always spawns fresh)
-            if let Err(error) = self.start_reader_thread(reader) {
+            // Start reader (always fresh). Pass an Arc so install ordering doesn't matter.
+            let host_tx_slot = Arc::clone(&self.host_request_tx);
+            if let Err(error) = self.start_reader_thread(reader, host_tx_slot) {
                 tracing::error!(error = %error, "Failed to start sidecar reader thread");
                 if let Some(mut process) = guard.take() {
                     process.kill();
@@ -522,7 +602,11 @@ impl ManagedSidecar {
         dispatch_event(&self.listeners, event, raw)
     }
 
-    fn start_reader_thread(&self, reader: BufReader<std::process::ChildStdout>) -> Result<()> {
+    fn start_reader_thread(
+        &self,
+        reader: BufReader<std::process::ChildStdout>,
+        host_tx_slot: HostRequestSenderSlot,
+    ) -> Result<()> {
         // Reset flag — previous reader (if any) already exited or we killed its process.
         if let Ok(mut running) = self.reader_running.lock() {
             *running = false;
@@ -561,6 +645,33 @@ impl ManagedSidecar {
                                 tracing::error!(line = trimmed, "Invalid JSON from sidecar");
                                 continue;
                             };
+                            // Reverse channel: route `hostRequest` ahead of normal event dispatch.
+                            if raw.get("type").and_then(Value::as_str) == Some("hostRequest") {
+                                match parse_host_request(&raw) {
+                                    Ok(env) => {
+                                        let sender = host_tx_slot
+                                            .lock()
+                                            .ok()
+                                            .and_then(|g| g.as_ref().cloned());
+                                        if let Some(tx) = sender {
+                                            if let Err(error) = tx.send(env) {
+                                                tracing::warn!(
+                                                    error = %error,
+                                                    "hostRequest forward failed (receiver dropped)"
+                                                );
+                                            }
+                                        } else {
+                                            tracing::warn!(
+                                                "hostRequest received but dispatcher not installed"
+                                            );
+                                        }
+                                    }
+                                    Err(error) => {
+                                        tracing::warn!(error = %error, "invalid hostRequest");
+                                    }
+                                }
+                                continue;
+                            }
                             let event = SidecarEvent { raw };
                             if dispatch_event(&listeners, event, trimmed) {
                                 event_count += 1;
@@ -614,6 +725,23 @@ impl ManagedSidecar {
                 anyhow::anyhow!("Failed to spawn sidecar reader thread: {error}")
             })
     }
+}
+
+fn parse_host_request(raw: &Value) -> Result<HostRequestEnvelope> {
+    let callback_id = raw
+        .get("callbackId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("hostRequest missing callbackId"))?;
+    let method = raw
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("hostRequest missing method"))?;
+    let params = raw.get("params").cloned().unwrap_or(Value::Null);
+    Ok(HostRequestEnvelope {
+        callback_id: callback_id.to_string(),
+        method: method.to_string(),
+        params,
+    })
 }
 
 /// Dispatch one event. `true` when delivered to a listener; no-id
@@ -871,25 +999,43 @@ mod tests {
 
     #[test]
     fn bundled_agent_paths_resolve_from_running_app() {
+        // The resolver appends `.exe` on Windows; build the fixture with the
+        // platform-native binary names so the test exercises real resolution.
+        let claude = if cfg!(windows) {
+            "claude.exe"
+        } else {
+            "claude"
+        };
+        let codex = if cfg!(windows) { "codex.exe" } else { "codex" };
+        let opencode = if cfg!(windows) {
+            "opencode.exe"
+        } else {
+            "opencode"
+        };
+
         let root = tempfile::tempdir().unwrap();
         let exe = root.path().join("Helmor.app/Contents/MacOS/Helmor");
         let resources = root.path().join("Helmor.app/Contents/Resources/vendor");
         std::fs::create_dir_all(resources.join("claude-code")).unwrap();
         std::fs::create_dir_all(resources.join("codex")).unwrap();
-        std::fs::write(resources.join("claude-code/claude"), "").unwrap();
-        std::fs::write(resources.join("codex/codex"), "").unwrap();
+        std::fs::create_dir_all(resources.join("opencode")).unwrap();
+        std::fs::write(resources.join("claude-code").join(claude), "").unwrap();
+        std::fs::write(resources.join("codex").join(codex), "").unwrap();
+        std::fs::write(resources.join("opencode").join(opencode), "").unwrap();
 
         let paths = resolve_bundled_agent_paths_for_exe(&exe).unwrap();
 
         assert_eq!(
             paths.claude_bin.unwrap(),
-            root.path()
-                .join("Helmor.app/Contents/Resources/vendor/claude-code/claude")
+            resources.join("claude-code").join(claude)
         );
         assert_eq!(
             paths.codex_bin.unwrap(),
-            root.path()
-                .join("Helmor.app/Contents/Resources/vendor/codex/codex")
+            resources.join("codex").join(codex)
+        );
+        assert_eq!(
+            paths.opencode_bin.unwrap(),
+            resources.join("opencode").join(opencode)
         );
     }
 }

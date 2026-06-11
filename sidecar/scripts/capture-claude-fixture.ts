@@ -15,6 +15,7 @@
  *   CAPTURE_CWD              working directory (defaults to process.cwd())
  *   CAPTURE_PERMISSION_MODE  permission mode (default / plan / acceptEdits / ...)
  *   CAPTURE_EFFORT           effort level (low / medium / high / max)
+ *   CAPTURE_THINKING_DISPLAY thinking display (summarized / omitted)
  *
  * Example:
  *   CAPTURE_MODEL=sonnet bun run scripts/capture-claude-fixture.ts \
@@ -139,6 +140,11 @@ try {
 			resume: undefined,
 			permissionMode: process.env.CAPTURE_PERMISSION_MODE,
 			effortLevel: process.env.CAPTURE_EFFORT,
+			claudeThinkingDisplay:
+				process.env.CAPTURE_THINKING_DISPLAY === "omitted" ||
+				process.env.CAPTURE_THINKING_DISPLAY === "summarized"
+					? process.env.CAPTURE_THINKING_DISPLAY
+					: undefined,
 		},
 		emitter,
 	);
@@ -155,8 +161,17 @@ try {
 const lines = captured.map((line) => {
 	const obj = JSON.parse(line) as Record<string, unknown>;
 	const { id: _discard, ...rest } = obj;
-	return sanitizeFixtureText(JSON.stringify(rest), appRepoRoot, captureCwd);
+	return JSON.stringify(rest);
 });
 
-writeFileSync(outputAbs, `${lines.join("\n")}\n`);
+// Sanitize the whole file in ONE pass so id mappers stay consistent across
+// lines (per-line mapping used to collapse every toolu_*/msg_* to *_1,
+// destroying tool_use/tool_result pairing).
+const sanitized = sanitizeFixtureText(
+	lines.join("\n"),
+	appRepoRoot,
+	captureCwd,
+);
+
+writeFileSync(outputAbs, `${sanitized}\n`);
 console.error(`[capture] wrote ${lines.length} events to ${outputAbs}`);

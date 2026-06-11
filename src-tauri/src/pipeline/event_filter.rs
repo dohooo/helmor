@@ -25,6 +25,10 @@ pub(crate) const SUPPRESSED_EVENT_TYPES: &[&str] = &[
     // type silent so the wire stays clean even if the SDK option is
     // turned on later by accident.
     "prompt_suggestion",
+    // Sidecar context-usage meta. Production routes it at the streaming
+    // layer (`handle_context_usage_updated`) before the pipeline; only
+    // stream-replay feeds it here. Never renders.
+    "contextUsageUpdated",
 ];
 
 /// Claude `system` subtypes that should be silently dropped.
@@ -45,6 +49,9 @@ pub(crate) const SUPPRESSED_SYSTEM_SUBTYPES: &[&str] = &[
     // Status pings (`{status: 'compacting' | null}`) — comment out to
     // surface the compacting indicator.
     "status",
+    // Per-frame thinking-token estimate (sdk 0.3.x) — a progress signal, not
+    // a message. We render no pill for it, so drop it.
+    "thinking_tokens",
     // Dead arm — not in `@anthropic-ai/claude-agent-sdk` v0.2.111's
     // `.d.ts`. The real lifecycle uses `task_notification`. Listed
     // defensively in case the SDK ever revives it.

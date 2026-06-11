@@ -1,4 +1,5 @@
-import providers from "@/shared/builtin-claude-providers.json";
+import type { ProviderBrandIconKey } from "@/components/icons";
+import catalog from "@/shared/provider-catalog.json";
 
 export type BuiltinClaudeProviderKey = string;
 
@@ -13,11 +14,11 @@ export type BuiltinClaudeProvider = {
 	baseUrl: string;
 	apiKeyUrl: string;
 	models: readonly BuiltinClaudeProviderModel[];
-	icon: "minimax" | "moonshot" | "deepseek" | "zhipu" | "qwen" | "xiaomi";
+	icon: ProviderBrandIconKey;
 };
 
 export const BUILTIN_CLAUDE_PROVIDERS =
-	providers as readonly BuiltinClaudeProvider[];
+	catalog.claude as readonly BuiltinClaudeProvider[];
 
 export function findBuiltinClaudeProvider(key: BuiltinClaudeProviderKey) {
 	return BUILTIN_CLAUDE_PROVIDERS.find((provider) => provider.key === key);

@@ -28,7 +28,6 @@ import {
 } from "@/lib/api";
 import { initialsFor } from "@/lib/initials";
 import { useForgeAccountsAll } from "@/lib/use-forge-accounts";
-import { useForgeLoginsHealth } from "@/lib/use-forge-logins-health";
 import { cn } from "@/lib/utils";
 import { SettingsGroup } from "../components/settings-row";
 import { parseRemoteHost } from "./cli-install-gitlab-hosts";
@@ -256,14 +255,9 @@ export function RepositorySettingsPanel({
 	);
 }
 
-/// Account card pinned to the top of the repo settings panel. Shows
-/// the bound account when present (avatar + name + @login + provider
-/// logo); otherwise collapses to a Connect CTA matching the inspector's
-/// flow. Couples a focus-driven `useForgeLoginsHealth` probe so that
-/// external auth changes are reflected the moment the user returns to
-/// the window — the bound login disappearing from the live set is
-/// treated as "not connected" client-side, even before the backend
-/// forge_login column gets cleaned up.
+/// Account card at the top of the repo settings panel: the bound account,
+/// else a Connect CTA. Auth is lazy — trust the persisted binding,
+/// cross-checked against the focus-refreshed accounts roster, no probe.
 function ForgeAccountHeader({
 	repo,
 	workspaceId,
@@ -287,25 +281,22 @@ function ForgeAccountHeader({
 	const providerLabel =
 		provider === "gitlab" ? "GitLab" : provider === "github" ? "GitHub" : "Git";
 
-	// Probe the live login set for this repo's host so external auth
-	// changes are reflected right away. The hook itself owns the
-	// downstream cache invalidation (forgeAccounts / repositories);
-	// we use its data to decide whether the persisted forge_login is
-	// still valid.
+	// No per-repo probe — cross-check the binding against the loaded roster.
 	const probeProvider = provider === "unknown" ? "github" : provider;
 	const probeHost =
 		parseRemoteHost(repo.remoteUrl) ?? defaultHostFor(probeProvider);
-	const liveLoginsQuery = useForgeLoginsHealth(probeProvider, probeHost);
 	const persistedLogin = repo.forgeLogin;
-	const liveLoginsData = liveLoginsQuery.data;
-	// Treat the binding as "active" when:
-	//   - the column has a value, AND
-	//   - we don't yet have a live probe answer (assume good — avoids
-	//     a flash of "not connected" on first paint), OR
-	//   - the live answer contains the persisted login.
+	// Assume good until the roster lands (avoids a first-paint flash).
+	const rosterLoaded = accountsQuery.data !== undefined;
 	const liveLoginIsActive =
 		!!persistedLogin &&
-		(liveLoginsData === undefined || liveLoginsData.includes(persistedLogin));
+		(!rosterLoaded ||
+			accounts.some(
+				(a: ForgeAccount) =>
+					a.provider === probeProvider &&
+					a.host === probeHost &&
+					a.login === persistedLogin,
+			));
 	const effectiveLogin = liveLoginIsActive ? persistedLogin : null;
 
 	const account = useMemo(() => {

@@ -2,7 +2,6 @@ import { getMaterialFileIcon } from "file-extension-icon-js";
 import {
 	AlertCircle,
 	Check,
-	ChevronDown,
 	FileText,
 	LoaderCircle,
 	Search,
@@ -14,22 +13,24 @@ import {
 	ReasoningContent,
 	ReasoningTrigger,
 } from "@/components/ai/reasoning";
-import { Button } from "@/components/ui/button";
 import {
+	type CollapsedGroupPart,
 	type ExtendedMessagePart,
 	partKey,
 	type ToolCallPart,
 } from "@/lib/api";
 import { childrenStructurallyEqual } from "@/lib/structural-equality";
 import { cn } from "@/lib/utils";
-import { TodoList } from "./content-parts";
+import { TodoList, WorkflowCard } from "./content-parts";
 import { EditDiffTrigger } from "./edit-diff";
 import {
 	isLiveStreamingStatus,
 	isTodoListPart,
 	isToolCallPart,
+	isWorkflowPart,
 } from "./shared";
 import { getToolInfo } from "./tool-info";
+import { type TruncatedNoun, TruncatedToolList } from "./truncated-tool-list";
 
 // --- props & equality ---
 
@@ -483,7 +484,6 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 	isRunning,
 	parts,
 }: AgentChildrenBlockProps) {
-	const [expanded, setExpanded] = useState(false);
 	const isLive = isLiveStreamingStatus(streamingStatus);
 	const streaming = isLive || (!streamingStatus && !!isRunning);
 	const info = getToolInfo(toolName, toolArgs);
@@ -493,17 +493,13 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 		[parts],
 	);
 	const toolUseCount = toolCallParts.length;
-	const visibleParts: ExtendedMessagePart[] = expanded
-		? parts
-		: toolCallParts.slice(-AGENT_PREVIEW_STEPS);
-	const collapsedVisibleCount = Math.min(
-		toolCallParts.length,
-		AGENT_PREVIEW_STEPS,
-	);
-	const hiddenCount = parts.length - collapsedVisibleCount;
-	const hasMore =
-		toolCallParts.length >= AGENT_PREVIEW_STEPS && hiddenCount > 0;
-	const canToggle = hasMore;
+	// While the sub-agent is live, surface the trailing text/reasoning block
+	// (the part currently streaming) in the collapsed preview. The collapsed
+	// view otherwise lists only tool calls, so a streaming text turn nested
+	// into the card would render nothing until the user expands it.
+	const lastPart = parts[parts.length - 1];
+	const liveTail =
+		streaming && lastPart && !isToolCallPart(lastPart) ? lastPart : null;
 
 	return (
 		<div className="flex flex-col">
@@ -528,81 +524,67 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 				</span>
 			</div>
 
-			<div className="ml-5 flex flex-col gap-0.5 border-l border-border/30 pl-3 pt-1">
-				{canToggle ? (
-					<Button
-						type="button"
-						variant="ghost"
-						size="xs"
-						onClick={() => setExpanded((value) => !value)}
-						className="mb-0.5 h-auto items-center justify-start gap-1 px-0 text-mini text-muted-foreground/50 hover:bg-transparent hover:text-muted-foreground"
-					>
-						<ChevronDown
-							className={cn(
-								"size-3 transition-transform",
-								expanded && "rotate-180",
-							)}
-							strokeWidth={1.5}
-						/>
-						{expanded
-							? "Collapse"
-							: `Show ${hiddenCount} more step${hiddenCount > 1 ? "s" : ""}`}
-					</Button>
-				) : null}
-
-				<div className="flex flex-col gap-0.5">
-					{visibleParts.map((part) => {
-						const key = partKey(part);
-						if (isToolCallPart(part)) {
-							return (
-								<AssistantToolCall
-									key={key}
-									toolName={part.toolName ?? "unknown"}
-									args={part.args ?? {}}
-									result={part.result}
-									isError={part.isError}
-									compact={!expanded}
-									childParts={part.children}
-								/>
-							);
-						}
-						if (part.type === "text" && part.text) {
-							return (
-								<div
-									key={key}
-									className="text-ui leading-6 text-muted-foreground"
-								>
-									{part.text.slice(0, 300)}
-									{part.text.length > 300 ? "…" : ""}
-								</div>
-							);
-						}
-						if (part.type === "reasoning" && part.text) {
-							return (
-								<Reasoning key={key}>
-									<ReasoningTrigger />
-									<ReasoningContent>{part.text}</ReasoningContent>
-								</Reasoning>
-							);
-						}
-						if (isTodoListPart(part)) {
-							return <TodoList key={key} part={part} />;
-						}
-						return null;
-					})}
-				</div>
-			</div>
+			<TruncatedToolList
+				items={parts}
+				previewCount={AGENT_PREVIEW_STEPS}
+				previewFilter={(part) => part.type === "tool-call"}
+				previewTail={liveTail}
+				getKey={partKey}
+				renderItem={(part, { expanded }) => {
+					if (isToolCallPart(part)) {
+						return (
+							<AssistantToolCall
+								toolName={part.toolName ?? "unknown"}
+								args={part.args ?? {}}
+								result={part.result}
+								isError={part.isError}
+								compact={!expanded}
+								childParts={part.children}
+							/>
+						);
+					}
+					if (part.type === "text" && part.text) {
+						return (
+							<div className="text-ui leading-6 text-muted-foreground">
+								{part.text.slice(0, 300)}
+								{part.text.length > 300 ? "…" : ""}
+							</div>
+						);
+					}
+					if (part.type === "reasoning" && part.text) {
+						return (
+							<Reasoning>
+								<ReasoningTrigger />
+								<ReasoningContent>{part.text}</ReasoningContent>
+							</Reasoning>
+						);
+					}
+					if (isTodoListPart(part)) {
+						return <TodoList part={part} />;
+					}
+					if (isWorkflowPart(part)) {
+						return <WorkflowCard part={part} />;
+					}
+					return null;
+				}}
+			/>
 		</div>
 	);
 }, agentChildrenBlockPropsEqual);
 
 // --- CollapsedToolGroup ---
 
-export function CollapsedToolGroup({
-	group,
-}: {
-	group: import("@/lib/api").CollapsedGroupPart;
-}) {
+const COLLAPSED_GROUP_NOUNS: Record<
+	CollapsedGroupPart["category"],
+	TruncatedNoun
+> = {
+	shell: { one: "command", other: "commands" },
+	search: { one: "search", other: "searches" },
+	read: { one: "file", other: "files" },
+	mixed: { one: "tool", other: "tools" },
+};
+
+export function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {
 	const [open, setOpen] = useState(true);
 	const collapsedGroupIconClassName = "size-3.5 text-muted-foreground";
 
@@ -654,17 +636,19 @@ export function CollapsedToolGroup({
 				</span>
 			</summary>
 			{open ? (
-				<div className="ml-5 flex flex-col gap-0.5 border-l border-border/30 pl-3 pt-1">
-					{group.tools.map((tool) => (
+				<TruncatedToolList
+					items={group.tools}
+					getKey={(tool) => tool.toolCallId}
+					noun={COLLAPSED_GROUP_NOUNS[group.category]}
+					renderItem={(tool) => (
 						<AssistantToolCall
-							key={tool.toolCallId}
 							toolName={tool.toolName}
 							args={tool.args}
 							result={tool.result}
 							isError={tool.isError}
 						/>
-					))}
-				</div>
+					)}
+				/>
 			) : null}
 		</details>
 	);

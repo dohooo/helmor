@@ -621,6 +621,8 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
             }
         }
 
+        ensure_agent_contexts_best_effort(workspace_id, &workspace_dir);
+
         // Defer setup to the frontend inspector: if a script is configured AND
         // the user opted into auto-run, the workspace starts in "setup_pending"
         // and the UI auto-triggers it. Otherwise we go straight to Ready and
@@ -757,6 +759,7 @@ pub fn move_local_workspace_to_worktree_impl(
             &head_commit,
         )?;
         created_worktree = true;
+        ensure_agent_contexts_best_effort(workspace_id, &workspace_dir);
 
         // 4. Apply tracked + index changes (if any).
         if let Some(sha) = stash_sha.as_deref() {
@@ -850,6 +853,23 @@ pub fn move_local_workspace_to_worktree_impl(
     })
 }
 
+fn ensure_agent_contexts_best_effort(workspace_id: &str, workspace_dir: &Path) {
+    // Scratch space for agents to share files across sessions. The
+    // directory lives at `<workspace>/.agent-contexts/`, and Git's
+    // local exclude file keeps it out of every diff. Best-effort — a
+    // failure here doesn't block workspace creation (agents just lose
+    // cross-session file sharing for this WS).
+    if let Err(error) =
+        crate::workspace::agent_contexts::ensure_agent_contexts_in_worktree(workspace_dir)
+    {
+        tracing::warn!(
+            workspace_id = %workspace_id,
+            error = %format!("{error:#}"),
+            "Failed to provision .agent-contexts/ — workspace still usable",
+        );
+    }
+}
+
 /// Legacy combined flow. Runs Phase 1 + Phase 2 back-to-back and returns
 /// the old-shape response. Used by CLI, MCP, and `add_repository_from_local_path`
 /// — all non-UI callers that do not benefit from the prepare/finalize split.
@@ -861,6 +881,57 @@ pub fn create_workspace_from_repo_impl(repo_id: &str) -> Result<CreateWorkspaceR
         WorkspaceStatus::default(),
         None,
     )?;
+    let finalized = finalize_workspace_from_repo_impl(&prepared.workspace_id)?;
+
+    Ok(CreateWorkspaceResponse {
+        created_workspace_id: prepared.workspace_id.clone(),
+        selected_workspace_id: prepared.workspace_id,
+        initial_session_id: prepared.initial_session_id,
+        created_state: finalized.final_state,
+        directory_name: prepared.directory_name,
+        branch: prepared.branch,
+    })
+}
+
+/// Create a new workspace stacked on top of an existing one (stacked PRs).
+///
+/// The child's branch forks off the parent workspace's branch, and its
+/// `intended_target_branch` is materialized to the parent's branch (via the
+/// shared `FromBranch` prepare path) so `gh pr create --base` targets the
+/// parent with no ship-path change. `parent_workspace_id` records the stack
+/// link, which drives sidebar nesting and the future restack cascade.
+///
+/// One-shot (prepare + finalize), mirroring `create_workspace_from_repo_impl`.
+/// The repo is taken from the parent. Finalize forks the worktree off the
+/// parent branch's published tip (`origin/<branch>`) when available, falling
+/// back to the local branch for a not-yet-pushed parent.
+pub fn create_stacked_workspace_impl(parent_workspace_id: &str) -> Result<CreateWorkspaceResponse> {
+    let parent = workspace_models::load_workspace_record_by_id(parent_workspace_id)?
+        .with_context(|| format!("Parent workspace not found: {parent_workspace_id}"))?;
+    if !parent.state.is_operational() {
+        bail!(
+            "Cannot stack on workspace {parent_workspace_id}: it is {} (archived or mid-creation)",
+            parent.state
+        );
+    }
+    let parent_branch = helpers::non_empty(&parent.branch)
+        .map(ToOwned::to_owned)
+        .with_context(|| {
+            format!("Parent workspace {parent_workspace_id} has no branch to stack on")
+        })?;
+
+    let prepared = prepare_workspace_from_repo_impl(
+        &parent.repo_id,
+        Some(&parent_branch),
+        WorkspaceBranchIntent::FromBranch,
+        WorkspaceStatus::default(),
+        None,
+    )?;
+
+    // Record the stack link before finalize so the row is fully shaped
+    // (and is cleaned up with the row if finalize fails).
+    workspace_models::set_workspace_parent_id(&prepared.workspace_id, Some(parent_workspace_id))?;
+
     let finalized = finalize_workspace_from_repo_impl(&prepared.workspace_id)?;
 
     Ok(CreateWorkspaceResponse {
@@ -944,6 +1015,33 @@ fn is_archive_eligible_state(state: WorkspaceState) -> bool {
     matches!(state, WorkspaceState::Ready | WorkspaceState::SetupPending)
 }
 
+fn can_archive_without_head(record: Option<&workspace_models::WorkspaceRecord>) -> bool {
+    match record {
+        Some(record) => record.kind == "ai_triage" && !record.ai_priming_consumed,
+        None => false,
+    }
+}
+
+fn delete_archived_branch(repo_root: &Path, branch: &str, workspace_id: &str) {
+    let branch_delete_started = std::time::Instant::now();
+    git_ops::run_git(
+        [
+            "-C",
+            &repo_root.display().to_string(),
+            "branch",
+            "-D",
+            branch,
+        ],
+        None,
+    )
+    .ok();
+    tracing::debug!(
+        workspace_id,
+        elapsed_ms = branch_delete_started.elapsed().as_millis(),
+        "Archive: branch delete finished"
+    );
+}
+
 /// Resolve the interpreter + single-command flag used to run the archive
 /// script. Respects `$SHELL` (falling back to `/bin/sh`) and uses `-c`.
 fn archive_shell() -> (String, &'static str) {
@@ -1014,7 +1112,8 @@ pub(crate) fn run_archive_hook_inner(
     let (shell, shell_flag) = archive_shell();
     tracing::info!(workspace_id, script = %script, shell = %shell, "Running archive hook");
 
-    let status = Command::new(&shell)
+    let mut command = Command::new(&shell);
+    command
         .arg(shell_flag)
         .arg(&script)
         .current_dir(workspace_dir)
@@ -1024,8 +1123,8 @@ pub(crate) fn run_archive_hook_inner(
         .env(
             "HELMOR_DEFAULT_BRANCH",
             record.default_branch.as_deref().unwrap_or("main"),
-        )
-        .status();
+        );
+    let status = crate::platform::process::configure_background_cli(&mut command).status();
 
     match status {
         Ok(s) if s.success() => ArchiveHookOutcome::Success,
@@ -1157,6 +1256,7 @@ pub fn execute_archive_plan(plan: &ArchivePreparedPlan) -> Result<ArchiveWorkspa
     // Missing row defaults to `true` so legacy / orphaned rows still get
     // their branch cleaned up by the worktree-removal path below.
     let archive_owns_branch = record
+        .as_ref()
         .map(|r| matches!(r.branch_intent, WorkspaceBranchIntent::FromBranch))
         .unwrap_or(true);
 
@@ -1169,13 +1269,26 @@ pub fn execute_archive_plan(plan: &ArchivePreparedPlan) -> Result<ArchiveWorkspa
         );
     }
     let git_started = std::time::Instant::now();
-    let archive_commit = git_ops::current_workspace_head_commit(workspace_dir)?;
-    git_ops::verify_commit_exists(repo_root, &archive_commit)?;
-    tracing::debug!(
-        workspace_id,
-        elapsed_ms = git_started.elapsed().as_millis(),
-        "Archive: HEAD resolve + verify finished"
-    );
+    let archive_commit = match git_ops::current_workspace_head_commit(workspace_dir) {
+        Ok(commit) => {
+            git_ops::verify_commit_exists(repo_root, &commit)?;
+            tracing::debug!(
+                workspace_id,
+                elapsed_ms = git_started.elapsed().as_millis(),
+                "Archive: HEAD resolve + verify finished"
+            );
+            commit
+        }
+        Err(error) if can_archive_without_head(record.as_ref()) => {
+            tracing::info!(
+                workspace_id,
+                error = %format!("{error:#}"),
+                "Archive: continuing without HEAD for untouched AI triage workspace"
+            );
+            String::new()
+        }
+        Err(error) => return Err(error),
+    };
 
     // Run archive script (best-effort, don't block archive on script failure).
     let hook_started = std::time::Instant::now();
@@ -1186,32 +1299,38 @@ pub fn execute_archive_plan(plan: &ArchivePreparedPlan) -> Result<ArchiveWorkspa
         "Archive hook finished"
     );
 
-    let remove_worktree_started = std::time::Instant::now();
-    git_ops::remove_worktree(repo_root, workspace_dir)?;
-    tracing::info!(
-        workspace_id,
-        elapsed_ms = remove_worktree_started.elapsed().as_millis(),
-        "Archive worktree removal finished"
-    );
-
-    if archive_owns_branch {
-        let branch_delete_started = std::time::Instant::now();
-        git_ops::run_git(
-            [
-                "-C",
-                &repo_root.display().to_string(),
-                "branch",
-                "-D",
-                branch,
-            ],
-            None,
-        )
-        .ok();
+    let headless_archive = archive_commit.is_empty();
+    if headless_archive {
+        let db_started = std::time::Instant::now();
+        workspace_models::update_archived_workspace_state(workspace_id, "")?;
         tracing::debug!(
             workspace_id,
-            elapsed_ms = branch_delete_started.elapsed().as_millis(),
-            "Archive: branch delete finished"
+            elapsed_ms = db_started.elapsed().as_millis(),
+            "Archive: DB state update finished"
         );
+    }
+
+    let remove_worktree_started = std::time::Instant::now();
+    match git_ops::remove_worktree(repo_root, workspace_dir) {
+        Ok(()) => {
+            tracing::info!(
+                workspace_id,
+                elapsed_ms = remove_worktree_started.elapsed().as_millis(),
+                "Archive worktree removal finished"
+            );
+        }
+        Err(error) if headless_archive => {
+            tracing::warn!(
+                workspace_id,
+                error = %format!("{error:#}"),
+                "Archive: failed to remove headless AI triage worktree"
+            );
+        }
+        Err(error) => return Err(error),
+    }
+
+    if archive_owns_branch {
+        delete_archived_branch(repo_root, branch, workspace_id);
     } else {
         tracing::info!(
             workspace_id,
@@ -1220,19 +1339,22 @@ pub fn execute_archive_plan(plan: &ArchivePreparedPlan) -> Result<ArchiveWorkspa
         );
     }
 
-    let db_started = std::time::Instant::now();
-    if let Err(error) =
-        workspace_models::update_archived_workspace_state(workspace_id, &archive_commit)
-    {
-        cleanup_failed_archive(repo_root, workspace_dir, branch, &archive_commit);
-        return Err(error);
+    if !headless_archive {
+        let db_started = std::time::Instant::now();
+        if let Err(error) =
+            workspace_models::update_archived_workspace_state(workspace_id, &archive_commit)
+        {
+            cleanup_failed_archive(repo_root, workspace_dir, branch, &archive_commit);
+            return Err(error);
+        }
+
+        tracing::debug!(
+            workspace_id,
+            elapsed_ms = db_started.elapsed().as_millis(),
+            "Archive: DB state update finished"
+        );
     }
 
-    tracing::debug!(
-        workspace_id,
-        elapsed_ms = db_started.elapsed().as_millis(),
-        "Archive: DB state update finished"
-    );
     tracing::info!(
         workspace_id,
         elapsed_ms = timing.elapsed().as_millis(),
@@ -1599,6 +1721,7 @@ mod tests {
 
     #[test]
     fn archive_hook_inner_returns_workspace_missing_for_unknown_id() {
+        let _env = crate::testkit::TestEnv::new("archive-hook-inner-returns-workspace-mis");
         let tmp = std::env::temp_dir();
         let outcome = run_archive_hook_inner("nonexistent-workspace-id", &tmp, &tmp);
         // Whatever the DB state, an unknown workspace id must short-circuit to

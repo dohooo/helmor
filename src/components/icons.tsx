@@ -1,13 +1,35 @@
+import Ai302Color from "@lobehub/icons/es/Ai302/components/Color";
+import BasetenMono from "@lobehub/icons/es/Baseten/components/Mono";
+import CerebrasColor from "@lobehub/icons/es/Cerebras/components/Color";
 import ClaudeColor from "@lobehub/icons/es/Claude/components/Color";
+import CohereColor from "@lobehub/icons/es/Cohere/components/Color";
 import CursorMono from "@lobehub/icons/es/Cursor/components/Mono";
+import DeepInfraColor from "@lobehub/icons/es/DeepInfra/components/Color";
 import DeepSeekColor from "@lobehub/icons/es/DeepSeek/components/Color";
+import FireworksColor from "@lobehub/icons/es/Fireworks/components/Color";
+import GrokMono from "@lobehub/icons/es/Grok/components/Mono";
+import GroqMono from "@lobehub/icons/es/Groq/components/Mono";
+import HuggingFaceColor from "@lobehub/icons/es/HuggingFace/components/Color";
 import KimiMono from "@lobehub/icons/es/Kimi/components/Mono";
 import MinimaxColor from "@lobehub/icons/es/Minimax/components/Color";
+import MistralColor from "@lobehub/icons/es/Mistral/components/Color";
+import ModelScopeColor from "@lobehub/icons/es/ModelScope/components/Color";
+import NebiusMono from "@lobehub/icons/es/Nebius/components/Mono";
+import NvidiaColor from "@lobehub/icons/es/Nvidia/components/Color";
 import OpenAIMono from "@lobehub/icons/es/OpenAI/components/Mono";
+import OpenCodeMono from "@lobehub/icons/es/OpenCode/components/Mono";
+import OpenRouterMono from "@lobehub/icons/es/OpenRouter/components/Mono";
+import PerplexityColor from "@lobehub/icons/es/Perplexity/components/Color";
 import QwenColor from "@lobehub/icons/es/Qwen/components/Color";
+import SiliconCloudColor from "@lobehub/icons/es/SiliconCloud/components/Color";
+import TogetherColor from "@lobehub/icons/es/Together/components/Color";
 import XiaomiMiMoMono from "@lobehub/icons/es/XiaomiMiMo/components/Mono";
+import ZAIMono from "@lobehub/icons/es/ZAI/components/Mono";
+import ZenMuxMono from "@lobehub/icons/es/ZenMux/components/Mono";
 import ZhipuColor from "@lobehub/icons/es/Zhipu/components/Color";
+import { Box } from "lucide-react";
 import type { SVGProps } from "react";
+import { cn } from "@/lib/utils";
 
 export function ClaudeIcon(props: SVGProps<SVGSVGElement>) {
 	return (
@@ -41,6 +63,10 @@ export function CursorIcon(props: SVGProps<SVGSVGElement>) {
 	return <CursorMono {...props} />;
 }
 
+export function OpenCodeIcon(props: SVGProps<SVGSVGElement>) {
+	return <OpenCodeMono {...props} />;
+}
+
 export function ClaudeColorIcon(props: SVGProps<SVGSVGElement>) {
 	return <ClaudeColor {...props} />;
 }
@@ -71,4 +97,156 @@ export function XiaomiMiMoIcon(props: SVGProps<SVGSVGElement>) {
 
 export function ZhipuIcon(props: SVGProps<SVGSVGElement>) {
 	return <ZhipuColor {...props} />;
+}
+
+// opencode preset brand icons (lobehub): color when the brand ships one, Mono otherwise.
+export function Ai302Icon(props: SVGProps<SVGSVGElement>) {
+	return <Ai302Color {...props} />;
+}
+
+export function BasetenIcon(props: SVGProps<SVGSVGElement>) {
+	return <BasetenMono {...props} />;
+}
+
+export function CerebrasIcon(props: SVGProps<SVGSVGElement>) {
+	return <CerebrasColor {...props} />;
+}
+
+export function CohereIcon(props: SVGProps<SVGSVGElement>) {
+	return <CohereColor {...props} />;
+}
+
+export function DeepInfraIcon(props: SVGProps<SVGSVGElement>) {
+	return <DeepInfraColor {...props} />;
+}
+
+export function FireworksIcon(props: SVGProps<SVGSVGElement>) {
+	return <FireworksColor {...props} />;
+}
+
+export function GrokIcon(props: SVGProps<SVGSVGElement>) {
+	return <GrokMono {...props} />;
+}
+
+export function GroqIcon(props: SVGProps<SVGSVGElement>) {
+	return <GroqMono {...props} />;
+}
+
+export function HuggingFaceIcon(props: SVGProps<SVGSVGElement>) {
+	return <HuggingFaceColor {...props} />;
+}
+
+export function MistralIcon(props: SVGProps<SVGSVGElement>) {
+	return <MistralColor {...props} />;
+}
+
+export function ModelScopeIcon(props: SVGProps<SVGSVGElement>) {
+	return <ModelScopeColor {...props} />;
+}
+
+export function NebiusIcon(props: SVGProps<SVGSVGElement>) {
+	return <NebiusMono {...props} />;
+}
+
+export function NvidiaIcon(props: SVGProps<SVGSVGElement>) {
+	return <NvidiaColor {...props} />;
+}
+
+export function OpenRouterIcon(props: SVGProps<SVGSVGElement>) {
+	return <OpenRouterMono {...props} />;
+}
+
+export function PerplexityIcon(props: SVGProps<SVGSVGElement>) {
+	return <PerplexityColor {...props} />;
+}
+
+export function SiliconCloudIcon(props: SVGProps<SVGSVGElement>) {
+	return <SiliconCloudColor {...props} />;
+}
+
+export function TogetherIcon(props: SVGProps<SVGSVGElement>) {
+	return <TogetherColor {...props} />;
+}
+
+export function ZaiIcon(props: SVGProps<SVGSVGElement>) {
+	return <ZAIMono {...props} />;
+}
+
+export function ZenMuxIcon(props: SVGProps<SVGSVGElement>) {
+	return <ZenMuxMono {...props} />;
+}
+
+/// Provider-catalog brand-icon key; `generic` → neutral box.
+export type ProviderBrandIconKey =
+	| "minimax"
+	| "moonshot"
+	| "deepseek"
+	| "zhipu"
+	| "qwen"
+	| "xiaomi"
+	| "zai"
+	| "groq"
+	| "cerebras"
+	| "fireworks"
+	| "together"
+	| "openrouter"
+	| "mistral"
+	| "grok"
+	| "deepinfra"
+	| "nebius"
+	| "baseten"
+	| "huggingface"
+	| "nvidia"
+	| "cohere"
+	| "perplexity"
+	| "siliconcloud"
+	| "modelscope"
+	| "zenmux"
+	| "ai302"
+	| "generic";
+
+export const PROVIDER_BRAND_ICONS: Record<
+	Exclude<ProviderBrandIconKey, "generic">,
+	typeof MinimaxIcon
+> = {
+	minimax: MinimaxIcon,
+	moonshot: KimiIcon,
+	deepseek: DeepSeekIcon,
+	zhipu: ZhipuIcon,
+	qwen: QwenIcon,
+	xiaomi: XiaomiMiMoIcon,
+	zai: ZaiIcon,
+	groq: GroqIcon,
+	cerebras: CerebrasIcon,
+	fireworks: FireworksIcon,
+	together: TogetherIcon,
+	openrouter: OpenRouterIcon,
+	mistral: MistralIcon,
+	grok: GrokIcon,
+	deepinfra: DeepInfraIcon,
+	nebius: NebiusIcon,
+	baseten: BasetenIcon,
+	huggingface: HuggingFaceIcon,
+	nvidia: NvidiaIcon,
+	cohere: CohereIcon,
+	perplexity: PerplexityIcon,
+	siliconcloud: SiliconCloudIcon,
+	modelscope: ModelScopeIcon,
+	zenmux: ZenMuxIcon,
+	ai302: Ai302Icon,
+};
+
+/// Brand-icon renderer for the provider catalog.
+export function ProviderBrandIcon({
+	icon,
+	className,
+}: {
+	icon: ProviderBrandIconKey;
+	className?: string;
+}) {
+	if (icon === "generic") {
+		return <Box className={cn("text-muted-foreground", className)} />;
+	}
+	const Icon = PROVIDER_BRAND_ICONS[icon];
+	return <Icon className={className} />;
 }

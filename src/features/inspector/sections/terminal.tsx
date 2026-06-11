@@ -160,6 +160,7 @@ export function TerminalInstancePanel({
 					className="h-full"
 					onData={handleData}
 					onResize={handleResize}
+					isVisible={isActive}
 				/>
 			) : null}
 		</div>

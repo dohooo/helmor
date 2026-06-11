@@ -31,6 +31,7 @@ import type {
 	PendingPermission,
 	useStreamingStore,
 } from "@/features/conversation/state/streaming-store";
+import { nestStreamingChildPartial } from "@/features/conversation/streaming-child-nesting";
 import { stabilizeStreamingMessages } from "@/features/conversation/streaming-tail-collapse";
 import type {
 	AgentModelOption,
@@ -53,7 +54,16 @@ export type StreamAccumulator = {
 	pendingPartial: ThreadMessageLike | null;
 	needsFlush: boolean;
 	frameId: number | null;
+	fallbackTimerId?: number | null;
 };
+
+const STREAM_FLUSH_FALLBACK_MS = 120;
+
+function clearFallbackTimer(accumulator: StreamAccumulator): void {
+	if (accumulator.fallbackTimerId == null) return;
+	window.clearTimeout(accumulator.fallbackTimerId);
+	accumulator.fallbackTimerId = null;
+}
 
 export type StreamDispatchDeps = {
 	// Send-time invariants. Captured once at the top of handleComposerSubmit.
@@ -199,6 +209,13 @@ export function createStreamEventDispatcher(
 				window.cancelAnimationFrame(deps.accumulator.frameId);
 				deps.accumulator.frameId = null;
 			}
+			// Terminal state renders from the final Full only. The backend
+			// always emits a closing Full (result / materialized abort), so a
+			// pending partial here is stale — flushing it would freeze
+			// duplicate reasoning chips and phantom spinning tool cards into
+			// the thread cache forever (no DB re-read happens after done).
+			deps.accumulator.pendingPartial = null;
+			deps.accumulator.needsFlush = true;
 			deps.flushStreamMessages();
 			deps.cleanup();
 			deps.clearPendingPermissions(deps.contextKey);
@@ -307,6 +324,7 @@ export function createStreamFlushers(opts: {
 	userMessageId: string;
 	optimisticUserMessage: ThreadMessageLike;
 	changesRefreshInterval: number;
+	onFinalChangesRefresh?: () => void;
 }): {
 	flushStreamMessages: () => void;
 	scheduleFlush: () => void;
@@ -314,15 +332,23 @@ export function createStreamFlushers(opts: {
 } {
 	const flushStreamMessages = () => {
 		opts.accumulator.frameId = null;
+		clearFallbackTimer(opts.accumulator);
 		if (!opts.accumulator.needsFlush) return;
 		opts.accumulator.needsFlush = false;
 
-		const rendered = opts.accumulator.pendingPartial
-			? stabilizeStreamingMessages([
-					...opts.accumulator.baseMessages,
-					opts.accumulator.pendingPartial,
-				])
-			: opts.accumulator.baseMessages;
+		const partial = opts.accumulator.pendingPartial;
+		let rendered: ThreadMessageLike[];
+		if (!partial) {
+			rendered = opts.accumulator.baseMessages;
+		} else {
+			// A subagent partial (`child:<parent>:…`) nests under its parent
+			// tool call so the live tokens render inside the card instead of
+			// flashing as a second top-level bubble. Everything else takes the
+			// trailing-tail merge path.
+			rendered =
+				nestStreamingChildPartial(opts.accumulator.baseMessages, partial) ??
+				stabilizeStreamingMessages([...opts.accumulator.baseMessages, partial]);
+		}
 		replaceStreamingTail(
 			opts.queryClient,
 			opts.cacheSessionId,
@@ -333,18 +359,32 @@ export function createStreamFlushers(opts: {
 
 	const scheduleFlush = () => {
 		opts.accumulator.needsFlush = true;
-		if (opts.accumulator.frameId !== null) return;
-		opts.accumulator.frameId = window.requestAnimationFrame(() =>
-			flushStreamMessages(),
-		);
+		if (opts.accumulator.frameId === null) {
+			opts.accumulator.frameId = window.requestAnimationFrame(() =>
+				flushStreamMessages(),
+			);
+		}
+		if (opts.accumulator.fallbackTimerId == null) {
+			opts.accumulator.fallbackTimerId = window.setTimeout(() => {
+				if (opts.accumulator.frameId !== null) {
+					window.cancelAnimationFrame(opts.accumulator.frameId);
+					opts.accumulator.frameId = null;
+				}
+				flushStreamMessages();
+			}, STREAM_FLUSH_FALLBACK_MS);
+		}
 	};
 
 	const cleanup = () => {
 		window.clearInterval(opts.changesRefreshInterval);
+		// Final Changes-diff refresh on stream end so the post-turn diff is fresh
+		// even though the periodic refresh now runs every 7s (was 3s) mid-stream.
+		opts.onFinalChangesRefresh?.();
 		if (opts.accumulator.frameId !== null) {
 			window.cancelAnimationFrame(opts.accumulator.frameId);
 			opts.accumulator.frameId = null;
 		}
+		clearFallbackTimer(opts.accumulator);
 	};
 
 	return { flushStreamMessages, scheduleFlush, cleanup };

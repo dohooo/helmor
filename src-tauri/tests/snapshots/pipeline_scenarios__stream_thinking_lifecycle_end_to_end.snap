@@ -10,8 +10,10 @@ emissions:
       role: assistant
       id: msg-1
       content:
-        - type: text
-          text: "..."
+        - type: reasoning
+          text_preview: ""
+          streaming: true
+          has_duration: false
       streaming: true
   - kind: partial
     line_index: 1
@@ -49,16 +51,6 @@ emissions:
             streaming: false
             has_duration: true
         streaming: ~
-  - kind: partial
-    line_index: 5
-    event_type: stream_event
-    message:
-      role: assistant
-      id: msg-1
-      content:
-        - type: text
-          text: "..."
-      streaming: true
   - kind: partial
     line_index: 6
     event_type: stream_event

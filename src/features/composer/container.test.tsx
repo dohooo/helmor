@@ -164,6 +164,18 @@ const MODEL_SECTIONS = [
 			},
 		],
 	},
+	{
+		id: "opencode",
+		label: "OpenCode",
+		options: [
+			{
+				id: "opencode/big-pickle",
+				provider: "opencode",
+				label: "OpenCode Zen · Big Pickle",
+				cliModel: "opencode/big-pickle",
+			},
+		],
+	},
 ] as const;
 
 const WORKSPACE_DETAIL = {
@@ -222,6 +234,24 @@ const WORKSPACE_SESSIONS = [
 		providerSessionId: null,
 		unreadCount: 0,
 		codexThinkingLevel: "high",
+		fastMode: false,
+		createdAt: "2026-04-05T00:00:00Z",
+		updatedAt: "2026-04-05T00:00:00Z",
+		lastUserMessageAt: null,
+		isHidden: false,
+		active: false,
+	},
+	{
+		id: "session-3",
+		workspaceId: "workspace-1",
+		title: "Session 3",
+		agentType: "opencode",
+		status: "idle",
+		model: "opencode/big-pickle",
+		permissionMode: "default",
+		providerSessionId: null,
+		unreadCount: 0,
+		codexThinkingLevel: null,
 		fastMode: false,
 		createdAt: "2026-04-05T00:00:00Z",
 		updatedAt: "2026-04-05T00:00:00Z",
@@ -967,6 +997,7 @@ describe("WorkspaceComposerContainer", () => {
 				expect(composerMockState.lastSlashCommands.map((c) => c.name)).toEqual([
 					"add-dir",
 					"goal",
+					"workflows",
 					"compact",
 					"clear",
 				]);
@@ -1009,6 +1040,28 @@ describe("WorkspaceComposerContainer", () => {
 			});
 		});
 
+		it("adds a built-in /compact command for OpenCode sessions", async () => {
+			apiMockState.listSlashCommands.mockResolvedValue({
+				commands: [],
+				isComplete: true,
+			});
+
+			renderWithLinkedDirs([], "session-3");
+
+			await waitFor(() => {
+				expect(composerMockState.lastSlashCommands.map((c) => c.name)).toEqual([
+					"add-dir",
+					"compact",
+				]);
+			});
+			expect(composerMockState.lastSlashCommands[1]).toEqual({
+				name: "compact",
+				description: "Compact this conversation's context",
+				source: "builtin",
+				providers: ["opencode"],
+			});
+		});
+
 		it("adds a built-in /goal command for Claude sessions without duplicating an agent-provided goal", async () => {
 			apiMockState.listSlashCommands.mockResolvedValue({
 				commands: [
@@ -1032,6 +1085,7 @@ describe("WorkspaceComposerContainer", () => {
 				expect(composerMockState.lastSlashCommands.map((c) => c.name)).toEqual([
 					"add-dir",
 					"goal",
+					"workflows",
 					"clear",
 				]);
 			});
@@ -1077,7 +1131,11 @@ describe("WorkspaceComposerContainer", () => {
 			updatedAt: 0,
 		};
 
-		function setupCodexSessionWithGoal(): {
+		function setupCodexSessionWithGoal({
+			seedCapabilities = true,
+		}: {
+			seedCapabilities?: boolean;
+		} = {}): {
 			queryClient: ReturnType<typeof createHelmorQueryClient>;
 		} {
 			const queryClient = createHelmorQueryClient();
@@ -1085,6 +1143,25 @@ describe("WorkspaceComposerContainer", () => {
 				helmorQueryKeys.agentModelSections,
 				MODEL_SECTIONS,
 			);
+			// Explicitly seed the provider-capability table for the steady-
+			// state tests. When omitted (`seedCapabilities: false`) the
+			// query falls back to `providerCapabilitiesQueryOptions`'
+			// `initialData`, which mirrors the Rust default table — that is
+			// the cold-start path the dedicated test below exercises.
+			if (seedCapabilities) {
+				queryClient.setQueryData(helmorQueryKeys.providerCapabilities, [
+					{
+						provider: "codex",
+						displayName: "Codex",
+						supportsPlanMode: true,
+						supportsActiveGoal: true,
+						supportsContextUsage: true,
+						supportsSteer: true,
+						supportsSlashCommands: true,
+						requiresApiKey: false,
+					},
+				]);
+			}
 			queryClient.setQueryData(
 				helmorQueryKeys.workspaceDetail("workspace-1"),
 				WORKSPACE_DETAIL,
@@ -1198,6 +1275,32 @@ describe("WorkspaceComposerContainer", () => {
 			expect(onSubmit).toHaveBeenCalledWith(
 				expect.objectContaining({ prompt: "/goal resume" }),
 			);
+		});
+
+		// Cold-start regression: before the capability table hydrates from
+		// the persisted cache / IPC, the composer must still treat Codex as
+		// an active-goal provider via the query's `initialData`. With an
+		// empty/unhydrated table this `/goal pause` would have leaked to the
+		// agent stream (mis-parsed as `{kind: "set", objective: "pause"}`).
+		it("intercepts /goal pause via initialData before the capability table hydrates", async () => {
+			const { queryClient } = setupCodexSessionWithGoal({
+				seedCapabilities: false,
+			});
+			const onSubmit = vi.fn<ContainerOnSubmit>();
+			renderCodexComposer(queryClient, onSubmit);
+
+			await waitFor(() =>
+				expect(composerMockState.lastOnSubmit).not.toBeNull(),
+			);
+
+			composerMockState.lastOnSubmit?.("/goal pause", [], [], []);
+
+			expect(apiMockState.mutateCodexGoal).toHaveBeenCalledTimes(1);
+			expect(apiMockState.mutateCodexGoal).toHaveBeenCalledWith(
+				"session-2",
+				"pause",
+			);
+			expect(onSubmit).not.toHaveBeenCalled();
 		});
 	});
 });

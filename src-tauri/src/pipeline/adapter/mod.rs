@@ -18,6 +18,7 @@ mod blocks;
 mod codex_items;
 mod grouping;
 mod labels;
+mod opencode_parts;
 
 #[cfg(test)]
 mod tests;
@@ -30,7 +31,8 @@ pub(crate) const AGENT_TOOL_NAMES: &[&str] = &["Agent", "Task"];
 
 use blocks::{
     assistant_has_recognized_blocks, late_merge_unresolved_tool_results, merge_tool_results,
-    merge_tool_results_extended, parse_assistant_parts,
+    merge_tool_results_extended, parse_assistant_parts_stateful, TaskListState,
+    WorkflowAccumulator, CLAUDE_TASK_LIST_ID_PREFIX,
 };
 use grouping::{
     convert_user_message, group_child_messages, merge_adjacent_assistants,
@@ -53,14 +55,120 @@ use super::types::{
 
 /// Convert intermediate messages into rendered thread messages.
 pub fn convert(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
-    let flat = convert_flat(messages);
-    if flat.len() <= 1 {
-        return flat;
+    let (flat, workflow_acc) = convert_flat(messages);
+    let mut result = if flat.len() <= 1 {
+        flat
+    } else {
+        let grouped = group_child_messages(flat);
+        let mut merged = merge_adjacent_assistants(grouped);
+        settle_aborted_tool_calls(messages, &mut merged);
+        merged
+    };
+    // The Claude Task family is a SINGLE session-wide list (the CLI assigns
+    // global sequential ids 1,2,3…), so fold every synthesized snapshot into
+    // one evolving widget — anchored where the plan first appeared, carrying
+    // the final cumulative state — just like the Codex plan render. Scoped
+    // by id prefix so TodoWrite/Codex lists are never touched.
+    collapse_task_todo_lists(&mut result);
+    // Rewrite each Workflow widget (anchored at the Workflow tool_use) with
+    // the final aggregated run state collected from its task_* events.
+    finalize_workflow_widgets(&mut result, &workflow_acc);
+    result
+}
+
+/// Write the aggregated run state (name, status, agents, usage) back into
+/// each `MessagePart::Workflow` placeholder that `push_tool_use` anchored at
+/// the Workflow tool call. No-op for parts whose id isn't a tracked run.
+fn finalize_workflow_widgets(messages: &mut [ThreadMessageLike], acc: &WorkflowAccumulator) {
+    for msg in messages.iter_mut() {
+        for part in msg.content.iter_mut() {
+            if let ExtendedMessagePart::Basic(MessagePart::Workflow {
+                id,
+                name,
+                status,
+                agents,
+                total_tokens,
+                duration_ms,
+            }) = part
+            {
+                if let Some((n, st, ags, tok, dur)) = acc.finalize(id) {
+                    *name = n;
+                    *status = st;
+                    *agents = ags;
+                    *total_tokens = tok;
+                    *duration_ms = dur;
+                }
+            }
+        }
     }
-    let grouped = group_child_messages(flat);
-    let mut merged = merge_adjacent_assistants(grouped);
-    settle_aborted_tool_calls(messages, &mut merged);
-    merged
+}
+
+/// Fold all Claude-Task-sourced `TodoList` parts (id prefix
+/// `CLAUDE_TASK_LIST_ID_PREFIX`) into a single widget: keep the FIRST
+/// occurrence (stable anchor position + React key) but rewrite its items to
+/// the LAST occurrence's items (the final cumulative state), and drop every
+/// other Task list. Assistant messages emptied by the drop are removed so no
+/// ghost bubble is left behind. No-op when fewer than two Task lists exist,
+/// so the single-`TaskCreate` and TodoWrite/Codex paths are untouched.
+fn collapse_task_todo_lists(messages: &mut Vec<ThreadMessageLike>) {
+    fn is_task_list(part: &ExtendedMessagePart) -> bool {
+        matches!(
+            part,
+            ExtendedMessagePart::Basic(MessagePart::TodoList { id, .. })
+                if id.starts_with(CLAUDE_TASK_LIST_ID_PREFIX)
+        )
+    }
+
+    let mut final_items: Option<Vec<crate::pipeline::types::TodoItem>> = None;
+    let mut count = 0usize;
+    for msg in messages.iter() {
+        for part in &msg.content {
+            if let ExtendedMessagePart::Basic(MessagePart::TodoList { id, items }) = part {
+                if id.starts_with(CLAUDE_TASK_LIST_ID_PREFIX) {
+                    final_items = Some(items.clone());
+                    count += 1;
+                }
+            }
+        }
+    }
+    if count < 2 {
+        return;
+    }
+    let final_items = final_items.expect("count >= 2 implies a last list exists");
+
+    let mut kept_first = false;
+    // Indices of messages we emptied BY removing their Task list(s) — only
+    // these get dropped, so a pre-existing empty assistant message (e.g. an
+    // mcp_tool_result that attached elsewhere) elsewhere in the thread is
+    // never collateral.
+    let mut emptied: Vec<usize> = Vec::new();
+    for (i, msg) in messages.iter_mut().enumerate() {
+        if !msg.content.iter().any(is_task_list) {
+            continue;
+        }
+        msg.content.retain_mut(|part| {
+            if is_task_list(part) {
+                if !kept_first {
+                    kept_first = true;
+                    if let ExtendedMessagePart::Basic(MessagePart::TodoList { items, .. }) = part {
+                        *items = final_items.clone();
+                    }
+                    return true;
+                }
+                return false;
+            }
+            true
+        });
+        if msg.content.is_empty() && msg.role == MessageRole::Assistant {
+            emptied.push(i);
+        }
+    }
+
+    // Drop (in reverse, to keep indices valid) the assistant messages whose
+    // only content was a folded-away Task list.
+    for &i in emptied.iter().rev() {
+        messages.remove(i);
+    }
 }
 
 /// Convert historical DB records into rendered thread messages.
@@ -83,9 +191,17 @@ pub fn convert_historical(records: &[HistoricalRecord]) -> Vec<ThreadMessageLike
 // Flat conversion — per-message dispatch
 // ---------------------------------------------------------------------------
 
-fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
+fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, WorkflowAccumulator) {
     let mut result: Vec<ThreadMessageLike> = Vec::new();
     let mut i = 0;
+    // Shared across every assistant message so the Claude Task family
+    // (TaskCreate/TaskUpdate, which patches tasks by an id assigned in an
+    // earlier message) accumulates into one running plan.
+    let mut task_state = TaskListState::default();
+    // Shared across the whole walk so a Workflow tool call (in an assistant
+    // message) and its later task_* lifecycle events (separate system
+    // messages) fold into the same run.
+    let mut workflow_acc = WorkflowAccumulator::default();
 
     while i < messages.len() {
         let msg = &messages[i];
@@ -96,7 +212,7 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
         // render as SystemNotice banners; the rest fall through to the
         // generic system label.
         if msg_type == Some("system") {
-            convert_system_msg(msg, &mut result);
+            convert_system_msg(msg, &mut result, &mut workflow_acc);
             i += 1;
             continue;
         }
@@ -177,10 +293,32 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
             continue;
         }
 
+        // opencode native assistant message → universal render parts.
+        if msg_type == Some("opencode_message") {
+            if let Some(p) = parsed {
+                let content: Vec<ExtendedMessagePart> =
+                    opencode_parts::render_parts(p, &msg.id, msg.is_streaming)
+                        .into_iter()
+                        .map(ExtendedMessagePart::Basic)
+                        .collect();
+                result.push(ThreadMessageLike {
+                    role: MessageRole::Assistant,
+                    id: Some(msg.id.clone()),
+                    created_at: Some(msg.created_at.clone()),
+                    content,
+                    status: None,
+                    streaming: if msg.is_streaming { Some(true) } else { None },
+                });
+            }
+            i += 1;
+            continue;
+        }
+
         // assistant (by JSON type or by role for plain-text live messages)
         if msg_type == Some("assistant") || (parsed.is_none() && msg.role == MessageRole::Assistant)
         {
-            let mut parts = parse_assistant_parts(parsed, &msg.id);
+            let mut parts =
+                parse_assistant_parts_stateful(parsed, &msg.id, &mut task_state, &mut workflow_acc);
             // Pull the parent_tool_use_id (if any) so we can encode it in
             // the message id below — the grouping pass uses it to attach
             // the child to the EXACT parent Task tool, not whichever
@@ -269,7 +407,7 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
                     .and_then(|p| p.get("type"))
                     .and_then(Value::as_str);
                 match dtype {
-                    Some("system") => convert_system_msg(deferred, &mut result),
+                    Some("system") => convert_system_msg(deferred, &mut result, &mut workflow_acc),
                     Some("rate_limit_event") => convert_rate_limit_msg(deferred, &mut result),
                     // The lookahead loop above only ever appends these
                     // two types — anything else would be a bug.
@@ -377,7 +515,7 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
     // any ToolCall still missing a `result`.
     late_merge_unresolved_tool_results(messages, &mut result);
 
-    result
+    (result, workflow_acc)
 }
 
 /// Translate Claude's `BetaMessage.stop_reason` into a unified
@@ -504,7 +642,11 @@ fn convert_user_type_msg(
 /// Convert a single `system` event into zero or one ThreadMessageLike,
 /// pushing the result onto `out`. Used by the main `convert_flat` loop
 /// AND by the post-assistant deferred flush so neither has to recurse.
-fn convert_system_msg(msg: &IntermediateMessage, out: &mut Vec<ThreadMessageLike>) {
+fn convert_system_msg(
+    msg: &IntermediateMessage,
+    out: &mut Vec<ThreadMessageLike>,
+    workflow_acc: &mut WorkflowAccumulator,
+) {
     let parsed = msg.parsed.as_ref();
     let sub = parsed
         .and_then(|p| p.get("subtype"))
@@ -519,6 +661,15 @@ fn convert_system_msg(msg: &IntermediateMessage, out: &mut Vec<ThreadMessageLike
     }
     if let Some(value) = parsed {
         if super::event_filter::is_suppressed_local_bash_task(value) {
+            return;
+        }
+    }
+    // Dynamic Workflow lifecycle (task_type = "local_workflow"): fold the
+    // event into its Workflow widget instead of emitting a standalone
+    // subagent notice. Non-workflow task_* events return false here and fall
+    // through to the existing subagent-notice path unchanged.
+    if let Some(value) = parsed {
+        if workflow_acc.on_task_event(value) {
             return;
         }
     }

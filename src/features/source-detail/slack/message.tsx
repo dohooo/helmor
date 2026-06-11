@@ -3,6 +3,7 @@ import { LazyStreamdown } from "@/components/streamdown-loader";
 import type { SlackMessage } from "@/lib/api";
 import {
 	inlineEmojiForMarkdown,
+	inlineMentionsForMarkdown,
 	resolveEmoji,
 	type SlackEmoji,
 } from "@/lib/slack-text";
@@ -37,7 +38,13 @@ export function SlackMessageBubble({
 	// File-only messages render their attachments inline instead.
 	const placeholderNeeded = !trimmedText && message.files.length === 0;
 	const rawBody = trimmedText || (placeholderNeeded ? "_(empty message)_" : "");
-	const body = rawBody ? inlineEmojiForMarkdown(rawBody, emoji) : "";
+	// Run mention rewriting before emoji inlining so the markdown
+	// pass sees `@name` text, not the raw `<@U…|name>` escape — both
+	// are pure-string transforms and order is independent, but reading
+	// the chain top-down is easier when mentions resolve first.
+	const body = rawBody
+		? inlineEmojiForMarkdown(inlineMentionsForMarkdown(rawBody), emoji)
+		: "";
 	return (
 		<div className="flex gap-3 px-1 py-2">
 			<div className="shrink-0">

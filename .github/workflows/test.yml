@@ -1,10 +1,7 @@
 name: Test
 
-# macOS-only quality suite. Windows and Linux no longer run unit / sidecar /
-# frontend tests — they're gated by a compile-only job in quality.yml
-# (Rust Windows/Linux Check) so we still catch cross-platform source
-# regressions, but day-to-day test signal comes from the primary target
-# (macOS) where the app actually ships.
+# macOS quality suite. Windows has its own source, sidecar, Rust, and bundle
+# checks in windows.yml; Linux is not a shipped desktop target.
 
 on:
   pull_request:
@@ -67,10 +64,23 @@ jobs:
       - name: Setup Rust Tauri
         uses: ./.github/actions/setup-rust-tauri
 
-      - name: Build sidecar binary
-        uses: ./.github/actions/build-sidecar
+      # rust-test stages for the host arch (macos-latest is arm64) — `bun run
+      # build` below has no TAURI_TARGET_TRIPLE, so it downloads aarch64 archives.
+      - name: Cache bundle archives
+        uses: ./.github/actions/cache-bundle-archives
         with:
           target-triple: aarch64-apple-darwin
+
+      # Stage the sidecar vendor tree, but NOT the release helmor-cli. The crate
+      # compile needs `sidecar/dist/vendor/` (a Tauri bundle resource) to exist;
+      # build.rs stubs the helmor-cli / helmor-sidecar externalBin placeholders,
+      # and no test spawns the real sidecar. This skips the
+      # `cargo build --bin helmor-cli --release` the full build-sidecar action
+      # runs — ~3m16s the tests never use. (`bun run build` = stage-vendor plus
+      # the ~4s bun sidecar compile.)
+      - name: Stage sidecar vendor tree
+        shell: bash
+        run: cd sidecar && bun install --frozen-lockfile && bun run build
 
       - name: Run Rust tests with nextest
         shell: bash

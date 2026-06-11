@@ -529,6 +529,11 @@ fn delete_imported_workspace_records(workspace_id: &str) -> Result<()> {
         )
         .context("Failed to delete imported messages")?;
         conn.execute(
+            "DELETE FROM session_plan_state WHERE session_id IN (SELECT id FROM sessions WHERE workspace_id = ?1)",
+            [workspace_id],
+        )
+        .context("Failed to delete imported session plan state")?;
+        conn.execute(
             "DELETE FROM sessions WHERE workspace_id = ?1",
             [workspace_id],
         )
@@ -643,15 +648,16 @@ fn resolve_source_branch(
         let conductor_ws = root.join("workspaces").join(repo_name).join(directory_name);
 
         if conductor_ws.is_dir() {
-            if let Ok(output) = std::process::Command::new("git")
-                .args([
-                    "-C",
-                    &conductor_ws.display().to_string(),
-                    "rev-parse",
-                    "--abbrev-ref",
-                    "HEAD",
-                ])
-                .output()
+            let mut command = std::process::Command::new("git");
+            command.args([
+                "-C",
+                &conductor_ws.display().to_string(),
+                "rev-parse",
+                "--abbrev-ref",
+                "HEAD",
+            ]);
+            if let Ok(output) =
+                crate::platform::process::configure_background_cli(&mut command).output()
             {
                 let actual = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !actual.is_empty()
@@ -772,6 +778,26 @@ fn import_column_lists(conn: &Connection, table: &str) -> Result<(String, String
     let mut source_parts = Vec::new();
 
     for col in &main_cols {
+        // Coalesce post-migration NOT NULL columns so pre-triage source DBs import cleanly.
+        if table == "sessions" && col == "session_kind" {
+            main_parts.push(col.clone());
+            source_parts.push(if source_set.contains("session_kind") {
+                "COALESCE(session_kind, 'gui') AS session_kind".to_string()
+            } else {
+                "'gui' AS session_kind".to_string()
+            });
+            continue;
+        }
+        if table == "session_messages" && col == "is_ai_priming" {
+            main_parts.push(col.clone());
+            source_parts.push(if source_set.contains("is_ai_priming") {
+                "COALESCE(is_ai_priming, 0) AS is_ai_priming".to_string()
+            } else {
+                "0 AS is_ai_priming".to_string()
+            });
+            continue;
+        }
+
         if source_set.contains(col.as_str()) {
             // Column exists in both with the same name
             main_parts.push(col.clone());
@@ -905,6 +931,26 @@ fn import_workspace_column_lists(conn: &Connection) -> Result<(String, String)> 
             continue;
         }
 
+        // Coalesce AI-triage NOT NULL columns so pre-triage Conductor DBs import cleanly.
+        if col == "kind" {
+            main_parts.push(col.clone());
+            source_parts.push(if source_set.contains("kind") {
+                "COALESCE(kind, 'manual') AS kind".to_string()
+            } else {
+                "'manual' AS kind".to_string()
+            });
+            continue;
+        }
+        if col == "ai_priming_consumed" {
+            main_parts.push(col.clone());
+            source_parts.push(if source_set.contains("ai_priming_consumed") {
+                "COALESCE(ai_priming_consumed, 0) AS ai_priming_consumed".to_string()
+            } else {
+                "0 AS ai_priming_consumed".to_string()
+            });
+            continue;
+        }
+
         if source_set.contains(col.as_str()) {
             main_parts.push(col.clone());
             source_parts.push(col.clone());
@@ -994,10 +1040,22 @@ mod tests {
         assert_eq!(ws_count, 1);
         assert_eq!(sess_count, 2);
         assert_eq!(msg_count, 2);
+
+        // session_kind is NOT NULL in main; source rows leave it NULL, so the
+        // import must coalesce to 'gui' (else INSERT OR IGNORE drops the rows).
+        let kind: String = conn
+            .query_row(
+                "SELECT session_kind FROM main.sessions WHERE id = 's1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kind, "gui");
     }
 
     #[test]
     fn import_workspace_db_records_skips_existing() {
+        let _env = crate::testkit::TestEnv::new("import-workspace-db-records-skips-existi");
         let (conn, _dir) = setup_test_db();
 
         conn.execute_batch(

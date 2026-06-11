@@ -46,9 +46,13 @@ vi.mock("./lib/api", async (importOriginal) => {
 });
 
 import App from "./App";
+import { router } from "./router";
 
 describe("App add repository flow", () => {
 	beforeEach(() => {
+		// Stage 3b: reset the module-scope router (now the selection source of
+		// truth) between renders so a stale location can't leak across tests.
+		router.history.replace("/");
 		addRepoRuntime.added = false;
 
 		apiMocks.addRepositoryFromLocalPath.mockReset();

@@ -146,6 +146,23 @@ describe("useUiSyncBridge", () => {
 		expect(invalidateQueries).toHaveBeenCalledWith({
 			queryKey: helmorQueryKeys.forgeAccountsAll,
 		});
+		// Auth verdicts are shared repo-wide — every workspace's
+		// action-status snapshot must refresh, not just the one that
+		// detected the flip.
+		const predicate = invalidateQueries.mock.calls
+			.map(([arg]) => arg?.predicate)
+			.find((candidate) => typeof candidate === "function");
+		expect(predicate).toBeDefined();
+		expect(
+			predicate?.({
+				queryKey: ["workspaceForgeActionStatus", "workspace-2"],
+			} as never),
+		).toBe(true);
+		expect(
+			predicate?.({
+				queryKey: ["workspaceDetail", "workspace-2"],
+			} as never),
+		).toBe(false);
 	});
 
 	it("invalidates baseline + rich on contextUsageChanged", async () => {

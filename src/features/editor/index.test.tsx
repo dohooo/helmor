@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { RouterContextProvider } from "@tanstack/react-router";
 import {
 	cleanup,
 	fireEvent,
@@ -11,6 +12,7 @@ import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { EditorSessionState } from "@/lib/editor-session";
+import { router } from "@/router";
 
 const apiMocks = vi.hoisted(() => ({
 	listWorkspaceChanges: vi.fn(),
@@ -135,24 +137,34 @@ function EditorSurfaceHarness({
 			}),
 	);
 
+	// Stage 3b: WorkspaceEditorSurface reads `selectedWorkspaceId` from the
+	// ROUTER. The `beforeEach` resets the module router to `/`, so the editor
+	// reads `workspaceId = null` — the prior default these tests were written
+	// against. A bare RouterContextProvider is enough (the editor only reads;
+	// it never navigates).
 	return (
 		<QueryClientProvider client={queryClient}>
-			<WorkspaceEditorSurface
-				editorSession={session}
-				workspaceRootPath="/tmp/helmor-workspace"
-				onChangeSession={(next) => {
-					onChangeSpy(next);
-					setSession(next);
-				}}
-				onError={onError}
-				onExit={vi.fn()}
-			/>
+			<RouterContextProvider router={router}>
+				<WorkspaceEditorSurface
+					editorSession={session}
+					workspaceRootPath="/tmp/helmor-workspace"
+					onChangeSession={(next) => {
+						onChangeSpy(next);
+						setSession(next);
+					}}
+					onError={onError}
+					onExit={vi.fn()}
+				/>
+			</RouterContextProvider>
 		</QueryClientProvider>
 	);
 }
 
 describe("WorkspaceEditorSurface", () => {
 	beforeEach(() => {
+		// Stage 3b: the editor reads the selected workspace from the module-scope
+		// router. Reset it to `/` so each test starts with `workspaceId = null`.
+		router.history.replace("/");
 		runtimeMocks.reset();
 		apiMocks.listWorkspaceChanges.mockReset();
 		apiMocks.listWorkspaceChanges.mockResolvedValue([]);

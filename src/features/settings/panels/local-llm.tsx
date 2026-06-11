@@ -15,7 +15,7 @@ import {
 	Undo2,
 	X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -46,7 +46,9 @@ import {
 	type LocalLlmDownloadEvent,
 	type LocalLlmDownloadStatus,
 	listLocalLlmCatalog,
+	localLlmEntryTotalBytes,
 	pauseLocalLlmDownload,
+	setLocalLlmContextOverride,
 	startLocalLlm,
 	startLocalLlmDownload,
 	stopLocalLlm,
@@ -119,11 +121,17 @@ export function LocalLlmPanel({
 		};
 		void subscribeLocalLlmDownloads(channel).then((snapshot) => {
 			if (!mounted) return;
-			const next: Record<string, DownloadRow> = {};
-			for (const row of snapshot) {
-				next[row.entryId] = row;
-			}
-			setDownloads(next);
+			// Merge — channel event may beat IPC reply; prefer the more-advanced row.
+			setDownloads((prev) => {
+				const next: Record<string, DownloadRow> = { ...prev };
+				for (const row of snapshot) {
+					const existing = next[row.entryId];
+					if (!existing || isSnapshotMoreAdvanced(row, existing)) {
+						next[row.entryId] = row;
+					}
+				}
+				return next;
+			});
 		});
 		return () => {
 			mounted = false;
@@ -194,30 +202,12 @@ export function LocalLlmPanel({
 		void cancelLocalLlmDownload(entryId);
 	};
 
-	// Shared context-override commit path. Catalog entries and custom
-	// GGUFs both round-trip through here so the restart-on-change behavior
-	// stays uniform.
+	// Goes through Rust so persistence + restart stay atomic.
 	const commitContextOverride = async (entryId: string, tokens: number) => {
-		const nextOverrides = {
-			...(settings.localLlm.contextOverrides ?? {}),
-			[entryId]: tokens,
-		};
-		await updateSettings({
-			localLlm: { ...settings.localLlm, contextOverrides: nextOverrides },
-		});
-		// `manager.start()` short-circuits when the model PATH is
-		// unchanged. Only `-c` differs here, so we have to stop first to
-		// force the spawn path that actually reads the new value.
-		if (running || starting) {
-			try {
-				await stopLocalLlm();
-			} catch (error) {
-				console.warn("[local-llm] stop before context restart failed", error);
-			}
-			void startLocalLlm().catch((error) => {
-				console.warn("[local-llm] restart after context change failed", error);
-				invalidateStatus();
-			});
+		try {
+			await setLocalLlmContextOverride(entryId, tokens);
+		} catch (error) {
+			console.warn("[local-llm] context override commit failed", error);
 		}
 		invalidateStatus();
 	};
@@ -393,8 +383,8 @@ export function LocalLlmPanel({
 						<SettingsReleaseBadge marker={{ kind: "feature" }} />
 					</div>
 					<p className="mt-1 text-[12px] leading-snug text-muted-foreground">
-						Today this server powers session title and branch name generation.
-						More features that run on your device are coming soon.
+						Powers session title / branch name generation and Smart Triage —
+						both run entirely on your device.
 					</p>
 				</div>
 				<Switch
@@ -459,25 +449,15 @@ export function LocalLlmPanel({
 						<CustomModelPathSection
 							value={customPathValue}
 							disabled={pending}
-							onChange={(value) =>
-								updateSettings({
-									localLlm: { ...settings.localLlm, model: value },
-								})
-							}
-							onCommit={() => {
-								// Trim once on commit so the inspect IPC, catalog
-								// suffix match, and llama-server `--model` arg all
-								// see the canonical path. Bare whitespace = clear.
-								const trimmed = settings.localLlm.model.trim();
-								if (trimmed !== settings.localLlm.model) {
-									updateSettings({
-										localLlm: { ...settings.localLlm, model: trimmed },
+							onCommit={(path) => {
+								if (path !== settings.localLlm.model) {
+									void updateSettings({
+										localLlm: { ...settings.localLlm, model: path },
 									});
 								}
-								if (trimmed.length === 0) return;
-								// Kick the server to pick up the new path. The
-								// backend is idempotent: same model + running →
-								// no-op; new path → kill old, start new.
+								if (path.length === 0) return;
+								// Kick the server to pick up the new path. Idempotent
+								// on the backend: same path while running = no-op.
 								void startLocalLlm().catch((error) => {
 									console.warn(
 										"[local-llm] start after custom path commit failed",
@@ -520,7 +500,7 @@ export function LocalLlmPanel({
 								id: selectedEntry.id,
 								modelMaxContextTokens: catalogInspect.contextLength,
 								kvBytesPerToken: catalogInspect.kvBytesPerToken,
-								modelBytes: selectedEntry.bytes,
+								modelBytes: localLlmEntryTotalBytes(selectedEntry),
 							}}
 							totalRamGb={hardwareQuery.data?.totalRamGb ?? null}
 							currentTokens={contextTokensForSelected}
@@ -543,8 +523,8 @@ export function LocalLlmPanel({
 							<span className="font-medium text-foreground">
 								{deleteTargetEntry.label}
 							</span>{" "}
-							({formatBytes(deleteTargetEntry.bytes)}) from disk. You'll have to
-							download it again to use it.
+							({formatBytes(localLlmEntryTotalBytes(deleteTargetEntry))}) from
+							disk. You'll have to download it again to use it.
 						</>
 					) : (
 						"This will remove the model from disk."
@@ -602,18 +582,23 @@ function StatusHeader({
 		<div className="flex min-w-0 items-center gap-2">
 			<Cpu className="size-4 shrink-0 text-muted-foreground" />
 			<div className="flex min-w-0 items-center gap-1.5 rounded-md border border-border bg-background px-2 py-0.5 text-[12px]">
-				{showSpinner ? (
-					<Loader2 className="size-3 animate-spin text-muted-foreground" />
-				) : (
-					<span
-						className={cn("size-2 shrink-0 rounded-full", dotClass)}
-						aria-hidden
-					/>
-				)}
+				{/* Fixed wrapper around the spinner/dot so the Starting→Running
+				    swap doesn't grow the pill by the 4 px difference between
+				    `size-3` (loader) and `size-2` (dot). */}
+				<span
+					className="flex size-3 shrink-0 items-center justify-center"
+					aria-hidden
+				>
+					{showSpinner ? (
+						<Loader2 className="size-3 animate-spin text-muted-foreground" />
+					) : (
+						<span className={cn("size-2 rounded-full", dotClass)} />
+					)}
+				</span>
 				<span className="font-medium text-foreground">{label}</span>
 				{showEndpoint && endpoint ? (
 					<span
-						className="font-mono text-[11px] text-muted-foreground/80"
+						className="font-mono text-[11px] tabular-nums text-muted-foreground/80"
 						title={stripScheme(endpoint)}
 					>
 						{formatEndpointPort(endpoint)}
@@ -626,7 +611,7 @@ function StatusHeader({
 				</span>
 			) : null}
 			{running && activeContextTokens ? (
-				<span className="flex shrink-0 items-center rounded-md border border-border bg-background px-2 py-0.5 text-[12px] font-medium text-foreground">
+				<span className="flex shrink-0 items-center rounded-md border border-border bg-background px-2 py-0.5 text-[12px] font-medium tabular-nums text-foreground">
 					{formatContext(activeContextTokens)}
 				</span>
 			) : null}
@@ -799,8 +784,13 @@ function ModelsSection({
 											active={isSelectedActive}
 											recommended={isSelectedRecommended}
 										/>
-										<span className="tabular-nums text-muted-foreground">
-											{formatBytes(selectedCatalogEntry.bytes)}
+										{/* Right-align in a fixed slot so pill swaps
+										    (Downloading ↔ Paused ↔ Downloaded ↔ none)
+										    don't drag the bytes / chevron horizontally. */}
+										<span className="min-w-[3.5rem] text-right tabular-nums text-muted-foreground">
+											{formatBytes(
+												localLlmEntryTotalBytes(selectedCatalogEntry),
+											)}
 										</span>
 										<ChevronDown
 											className="size-3 text-muted-foreground"
@@ -879,8 +869,8 @@ function ModelsSection({
 												active={entryActive}
 												recommended={entryRecommended}
 											/>
-											<span className="tabular-nums text-muted-foreground">
-												{formatBytes(entry.bytes)}
+											<span className="min-w-[3.5rem] text-right tabular-nums text-muted-foreground">
+												{formatBytes(localLlmEntryTotalBytes(entry))}
 											</span>
 										</div>
 									</div>
@@ -899,6 +889,9 @@ function ModelsSection({
 					<ContextualActions
 						state={selectedState}
 						active={isSelectedActive}
+						optionalComplete={
+							downloads[selectedCatalogEntry.id]?.optionalComplete ?? true
+						}
 						onDownload={() => onDownload(selectedCatalogEntry.id)}
 						onResume={() => onResume(selectedCatalogEntry.id)}
 						onCancel={() => onCancel(selectedCatalogEntry.id)}
@@ -1187,6 +1180,7 @@ function StateIndicator({
 function ContextualActions({
 	state,
 	active,
+	optionalComplete,
 	onDownload,
 	onResume,
 	onCancel,
@@ -1194,6 +1188,11 @@ function ContextualActions({
 }: {
 	state: LocalLlmDownloadStatus["state"];
 	active: boolean;
+	/** `false` when essentials are on disk but an optional companion
+	 *  (e.g. the vision mmproj) is still missing — surfaces a top-up
+	 *  affordance next to Delete so the user doesn't lose the main
+	 *  weights to a redownload. */
+	optionalComplete: boolean;
 	onDownload: () => void;
 	onResume: () => void;
 	onCancel: () => void;
@@ -1202,7 +1201,7 @@ function ContextualActions({
 	// Selection = activation, so we never render "Use this model" any
 	// more. The only contextual CTA on the row is whatever's
 	// reasonable for the entry's current state:
-	//   - downloaded → Delete (red)
+	//   - downloaded → Delete (red), plus Add vision when mmproj missing
 	//   - downloading → Cancel (red)
 	//   - paused → Resume (default) + Cancel (red)
 	//   - failed → Retry (default) + Cancel (red)
@@ -1211,10 +1210,28 @@ function ContextualActions({
 	void active;
 	if (state === "downloaded") {
 		return (
-			<Button type="button" size="sm" variant="destructive" onClick={onDelete}>
-				<Trash2 className="size-3.5" strokeWidth={1.8} />
-				Delete
-			</Button>
+			<>
+				{optionalComplete ? null : (
+					<Button
+						type="button"
+						size="sm"
+						variant="default"
+						onClick={onDownload}
+					>
+						<Download className="size-3.5" strokeWidth={1.8} />
+						Add vision
+					</Button>
+				)}
+				<Button
+					type="button"
+					size="sm"
+					variant="destructive"
+					onClick={onDelete}
+				>
+					<Trash2 className="size-3.5" strokeWidth={1.8} />
+					Delete
+				</Button>
+			</>
 		);
 	}
 	if (state === "downloading") {
@@ -1370,18 +1387,30 @@ function DownloadRowView({
 function CustomModelPathSection({
 	value,
 	disabled,
-	onChange,
 	onCommit,
 }: {
 	value: string;
 	disabled: boolean;
-	onChange: (value: string) => void;
-	/** Called when the user signals "this is the path I want" — either
-	 *  by blurring the input or pressing Enter. Parent uses this to
-	 *  kick off / restart the server so the new path takes effect
-	 *  without a separate Apply button. */
-	onCommit: () => void;
+	/** Fired on blur / Enter with the trimmed path. Parent persists it
+	 *  and kicks the server. */
+	onCommit: (path: string) => void;
 }) {
+	// Local draft — avoid round-tripping through settings reload while typing.
+	const [draft, setDraft] = useState(value);
+	const inputRef = useRef<HTMLInputElement>(null);
+	// Re-sync only when not focused.
+	useEffect(() => {
+		if (document.activeElement !== inputRef.current) {
+			setDraft(value);
+		}
+	}, [value]);
+
+	const commit = () => {
+		const trimmed = draft.trim();
+		if (trimmed !== draft) setDraft(trimmed);
+		onCommit(trimmed);
+	};
+
 	return (
 		<div className="grid gap-1.5">
 			<div className="flex items-center gap-1">
@@ -1421,11 +1450,12 @@ function CustomModelPathSection({
 			</div>
 			<Input
 				id="local-llm-model"
-				value={value}
+				ref={inputRef}
+				value={draft}
 				placeholder="/path/to/model.gguf"
 				disabled={disabled}
-				onChange={(event) => onChange(event.currentTarget.value)}
-				onBlur={onCommit}
+				onChange={(event) => setDraft(event.currentTarget.value)}
+				onBlur={commit}
 				onKeyDown={(event) => {
 					if (event.key === "Enter") {
 						event.preventDefault();
@@ -1505,11 +1535,26 @@ function formatEta(seconds: number): string {
 	return rem === 0 ? `${hours}h` : `${hours}h${rem}m`;
 }
 
+// Snapshot wins only when existing row is still `not_downloaded` or snapshot reports `downloaded`.
+function isSnapshotMoreAdvanced(
+	snap: LocalLlmDownloadStatus,
+	existing: DownloadRow,
+): boolean {
+	if (existing.state === "not_downloaded" && snap.state !== "not_downloaded") {
+		return true;
+	}
+	if (snap.state === "downloaded" && existing.state !== "downloaded") {
+		return true;
+	}
+	return false;
+}
+
 function applyDownloadEvent(
 	prev: Record<string, DownloadRow>,
 	event: LocalLlmDownloadEvent,
 ): Record<string, DownloadRow> {
 	const current = prev[event.entryId];
+	const carriedOptionalComplete = current?.optionalComplete ?? true;
 	const next = { ...prev };
 	switch (event.kind) {
 		case "started":
@@ -1518,6 +1563,7 @@ function applyDownloadEvent(
 				state: "downloading",
 				downloaded: current?.downloaded ?? 0,
 				total: event.total,
+				optionalComplete: carriedOptionalComplete,
 				bytesPerSec: 0,
 			};
 			break;
@@ -1527,6 +1573,7 @@ function applyDownloadEvent(
 				state: "downloading",
 				downloaded: event.downloaded,
 				total: event.total,
+				optionalComplete: carriedOptionalComplete,
 				// Keep the last non-zero rate so a momentary 0 (HF
 				// rate-limit window, brief stall) doesn't blank the
 				// "X MB/s" readout. A genuinely stuck download surfaces
@@ -1545,6 +1592,7 @@ function applyDownloadEvent(
 				state: "paused",
 				downloaded: event.downloaded,
 				total: event.total,
+				optionalComplete: carriedOptionalComplete,
 				bytesPerSec: 0,
 			};
 			break;
@@ -1554,6 +1602,7 @@ function applyDownloadEvent(
 				state: "not_downloaded",
 				downloaded: 0,
 				total: event.total,
+				optionalComplete: true,
 				bytesPerSec: 0,
 			};
 			break;
@@ -1563,6 +1612,7 @@ function applyDownloadEvent(
 				state: "downloaded",
 				downloaded: event.downloaded,
 				total: event.downloaded,
+				optionalComplete: event.optionalComplete,
 				bytesPerSec: 0,
 			};
 			break;
@@ -1572,6 +1622,7 @@ function applyDownloadEvent(
 				state: "failed",
 				downloaded: current?.downloaded ?? 0,
 				total: current?.total ?? 0,
+				optionalComplete: carriedOptionalComplete,
 				error: event.error,
 				bytesPerSec: 0,
 			};

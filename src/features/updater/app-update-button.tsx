@@ -1,4 +1,3 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { Download, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -10,6 +9,7 @@ import {
 } from "@/components/ui/tooltip";
 import type { AppUpdateStatus } from "@/lib/api";
 import { installDownloadedAppUpdate } from "@/lib/api";
+import { openUrl } from "@/lib/platform-bridge";
 import { cn } from "@/lib/utils";
 
 type AppUpdateButtonProps = {

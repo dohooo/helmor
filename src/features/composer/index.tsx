@@ -15,6 +15,7 @@ import {
 	MessageSquareMore,
 	Plus,
 	Square,
+	SquareTerminal,
 	Zap,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -44,8 +45,10 @@ import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import type {
 	AgentModelSection,
 	CandidateDirectory,
+	ProviderCapabilities,
 	SlashCommandEntry,
 } from "@/lib/api";
+import { findProviderCapabilities } from "@/lib/api";
 import type {
 	ComposerCustomTag,
 	ResolvedComposerInsertRequest,
@@ -76,8 +79,10 @@ import { FileMentionPlugin } from "./editor/plugins/file-mention-plugin";
 import { HasContentPlugin } from "./editor/plugins/has-content-plugin";
 import { HistoryRecallPlugin } from "./editor/plugins/history-recall-plugin";
 import { PasteImagePlugin } from "./editor/plugins/paste-image-plugin";
+import { ShimmerKeywordPlugin } from "./editor/plugins/shimmer-keyword-plugin";
 import { SlashCommandPlugin } from "./editor/plugins/slash-command-plugin";
 import { SubmitPlugin } from "./editor/plugins/submit-plugin";
+import { ShimmerKeywordNode } from "./editor/shimmer-keyword-node";
 import { $extractComposerContent } from "./editor/utils";
 import { $appendComposerInsertItems } from "./editor-ops";
 import { FastModeLottieIcon } from "./fast-mode-lottie-icon";
@@ -128,6 +133,8 @@ type WorkspaceComposerProps = {
 	sending?: boolean;
 	selectedModelId: string | null;
 	modelSections: AgentModelSection[];
+	/** false → OpenCode picker shows an "Add custom model…" jump. */
+	hasOpencodeCustomProviders?: boolean;
 	modelsLoading?: boolean;
 	onSelectModel: (modelId: string) => void;
 	provider?: string;
@@ -138,11 +145,16 @@ type WorkspaceComposerProps = {
 	fastMode?: boolean;
 	showFastModePrelude?: boolean;
 	onChangeFastMode?: (enabled: boolean) => void;
+	/** Terminal-Mode toggle; undefined handler hides the button. When on,
+	 *  sending opens the prompt in the agent's TUI instead of a GUI turn. */
+	terminalMode?: boolean;
+	onChangeTerminalMode?: (enabled: boolean) => void;
 	sendError?: string | null;
 	restoreDraft?: string | null;
 	restoreImages?: string[];
 	restoreFiles?: string[];
 	restoreCustomTags?: ComposerCustomTag[];
+	restoreEditorState?: SerializedEditorState | null;
 	restoreNonce?: number;
 	pendingInsertRequests?: ResolvedComposerInsertRequest[];
 	onPendingInsertRequestsConsumed?: (ids: string[]) => void;
@@ -158,6 +170,8 @@ type WorkspaceComposerProps = {
 	addDirCandidates?: readonly CandidateDirectory[];
 	/** Called when the user selects an entry from the /add-dir popup. */
 	onPickAddDir?: (entry: AddDirPickerEntry) => void;
+	/** Open the independent workflow-progress panel (the `/workflows` command). */
+	onOpenWorkflows?: () => void;
 	pendingUserInput?: PendingUserInput | null;
 	onUserInputResponse?: UserInputResponseHandler;
 	userInputResponsePending?: boolean;
@@ -173,6 +187,9 @@ type WorkspaceComposerProps = {
 		onCancel: () => void;
 	} | null;
 	hasPlanReview?: boolean;
+	/** Provider capability table; the Plan toggle reads `supportsPlanMode`
+	 *  for the selected model's provider instead of hard-coding by id. */
+	providerCapabilities?: ProviderCapabilities[];
 	/** When true, the ring is always rendered next to the send button.
 	 *  When false (the default), the ring auto-reveals only after usage
 	 *  crosses the threshold defined inside the ring component. */
@@ -186,9 +203,10 @@ type WorkspaceComposerProps = {
 	 *  and selects which rate-limits API to query. `"cursor"` exists but
 	 *  Cursor's SDK doesn't expose rate-limit / context-usage endpoints
 	 *  yet, so the indicators just hide for cursor sessions. */
-	agentType?: "claude" | "codex" | "cursor" | null;
+	agentType?: "claude" | "codex" | "cursor" | "opencode" | null;
 	focusShortcut?: string | null;
 	togglePlanShortcut?: string | null;
+	toggleTerminalShortcut?: string | null;
 	/** Hotkey that submits the current draft with the opposite follow-up
 	 *  behavior (queue ↔ steer) for one message. */
 	toggleFollowUpShortcut?: string | null;
@@ -213,6 +231,13 @@ type WorkspaceComposerProps = {
 	getInputHistory?: () => readonly InputHistoryEntry[];
 };
 
+/**
+ * Composer keywords that get the inline shimmer cue (see `ShimmerKeywordPlugin`
+ * + the `composer-shimmer-keyword` CSS). Whole-word regex fragments, matched
+ * case-insensitively at word boundaries.
+ */
+const SHIMMER_KEYWORDS = ["workflows?", "ultrathink"] as const;
+
 const EMPTY_SLASH_COMMANDS: readonly SlashCommandEntry[] = [];
 const EMPTY_LINKED_DIRECTORIES: readonly string[] = [];
 const EMPTY_CANDIDATE_DIRECTORIES: readonly CandidateDirectory[] = [];
@@ -234,6 +259,27 @@ function onEditorError(error: Error) {
 	console.error("[Composer Lexical]", error);
 }
 
+/**
+ * Dev-only render counter. Rendered (returns null) only under
+ * `import.meta.env.DEV`, so prod never mounts it and never schedules the
+ * no-dep-array effect (the recorder itself already no-ops outside the
+ * ?debugRenderCounts=1 dev flag). Kept as its own component — rather than a
+ * `if (DEV) useEffect()` inside WorkspaceComposer — so the parent's hook order
+ * stays unconditional and the React Compiler keeps memoizing the composer.
+ */
+function ComposerRenderProbe({
+	contextKey,
+	instanceId,
+}: {
+	contextKey: string;
+	instanceId: string;
+}) {
+	useEffect(() => {
+		recordComposerRender(contextKey, instanceId);
+	});
+	return null;
+}
+
 export const WorkspaceComposer = memo(function WorkspaceComposer({
 	contextKey,
 	onSubmit,
@@ -243,6 +289,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	sending = false,
 	selectedModelId,
 	modelSections,
+	hasOpencodeCustomProviders = false,
 	modelsLoading = false,
 	onSelectModel,
 	provider: _provider = "claude",
@@ -253,11 +300,14 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	fastMode = false,
 	showFastModePrelude = false,
 	onChangeFastMode,
+	terminalMode = false,
+	onChangeTerminalMode,
 	sendError,
 	restoreDraft,
 	restoreImages = [],
 	restoreFiles = [],
 	restoreCustomTags = [],
+	restoreEditorState = null,
 	restoreNonce = 0,
 	pendingInsertRequests = [],
 	onPendingInsertRequestsConsumed,
@@ -272,6 +322,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	linkedDirectoriesDisabled = false,
 	addDirCandidates = EMPTY_CANDIDATE_DIRECTORIES,
 	onPickAddDir = noopPickAddDir,
+	onOpenWorkflows,
 	pendingUserInput = null,
 	onUserInputResponse = noopUserInputResponse,
 	userInputResponsePending = false,
@@ -279,12 +330,14 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	onPermissionResponse = noopPermissionResponse,
 	goalReplace = null,
 	hasPlanReview = false,
+	providerCapabilities,
 	alwaysShowContextUsage = false,
 	sessionId = null,
 	providerSessionId = null,
 	agentType = null,
 	focusShortcut = null,
 	togglePlanShortcut = null,
+	toggleTerminalShortcut = null,
 	toggleFollowUpShortcut = null,
 	toggleContextPanelShortcut = null,
 	contextPanelOpen = false,
@@ -298,9 +351,6 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const instanceIdRef = useRef(
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
 	);
-	useEffect(() => {
-		recordComposerRender(contextKey, instanceIdRef.current);
-	});
 
 	// Pre-allocated UUID used as the paste-cache bucket id when
 	// `sessionId` isn't bound yet (StartPage). Forwarded on submit so the
@@ -395,8 +445,14 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const supportsEffort = availableEffortLevels.length > 0;
 	const supportsFastMode = selectedModel?.supportsFastMode === true;
 	const supportsContextUsage = selectedModel?.supportsContextUsage !== false;
-	// Cursor SDK auto-handles plans internally — no toggle to expose.
-	const supportsPlanMode = selectedModel?.provider !== "cursor";
+	// Plan toggle is capability-driven. Every shipping provider supports a
+	// plan mode today, so while the table loads (or for an unknown provider)
+	// we optimistically show the toggle; the table corrects it once hydrated.
+	const supportsPlanMode =
+		findProviderCapabilities(
+			providerCapabilities ?? [],
+			selectedModel?.provider ?? "",
+		)?.supportsPlanMode ?? true;
 	const effectiveEffort = useMemo(
 		() => clampEffort(effortLevel, availableEffortLevels),
 		[effortLevel, availableEffortLevels],
@@ -436,11 +492,12 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				handleOpenModelPicker,
 			);
 	}, [toolbarDisabled]);
-	const handleOpenModelSettings = useCallback(() => {
+	// "Add custom model…" jumps to the Providers settings page.
+	const handleOpenProviderSettings = useCallback(() => {
 		setModelPickerOpen(false);
 		window.dispatchEvent(
 			new CustomEvent(OPEN_SETTINGS_EVENT, {
-				detail: { section: "model" },
+				detail: { section: "providers" },
 			}),
 		);
 	}, []);
@@ -471,6 +528,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			FileBadgeNode,
 			CustomTagBadgeNode,
 			AddDirTriggerNode,
+			ShimmerKeywordNode,
 		],
 		onError: onEditorError,
 	}).current;
@@ -664,7 +722,26 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			) {
 				event.preventDefault();
 				event.stopPropagation();
-				onChangePermissionMode(permissionMode === "plan" ? "default" : "plan");
+				// Exit plan into bypassPermissions, matching the Plan button and
+				// handlePlanImplement. "default" left Codex prompting for MCP
+				// tool calls despite full-access sandbox (#733).
+				onChangePermissionMode(
+					permissionMode === "plan" ? "bypassPermissions" : "plan",
+				);
+				return;
+			}
+
+			// Terminal-Mode toggle — only when the toggle is offered (setting
+			// on + provider supports it), and workspace-composer only like plan.
+			if (
+				toggleTerminalShortcut &&
+				hotkey === toggleTerminalShortcut &&
+				onChangeTerminalMode &&
+				focusScope === "workspace-composer"
+			) {
+				event.preventDefault();
+				event.stopPropagation();
+				onChangeTerminalMode(!terminalMode);
 			}
 		},
 		[
@@ -674,6 +751,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			permissionMode,
 			supportsPlanMode,
 			togglePlanShortcut,
+			toggleTerminalShortcut,
+			onChangeTerminalMode,
+			terminalMode,
 			toggleFollowUpShortcut,
 			handleSubmitOpposite,
 			submitEnabled,
@@ -697,6 +777,15 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 					"cursor-not-allowed opacity-60",
 			)}
 		>
+			{/* Dev-only render counter; renders null (no DOM) and is dropped
+			    from prod builds since `import.meta.env.DEV` is statically
+			    false there. */}
+			{import.meta.env.DEV ? (
+				<ComposerRenderProbe
+					contextKey={contextKey}
+					instanceId={instanceIdRef.current}
+				/>
+			) : null}
 			<label htmlFor="workspace-input" className="sr-only">
 				Workspace input
 			</label>
@@ -811,6 +900,17 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								if (name === "add-dir" && editorRef.current) {
 									$insertAddDirTrigger(editorRef.current, nodeToReplace);
 								}
+								// `/workflows` opens the independent progress panel and
+								// is NEVER sent — drop the typed token so the composer
+								// returns to empty.
+								if (name === "workflows") {
+									if (nodeToReplace) {
+										editorRef.current?.update(() => {
+											nodeToReplace.remove();
+										});
+									}
+									onOpenWorkflows?.();
+								}
 							}}
 							popupAnchorRef={composerRootRef}
 						/>
@@ -841,6 +941,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 							restoreImages={restoreImages}
 							restoreFiles={restoreFiles}
 							restoreCustomTags={restoreCustomTags}
+							restoreEditorState={restoreEditorState}
 							restoreNonce={restoreNonce}
 						/>
 						{getInputHistory ? (
@@ -851,6 +952,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						) : null}
 						<EditablePlugin disabled={inputDisabled} />
 						<HasContentPlugin onChange={setHasContent} />
+						<ShimmerKeywordPlugin keywords={SHIMMER_KEYWORDS} />
 					</LexicalComposer>
 
 					{sendError ? (
@@ -867,6 +969,47 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								</ShimmerText>
 							) : (
 								<>
+									{onChangeTerminalMode && (
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<ComposerButton
+													aria-label="Terminal mode"
+													disabled={toolbarDisabled}
+													className={cn(
+														composerToolbarTriggerClassName,
+														terminalMode
+															? "text-emerald-500 hover:bg-emerald-500/10 hover:text-emerald-500"
+															: "text-muted-foreground",
+														toolbarDisabled
+															? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
+															: null,
+													)}
+													onClick={() => onChangeTerminalMode(!terminalMode)}
+												>
+													<SquareTerminal
+														className={cn(
+															"size-[14px]",
+															terminalMode ? null : "opacity-55",
+														)}
+														strokeWidth={1.8}
+													/>
+												</ComposerButton>
+											</TooltipTrigger>
+											<TooltipContent
+												side="top"
+												sideOffset={4}
+												className="flex items-center gap-2"
+											>
+												<span>Terminal mode</span>
+												{toggleTerminalShortcut ? (
+													<InlineShortcutDisplay
+														hotkey={toggleTerminalShortcut}
+														className="text-background/60"
+													/>
+												) : null}
+											</TooltipContent>
+										</Tooltip>
+									)}
 									<DropdownMenu
 										open={modelPickerOpen}
 										onOpenChange={setModelPickerOpen}
@@ -924,12 +1067,31 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 																	{option.label}
 																</span>
 															</div>
+															{option.id === selectedModel?.id ? (
+																<span className="text-mini text-foreground">
+																	✓
+																</span>
+															) : null}
 														</DropdownMenuItem>
 													))}
 													{section.id === "claude" &&
 													!hasConfiguredClaudeProviderModels ? (
 														<DropdownMenuItem
-															onClick={handleOpenModelSettings}
+															onClick={handleOpenProviderSettings}
+															className="flex items-center gap-3"
+														>
+															<span className="flex size-4 items-center justify-center text-muted-foreground">
+																<Plus className="size-4" strokeWidth={1.8} />
+															</span>
+															<span className="font-mono tabular-nums">
+																Add custom model...
+															</span>
+														</DropdownMenuItem>
+													) : null}
+													{section.id === "opencode" &&
+													!hasOpencodeCustomProviders ? (
+														<DropdownMenuItem
+															onClick={handleOpenProviderSettings}
 															className="flex items-center gap-3"
 														>
 															<span className="flex size-4 items-center justify-center text-muted-foreground">

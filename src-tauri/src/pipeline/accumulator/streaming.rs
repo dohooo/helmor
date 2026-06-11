@@ -55,6 +55,15 @@ pub(super) enum StreamingBlock {
 }
 
 pub(super) fn handle_stream_event(acc: &mut StreamAccumulator, value: &Value) {
+    // Track the streaming turn's parent so `build_partial_from_blocks` can
+    // tag the partial as a `child:` of its parent Task/Agent tool call.
+    // Every event of a turn carries the same `parent_tool_use_id`; `null`
+    // (top-level agent) resets it to `None`.
+    acc.cur_streaming_parent_id = value
+        .get("parent_tool_use_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
     let event = match value.get("event") {
         Some(e) => e,
         None => return,
@@ -317,36 +326,46 @@ pub(super) fn build_partial_from_blocks(
     _session_id: &str,
     partial_id: String,
     created_at: String,
-) -> IntermediateMessage {
+) -> Option<IntermediateMessage> {
+    // Resolved-id scan walks all of collected[] — only pay for it when a
+    // tool block is actually in flight (thinking/text streaming is the
+    // hot path and never consults it).
+    let has_tool_block = acc
+        .blocks
+        .values()
+        .any(|b| matches!(b, StreamingBlock::ToolUse { .. }));
+    let resolved = if has_tool_block {
+        acc.collect_resolved_tool_use_ids()
+    } else {
+        Default::default()
+    };
     let mut content_blocks = Vec::new();
     for block in acc.blocks.values() {
         match block {
             StreamingBlock::Text { id, text } => {
-                let display = if text.is_empty() {
-                    "..."
-                } else {
-                    text.as_str()
-                };
-                content_blocks.push(serde_json::json!({
-                    "type": "text",
-                    "text": display,
-                    "__part_id": id,
-                }));
-            }
-            StreamingBlock::Thinking { id, text, .. } => {
-                // Partials only fire while the block is still live —
-                // `handle_assistant` clears `self.blocks` once the SDK
-                // finalizes the turn. So "still streaming" is the only
-                // state this path ever emits. Duration is stamped later
-                // by `handle_assistant` from each block's `started_at_ms`.
+                // Empty text block renders nothing — no "..." placeholder.
                 if !text.is_empty() {
                     content_blocks.push(serde_json::json!({
-                        "type": "thinking",
-                        "thinking": text,
-                        "__is_streaming": true,
+                        "type": "text",
+                        "text": text,
                         "__part_id": id,
                     }));
                 }
+            }
+            StreamingBlock::Thinking { id, text, .. } => {
+                // Emit the thinking block even with empty text. With Thinking
+                // Display = omitted the deltas carry no text, so the block
+                // stays empty for the whole (possibly 60s+) thinking phase —
+                // an empty thinking block is what drives the frontend's
+                // content-less "Thinking…" chip. Skipping it would leave the
+                // bubble blank until the answer text arrives. Duration is
+                // stamped later by `handle_assistant` from `started_at_ms`.
+                content_blocks.push(serde_json::json!({
+                    "type": "thinking",
+                    "thinking": text,
+                    "__is_streaming": true,
+                    "__part_id": id,
+                }));
             }
             StreamingBlock::ToolUse {
                 tool_use_id,
@@ -355,8 +374,21 @@ pub(super) fn build_partial_from_blocks(
                 parsed_input,
                 status,
             } => {
+                // Out-of-order guard (SDK 0.3.x): the finalized `assistant`
+                // block for a tool_use can lag behind its `tool_result`. While
+                // it lags, the block sits half-streamed in `self.blocks` with
+                // no parsed input — rendering it now flashes a phantom
+                // "+0 -0" Edit card next to the real one. Skip it: the
+                // imminent `assistant` event renders the real tool-call.
+                if resolved.contains(tool_use_id) {
+                    continue;
+                }
+                // Prefer parsed input, but fall back to a best-effort parse of
+                // the streamed JSON so a still-streaming Edit shows its real
+                // diff instead of "+0 -0" the moment the JSON completes.
                 let input = parsed_input
                     .clone()
+                    .or_else(|| serde_json::from_str::<Value>(input_json_text).ok())
                     .unwrap_or_else(|| serde_json::json!({}));
                 // ToolCall's part id is its `tool_use_id` — no separate
                 // `__part_id` needed, adapter reads `tool_call_id` directly.
@@ -372,11 +404,13 @@ pub(super) fn build_partial_from_blocks(
         }
     }
 
+    // No renderable content yet (e.g. only empty text blocks while the
+    // SDK warms up) — emit nothing so the thread shows no placeholder.
     if content_blocks.is_empty() {
-        content_blocks.push(serde_json::json!({"type": "text", "text": "..."}));
+        return None;
     }
 
-    let parsed = serde_json::json!({
+    let mut parsed = serde_json::json!({
         "type": "assistant",
         "message": {
             "type": "message",
@@ -386,14 +420,21 @@ pub(super) fn build_partial_from_blocks(
         "__streaming": true,
     });
 
-    IntermediateMessage {
+    // Tag subagent partials with their parent so the adapter mints a
+    // `child:<pt>:<turn>` id — keeps the live partial nested under its
+    // parent Task/Agent tool call instead of flashing as a top-level bubble.
+    if let Some(parent) = acc.cur_streaming_parent_id.as_deref() {
+        parsed["parent_tool_use_id"] = Value::String(parent.to_string());
+    }
+
+    Some(IntermediateMessage {
         id: partial_id,
         role: MessageRole::Assistant,
         raw_json: serde_json::to_string(&parsed).unwrap_or_default(),
         parsed: Some(parsed),
         created_at,
         is_streaming: true,
-    }
+    })
 }
 
 pub(super) fn build_materialized_partial_from_blocks(
@@ -419,21 +460,21 @@ pub(super) fn build_materialized_partial_from_blocks(
                 started_at_ms,
                 ..
             } => {
-                if !text.is_empty() {
-                    let duration = now_ms().saturating_sub(*started_at_ms);
-                    // Materialized partials go to `collected[]` on the
-                    // abort path. Stamp `__is_streaming: false` so the
-                    // frontend treats them the same as `handle_assistant`
-                    // output — open + "Thought for Ns". `materialize_partial`
-                    // strips it before persisting (see `strip_is_streaming_markers`).
-                    content_blocks.push(serde_json::json!({
-                        "type": "thinking",
-                        "thinking": text,
-                        "__part_id": id,
-                        "__duration_ms": duration,
-                        "__is_streaming": false,
-                    }));
-                }
+                let duration = now_ms().saturating_sub(*started_at_ms);
+                // Materialized partials go to `collected[]` on the abort
+                // path. Emit even when empty so an aborted omitted-thinking
+                // turn keeps its "Thought for Ns" chip instead of vanishing.
+                // Stamp `__is_streaming: false` so the frontend treats it the
+                // same as `handle_assistant` output — open + "Thought for Ns".
+                // `materialize_partial` strips it before persisting (see
+                // `strip_is_streaming_markers`).
+                content_blocks.push(serde_json::json!({
+                    "type": "thinking",
+                    "thinking": text,
+                    "__part_id": id,
+                    "__duration_ms": duration,
+                    "__is_streaming": false,
+                }));
             }
             StreamingBlock::ToolUse {
                 tool_use_id,
@@ -442,8 +483,11 @@ pub(super) fn build_materialized_partial_from_blocks(
                 parsed_input,
                 status,
             } => {
+                // Same best-effort parse as the live partial: without it an
+                // abort mid-input persists an `input: {}` "+0 -0" card.
                 let input = parsed_input
                     .clone()
+                    .or_else(|| serde_json::from_str::<Value>(input_json_text).ok())
                     .unwrap_or_else(|| serde_json::json!({}));
                 content_blocks.push(serde_json::json!({
                     "type": "tool_use",
@@ -461,7 +505,7 @@ pub(super) fn build_materialized_partial_from_blocks(
         return None;
     }
 
-    let parsed = serde_json::json!({
+    let mut parsed = serde_json::json!({
         "type": "assistant",
         "message": {
             "type": "message",
@@ -469,6 +513,12 @@ pub(super) fn build_materialized_partial_from_blocks(
             "content": content_blocks,
         },
     });
+
+    // Keep an aborted subagent turn folded under its parent tool call (and
+    // persisted that way) instead of orphaning it at the top level.
+    if let Some(parent) = acc.cur_streaming_parent_id.as_deref() {
+        parsed["parent_tool_use_id"] = Value::String(parent.to_string());
+    }
 
     Some(IntermediateMessage {
         id: partial_id,
@@ -488,41 +538,41 @@ pub(super) fn build_partial_fallback(
 ) -> IntermediateMessage {
     let text = acc.fallback_text.trim();
     let thinking = acc.fallback_thinking.trim();
-    let display_text = if text.is_empty() { "..." } else { text };
 
-    let thinking_part_id = format!("{partial_id}:blk:0");
-    let text_part_id = if thinking.is_empty() {
-        format!("{partial_id}:blk:0")
-    } else {
-        format!("{partial_id}:blk:1")
-    };
+    // Only emit parts that actually have content — empty text never
+    // renders a "..." placeholder. The caller (`build_partial`) only
+    // reaches this path when text or thinking is non-empty, so the
+    // resulting content is never empty.
+    let mut content = Vec::new();
+    let mut idx = 0;
+    if !thinking.is_empty() {
+        content.push(serde_json::json!({
+            "type": "thinking",
+            "thinking": thinking,
+            "__part_id": format!("{partial_id}:blk:{idx}"),
+        }));
+        idx += 1;
+    }
+    if !text.is_empty() {
+        content.push(serde_json::json!({
+            "type": "text",
+            "text": text,
+            "__part_id": format!("{partial_id}:blk:{idx}"),
+        }));
+    }
 
-    let parsed = if !thinking.is_empty() {
-        serde_json::json!({
-            "type": "assistant",
-            "message": {
-                "type": "message",
-                "role": "assistant",
-                "content": [
-                    {"type": "thinking", "thinking": thinking, "__part_id": thinking_part_id},
-                    {"type": "text", "text": display_text, "__part_id": text_part_id},
-                ],
-            },
-            "__streaming": true,
-        })
-    } else {
-        serde_json::json!({
-            "type": "assistant",
-            "message": {
-                "type": "message",
-                "role": "assistant",
-                "content": [
-                    {"type": "text", "text": display_text, "__part_id": text_part_id},
-                ],
-            },
-            "__streaming": true,
-        })
-    };
+    let mut parsed = serde_json::json!({
+        "type": "assistant",
+        "message": {
+            "type": "message",
+            "role": "assistant",
+            "content": content,
+        },
+        "__streaming": true,
+    });
+    if let Some(parent) = acc.cur_streaming_parent_id.as_deref() {
+        parsed["parent_tool_use_id"] = Value::String(parent.to_string());
+    }
 
     IntermediateMessage {
         id: partial_id,
@@ -564,7 +614,7 @@ pub(super) fn build_materialized_partial_fallback(
         }));
     }
 
-    let parsed = serde_json::json!({
+    let mut parsed = serde_json::json!({
         "type": "assistant",
         "message": {
             "type": "message",
@@ -572,6 +622,9 @@ pub(super) fn build_materialized_partial_fallback(
             "content": content,
         },
     });
+    if let Some(parent) = acc.cur_streaming_parent_id.as_deref() {
+        parsed["parent_tool_use_id"] = Value::String(parent.to_string());
+    }
 
     Some(IntermediateMessage {
         id: partial_id,

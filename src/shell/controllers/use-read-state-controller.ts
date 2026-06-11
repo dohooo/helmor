@@ -268,6 +268,23 @@ export function useReadStateController(
 		[queryClient],
 	);
 
+	// Terminal sessions report idle via a window event re-dispatched by the
+	// ui-sync bridge when the agent's Stop hook fires (they have no SDK stream).
+	// Route it through the same completion path so the notification fires
+	// exactly like a GUI session.
+	useEffect(() => {
+		const handler = (event: Event) => {
+			const detail = (event as CustomEvent).detail as
+				| { sessionId: string; workspaceId: string }
+				| undefined;
+			if (!detail) return;
+			onSessionCompleted(detail.sessionId, detail.workspaceId);
+		};
+		window.addEventListener("helmor:terminal-session-idle", handler);
+		return () =>
+			window.removeEventListener("helmor:terminal-session-idle", handler);
+	}, [onSessionCompleted]);
+
 	const onSessionAborted = useCallback((sessionId: string) => {
 		setAbortedSessionIds((prev) => {
 			if (prev.has(sessionId)) return prev;

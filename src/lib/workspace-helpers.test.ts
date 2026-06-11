@@ -733,6 +733,43 @@ describe("resolveSessionSelectedModelId", () => {
 		).toBe("gpt-4o");
 	});
 
+	it("drops a persisted pick that's no longer in the catalog", () => {
+		// Cursor key removed → the persisted cursor model is gone; fall back
+		// to a valid default instead of returning the dangling id.
+		expect(
+			resolveSessionSelectedModelId({
+				session: {
+					id: "session-5",
+					agentType: "claude",
+					model: null,
+					lastUserMessageAt: null,
+				},
+				modelSelections: {
+					"session:session-5": "cursor-removed-model",
+				},
+				modelSections: MODEL_SECTIONS,
+				settingsDefaultModelId: "opus",
+			}),
+		).toBe("opus");
+	});
+
+	it("keeps a persisted pick while the catalog is still loading (empty)", () => {
+		expect(
+			resolveSessionSelectedModelId({
+				session: {
+					id: "session-6",
+					agentType: "claude",
+					model: null,
+					lastUserMessageAt: null,
+				},
+				modelSelections: {
+					"session:session-6": "cursor-removed-model",
+				},
+				modelSections: [],
+			}),
+		).toBe("cursor-removed-model");
+	});
+
 	it("falls back to the first available model when no session or settings model is available", () => {
 		expect(
 			resolveSessionSelectedModelId({
@@ -751,7 +788,7 @@ describe("resolveSessionSelectedModelId", () => {
 });
 
 describe("resolveSessionDisplayProvider", () => {
-	it("maps the resolved model to the provider", () => {
+	it("uses the session's provider, ignoring the composer model selection", () => {
 		expect(
 			resolveSessionDisplayProvider({
 				session: {
@@ -765,22 +802,41 @@ describe("resolveSessionDisplayProvider", () => {
 				},
 				modelSections: MODEL_SECTIONS,
 			}),
-		).toBe("codex");
+		).toBe("claude");
 	});
 
-	it("falls back to persisted agent type when model resolution is unavailable", () => {
+	it("keeps the opencode icon regardless of the selected sub-provider model", () => {
 		expect(
 			resolveSessionDisplayProvider({
 				session: {
 					id: "session-2",
-					agentType: "claude",
+					agentType: "opencode",
 					model: null,
 					lastUserMessageAt: null,
 				},
-				modelSelections: {},
-				modelSections: [],
+				modelSelections: {
+					"session:session-2": "gpt-4o",
+				},
+				modelSections: MODEL_SECTIONS,
 			}),
-		).toBe("claude");
+		).toBe("opencode");
+	});
+
+	it("falls back to the selected model's provider when the session has no agent", () => {
+		expect(
+			resolveSessionDisplayProvider({
+				session: {
+					id: "session-3",
+					agentType: null,
+					model: null,
+					lastUserMessageAt: null,
+				},
+				modelSelections: {
+					"session:session-3": "gpt-4o",
+				},
+				modelSections: MODEL_SECTIONS,
+			}),
+		).toBe("codex");
 	});
 });
 
@@ -886,6 +942,67 @@ describe("findReplacementWorkspaceIdAfterRemoval", () => {
 			removedWorkspaceId: "ghost",
 		});
 		expect(next).toBe("a");
+	});
+
+	// Last row in a group falls back to the previous sibling, not the next group.
+	it("falls back inside the same group before jumping to the next group", () => {
+		const currentGroups = [
+			group("ai-tasks", ["t1", "t2", "t3"]),
+			group("progress", ["p1", "p2"]),
+		];
+		const nextGroups = [
+			group("ai-tasks", ["t1", "t2"]),
+			group("progress", ["p1", "p2"]),
+		];
+		// t3 was the last in ai-tasks → fall back to t2 (NOT p1, which
+		// the old flat-index algorithm would have picked).
+		expect(
+			findReplacementWorkspaceIdAfterRemoval({
+				currentGroups,
+				currentArchivedRows: [],
+				nextGroups,
+				nextArchivedRows: [],
+				removedWorkspaceId: "t3",
+			}),
+		).toBe("t2");
+	});
+
+	// Group-aware: when the removed workspace's group becomes empty,
+	// fall back to the first row of the first non-empty group.
+	it("jumps to the next non-empty group when the removed group is exhausted", () => {
+		const currentGroups = [
+			group("ai-tasks", ["t1"]),
+			group("progress", ["p1", "p2"]),
+		];
+		const nextGroups = [group("ai-tasks", []), group("progress", ["p1", "p2"])];
+		expect(
+			findReplacementWorkspaceIdAfterRemoval({
+				currentGroups,
+				currentArchivedRows: [],
+				nextGroups,
+				nextArchivedRows: [],
+				removedWorkspaceId: "t1",
+			}),
+		).toBe("p1");
+	});
+
+	// Group-aware: archived rows are their own bucket — removing one
+	// stays inside the archived lane while it has siblings.
+	it("treats archived rows as their own bucket for same-bucket fallback", () => {
+		const currentGroups = [group("progress", ["p1"])];
+		const currentArchived = [row("z1"), row("z2"), row("z3")];
+		const nextGroups = [group("progress", ["p1"])];
+		const nextArchived = [row("z1"), row("z2")];
+		// z3 was last archived → fall back to z2 (NOT p1).
+		expect(
+			findReplacementWorkspaceIdAfterRemoval({
+				currentGroups,
+				currentArchivedRows: currentArchived,
+				nextGroups,
+				nextArchivedRows: nextArchived,
+				removedWorkspaceId: "z3",
+			}),
+		).toBe("z2");
 	});
 
 	// Regression: caller MUST pass currentGroups and nextGroups in the same

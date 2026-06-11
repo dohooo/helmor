@@ -1,0 +1,58 @@
+---
+source: tests/pipeline_streams.rs
+expression: snapshot
+input_file: tests/fixtures/streams/opencode/tools-write-edit-grep.jsonl
+---
+line_count: 379
+checkpoint_count: 1
+checkpoints:
+  - line_index: 377
+    event_type: opencode/session.status
+    roles:
+      - assistant
+      - system
+    last_part_types:
+      - text
+final_state:
+  message_count: 2
+  roles:
+    - assistant
+    - system
+  total_parts: 13
+persisted_turns:
+  turn_count: 1
+  total_blocks: 14
+  turns:
+    - role: assistant
+      block_types:
+        - reasoning
+        - tool
+        - reasoning
+        - tool
+        - reasoning
+        - text
+        - tool
+        - reasoning
+        - text
+        - tool
+        - tool
+        - tool
+        - reasoning
+        - text
+historical_render:
+  message_count: 1
+  messages:
+    - role: assistant
+      part_types:
+        - reasoning
+        - tool-call
+        - reasoning
+        - tool-call
+        - reasoning
+        - text
+        - tool-call
+        - reasoning
+        - text
+        - collapsed-group
+        - reasoning
+        - text

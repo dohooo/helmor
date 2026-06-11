@@ -1,0 +1,2 @@
+{"type":"opencode/message.updated","session_id":"ses_1","info":{"id":"m1","role":"assistant"}}
+{"type":"opencode/session.error","session_id":"ses_1","error":{"data":{"message":"Quota exceeded. Try again in 5 hours."}}}

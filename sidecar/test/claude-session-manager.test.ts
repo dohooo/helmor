@@ -16,6 +16,19 @@ import { createSidecarEmitter, type SidecarEmitter } from "../src/emitter.js";
 
 process.env.HELMOR_LOG_DIR = resolve(tmpdir(), "helmor-sidecar-test-logs");
 
+async function withPlatform<T>(
+	platform: NodeJS.Platform,
+	fn: () => Promise<T>,
+): Promise<T> {
+	const original = process.platform;
+	Object.defineProperty(process, "platform", { value: platform });
+	try {
+		return await fn();
+	} finally {
+		Object.defineProperty(process, "platform", { value: original });
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Mock the Claude Agent SDK BEFORE importing anything that uses it.
 // A closure variable lets each test supply its own async iterator.
@@ -480,8 +493,10 @@ describe("ClaudeSessionManager.sendMessage", () => {
 			models.map((m) => [m.id, m.supportsFastMode]),
 		);
 
-		expect(bySupports.default).toBeUndefined();
+		// `default` now resolves to Opus 4.8, which supports fast mode.
+		expect(bySupports.default).toBe(true);
 		expect(bySupports.sonnet).toBeUndefined();
+		expect(bySupports["claude-opus-4-7[1m]"]).toBeUndefined();
 		expect(bySupports["claude-opus-4-6[1m]"]).toBe(true);
 	});
 
@@ -560,6 +575,160 @@ describe("ClaudeSessionManager.sendMessage", () => {
 
 		const args = lastQueryArgs as { options?: { effort?: string } };
 		expect(args.options?.effort).toBeUndefined();
+	});
+
+	test("forces MCP_CONNECTION_NONBLOCKING=0 so MCP servers stay blocking (claude-agent-sdk v0.3.142 default change)", async () => {
+		mockQueryImpl = () => makeMockQuery();
+
+		await manager.sendMessage(
+			"REQ-mcp-blocking",
+			{
+				sessionId: "helmor-sess-mcp-blocking",
+				prompt: "test",
+				model: "default",
+				cwd: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: undefined,
+				fastMode: undefined,
+				images: [],
+			},
+			emitter,
+		);
+
+		const args = lastQueryArgs as {
+			options?: { env?: Record<string, string> };
+		};
+		expect(args.options?.env?.MCP_CONNECTION_NONBLOCKING).toBe("0");
+		// process.env is still spread in — we add the flag, we don't replace.
+		expect(args.options?.env?.PATH).toBeDefined();
+	});
+
+	test("emits fast_mode_unavailable when fast mode was requested but the result reports it off", async () => {
+		const sdkMessages = [
+			{
+				type: "rate_limit_event",
+				rate_limit_info: {
+					status: "allowed",
+					overageStatus: "rejected",
+					overageDisabledReason: "overage_not_provisioned",
+					isUsingOverage: false,
+				},
+				session_id: "sdk-sess-fm",
+			},
+			{
+				type: "result",
+				subtype: "success",
+				is_error: false,
+				session_id: "sdk-sess-fm",
+				fast_mode_state: "off",
+				usage: { input_tokens: 1, output_tokens: 1 },
+				modelUsage: {},
+			},
+		];
+		mockQueryImpl = () => asyncIterableFrom(sdkMessages);
+
+		await manager.sendMessage(
+			"REQ-fm-off",
+			{
+				sessionId: "helmor-sess-fm",
+				prompt: "hi",
+				model: "default",
+				cwd: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: undefined,
+				fastMode: true,
+				images: [],
+			},
+			emitter,
+		);
+
+		const notice = captured.find(
+			(e) => (e as { subtype?: string }).subtype === "fast_mode_unavailable",
+		) as Record<string, unknown> | undefined;
+		expect(notice).toBeDefined();
+		expect(notice?.type).toBe("system");
+		expect(notice?.id).toBe("REQ-fm-off");
+		expect(notice?.session_id).toBe("helmor-sess-fm");
+		expect(notice?.fastModeState).toBe("off");
+		expect(String(notice?.reason)).toContain("extra usage");
+	});
+
+	test("emits fast_mode_unavailable from the init event, before (and without) a terminal result", async () => {
+		// `fast_mode_state` rides the `system` init event right after send, so
+		// the notice must fire immediately — even when the turn is aborted and
+		// never reaches a terminal `result` (the only event here is init).
+		const sdkMessages = [
+			{
+				type: "system",
+				subtype: "init",
+				session_id: "sdk-sess-fm-init",
+				model: "claude-opus-4-8[1m]",
+				fast_mode_state: "off",
+			},
+		];
+		mockQueryImpl = () => asyncIterableFrom(sdkMessages);
+
+		await manager.sendMessage(
+			"REQ-fm-init",
+			{
+				sessionId: "helmor-sess-fm-init",
+				prompt: "hi",
+				model: "default",
+				cwd: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: undefined,
+				fastMode: true,
+				images: [],
+			},
+			emitter,
+		);
+
+		const notices = captured.filter(
+			(e) => (e as { subtype?: string }).subtype === "fast_mode_unavailable",
+		) as Record<string, unknown>[];
+		// Exactly one notice, emitted off the init event (no result needed).
+		expect(notices).toHaveLength(1);
+		expect(notices[0]?.fastModeState).toBe("off");
+		expect(String(notices[0]?.reason)).toContain("extra usage");
+	});
+
+	test("stays silent when fast mode actually engaged (fast_mode_state on)", async () => {
+		const sdkMessages = [
+			{
+				type: "result",
+				subtype: "success",
+				is_error: false,
+				session_id: "sdk-sess-fm-on",
+				fast_mode_state: "on",
+				usage: { input_tokens: 1, output_tokens: 1 },
+				modelUsage: {},
+			},
+		];
+		mockQueryImpl = () => asyncIterableFrom(sdkMessages);
+
+		await manager.sendMessage(
+			"REQ-fm-on",
+			{
+				sessionId: "helmor-sess-fm-on",
+				prompt: "hi",
+				model: "default",
+				cwd: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: undefined,
+				fastMode: true,
+				images: [],
+			},
+			emitter,
+		);
+
+		const notice = captured.find(
+			(e) => (e as { subtype?: string }).subtype === "fast_mode_unavailable",
+		);
+		expect(notice).toBeUndefined();
 	});
 
 	test("every forwarded event carries our requestId, never an SDK-supplied id", async () => {
@@ -722,6 +891,42 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				additionalDirectories: [userDirA, userDirA, userDirB],
 				env: {
 					CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: "1",
+				},
+			},
+		});
+	});
+
+	test("applies custom agent proxy env to Claude query options", async () => {
+		mockQueryImpl = () => asyncIterableFrom([{ type: "result", result: "ok" }]);
+
+		await withPlatform("darwin", async () => {
+			await manager.sendMessage(
+				"REQ-AGENT-PROXY",
+				{
+					sessionId: "s-agent-proxy",
+					prompt: "ok",
+					model: "opus-1m",
+					cwd: undefined,
+					resume: undefined,
+					permissionMode: "bypassPermissions",
+					effortLevel: undefined,
+					fastMode: undefined,
+					images: [],
+					agentProxy: {
+						mode: "custom",
+						customUrl: "http://127.0.0.1:7890",
+					},
+				},
+				emitter,
+			);
+		});
+
+		expect(lastQueryArgs).toMatchObject({
+			options: {
+				env: {
+					HTTP_PROXY: "http://127.0.0.1:7890",
+					HTTPS_PROXY: "http://127.0.0.1:7890",
+					ALL_PROXY: "http://127.0.0.1:7890",
 				},
 			},
 		});
@@ -1080,6 +1285,126 @@ describe("ClaudeSessionManager.stopSession", () => {
 		await manager.stopSession("never-existed");
 	});
 
+	test("emits aborted immediately without waiting for the SDK iterator to unwind", async () => {
+		const captured: Array<Record<string, unknown>> = [];
+		const emitter = createSidecarEmitter((event) => {
+			captured.push(event as Record<string, unknown>);
+		});
+		const manager = new ClaudeSessionManager();
+
+		// Iterator yields one message then hangs — mimics the SDK deferring its
+		// child teardown (~2s SIGTERM grace), so the for-await does NOT throw
+		// promptly on abort. The fix must surface `aborted` anyway.
+		let release: () => void = () => {};
+		mockQueryImpl = async function* hanging() {
+			yield { type: "system", subtype: "init", session_id: "sdk-1", uuid: "u" };
+			await new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const err = new Error("The operation was aborted") as Error & {
+				name: string;
+			};
+			err.name = "AbortError";
+			throw err;
+		};
+
+		const sendPromise = manager.sendMessage(
+			"REQ-STOP-FAST",
+			{
+				sessionId: "s-stop-fast",
+				prompt: "x",
+				model: undefined,
+				cwd: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: undefined,
+				fastMode: undefined,
+				images: [],
+			},
+			emitter,
+		);
+
+		await waitForCondition(
+			() => captured.some((e) => e.type === "system"),
+			"init passthrough",
+		);
+
+		await manager.stopSession("s-stop-fast");
+
+		// aborted is already out, even though the iterator is still hanging.
+		expect(
+			captured.some((e) => e.type === "aborted" && e.id === "REQ-STOP-FAST"),
+		).toBe(true);
+
+		// Now let the iterator unwind with AbortError; the catch must NOT
+		// emit a second aborted.
+		release();
+		await sendPromise;
+		expect(captured.filter((e) => e.type === "aborted")).toHaveLength(1);
+		expect(captured.some((e) => e.type === "end")).toBe(false);
+	});
+
+	test("after stopSession, a late buffered result does not emit a second terminal", async () => {
+		const captured: Array<Record<string, unknown>> = [];
+		const emitter = createSidecarEmitter((event) => {
+			captured.push(event as Record<string, unknown>);
+		});
+		const manager = new ClaudeSessionManager();
+
+		// The turn finishes NATURALLY during the SDK's post-abort grace window:
+		// after stopSession, the iterator drains a buffered terminal `result`
+		// instead of throwing AbortError. The loop must drop it — no passthrough,
+		// no `end` — so `aborted` stays the one and only terminal event.
+		let release: () => void = () => {};
+		mockQueryImpl = async function* lateResult() {
+			yield { type: "system", subtype: "init", session_id: "sdk-1", uuid: "u" };
+			await new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			yield {
+				type: "result",
+				session_id: "sdk-1",
+				subtype: "success",
+				is_error: false,
+				result: "done",
+			};
+		};
+
+		const sendPromise = manager.sendMessage(
+			"REQ-LATE-RESULT",
+			{
+				sessionId: "s-late-result",
+				prompt: "x",
+				model: undefined,
+				cwd: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: undefined,
+				fastMode: undefined,
+				images: [],
+			},
+			emitter,
+		);
+
+		await waitForCondition(
+			() => captured.some((e) => e.type === "system"),
+			"init passthrough",
+		);
+
+		await manager.stopSession("s-late-result");
+		release();
+		await sendPromise;
+
+		// Exactly one terminal, and it's `aborted` (not `end`).
+		const terminals = captured.filter(
+			(e) => e.type === "aborted" || e.type === "end",
+		);
+		expect(terminals).toHaveLength(1);
+		expect(terminals[0]?.type).toBe("aborted");
+		// The post-abort buffered result was dropped, not passed through.
+		expect(captured.some((e) => e.type === "result")).toBe(false);
+	});
+
 	test("emits elicitationRequest and resumes when the elicitation is resolved", async () => {
 		const captured: Array<Record<string, unknown>> = [];
 		const emitter = createSidecarEmitter((event) => {
@@ -1193,7 +1518,7 @@ describe("ClaudeSessionManager.stopSession", () => {
 		});
 	});
 
-	test("cancels pending elicitation when the session is stopped", async () => {
+	test("stopping during a pending elicitation cancels it and emits one aborted terminal", async () => {
 		const captured: Array<Record<string, unknown>> = [];
 		const emitter = createSidecarEmitter((event) => {
 			captured.push(event as Record<string, unknown>);
@@ -1251,18 +1576,19 @@ describe("ClaudeSessionManager.stopSession", () => {
 		await manager.stopSession("elicitation-stop-session");
 		await sendPromise;
 
-		expect(captured).toContainEqual({
-			id: "REQ-ELICIT-STOP",
-			type: "assistant",
-			session_id: "sdk-session-stop",
-			uuid: "assistant-stop-1",
-			message: {
-				content: [{ type: "text", text: '{"action":"cancel"}' }],
-			},
-		});
+		// Stopping fires the elicitation's abort signal so the SDK doesn't hang
+		// (sendPromise resolving proves it), and emits a single `aborted`
+		// terminal. The assistant message the SDK drains afterward (the cancelled
+		// elicitation's result) is dropped — exactly one terminal event.
+		expect(captured.some((e) => e.type === "assistant")).toBe(false);
+		const terminals = captured.filter(
+			(e) => e.type === "aborted" || e.type === "end",
+		);
+		expect(terminals).toHaveLength(1);
 		expect(captured[captured.length - 1]).toEqual({
 			id: "REQ-ELICIT-STOP",
-			type: "end",
+			type: "aborted",
+			reason: "user_requested",
 		});
 	});
 });
@@ -1372,6 +1698,41 @@ describe("Claude fixture diversity guards", () => {
 		expect(inv.topLevelTypes).toContain("rate_limit_event");
 	});
 
+	test("task-plan.jsonl exercises the Task tool family (TaskCreate + TaskUpdate)", () => {
+		// claude-agent-sdk v0.3.142 retired TodoWrite for SDK/headless
+		// sessions in favor of TaskCreate/TaskUpdate. This fixture is a real
+		// 2.1.154 capture; pin that it carries those tool calls so a future
+		// minimal-fixture replacement can't silently drop the coverage that
+		// the pipeline's Task→TodoList collapse depends on.
+		const inv = inventoryClaudeFixture("task-plan.jsonl");
+		expect(inv.contentBlockTypes).toContain("tool_use");
+		expect(inv.contentBlockTypes).toContain("tool_result");
+		expect(inv.streamEventDeltaTypes).toContain("input_json_delta");
+
+		const events = loadClaudeFixture("task-plan.jsonl");
+		const toolNames = new Set<string>();
+		for (const e of events) {
+			if (e.type !== "assistant") continue;
+			const message = e.message as { content?: unknown } | undefined;
+			const content = message?.content;
+			if (!Array.isArray(content)) continue;
+			for (const b of content) {
+				if (
+					b &&
+					typeof b === "object" &&
+					"type" in b &&
+					(b as { type?: unknown }).type === "tool_use" &&
+					"name" in b &&
+					typeof (b as { name?: unknown }).name === "string"
+				) {
+					toolNames.add((b as { name: string }).name);
+				}
+			}
+		}
+		expect(toolNames).toContain("TaskCreate");
+		expect(toolNames).toContain("TaskUpdate");
+	});
+
 	test("bash-and-edit.jsonl exercises multi-tool sequence (Bash + Read + Edit)", () => {
 		const inv = inventoryClaudeFixture("bash-and-edit.jsonl");
 		expect(inv.contentBlockTypes).toContain("tool_use");
@@ -1404,9 +1765,22 @@ describe("ClaudeSessionManager.listModels", () => {
 
 		expect(models).toEqual([
 			{
+				id: "claude-fable-5[1m]",
+				label: "Fable 5 1M",
+				cliModel: "claude-fable-5[1m]",
+				effortLevels: ["low", "medium", "high", "xhigh", "max"],
+			},
+			{
 				id: "default",
-				label: "Opus 4.7 1M",
+				label: "Opus 4.8 1M",
 				cliModel: "default",
+				effortLevels: ["low", "medium", "high", "xhigh", "max"],
+				supportsFastMode: true,
+			},
+			{
+				id: "claude-opus-4-7[1m]",
+				label: "Opus 4.7 1M",
+				cliModel: "claude-opus-4-7[1m]",
 				effortLevels: ["low", "medium", "high", "xhigh", "max"],
 			},
 			{
@@ -1437,6 +1811,7 @@ const CLAUDE_FIXTURES = [
 	"thinking-text.jsonl",
 	"tool-use.jsonl",
 	"todo-plan.jsonl",
+	"task-plan.jsonl",
 	"bash-and-edit.jsonl",
 ] as const;
 

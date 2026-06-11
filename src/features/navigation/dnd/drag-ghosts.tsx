@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import type { WorkspaceRow } from "@/lib/api";
 import { WorkspaceAvatar } from "../avatar";
 import { WorkspaceRowItem } from "../row-item";
@@ -15,6 +16,9 @@ type WorkspaceDragGhostProps = {
 	selected: boolean;
 	isSending?: boolean;
 	isInteractionRequired?: boolean;
+	/** Tip-first stack chain when dragging a stack tip. When it has >1 member
+	 *  the ghost shows a count badge (total PRs in the stack) on the right. */
+	stackRows?: WorkspaceRow[] | null;
 };
 
 export function WorkspaceDragGhost({
@@ -24,8 +28,11 @@ export function WorkspaceDragGhost({
 	selected,
 	isSending,
 	isInteractionRequired,
+	stackRows,
 }: WorkspaceDragGhostProps) {
-	return (
+	const stackCount =
+		stackRows && stackRows.length > 1 ? stackRows.length : null;
+	return createPortal(
 		<div
 			className="pointer-events-none fixed z-50"
 			style={{
@@ -35,16 +42,24 @@ export function WorkspaceDragGhost({
 				width: dragState.width,
 			}}
 		>
-			<WorkspaceRowItem
-				row={row}
-				selected={selected}
-				isSending={isSending}
-				isInteractionRequired={isInteractionRequired}
-				dragPreview
-				hideRepoAvatar={hideRepoAvatar}
-				workspaceActionsDisabled
-			/>
-		</div>
+			<div className="relative">
+				<WorkspaceRowItem
+					row={row}
+					selected={selected}
+					isSending={isSending}
+					isInteractionRequired={isInteractionRequired}
+					dragPreview
+					hideRepoAvatar={hideRepoAvatar}
+					workspaceActionsDisabled
+				/>
+				{stackCount ? (
+					<span className="absolute right-0 top-1/2 flex h-4 min-w-4 -translate-y-1/2 items-center justify-center rounded-full bg-primary/70 px-1 text-nano font-semibold tabular-nums text-primary-foreground">
+						{stackCount}
+					</span>
+				) : null}
+			</div>
+		</div>,
+		document.body,
 	);
 }
 
@@ -69,7 +84,7 @@ export function RepoDragGhost({
 }: RepoDragGhostProps) {
 	// Re-use the sidebar's native header + row look; one outer opacity
 	// fades the whole stack so it reads as "same group, lifted off".
-	return (
+	return createPortal(
 		<div
 			className="pointer-events-none fixed z-50 opacity-60"
 			style={{
@@ -100,6 +115,7 @@ export function RepoDragGhost({
 					/>
 				</div>
 			))}
-		</div>
+		</div>,
+		document.body,
 	);
 }

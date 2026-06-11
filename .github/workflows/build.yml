@@ -1,7 +1,7 @@
 name: Build
 
-# macOS-only frontend + storybook build verification. Full Tauri Windows/
-# Linux/macOS bundles are produced by publish.yml on tag push; this
+# macOS-hosted frontend + storybook build verification. Tauri bundles are
+# produced by publish.yml (macOS) and windows.yml (Windows CI build); this
 # workflow just ensures the frontend still compiles under Vite.
 
 on:

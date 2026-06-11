@@ -58,6 +58,7 @@ const EMPTY_INBOX_CONFIG: InboxSourceConfig = { accounts: {} };
 import { useForgeAccountsAll } from "@/lib/use-forge-accounts";
 import { cn } from "@/lib/utils";
 import { SettingsGroup, SettingsRow } from "../components/settings-row";
+import type { ContextProviderTab } from "../types";
 import {
 	LabelMultiSelect,
 	type Option,
@@ -83,7 +84,7 @@ type ConfigField = keyof Omit<
 	"enabled" | "issues" | "prs" | "discussions"
 >;
 
-type ContextProviderTab = "github" | "gitlab" | "linear" | "slack" | "mobile";
+// Type lives in ../types so the shell event bus can carry it.
 
 const PROVIDER_TABS: {
 	id: ContextProviderTab;
@@ -219,13 +220,20 @@ function joinSingularsAsList(items: string[]): string {
 
 export function InboxSettingsPanel({
 	repositories,
+	initialProvider,
 }: {
 	repositories: RepositoryCreateOption[];
+	initialProvider?: ContextProviderTab;
 }) {
 	const accountsQuery = useForgeAccountsAll();
 	const { settings, updateSettings } = useSettings();
-	const [activeProvider, setActiveProvider] =
-		useState<ContextProviderTab>("github");
+	const [activeProvider, setActiveProvider] = useState<ContextProviderTab>(
+		initialProvider ?? "github",
+	);
+	// Re-sync on reopen with a new inbox tab.
+	useEffect(() => {
+		if (initialProvider) setActiveProvider(initialProvider);
+	}, [initialProvider]);
 	const activeForgeProvider = tabToForgeProvider(activeProvider);
 	const isGithub = activeForgeProvider === "github";
 	// Provider-level labels (provider name, "Connect GitHub" CTA, …)

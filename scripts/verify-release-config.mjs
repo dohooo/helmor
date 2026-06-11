@@ -35,4 +35,19 @@ if (new Set(Object.values(versions)).size !== 1) {
 	);
 }
 
+// Guard the macOS updater release contract. `bundle.createUpdaterArtifacts`
+// is what tells Tauri to emit the signed `.app.tar.gz` + signature that
+// publish.yml feeds into `latest.json` and updater-dry-run.yml validates;
+// shipped macOS users' in-app auto-update depends on it. It is a shared,
+// top-level flag — a platform that does not want updater artifacts (e.g. a
+// Windows NSIS bundle) must opt out inside its own `bundle.<os>` block rather
+// than flipping this global off, which would silently break macOS releases.
+if (tauriConfig.bundle?.createUpdaterArtifacts !== true) {
+	fail(
+		"src-tauri/tauri.conf.json: bundle.createUpdaterArtifacts must be `true`. " +
+			"The macOS release + auto-update pipeline depends on signed updater artifacts; " +
+			"disable updater artifacts per-bundle (bundle.<os>), never via this global flag.",
+	);
+}
+
 console.log(`Release configuration verified for version ${versions.package}`);

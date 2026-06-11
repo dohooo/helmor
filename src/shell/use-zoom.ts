@@ -1,5 +1,6 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useEffect } from "react";
+import { isTauriRuntime } from "@/lib/platform";
 import { useSettings } from "@/lib/settings";
 
 const MIN_ZOOM = 0.5;
@@ -19,6 +20,13 @@ export function useZoom(): void {
 	const zoom = settings.zoomLevel;
 
 	useEffect(() => {
+		// The mobile-companion browser has no Tauri webview. `getCurrentWebview()`
+		// reads `__TAURI_INTERNALS__` SYNCHRONOUSLY and throws when it's absent —
+		// the `.catch` below only guards the async `setZoom` rejection, NOT that
+		// synchronous throw, so without this gate React treats it as a render
+		// error and tears down the whole app shell (blank screen). Same failure
+		// mode the dock-badge hook documents.
+		if (!isTauriRuntime()) return;
 		void getCurrentWebview()
 			.setZoom(zoom)
 			.catch(() => {

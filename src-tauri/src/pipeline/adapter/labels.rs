@@ -235,6 +235,19 @@ pub(super) fn build_system_notice(parsed: Option<&Value>, msg_id: &str) -> Optio
         }),
         "codex_reconnecting" => Some(build_codex_reconnecting_notice(parsed, msg_id)),
         "api_retry" => Some(build_api_retry_notice(parsed, msg_id)),
+        "fast_mode_unavailable" => {
+            let reason = parsed
+                .get("reason")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .map(str::to_string);
+            Some(MessagePart::SystemNotice {
+                id: notice_part_id(msg_id),
+                severity: NoticeSeverity::Warning,
+                label: "Fast mode unavailable".to_string(),
+                body: reason,
+            })
+        }
         _ => None,
     }
 }

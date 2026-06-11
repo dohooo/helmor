@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { BUILTIN_EMOJI } from "@/lib/slack-emoji-builtin";
 import {
 	formatSlackTextPlain,
+	inlineMentionsForMarkdown,
 	resolveEmoji,
 	type SlackEmoji,
 } from "./slack-text";
@@ -84,6 +85,33 @@ describe("formatSlackTextPlain", () => {
 			"<@U08P4HCEJS1|james> wouldn't shut up :joy:\n\nLet's go Team <@U08KK7P7X71|spencer>";
 		expect(formatSlackTextPlain(raw, { emoji: emojiTable() })).toBe(
 			"@james wouldn't shut up 😂 Let's go Team @spencer",
+		);
+	});
+});
+
+describe("inlineMentionsForMarkdown", () => {
+	it("rewrites labeled user mentions to @name", () => {
+		expect(inlineMentionsForMarkdown("<@U06RP8NFS4|caspian.zhao> 有bug")).toBe(
+			"@caspian.zhao 有bug",
+		);
+	});
+
+	it("rewrites unlabeled mentions to @USER fallback", () => {
+		expect(inlineMentionsForMarkdown("<@U0B6RP8NFS4> has joined")).toBe(
+			"@U0B6RP8NFS4 has joined",
+		);
+	});
+
+	it("rewrites channel mentions to #name", () => {
+		expect(inlineMentionsForMarkdown("see <#C03|eng-frontend>")).toBe(
+			"see #eng-frontend",
+		);
+		expect(inlineMentionsForMarkdown("see <#C03>")).toBe("see #C03");
+	});
+
+	it("leaves non-mention text untouched", () => {
+		expect(inlineMentionsForMarkdown("hello world :wave:")).toBe(
+			"hello world :wave:",
 		);
 	});
 });

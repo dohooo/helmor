@@ -1,7 +1,5 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-
 import {
 	Dialog,
 	DialogContent,
@@ -13,6 +11,7 @@ import {
 	type ExistingHelmorRepo,
 	findExistingHelmorRepo,
 } from "@/lib/api";
+import { openUrl } from "@/lib/platform-bridge";
 import { useForgeAccountsAll } from "@/lib/use-forge-accounts";
 import { describeUnknownError } from "@/lib/workspace-helpers";
 

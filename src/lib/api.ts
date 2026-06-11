@@ -1,16 +1,21 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { InspectorFileItem } from "./editor-session";
 import { type ErrorCode, extractError } from "./errors";
+// `invoke` / `Channel` / `listen` route through the transport shim so the same
+// frontend works in the desktop Tauri webview AND when served to a phone
+// browser by the companion server. See `src/lib/ipc.ts`.
+import { Channel, closeChannel, invoke, listen, type UnlistenFn } from "./ipc";
 import { setSessionThreadPaginationState } from "./session-thread-pagination";
 
 export type GroupTone =
 	| "pinned"
+	| "chats"
 	| "done"
 	| "review"
 	| "progress"
 	| "backlog"
-	| "canceled";
+	| "canceled"
+	| "ai-tasks";
 
 /**
  * Mirror of the Rust `WorkspaceState` enum (`src-tauri/src/workspace/state.rs`).
@@ -107,6 +112,33 @@ export type WorkspaceRow = {
 	/** ISO-8601 timestamp — most recent user message across all sessions
 	 * in this workspace. Null when the workspace has no user messages yet. */
 	lastUserMessageAt?: string | null;
+	/** "manual" or "ai_triage". */
+	kind?: string;
+	/** True for an ai_triage row still awaiting the user's first send. */
+	triagePrimingUnconsumed?: boolean;
+	/** Originating triage platform for ai_triage rows: "github" | "gitlab" |
+	 *  "slack" | "lark". Absent/null for manual workspaces. Drives the
+	 *  source-logo badge shown on AI-proposed sidebar rows. */
+	triageSourceType?: string | null;
+	/** Stacked PRs: `id` of the workspace one layer below this in a PR stack
+	 *  (its base). Absent/null for non-stacked rows. Drives sidebar stack
+	 *  grouping — the sidebar nests a stack's members under their tip. */
+	parentWorkspaceId?: string | null;
+};
+
+/** Per-row stacked-PR connector metadata, attached by the frontend
+ *  projection (`nestStacks`) — never sent by the backend. Lets the row
+ *  renderer draw the stack-link affordance. */
+export type StackRowMeta = {
+	/** `tip` = newest member (top of the stack, keeps its natural sort slot);
+	 *  `root` = base-most visible member; `mid` = in between. */
+	role: "tip" | "mid" | "root";
+	/** 0 at the tip, increasing toward the base of the stack. */
+	depth: number;
+	/** Total number of members in this stack — used for the "k of N" tooltip. */
+	stackSize: number;
+	/** `id` of the stack's tip — the anchor every member is grouped under. */
+	tipId: string;
 };
 
 export type WorkspaceGroup = {
@@ -114,6 +146,10 @@ export type WorkspaceGroup = {
 	label: string;
 	tone: GroupTone;
 	rows: WorkspaceRow[];
+	/** Frontend-only projection annotation (populated by `nestStacks`, absent
+	 *  on backend payloads): stacked-PR connector metadata keyed by row id,
+	 *  present only for rows that belong to a multi-member stack. */
+	stackMeta?: ReadonlyMap<string, StackRowMeta>;
 };
 
 export type DataInfo = {
@@ -123,7 +159,7 @@ export type DataInfo = {
 	archiveRoot: string;
 };
 
-export type AgentProvider = "claude" | "codex" | "cursor";
+export type AgentProvider = "claude" | "codex" | "cursor" | "opencode";
 
 export type LocalLlmStatus = {
 	enabled: boolean;
@@ -158,6 +194,25 @@ export type AgentModelSection = {
 	label: string;
 	status?: AgentModelSectionStatus;
 	options: AgentModelOption[];
+};
+
+/** Wire strings the sidecars accept for permission mode. Helmor models
+ *  permission as a binary: `plan` (read-only) or full access. */
+export type PermissionModeLiteral = "plan" | "bypassPermissions";
+
+/** Static capability table for a single provider. Mirrors the Rust
+ *  `agents::provider_capabilities::ProviderCapabilities` shape so a
+ *  cross-stack provider check is data-driven instead of a scattered
+ *  `provider === "codex"` string compare. */
+export type ProviderCapabilities = {
+	provider: string;
+	displayName: string;
+	supportsPlanMode: boolean;
+	supportsActiveGoal: boolean;
+	supportsContextUsage: boolean;
+	supportsSteer: boolean;
+	supportsSlashCommands: boolean;
+	requiresApiKey: boolean;
 };
 
 export type AgentSendRequest = {
@@ -328,6 +383,10 @@ export type WorkspaceDetail = {
 	branch?: string | null;
 	initializationParentBranch?: string | null;
 	intendedTargetBranch?: string | null;
+	/** Stacked-PR parent link. When set, the header renders a live
+	 * "→ <parent title>" chip (click to navigate) instead of the raw
+	 * target-branch picker. */
+	parentWorkspaceId?: string | null;
 	mode: WorkspaceMode;
 	pinnedAt?: string | null;
 	prTitle?: string | null;
@@ -349,6 +408,10 @@ export type WorkspaceDetail = {
 	 * this workspace. NULL means "use the first action" — either fresh,
 	 * or because the previously-active action was deleted. */
 	activeRunActionId?: string | null;
+	/** True when this workspace was auto-spawned by triage and the user
+	 * hasn't sent their first message yet. Drives the composer's
+	 * Start / Dismiss quick-action row. */
+	triagePrimingUnconsumed?: boolean;
 };
 
 export type WorkspaceSessionSummary = {
@@ -371,6 +434,9 @@ export type WorkspaceSessionSummary = {
 	 * inspector commit button (e.g. "create-pr", "commit-and-push"). Drives
 	 * post-stream verifiers and auto-close behavior. */
 	actionKind?: ActionKind | null;
+	/** "gui" (SDK chat session) or "terminal" (live PTY in the message area).
+	 * Optional for test mocks / optimistic rows; absent is treated as "gui". */
+	sessionKind?: "gui" | "terminal";
 	active: boolean;
 };
 
@@ -557,6 +623,28 @@ export async function listForgeAccounts(
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to list forge accounts."),
+		);
+	}
+}
+
+/** Auth verdict for a workspace's bound forge account. Action points gate
+ * on `"loggedOut"`; other states proceed. */
+export type ForgeAuthState =
+	| "loggedIn"
+	| "loggedOut"
+	| "indeterminate"
+	| "notApplicable";
+
+export async function checkWorkspaceForgeAuth(
+	workspaceId: string,
+): Promise<ForgeAuthState> {
+	try {
+		return await invoke<ForgeAuthState>("check_workspace_forge_auth", {
+			workspaceId,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to check forge authentication."),
 		);
 	}
 }
@@ -779,6 +867,32 @@ export async function installHelmorSkills(): Promise<HelmorSkillsStatus> {
 	}
 }
 
+/**
+ * Combined snapshot for the Settings → General "Helmor components"
+ * row. Pairs the live CLI / Skills status with whatever the per-version
+ * silent startup check cached. `lastCheckedVersion === currentVersion`
+ * means the silent pass finished cleanly for this build; mismatch (or
+ * null) means it never completed and the panel should surface a nudge.
+ */
+export type HelmorComponentsUpdateCheck = {
+	cli: CliStatus;
+	skills: HelmorSkillsStatus;
+	lastCheckedVersion: string | null;
+	currentVersion: string;
+	cliError: string | null;
+	skillsError: string | null;
+};
+
+export async function getHelmorComponentsUpdateCheck(): Promise<HelmorComponentsUpdateCheck> {
+	return await invoke<HelmorComponentsUpdateCheck>(
+		"get_helmor_components_update_check",
+	);
+}
+
+export async function recheckHelmorComponents(): Promise<HelmorComponentsUpdateCheck> {
+	return await invoke<HelmorComponentsUpdateCheck>("recheck_helmor_components");
+}
+
 export async function enterOnboardingWindowMode(): Promise<void> {
 	await invoke("enter_onboarding_window_mode");
 }
@@ -787,18 +901,42 @@ export async function exitOnboardingWindowMode(): Promise<void> {
 	await invoke("exit_onboarding_window_mode");
 }
 
-export type AgentLoginProvider = "claude" | "codex" | "cursor";
+export async function enterMiniWindowMode(): Promise<void> {
+	await invoke("enter_mini_window_mode");
+}
+
+export async function exitMiniWindowMode(): Promise<void> {
+	await invoke("exit_mini_window_mode");
+}
+
+export async function toggleMiniWindowMode(): Promise<boolean> {
+	return await invoke("toggle_mini_window_mode");
+}
+
+export type AgentLoginProvider = "claude" | "codex" | "cursor" | "opencode";
 
 export type AgentLoginStatusResult = {
 	claude: boolean;
 	codex: boolean;
 	cursor: boolean;
+	opencode: boolean;
 	codexProvider?: string | null;
 	codexAuthMethod?: "login" | "apiKey" | string | null;
 };
 
 export async function getAgentLoginStatus(): Promise<AgentLoginStatusResult> {
 	return await invoke<AgentLoginStatusResult>("get_agent_login_status");
+}
+
+// Cursor is an SDK (no versioned CLI), so it has no entry.
+export type AgentVersionsResult = {
+	claude: string | null;
+	codex: string | null;
+	opencode: string | null;
+};
+
+export async function getAgentVersions(): Promise<AgentVersionsResult> {
+	return await invoke<AgentVersionsResult>("get_agent_versions");
 }
 
 export async function openAgentLoginTerminal(
@@ -867,6 +1005,14 @@ export type DevResetResult = {
 
 export async function requestQuit(force: boolean): Promise<void> {
 	return await invoke("request_quit", { force });
+}
+
+// Close (hide) the main window. Routes through the Rust `CloseRequested`
+// interceptor, which on macOS hides the window and keeps the app running in
+// the Dock (reopened by clicking the Dock icon). Used by Cmd+W on the last
+// tab and by Cmd+Shift+W.
+export async function closeMainWindow(): Promise<void> {
+	await getCurrentWindow().close();
 }
 
 export async function devResetAllData(): Promise<DevResetResult> {
@@ -955,6 +1101,79 @@ export async function loadAgentModelSections(): Promise<AgentModelSection[]> {
 	}
 }
 
+/** Static provider-capability table. Backed by the Rust source of truth
+ *  in `agents::provider_capabilities`; callers cache the result for the
+ *  lifetime of the app and look up rows by `provider`. */
+export async function loadProviderCapabilities(): Promise<
+	ProviderCapabilities[]
+> {
+	return invoke<ProviderCapabilities[]>("list_provider_capabilities");
+}
+
+/** Local mirror of the Rust default table
+ *  (`agents::provider_capabilities::capabilities_for_provider` over
+ *  `KNOWN_PROVIDERS`). Used as `initialData` for the provider-capability
+ *  query so that on a cold start — before the persisted cache or the
+ *  `list_provider_capabilities` IPC has hydrated — consumers already read
+ *  the correct flags (e.g. Codex `supportsActiveGoal === true`). An empty
+ *  `[]` initialData would instead make Codex read `supportsActiveGoal ===
+ *  false` and silently disable `/goal` interception + the stop-stream goal
+ *  pause during that window. Keep this in lock-step with the Rust table;
+ *  the live query reconciles any drift via a background refetch. */
+export const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities[] = [
+	{
+		provider: "claude",
+		displayName: "Claude",
+		supportsPlanMode: true,
+		supportsActiveGoal: false,
+		supportsContextUsage: true,
+		supportsSteer: true,
+		supportsSlashCommands: true,
+		requiresApiKey: false,
+	},
+	{
+		provider: "codex",
+		displayName: "Codex",
+		supportsPlanMode: true,
+		supportsActiveGoal: true,
+		supportsContextUsage: true,
+		supportsSteer: true,
+		supportsSlashCommands: true,
+		requiresApiKey: false,
+	},
+	{
+		provider: "cursor",
+		displayName: "Cursor",
+		supportsPlanMode: true,
+		supportsActiveGoal: false,
+		supportsContextUsage: false,
+		supportsSteer: false,
+		supportsSlashCommands: true,
+		requiresApiKey: true,
+	},
+	{
+		provider: "opencode",
+		displayName: "OpenCode",
+		supportsPlanMode: true,
+		supportsActiveGoal: false,
+		supportsContextUsage: true,
+		supportsSteer: true,
+		supportsSlashCommands: true,
+		requiresApiKey: false,
+	},
+];
+
+/** Look up a single provider's capabilities from a previously-fetched
+ *  table. Returns `null` when the provider id isn't represented — the
+ *  composer treats that as "use Claude's safe defaults", matching the
+ *  Rust helper's fallback. */
+export function findProviderCapabilities(
+	table: readonly ProviderCapabilities[],
+	provider: string,
+): ProviderCapabilities | null {
+	return table.find((caps) => caps.provider === provider) ?? null;
+}
+
 export type CursorModelParameterValue = {
 	value: string;
 	displayName?: string;
@@ -985,6 +1204,86 @@ export async function listCursorModels(
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to list Cursor models."),
+		);
+	}
+}
+
+export type OpencodeModelEntry = {
+	// `<providerID>/<modelID>` slug — doubles as the cliModel.
+	id: string;
+	label: string;
+	// Effort tiers (the model's `variants` keys). Empty ⟺ no effort switch.
+	effortLevels?: string[];
+};
+
+// `forceReload` restarts the opencode server to pick up config changes.
+export async function listOpencodeModels(
+	forceReload = false,
+): Promise<OpencodeModelEntry[]> {
+	try {
+		return await invoke<OpencodeModelEntry[]>("list_opencode_models", {
+			forceReload,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to list opencode models."),
+		);
+	}
+}
+
+export type OpencodeCustomModel = {
+	id: string;
+	name: string;
+	// Only set true when the upstream endpoint accepts a reasoning effort.
+	reasoning: boolean;
+};
+
+export type OpencodeCustomProvider = {
+	id: string;
+	name: string;
+	// `@ai-sdk/openai-compatible` (/v1/chat/completions) or `@ai-sdk/openai` (/v1/responses).
+	npm: string;
+	baseUrl: string;
+	apiKey: string;
+	headers: Record<string, string>;
+	models: OpencodeCustomModel[];
+};
+
+export async function getOpencodeCustomProviders(): Promise<
+	OpencodeCustomProvider[]
+> {
+	try {
+		return await invoke<OpencodeCustomProvider[]>(
+			"get_opencode_custom_providers",
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to read opencode config."),
+		);
+	}
+}
+
+// `preset` sets only `options.apiKey` (opencode fills npm/baseURL/models);
+// non-preset writes the full custom block.
+export async function upsertOpencodeCustomProvider(
+	provider: OpencodeCustomProvider,
+	preset: boolean,
+): Promise<void> {
+	try {
+		await invoke("upsert_opencode_custom_provider", { provider, preset });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to save opencode provider."),
+		);
+	}
+}
+
+export async function deleteOpencodeCustomProvider(id: string): Promise<void> {
+	try {
+		await invoke("delete_opencode_custom_provider", { id });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to delete opencode provider."),
 		);
 	}
 }
@@ -1691,7 +1990,7 @@ export type SlackImportResult = {
 	alreadyConnected: SlackWorkspace[];
 };
 
-/** Read the user's local Slack desktop session (macOS only in v1) and
+/** Read the user's local Slack desktop session (currently wired on macOS) and
  *  import every workspace whose token still authenticates. Strictly
  *  better UX than the webview-based connect flow when it works because
  *  it reuses whatever auth state Slack desktop already negotiated —
@@ -1876,6 +2175,7 @@ export type UiMutationEvent =
 	| { type: "sessionListChanged"; workspaceId: string }
 	| { type: "contextUsageChanged"; sessionId: string }
 	| { type: "codexGoalChanged"; sessionId: string }
+	| { type: "sessionPlanChanged"; sessionId: string }
 	| { type: "sessionMessagesAppended"; sessionId: string }
 	| { type: "workspaceFilesChanged"; workspaceId: string }
 	| { type: "workspaceGitStateChanged"; workspaceId: string }
@@ -1895,7 +2195,266 @@ export type UiMutationEvent =
 	  }
 	| { type: "activeStreamsChanged" }
 	| { type: "slackWorkspacesChanged" }
-	| { type: "slackTokenInvalidated"; teamId: string };
+	| { type: "slackTokenInvalidated"; teamId: string }
+	| { type: "triageConfigChanged" }
+	| { type: "triageActiveStatusChanged" }
+	| { type: "triageWorkspaceCreated"; workspaceId: string }
+	| { type: "fastModeUnavailable"; sessionId: string; reason: string }
+	| { type: "pairedDevicesChanged" }
+	| { type: "terminalSessionIdle"; sessionId: string; workspaceId: string }
+	| {
+			type: "terminalPromptCaptured";
+			sessionId: string;
+			workspaceId: string;
+			prompt: string;
+	  };
+
+export type TriageConfig = {
+	enabled: boolean;
+	/** False = scheduler doesn't auto-fire; Run-now still works. */
+	autoRun: boolean;
+	systemPrompt: string;
+	maxPerTick: number;
+};
+
+export type TriageCandidateRow = {
+	id: string;
+	source: string;
+	sourceKind: string;
+	sourceRef: string;
+	sourceParent: string | null;
+	sourceTime: string;
+	sender: string | null;
+	title: string | null;
+	preview: string | null;
+	externalUrl: string | null;
+	payloadPath: string;
+	payloadBytes: number;
+	decision: string | null;
+};
+
+export async function listOpenTriageCandidates(
+	limit = 20,
+): Promise<TriageCandidateRow[]> {
+	try {
+		return await invoke<TriageCandidateRow[]>("list_open_triage_candidates", {
+			limit,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load triage candidates."),
+		);
+	}
+}
+
+export async function countOpenTriageCandidates(): Promise<number> {
+	try {
+		return await invoke<number>("count_open_triage_candidates");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to count triage candidates."),
+		);
+	}
+}
+
+export async function readTriageCandidate(
+	candidateId: string,
+	grep?: string,
+): Promise<string> {
+	try {
+		return await invoke<string>("read_triage_candidate", {
+			candidateId,
+			grep,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to read triage candidate."),
+		);
+	}
+}
+
+export async function recordTriageDecision(
+	candidateId: string,
+	decision: string,
+	reason?: string,
+): Promise<void> {
+	try {
+		await invoke<void>("record_triage_decision", {
+			candidateId,
+			decision,
+			reason,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to record triage decision."),
+		);
+	}
+}
+
+export type TriageSourceHealthState =
+	| "ok"
+	| "notInstalled"
+	| "notAuthed"
+	| "notConfigured"
+	| "degraded";
+
+export type TriageSourceHealth = {
+	source: string;
+	displayName: string;
+	state: TriageSourceHealthState;
+	detail: string;
+};
+
+export async function getTriageSourceHealth(): Promise<TriageSourceHealth[]> {
+	try {
+		return await invoke<TriageSourceHealth[]>("get_triage_source_health");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load triage source health."),
+		);
+	}
+}
+
+export type LarkAuthAction = "install" | "signIn";
+
+export async function spawnLarkCliAuthTerminal(
+	action: LarkAuthAction,
+	instanceId: string,
+	onEvent: (event: ScriptEvent) => void,
+): Promise<void> {
+	const channel = new Channel<ScriptEvent>();
+	channel.onmessage = onEvent;
+	await invoke("spawn_lark_cli_auth_terminal", {
+		action,
+		instanceId,
+		channel,
+	});
+}
+
+export async function stopLarkCliAuthTerminal(
+	action: LarkAuthAction,
+	instanceId: string,
+): Promise<boolean> {
+	return invoke<boolean>("stop_lark_cli_auth_terminal", {
+		action,
+		instanceId,
+	});
+}
+
+export async function writeLarkCliAuthTerminalStdin(
+	action: LarkAuthAction,
+	instanceId: string,
+	data: string,
+): Promise<boolean> {
+	return invoke<boolean>("write_lark_cli_auth_terminal_stdin", {
+		action,
+		instanceId,
+		data,
+	});
+}
+
+export async function resizeLarkCliAuthTerminal(
+	action: LarkAuthAction,
+	instanceId: string,
+	cols: number,
+	rows: number,
+): Promise<boolean> {
+	return invoke<boolean>("resize_lark_cli_auth_terminal", {
+		action,
+		instanceId,
+		cols,
+		rows,
+	});
+}
+
+export type TriageToolCallRecord = {
+	at: string;
+	tool: string;
+	argsPreview: string;
+};
+
+export type TriageActiveStatus = {
+	tickId: string;
+	startedAt: string;
+	turnCount: number;
+	toolCount: number;
+	lastToolName: string | null;
+	lastUpdateAt: string;
+	recentToolCalls: TriageToolCallRecord[];
+	/** 1-indexed current batch; 0 = haven't started a batch yet. */
+	batchIndex: number;
+	/** Upper bound on batches this tick will run. */
+	batchTotal: number;
+};
+
+export type TickOutcome =
+	| { kind: "createdWorkspaces"; count: number }
+	| { kind: "noActionableItems" }
+	| { kind: "cancelled" }
+	| { kind: "failed"; message: string };
+
+export type LastTickOutcome = {
+	at: string;
+	tickId: string;
+	outcome: TickOutcome;
+	/** Agent's final assistant text, when present. */
+	summary: string | null;
+};
+
+export type TriageStatus = {
+	active: TriageActiveStatus | null;
+	lastOutcome: LastTickOutcome | null;
+};
+
+export async function getTriageConfig(): Promise<TriageConfig> {
+	try {
+		return await invoke<TriageConfig>("get_triage_config");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load triage settings."),
+		);
+	}
+}
+
+export async function updateTriageConfig(config: TriageConfig): Promise<void> {
+	try {
+		await invoke<void>("update_triage_config", { config });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to save triage settings."),
+		);
+	}
+}
+
+export async function getTriageActiveStatus(): Promise<TriageStatus> {
+	try {
+		return await invoke<TriageStatus>("get_triage_active_status");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load triage status."),
+		);
+	}
+}
+
+export async function triggerTriageTickNow(): Promise<string> {
+	try {
+		return await invoke<string>("trigger_triage_tick_now");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to trigger triage tick."),
+		);
+	}
+}
+
+export async function cancelTriageTick(): Promise<boolean> {
+	try {
+		return await invoke<boolean>("cancel_triage_tick");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to cancel triage tick."),
+		);
+	}
+}
 
 export async function listenGitBranchChanged(
 	callback: (payload: GitBranchChangedPayload) => void,
@@ -1916,13 +2475,13 @@ export async function listenGitRefsChanged(
 export async function subscribeUiMutations(
 	callback: (event: UiMutationEvent) => void,
 ): Promise<UnlistenFn> {
-	const { Channel } = await import("@tauri-apps/api/core");
 	const subscriptionId = crypto.randomUUID();
 	const onEvent = new Channel<UiMutationEvent>();
 	onEvent.onmessage = callback;
 	await invoke("subscribe_ui_mutations", { subscriptionId, onEvent });
 	return () => {
 		onEvent.onmessage = () => {};
+		closeChannel(onEvent);
 		void invoke("unsubscribe_ui_mutations", { subscriptionId });
 	};
 }
@@ -2217,10 +2776,12 @@ export async function listWorkspaceFiles(
 
 export async function listWorkspaceChanges(
 	workspaceRootPath: string,
+	workspaceId?: string | null,
 ): Promise<InspectorFileItem[]> {
 	try {
 		return await invoke<InspectorFileItem[]>("list_workspace_changes", {
 			workspaceRootPath,
+			workspaceId: workspaceId ?? null,
 		});
 	} catch (error) {
 		throw new Error(
@@ -2514,6 +3075,29 @@ export async function permanentlyDeleteWorkspace(
 	workspaceId: string,
 ): Promise<void> {
 	await invoke("permanently_delete_workspace", { workspaceId });
+}
+
+export interface CleanupArchivedFailure {
+	workspaceId: string;
+	title: string;
+	message: string;
+}
+
+export interface CleanupArchivedWorkspacesResponse {
+	deletedCount: number;
+	failures: CleanupArchivedFailure[];
+}
+
+/**
+ * Permanently delete every archived workspace, one at a time, through the
+ * same backend path as `permanentlyDeleteWorkspace`. Resolves when the
+ * whole run finishes; the run is backend-owned, so it completes even if
+ * the caller unmounts mid-flight.
+ */
+export async function cleanupArchivedWorkspaces(): Promise<CleanupArchivedWorkspacesResponse> {
+	return invoke<CleanupArchivedWorkspacesResponse>(
+		"cleanup_archived_workspaces",
+	);
 }
 
 /**
@@ -2824,6 +3408,32 @@ export type TodoListPart = {
 	id: string;
 	items: TodoItem[];
 };
+export type WorkflowAgentStatus = "running" | "done";
+export type WorkflowAgentRow = {
+	label: string;
+	status: WorkflowAgentStatus;
+	resultPreview?: string;
+	/** Phase grouping back-refs, for the `workflow -> phase -> agent` drill-down. */
+	phaseIndex?: number;
+	phaseTitle?: string;
+	/** Per-agent metrics surfaced in the agent detail view. */
+	model?: string;
+	tokens?: number;
+	toolCalls?: number;
+	durationMs?: number;
+};
+export type WorkflowStatus = "running" | "completed" | "failed" | "stopped";
+/** A Claude Code "Dynamic Workflow" run — the `Workflow` tool call plus its
+ *  aggregated `task_*` lifecycle, rendered as one evolving card. */
+export type WorkflowPart = {
+	type: "workflow";
+	id: string;
+	name: string;
+	status: WorkflowStatus;
+	agents?: WorkflowAgentRow[];
+	totalTokens?: number;
+	durationMs?: number;
+};
 export type ImageSource =
 	| { kind: "base64"; data: string }
 	| { kind: "url"; url: string }
@@ -2862,6 +3472,7 @@ export type MessagePart =
 	| ToolCallPart
 	| SystemNoticePart
 	| TodoListPart
+	| WorkflowPart
 	| ImagePart
 	| PromptSuggestionPart
 	| FileMentionPart
@@ -3027,6 +3638,7 @@ export type LocalLlmCatalogEntry = {
 	files: string[];
 	label: string;
 	quant: string;
+	/** Main weights only. UI should add `mmprojBytes` for total footprint. */
 	bytes: number;
 	minRamGb: number;
 	recommendedForGb: number;
@@ -3035,7 +3647,18 @@ export type LocalLlmCatalogEntry = {
 	 *  as a discriminator so future entry kinds can land without
 	 *  churning every consumer. */
 	kind?: "llm";
+	/** Vision projector file fetched alongside the main weights. Absent
+	 *  on text-only entries. */
+	mmprojFile?: string | null;
+	/** Bytes of the mmproj file; 0 when none. */
+	mmprojBytes?: number;
 };
+
+/** Main weights + vision projector. Use everywhere we show "size of this
+ *  catalog entry" to the user (picker rows, delete dialog, download cap). */
+export function localLlmEntryTotalBytes(entry: LocalLlmCatalogEntry): number {
+	return entry.bytes + (entry.mmprojBytes ?? 0);
+}
 
 export async function listLocalLlmCatalog(): Promise<LocalLlmCatalogEntry[]> {
 	return await invoke<LocalLlmCatalogEntry[]>("list_local_llm_catalog");
@@ -3102,6 +3725,12 @@ export type LocalLlmDownloadStatus = {
 	state: LocalLlmDownloadState;
 	downloaded: number;
 	total: number;
+	/** `false` when the model is `downloaded` but at least one optional
+	 *  companion file (e.g. mmproj projector) is still missing on disk.
+	 *  UI uses this to surface a top-up affordance without forcing a
+	 *  Delete + redownload. Always `true` for entries with no optional
+	 *  files. */
+	optionalComplete: boolean;
 	error?: string;
 };
 
@@ -3124,6 +3753,7 @@ export type LocalLlmDownloadEvent =
 			downloaded: number;
 			path: string;
 			sha256Verified: boolean;
+			optionalComplete: boolean;
 	  }
 	| {
 			entryId: string;
@@ -3205,7 +3835,6 @@ export async function startAgentMessageStream(
 	request: AgentSendRequest,
 	callback: (event: AgentStreamEvent) => void,
 ): Promise<void> {
-	const { Channel } = await import("@tauri-apps/api/core");
 	const onEvent = new Channel<AgentStreamEvent>();
 	onEvent.onmessage = (event) => callback(event);
 	await invoke("send_agent_message_stream", { request, onEvent });
@@ -3218,6 +3847,37 @@ export async function stopAgentStream(
 	await invoke("stop_agent_stream", {
 		request: { sessionId, provider: provider ?? null },
 	});
+}
+
+/**
+ * Attach a read-only *watcher* to a session's live agent stream.
+ *
+ * The client that called `startAgentMessageStream` renders the turn from its
+ * own channel; this lets another client (a second window, or this same SPA
+ * served to a phone via the mobile companion) mirror the SAME turn live. The
+ * callback fires for every `AgentStreamEvent` the driver receives — feed them
+ * through the same render pipeline. Works identically over native Tauri and the
+ * companion HTTP/NDJSON transport. Returns an unlisten to detach.
+ */
+export async function subscribeSessionStream(
+	sessionId: string,
+	callback: (event: AgentStreamEvent) => void,
+): Promise<UnlistenFn> {
+	const subscriptionId = crypto.randomUUID();
+	const onEvent = new Channel<AgentStreamEvent>();
+	onEvent.onmessage = (event) => callback(event);
+	await invoke("subscribe_session_stream", {
+		sessionId,
+		subscriptionId,
+		onEvent,
+	});
+	return () => {
+		onEvent.onmessage = () => {};
+		// Abort the companion fetch so the server frees the watcher and the
+		// browser releases the connection slot (no-op on native Tauri).
+		closeChannel(onEvent);
+		void invoke("unsubscribe_session_stream", { sessionId, subscriptionId });
+	};
 }
 
 /** UI projection of a registered, in-flight agent stream. Mirror of
@@ -3400,6 +4060,10 @@ export async function createSession(
 		fastMode?: boolean | null;
 		/** Pre-allocated session UUID; see `prepareWorkspaceFromRepo`. */
 		seedSessionId?: string | null;
+		/** "terminal" creates a Terminal session (live PTY); defaults to "gui". */
+		sessionKind?: "gui" | "terminal" | null;
+		/** Pin agent_type at creation (Terminal preset CLI, e.g. "claude"). */
+		agentType?: string | null;
 	},
 ): Promise<CreateSessionResponse> {
 	return invoke<CreateSessionResponse>("create_session", {
@@ -3410,6 +4074,8 @@ export async function createSession(
 		effortLevel: options?.effortLevel ?? null,
 		fastMode: options?.fastMode ?? null,
 		seedSessionId: options?.seedSessionId ?? null,
+		sessionKind: options?.sessionKind ?? null,
+		agentType: options?.agentType ?? null,
 	});
 }
 
@@ -3442,12 +4108,18 @@ export async function generateSessionTitle(
 	sessionId: string,
 	userMessage: string,
 	titleSeed?: string | null,
+	provider?: AgentProvider | null,
 ): Promise<GenerateSessionTitleResponse | null> {
 	try {
 		return await invoke<GenerateSessionTitleResponse>(
 			"generate_session_title",
 			{
-				request: { sessionId, userMessage, titleSeed: titleSeed ?? null },
+				request: {
+					sessionId,
+					userMessage,
+					titleSeed: titleSeed ?? null,
+					provider: provider ?? null,
+				},
 			},
 		);
 	} catch (error) {
@@ -3493,6 +4165,54 @@ export type CodexGoalState = {
 	createdAt: number;
 	updatedAt: number;
 };
+
+/** Provenance of the latest normalised plan projection. */
+export type SessionPlanSource = "codex" | "exit_plan_mode";
+
+/** Status of a single plan item, normalised away from provider quirks. */
+export type SessionPlanItemStatus = "pending" | "inProgress" | "completed";
+
+/** Status of the plan as a whole. Only `active` ships today; the union
+ *  exists so future "completed" / "cancelled" states don't break callers. */
+export type SessionPlanStatus = "active";
+
+export type SessionPlanItem = {
+	id: string;
+	text: string;
+	status: SessionPlanItemStatus;
+};
+
+export type SessionPlan = {
+	items: SessionPlanItem[];
+	currentItemId: string | null;
+	allowedPrompts: string[];
+	/** Markdown fallback present when the provider ships free-text plans
+	 *  (currently Claude `ExitPlanMode`). `null` when the original
+	 *  payload was already structured (Codex `turn/plan/updated`). */
+	rawText: string | null;
+	rawSource: string;
+};
+
+export type SessionPlanState = {
+	sessionId: string;
+	source: SessionPlanSource;
+	sourceMessageId: string | null;
+	plan: SessionPlan;
+	status: SessionPlanStatus;
+	updatedAt: string;
+};
+
+/** Latest persisted plan projection for a session. `null` means the
+ *  session has never carried a plan (or the stored row failed
+ *  validation — the loader degrades gracefully so the pinned-plan UI
+ *  doesn't need to handle a hard error path). */
+export async function getSessionPlanState(
+	sessionId: string,
+): Promise<SessionPlanState | null> {
+	return invoke<SessionPlanState | null>("get_session_plan_state", {
+		sessionId,
+	});
+}
 
 /** Read the active Codex `/goal` for one session. Null when no goal. */
 export async function getSessionCodexGoal(
@@ -3757,6 +4477,32 @@ export async function stopRepoScript(
 }
 
 /**
+ * Run a run action's configured `stopCommand` as a standalone script —
+ * no preceding main process to terminate. Drives the inspector's
+ * "Cleanup" button, which the user clicks after a start exited (cleanly
+ * or otherwise) to tear down side effects (docker containers, daemons)
+ * that the start spawned but didn't clean up itself.
+ *
+ * Output streams through the same channel shape as `executeRepoScript`,
+ * so the Run tab's terminal naturally shows cleanup output.
+ */
+export async function executeRepoStopCommand(
+	repoId: string,
+	workspaceId: string,
+	actionId: string,
+	onEvent: (event: ScriptEvent) => void,
+): Promise<void> {
+	const channel = new Channel<ScriptEvent>();
+	channel.onmessage = onEvent;
+	await invoke("execute_repo_stop_command", {
+		repoId,
+		workspaceId,
+		actionId,
+		channel,
+	});
+}
+
+/**
  * Send raw bytes to a running script's PTY master. The kernel's tty line
  * discipline translates `\x03` into SIGINT for the foreground process group,
  * so passing `\x03` here is how Ctrl+C in the terminal tab actually kills
@@ -3880,6 +4626,8 @@ export async function spawnTerminal(
 	workspaceId: string,
 	instanceId: string,
 	onEvent: (event: ScriptEvent) => void,
+	bootCommand?: string | null,
+	agentKind?: string | null,
 ): Promise<void> {
 	const channel = new Channel<ScriptEvent>();
 	channel.onmessage = onEvent;
@@ -3887,6 +4635,8 @@ export async function spawnTerminal(
 		repoId,
 		workspaceId,
 		instanceId,
+		agentKind: agentKind ?? null,
+		bootCommand: bootCommand ?? null,
 		channel,
 	});
 }
@@ -3900,6 +4650,22 @@ export async function stopTerminal(
 		repoId,
 		workspaceId,
 		instanceId,
+	});
+}
+
+/** Mirror a Terminal session's working/idle state into the active-stream
+ * registry (drives the sidebar spinner + completion notification). */
+export async function setTerminalSessionBusy(
+	sessionId: string,
+	workspaceId: string,
+	busy: boolean,
+	provider?: string | null,
+): Promise<void> {
+	await invoke("set_terminal_session_busy", {
+		sessionId,
+		workspaceId,
+		busy,
+		provider: provider ?? null,
 	});
 }
 
@@ -3973,4 +4739,110 @@ export async function findExistingHelmorRepo(): Promise<ExistingHelmorRepo | nul
 
 function describeInvokeError(error: unknown, fallback: string): string {
 	return extractError(error, fallback).message;
+}
+
+// --- Mobile browser companion ----------------------------------------------
+
+/** Companion server + tunnel status. */
+export type CompanionStatus = {
+	running: boolean;
+	/** Loopback address the server is bound to (`127.0.0.1:<port>`). */
+	addr: string | null;
+	/** Public tunnel URL, when a tunnel is up. */
+	publicUrl: string | null;
+	/** `"named"` (stable URL), `"quick"` (ephemeral), or `"none"`. */
+	mode: "named" | "quick" | "none";
+	/** Provisioned stable hostname, if any — independent of running state. */
+	stableHost: string | null;
+	/** Whether the user has signed in to Cloudflare. */
+	signedIn: boolean;
+};
+
+/** One-time payload returned when pairing a device. The phone scans `url`. */
+export type CompanionPairingPayload = {
+	deviceId: string;
+	label: string;
+	/** Plaintext PAT — shown once, never persisted in plaintext. */
+	pat: string;
+	/** Full pairing URL to encode as a QR: `<origin>/#pair=<pat>`. */
+	url: string;
+};
+
+/** A paired phone (active, non-revoked). */
+export type PairedDevice = {
+	id: string;
+	label: string;
+	createdAt: string;
+	lastSeenAt: string | null;
+};
+
+export async function getCompanionStatus(): Promise<CompanionStatus> {
+	return invoke<CompanionStatus>("companion_status");
+}
+
+export async function enableCompanion(): Promise<CompanionStatus> {
+	try {
+		return await invoke<CompanionStatus>("companion_enable");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to enable the mobile companion."),
+		);
+	}
+}
+
+export async function disableCompanion(): Promise<void> {
+	await invoke<void>("companion_disable");
+}
+
+export async function pairCompanionDevice(
+	label: string,
+): Promise<CompanionPairingPayload> {
+	try {
+		return await invoke<CompanionPairingPayload>("companion_pair_device", {
+			label,
+		});
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to pair device."));
+	}
+}
+
+export async function listPairedDevices(): Promise<PairedDevice[]> {
+	return (await invoke<PairedDevice[]>("companion_list_devices")) ?? [];
+}
+
+export async function revokePairedDevice(deviceId: string): Promise<void> {
+	await invoke<void>("companion_revoke_device", { deviceId });
+}
+
+/** Open the Cloudflare sign-in flow (browser). Resolves once cert.pem lands. */
+export async function signInCloudflare(): Promise<void> {
+	try {
+		await invoke<void>("companion_sign_in_cloudflare");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Cloudflare sign-in did not complete."),
+		);
+	}
+}
+
+/** Provision a permanent remote-*.helmor.ai URL and bring it up. */
+export async function allocateStableUrl(): Promise<CompanionStatus> {
+	try {
+		return await invoke<CompanionStatus>("companion_allocate_stable_url");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to allocate a stable URL."),
+		);
+	}
+}
+
+/** Forget the permanent URL (revoke hostname + tear down). */
+export async function destroyStableUrl(): Promise<CompanionStatus> {
+	try {
+		return await invoke<CompanionStatus>("companion_destroy_stable_url");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to forget the stable URL."),
+		);
+	}
 }

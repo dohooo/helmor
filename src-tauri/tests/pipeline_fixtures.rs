@@ -18,7 +18,7 @@
 //! # Adding a new fixture
 //!
 //! ```sh
-//! cargo run --bin gen_pipeline_fixture -- <session_id> <fixture_name>
+//! cargo run --example gen_pipeline_fixture -- <session_id> <fixture_name>
 //! ```
 //!
 //! Then run the tests once with `INSTA_UPDATE=always` to create the

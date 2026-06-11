@@ -107,6 +107,13 @@ describe("summarizeToolCall", () => {
 		expect(summarizeToolCall(tool("TodoWrite"))).toBe("Updating todos");
 	});
 
+	it("formats the Task tool family (claude-agent-sdk v0.3.142)", () => {
+		expect(summarizeToolCall(tool("TaskCreate"))).toBe("Adding task");
+		expect(summarizeToolCall(tool("TaskUpdate"))).toBe("Updating task");
+		expect(summarizeToolCall(tool("TaskGet"))).toBe("Reading task");
+		expect(summarizeToolCall(tool("TaskList"))).toBe("Listing tasks");
+	});
+
 	it("strips the mcp__ prefix and shows server tool name", () => {
 		expect(summarizeToolCall(tool("mcp__github__search_repos"))).toBe(
 			"MCP search_repos",

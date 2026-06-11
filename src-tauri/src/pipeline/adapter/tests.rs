@@ -5,7 +5,7 @@
 use super::blocks::parse_assistant_parts;
 use super::labels::{build_result_label, format_count};
 use super::*;
-use crate::pipeline::types::{NoticeSeverity, TodoStatus};
+use crate::pipeline::types::{NoticeSeverity, TodoStatus, WorkflowAgentStatus, WorkflowStatus};
 use serde_json::json;
 
 fn im(id: &str, role: &str, content: Value) -> IntermediateMessage {
@@ -786,6 +786,39 @@ fn prompt_suggestion_empty_is_silent() {
     assert!(result.is_empty(), "empty suggestion must produce nothing");
 }
 
+#[test]
+fn fast_mode_unavailable_renders_as_warning_notice() {
+    let messages = vec![im(
+        "fmu1",
+        "assistant",
+        json!({
+            "type": "system",
+            "subtype": "fast_mode_unavailable",
+            "reason": "Fast mode runs on extra usage, which isn't enabled.",
+            "fastModeState": "off",
+        }),
+    )];
+    let result = convert(&messages);
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].role, MessageRole::System);
+    match &result[0].content[0] {
+        ExtendedMessagePart::Basic(MessagePart::SystemNotice {
+            severity,
+            label,
+            body,
+            ..
+        }) => {
+            assert_eq!(*severity, NoticeSeverity::Warning);
+            assert_eq!(label, "Fast mode unavailable");
+            assert_eq!(
+                body.as_deref(),
+                Some("Fast mode runs on extra usage, which isn't enabled.")
+            );
+        }
+        other => panic!("expected SystemNotice, got {other:?}"),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // R6: rate_limit_event
 // ---------------------------------------------------------------------------
@@ -943,6 +976,633 @@ fn parse_assistant_parts_collapses_todowrite() {
             assert_eq!(items[0].status, TodoStatus::Pending);
         }
         other => panic!("expected TodoList, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// R6b: Task family (TaskCreate / TaskUpdate) → TodoList collapse.
+//
+// claude-agent-sdk v0.3.142 retired `TodoWrite` for SDK/headless sessions in
+// favor of the incremental Task family. The adapter accumulates these by
+// creation order (the CLI assigns sequential ids "1","2","3"…), renders a
+// cumulative TodoList per state-changing call, then collapses consecutive
+// TodoList parts so the user still sees a SINGLE evolving plan widget —
+// identical in shape to the old single-TodoWrite render.
+// ---------------------------------------------------------------------------
+
+fn task_create(id: &str, subject: &str) -> IntermediateMessage {
+    im(
+        id,
+        "assistant",
+        json!({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": format!("tc_{id}"),
+                    "name": "TaskCreate",
+                    "input": {"subject": subject, "description": subject},
+                }]
+            }
+        }),
+    )
+}
+
+fn task_update(id: &str, task_id: &str, status: &str) -> IntermediateMessage {
+    im(
+        id,
+        "assistant",
+        json!({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": format!("tu_{id}"),
+                    "name": "TaskUpdate",
+                    "input": {"taskId": task_id, "status": status},
+                }]
+            }
+        }),
+    )
+}
+
+#[test]
+fn claude_task_family_collapses_to_single_todolist() {
+    // Mirror the real 2.1.154 stream: 3 TaskCreate + 2 TaskUpdate across
+    // separate assistant messages. After merge + collapse the user must
+    // see ONE TodoList reflecting the final cumulative state.
+    let messages = vec![
+        task_create("1", "Read the target file"),
+        task_create("2", "Rename the function"),
+        task_create("3", "Update all call sites"),
+        task_update("4", "1", "in_progress"),
+        task_update("5", "1", "completed"),
+    ];
+    let result = convert(&messages);
+    assert_eq!(
+        result.len(),
+        1,
+        "all Task calls merge into one assistant message"
+    );
+
+    let todo_lists: Vec<_> = result[0]
+        .content
+        .iter()
+        .filter(|p| matches!(p, ExtendedMessagePart::Basic(MessagePart::TodoList { .. })))
+        .collect();
+    assert_eq!(
+        todo_lists.len(),
+        1,
+        "consecutive Task TodoLists collapse to a single evolving list, got {} parts: {:?}",
+        result[0].content.len(),
+        result[0].content,
+    );
+
+    match todo_lists[0] {
+        ExtendedMessagePart::Basic(MessagePart::TodoList { items, .. }) => {
+            assert_eq!(items.len(), 3, "three tasks created");
+            assert_eq!(items[0].text, "Read the target file");
+            assert_eq!(
+                items[0].status,
+                TodoStatus::Completed,
+                "task 1 ends completed"
+            );
+            assert_eq!(items[1].text, "Rename the function");
+            assert_eq!(items[1].status, TodoStatus::Pending);
+            assert_eq!(items[2].text, "Update all call sites");
+            assert_eq!(items[2].status, TodoStatus::Pending);
+        }
+        other => panic!("expected TodoList, got {other:?}"),
+    }
+}
+
+#[test]
+fn claude_task_create_streaming_falls_back_to_toolcall() {
+    // Mid-stream TaskCreate with no `subject` yet → render a plain ToolCall,
+    // mirroring the TodoWrite streaming-fallback contract.
+    let parsed = json!({
+        "type": "assistant",
+        "message": {
+            "role": "assistant",
+            "content": [{
+                "type": "tool_use",
+                "id": "tc_stream",
+                "name": "TaskCreate",
+                "input": {},
+                "__streaming_status": "streaming_input"
+            }]
+        }
+    });
+    let parts = parse_assistant_parts(Some(&parsed), "test-msg");
+    assert_eq!(parts.len(), 1);
+    match &parts[0] {
+        MessagePart::ToolCall { tool_name, .. } => assert_eq!(tool_name, "TaskCreate"),
+        other => panic!("streaming TaskCreate must fall back to ToolCall, got {other:?}"),
+    }
+}
+
+#[test]
+fn claude_task_update_unknown_id_falls_back_to_toolcall() {
+    // A TaskUpdate referencing a task we never saw created cannot fold into
+    // a list → render it as a plain ToolCall rather than inventing a row.
+    let messages = vec![task_update("1", "99", "completed")];
+    let result = convert(&messages);
+    assert_eq!(result.len(), 1);
+    match &result[0].content[0] {
+        ExtendedMessagePart::Basic(MessagePart::ToolCall { tool_name, .. }) => {
+            assert_eq!(tool_name, "TaskUpdate");
+        }
+        other => panic!("unknown-id TaskUpdate must be a ToolCall, got {other:?}"),
+    }
+}
+
+#[test]
+fn claude_task_get_and_list_render_as_toolcall() {
+    // TaskGet / TaskList are read-only — they don't mutate the plan, so
+    // they render as ordinary ToolCalls (with their own summary label),
+    // never as a TodoList.
+    let messages = vec![im(
+        "1",
+        "assistant",
+        json!({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "tg", "name": "TaskGet", "input": {"taskId": "1"}},
+                    {"type": "tool_use", "id": "tl", "name": "TaskList", "input": {}},
+                ]
+            }
+        }),
+    )];
+    let result = convert(&messages);
+    assert_eq!(result.len(), 1);
+    let names: Vec<&str> = result[0]
+        .content
+        .iter()
+        .filter_map(|p| match p {
+            ExtendedMessagePart::Basic(MessagePart::ToolCall { tool_name, .. }) => {
+                Some(tool_name.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(names, vec!["TaskGet", "TaskList"]);
+    assert!(
+        !result[0]
+            .content
+            .iter()
+            .any(|p| matches!(p, ExtendedMessagePart::Basic(MessagePart::TodoList { .. }))),
+        "read-only Task tools must not synthesize a TodoList"
+    );
+}
+
+#[test]
+fn claude_task_create_then_update_in_one_message_collapses() {
+    // Two Task calls inside a single assistant message still collapse to a
+    // single TodoList (covers the `flat.len() <= 1` convert branch).
+    let messages = vec![im(
+        "1",
+        "assistant",
+        json!({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "c1", "name": "TaskCreate",
+                     "input": {"subject": "Step A", "description": "do A"}},
+                    {"type": "tool_use", "id": "u1", "name": "TaskUpdate",
+                     "input": {"taskId": "1", "status": "in_progress"}},
+                ]
+            }
+        }),
+    )];
+    let result = convert(&messages);
+    assert_eq!(result.len(), 1);
+    let todo_lists: Vec<_> = result[0]
+        .content
+        .iter()
+        .filter(|p| matches!(p, ExtendedMessagePart::Basic(MessagePart::TodoList { .. })))
+        .collect();
+    assert_eq!(todo_lists.len(), 1, "single evolving TodoList");
+    match todo_lists[0] {
+        ExtendedMessagePart::Basic(MessagePart::TodoList { items, .. }) => {
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].text, "Step A");
+            assert_eq!(items[0].status, TodoStatus::InProgress);
+        }
+        other => panic!("expected TodoList, got {other:?}"),
+    }
+}
+
+#[test]
+fn claude_task_update_deleted_removes_row_from_list() {
+    let messages = vec![
+        task_create("1", "Keep me"),
+        task_create("2", "Delete me"),
+        task_update("3", "2", "deleted"),
+    ];
+    let result = convert(&messages);
+    assert_eq!(result.len(), 1);
+    let items = result[0]
+        .content
+        .iter()
+        .find_map(|p| match p {
+            ExtendedMessagePart::Basic(MessagePart::TodoList { items, .. }) => Some(items),
+            _ => None,
+        })
+        .expect("a single TodoList");
+    assert_eq!(items.len(), 1, "the deleted task is gone");
+    assert_eq!(items[0].text, "Keep me");
+}
+
+#[test]
+fn claude_task_update_without_rendered_fields_is_toolcall() {
+    // A TaskUpdate that changes only owner/blocks (no status, no subject)
+    // doesn't alter the rendered list → it must render as a plain ToolCall,
+    // not a redundant duplicate TodoList.
+    let messages = vec![
+        task_create("1", "Step one"),
+        im(
+            "2",
+            "assistant",
+            json!({
+                "type": "assistant",
+                "message": {"role": "assistant", "content": [{
+                    "type": "tool_use", "id": "u2", "name": "TaskUpdate",
+                    "input": {"taskId": "1", "owner": "alice"}
+                }]}
+            }),
+        ),
+    ];
+    let result = convert(&messages);
+    assert_eq!(result.len(), 1);
+    let todos = result[0]
+        .content
+        .iter()
+        .filter(|p| matches!(p, ExtendedMessagePart::Basic(MessagePart::TodoList { .. })))
+        .count();
+    let toolcalls = result[0]
+        .content
+        .iter()
+        .filter(|p| matches!(p, ExtendedMessagePart::Basic(MessagePart::ToolCall { .. })))
+        .count();
+    assert_eq!(todos, 1, "the create still renders its list");
+    assert_eq!(
+        toolcalls, 1,
+        "the no-op TaskUpdate falls back to a ToolCall"
+    );
+}
+
+#[test]
+fn claude_task_collapse_drops_emptied_task_only_message() {
+    // Two Task-only assistant messages split by a user prompt (so they don't
+    // merge). The second (TaskUpdate-only) message is emptied when its list is
+    // folded into the anchor — it must be dropped, leaving no ghost bubble.
+    let messages = vec![
+        task_create("a1", "Step one"),
+        im(
+            "u1",
+            "user",
+            json!({"type": "user_prompt", "text": "keep going"}),
+        ),
+        task_update("a2", "1", "completed"),
+    ];
+    let result = convert(&messages);
+    assert_eq!(
+        result.len(),
+        2,
+        "emptied Task-only assistant message is dropped, got {result:?}"
+    );
+    assert!(
+        !result
+            .iter()
+            .any(|m| m.role == MessageRole::Assistant && m.content.is_empty()),
+        "no empty assistant ghost bubble remains"
+    );
+    let items = result[0]
+        .content
+        .iter()
+        .find_map(|p| match p {
+            ExtendedMessagePart::Basic(MessagePart::TodoList { items, .. }) => Some(items),
+            _ => None,
+        })
+        .expect("anchor message keeps the single TodoList");
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        items[0].status,
+        TodoStatus::Completed,
+        "anchor carries the final cumulative state"
+    );
+}
+
+#[test]
+fn claude_task_partial_fresh_state_bare_update_is_toolcall() {
+    // The streaming-partial render path calls parse_assistant_parts with a
+    // FRESH TaskListState (only the trailing message). A TaskUpdate whose
+    // TaskCreate lived in an earlier, not-included message has no prior task
+    // to patch → ToolCall, never a single-item phantom list.
+    let parsed = json!({
+        "type": "assistant",
+        "message": {"role": "assistant", "content": [{
+            "type": "tool_use", "id": "u", "name": "TaskUpdate",
+            "input": {"taskId": "1", "status": "completed"}
+        }]}
+    });
+    let parts = parse_assistant_parts(Some(&parsed), "partial-msg");
+    assert_eq!(parts.len(), 1);
+    assert!(
+        matches!(&parts[0], MessagePart::ToolCall { tool_name, .. } if tool_name == "TaskUpdate"),
+        "bare TaskUpdate in a fresh-state partial render is a ToolCall"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic Workflow widget: the Workflow tool call + its task_* lifecycle
+// events (task_type="local_workflow") aggregate into one MessagePart::Workflow.
+// Shapes mirror a real claude-code 2.1.154 capture.
+// ---------------------------------------------------------------------------
+
+fn sys(id: &str, content: Value) -> IntermediateMessage {
+    im(id, "system", content)
+}
+
+#[test]
+fn claude_workflow_aggregates_into_single_widget() {
+    let messages = vec![
+        // The Workflow tool call anchors the widget.
+        im(
+            "a1",
+            "assistant",
+            json!({
+                "type": "assistant",
+                "message": {"role": "assistant", "content": [{
+                    "type": "tool_use", "id": "wf_tc", "name": "Workflow",
+                    "input": {"script": "export const meta = { name: 'demo' }"}
+                }]}
+            }),
+        ),
+        // task_started links task_id ↔ tool_use_id and carries the name.
+        sys(
+            "s1",
+            json!({
+                "type": "system", "subtype": "task_started",
+                "task_id": "w1", "tool_use_id": "wf_tc",
+                "task_type": "local_workflow", "workflow_name": "demo-two-agents",
+                "description": "Minimal demo"
+            }),
+        ),
+        // task_progress carries the agent tree + cumulative usage.
+        sys(
+            "s2",
+            json!({
+                "type": "system", "subtype": "task_progress",
+                "task_id": "w1", "tool_use_id": "wf_tc",
+                "usage": {"total_tokens": 61609, "tool_uses": 0, "duration_ms": 1655},
+                "workflow_progress": [
+                    {"type": "workflow_phase", "index": 1, "title": "Demo"},
+                    {"type": "workflow_agent", "index": 1, "label": "agent-alpha",
+                     "phaseIndex": 1, "phaseTitle": "Demo", "model": "claude-opus-4-8[1m]",
+                     "state": "done", "tokens": 30805, "toolCalls": 0, "durationMs": 1645,
+                     "resultPreview": "alpha"},
+                    {"type": "workflow_agent", "index": 2, "label": "agent-beta",
+                     "state": "done", "resultPreview": "beta"}
+                ]
+            }),
+        ),
+        // task_updated (only task_id) flips status via the task→tool link.
+        sys(
+            "s3",
+            json!({
+                "type": "system", "subtype": "task_updated",
+                "task_id": "w1", "patch": {"status": "completed"}
+            }),
+        ),
+        // task_notification is terminal.
+        sys(
+            "s4",
+            json!({
+                "type": "system", "subtype": "task_notification",
+                "task_id": "w1", "tool_use_id": "wf_tc", "status": "completed",
+                "summary": "Dynamic workflow completed",
+                "usage": {"total_tokens": 61609, "tool_uses": 0, "duration_ms": 1655}
+            }),
+        ),
+    ];
+    let result = convert(&messages);
+
+    // Exactly one Workflow widget; the raw task_* events do NOT render as
+    // standalone subagent notices.
+    let workflows: Vec<_> = result
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .filter_map(|p| match p {
+            ExtendedMessagePart::Basic(MessagePart::Workflow {
+                name,
+                status,
+                agents,
+                total_tokens,
+                ..
+            }) => Some((name, status, agents, total_tokens)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(workflows.len(), 1, "one workflow widget, got {result:?}");
+    let (name, status, agents, total_tokens) = workflows[0];
+    assert_eq!(name, "demo-two-agents");
+    assert_eq!(*status, WorkflowStatus::Completed);
+    assert_eq!(*total_tokens, Some(61609));
+    assert_eq!(agents.len(), 2);
+    assert_eq!(agents[0].label, "agent-alpha");
+    assert_eq!(agents[0].status, WorkflowAgentStatus::Done);
+    assert_eq!(agents[0].result_preview.as_deref(), Some("alpha"));
+    // Phase grouping + per-agent metrics are captured from the workflow_progress
+    // entry (these drive the drill-down detail view).
+    assert_eq!(agents[0].phase_index, Some(1));
+    assert_eq!(agents[0].phase_title.as_deref(), Some("Demo"));
+    assert_eq!(agents[0].model.as_deref(), Some("claude-opus-4-8[1m]"));
+    assert_eq!(agents[0].tokens, Some(30805));
+    assert_eq!(agents[0].tool_calls, Some(0));
+    assert_eq!(agents[0].duration_ms, Some(1645));
+    assert_eq!(agents[1].label, "agent-beta");
+    // Agents whose entry omits the metric fields keep them None.
+    assert_eq!(agents[1].model, None);
+    assert_eq!(agents[1].tokens, None);
+
+    // No leftover "Subagent started/progress/completed" notices for the
+    // workflow's task_* events.
+    let notice_count = result
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .filter(|p| {
+            matches!(
+                p,
+                ExtendedMessagePart::Basic(MessagePart::SystemNotice { .. })
+            )
+        })
+        .count();
+    assert_eq!(
+        notice_count, 0,
+        "workflow task_* events must not render as notices"
+    );
+}
+
+#[test]
+fn non_workflow_subagent_task_still_renders_notice() {
+    // A task_* event WITHOUT task_type=local_workflow (a plain subagent) must
+    // keep rendering through the existing subagent-notice path — the workflow
+    // aggregation must not swallow it.
+    let messages = vec![sys(
+        "s1",
+        json!({
+            "type": "system", "subtype": "task_started",
+            "task_id": "t1", "tool_use_id": "task_abc",
+            "description": "review the code"
+        }),
+    )];
+    let result = convert(&messages);
+    let has_notice = result.iter().flat_map(|m| m.content.iter()).any(|p| {
+        matches!(
+            p,
+            ExtendedMessagePart::Basic(MessagePart::SystemNotice { label, .. }) if label == "Subagent started"
+        )
+    });
+    assert!(
+        has_notice,
+        "plain subagent task_started should still be a notice"
+    );
+}
+
+fn workflow_tool_use(msg_id: &str, tool_use_id: &str) -> IntermediateMessage {
+    im(
+        msg_id,
+        "assistant",
+        json!({
+            "type": "assistant",
+            "message": {"role": "assistant", "content": [{
+                "type": "tool_use", "id": tool_use_id, "name": "Workflow",
+                "input": {"script": "export const meta = { name: 'demo' }"}
+            }]}
+        }),
+    )
+}
+
+fn first_workflow(result: &[ThreadMessageLike]) -> Option<&MessagePart> {
+    result
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .find_map(|p| match p {
+            ExtendedMessagePart::Basic(part @ MessagePart::Workflow { .. }) => Some(part),
+            _ => None,
+        })
+}
+
+#[test]
+fn claude_workflow_agent_done_not_downgraded_by_stale_delta() {
+    let messages = vec![
+        workflow_tool_use("a1", "wf_tc"),
+        sys(
+            "s1",
+            json!({"type":"system","subtype":"task_started","task_id":"w1","tool_use_id":"wf_tc","task_type":"local_workflow","workflow_name":"demo"}),
+        ),
+        // Agent 1 reaches done with a result preview…
+        sys(
+            "s2",
+            json!({"type":"system","subtype":"task_progress","task_id":"w1","tool_use_id":"wf_tc","workflow_progress":[
+                {"type":"workflow_agent","index":1,"label":"a","state":"done","resultPreview":"ok"}]}),
+        ),
+        // …then a stale delta says "progress" again — must NOT downgrade.
+        sys(
+            "s3",
+            json!({"type":"system","subtype":"task_progress","task_id":"w1","tool_use_id":"wf_tc","workflow_progress":[
+                {"type":"workflow_agent","index":1,"label":"a","state":"progress"}]}),
+        ),
+    ];
+    let result = convert(&messages);
+    match first_workflow(&result).expect("workflow widget") {
+        MessagePart::Workflow { agents, .. } => {
+            assert_eq!(agents.len(), 1);
+            assert_eq!(
+                agents[0].status,
+                WorkflowAgentStatus::Done,
+                "a done agent must not be downgraded by a stale delta"
+            );
+            assert_eq!(agents[0].result_preview.as_deref(), Some("ok"));
+        }
+        other => panic!("expected Workflow, got {other:?}"),
+    }
+}
+
+#[test]
+fn claude_workflow_multiple_runs_render_separately() {
+    let messages = vec![
+        workflow_tool_use("a1", "wf_a"),
+        sys(
+            "s1",
+            json!({"type":"system","subtype":"task_started","task_id":"wa","tool_use_id":"wf_a","task_type":"local_workflow","workflow_name":"alpha-flow"}),
+        ),
+        sys(
+            "s2",
+            json!({"type":"system","subtype":"task_notification","task_id":"wa","tool_use_id":"wf_a","status":"completed"}),
+        ),
+        workflow_tool_use("a2", "wf_b"),
+        sys(
+            "s3",
+            json!({"type":"system","subtype":"task_started","task_id":"wb","tool_use_id":"wf_b","task_type":"local_workflow","workflow_name":"beta-flow"}),
+        ),
+        sys(
+            "s4",
+            json!({"type":"system","subtype":"task_progress","task_id":"wb","tool_use_id":"wf_b","workflow_progress":[
+                {"type":"workflow_agent","index":1,"label":"b","state":"progress"}]}),
+        ),
+    ];
+    let result = convert(&messages);
+    let flows: Vec<(&str, &WorkflowStatus)> = result
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .filter_map(|p| match p {
+            ExtendedMessagePart::Basic(MessagePart::Workflow { name, status, .. }) => {
+                Some((name.as_str(), status))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(flows.len(), 2, "two independent workflow widgets");
+    assert_eq!(flows[0].0, "alpha-flow");
+    assert_eq!(*flows[0].1, WorkflowStatus::Completed);
+    assert_eq!(flows[1].0, "beta-flow");
+    assert_eq!(*flows[1].1, WorkflowStatus::Running);
+}
+
+#[test]
+fn claude_workflow_completes_via_notification_without_task_updated() {
+    // task_notification is the terminal authority: even with no task_updated,
+    // the run settles to completed. (The event stream is ordered, so
+    // task_started always anchors the run before later events.)
+    let messages = vec![
+        workflow_tool_use("a1", "wf_tc"),
+        sys(
+            "s1",
+            json!({"type":"system","subtype":"task_started","task_id":"w1","tool_use_id":"wf_tc","task_type":"local_workflow","workflow_name":"demo"}),
+        ),
+        sys(
+            "s2",
+            json!({"type":"system","subtype":"task_notification","task_id":"w1","tool_use_id":"wf_tc","status":"completed","usage":{"total_tokens":1000,"duration_ms":500}}),
+        ),
+    ];
+    let result = convert(&messages);
+    match first_workflow(&result).expect("workflow widget") {
+        MessagePart::Workflow {
+            status,
+            total_tokens,
+            ..
+        } => {
+            assert_eq!(*status, WorkflowStatus::Completed);
+            assert_eq!(*total_tokens, Some(1000));
+        }
+        other => panic!("expected Workflow, got {other:?}"),
     }
 }
 

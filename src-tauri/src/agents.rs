@@ -12,11 +12,15 @@ mod builtin_claude_providers;
 mod catalog;
 pub(crate) mod claude_project_files;
 mod custom_providers;
+pub(crate) mod opencode_config;
 mod persistence;
+pub mod provider_capabilities;
 mod queries;
+pub mod session_plan;
 mod slash_commands;
 pub(crate) mod streaming;
 mod support;
+pub(crate) mod system_prompt;
 
 pub use self::action_kind::ActionKind;
 pub use self::catalog::{resolve_model, AgentModelOption, AgentModelSection, ResolvedModel};
@@ -30,7 +34,7 @@ pub use self::streaming::{
     abort_all_active_streams_blocking, bridge_aborted_event, bridge_done_event, bridge_error_event,
     bridge_permission_request_event, bridge_user_input_request_event, build_send_message_params,
     lookup_workspace_linked_directories, ActiveStreamSummary, ActiveStreams,
-    BuildSendMessageParamsInput,
+    BuildSendMessageParamsInput, SessionStreamHub,
 };
 
 use self::persistence::{
@@ -205,6 +209,20 @@ pub async fn list_agent_model_sections() -> CmdResult<Vec<AgentModelSection>> {
     Ok(queries::fetch_agent_model_sections())
 }
 
+/// Return the provider-capability table for every provider Helmor
+/// ships today. Static — no DB hit, no IPC fan-out — so callers are
+/// expected to cache the result for the lifetime of the app. Drives
+/// the composer's feature-flag branches (active-goal interception,
+/// permission-mode dropdown, etc.).
+#[tauri::command]
+pub async fn list_provider_capabilities(
+) -> CmdResult<Vec<provider_capabilities::ProviderCapabilities>> {
+    Ok(provider_capabilities::KNOWN_PROVIDERS
+        .iter()
+        .map(|p| provider_capabilities::capabilities_for_provider(p))
+        .collect())
+}
+
 #[tauri::command]
 pub async fn list_cursor_models(
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
@@ -215,16 +233,48 @@ pub async fn list_cursor_models(
 }
 
 #[tauri::command]
+pub async fn list_opencode_models(
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    force_reload: Option<bool>,
+) -> CmdResult<Vec<queries::OpencodeModelEntry>> {
+    // force_reload restarts the opencode server to pick up a just-written config.
+    queries::fetch_opencode_models(sidecar.inner(), force_reload.unwrap_or(false))
+}
+
+#[tauri::command]
 pub async fn send_agent_message_stream(
     app: AppHandle,
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
-    request: AgentSendRequest,
+    mut request: AgentSendRequest,
     on_event: Channel<AgentStreamEvent>,
 ) -> CmdResult<()> {
     let prompt = request.prompt.trim().to_string();
     if prompt.is_empty() {
         return Err(anyhow::anyhow!("Prompt cannot be empty.").into());
     }
+
+    // Inject triage priming as a hidden prefix; consumed flag flips only after sidecar accepts.
+    let priming_session_to_consume: Option<String> = match request.helmor_session_id.as_deref() {
+        Some(session_id) => match crate::triage::load_priming_prefix_for_session(session_id) {
+            Ok(Some(priming_prefix)) => {
+                request.prompt_prefix = crate::triage::combine_prefixes(
+                    Some(priming_prefix),
+                    request.prompt_prefix.take(),
+                );
+                Some(session_id.to_string())
+            }
+            Ok(None) => None,
+            Err(error) => {
+                tracing::warn!(
+                    error = %format!("{error:#}"),
+                    session_id,
+                    "triage: load_priming_prefix_for_session failed"
+                );
+                None
+            }
+        },
+        None => None,
+    };
 
     let model = resolve_model(&request.model_id, Some(request.provider.as_str()));
 
@@ -241,7 +291,7 @@ pub async fn send_agent_message_stream(
     let stream_id = Uuid::new_v4().to_string();
     let active_streams = app.state::<ActiveStreams>();
 
-    stream_via_sidecar(
+    let send_result = stream_via_sidecar(
         app.clone(),
         on_event,
         &sidecar,
@@ -251,7 +301,32 @@ pub async fn send_agent_message_stream(
         &prompt,
         &request,
         &working_directory,
-    )
+    );
+
+    // Mark consumed only after the prompt actually streamed; retries should keep the priming.
+    if send_result.is_ok() {
+        if let Some(session_id) = priming_session_to_consume {
+            match crate::triage::mark_consumed_for_session(&session_id) {
+                Ok(true) => {
+                    // Publish so the sidebar repaints the kind flip immediately.
+                    crate::ui_sync::publish(
+                        &app,
+                        crate::ui_sync::UiMutationEvent::WorkspaceListChanged,
+                    );
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        error = %format!("{error:#}"),
+                        session_id,
+                        "triage: failed to mark priming consumed; injection will recur"
+                    );
+                }
+            }
+        }
+    }
+
+    send_result
 }
 
 fn resolve_stream_working_directory(
@@ -278,6 +353,36 @@ pub async fn list_active_streams(
     active_streams: tauri::State<'_, ActiveStreams>,
 ) -> CmdResult<Vec<ActiveStreamSummary>> {
     Ok(active_streams.snapshot_for_ui())
+}
+
+/// Attach a *watcher* to a session's live agent stream. The initiating client
+/// renders the turn from its own `send_agent_message_stream` channel; this lets
+/// ANY other connected client (a second desktop window, or the mobile
+/// companion over HTTP/NDJSON) mirror the same turn in real time. Events arrive
+/// on `on_event` exactly like the send path — the frontend feeds them through
+/// the same render pipeline. Symmetric across desktop and mobile.
+#[tauri::command]
+pub async fn subscribe_session_stream(
+    hub: tauri::State<'_, SessionStreamHub>,
+    session_id: String,
+    subscription_id: String,
+    on_event: Channel<AgentStreamEvent>,
+) -> CmdResult<()> {
+    hub.subscribe(session_id, subscription_id, on_event);
+    Ok(())
+}
+
+/// Detach a watcher previously attached via [`subscribe_session_stream`]. Over
+/// the companion HTTP bridge this is redundant (the SSE drop auto-unsubscribes)
+/// but native clients call it explicitly on teardown.
+#[tauri::command]
+pub async fn unsubscribe_session_stream(
+    hub: tauri::State<'_, SessionStreamHub>,
+    session_id: String,
+    subscription_id: String,
+) -> CmdResult<()> {
+    hub.unsubscribe(&session_id, &subscription_id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -683,6 +788,7 @@ mod tests {
 
     #[test]
     fn resolve_model_infers_provider() {
+        let _env = crate::testkit::TestEnv::new("resolve-model-infers-provider");
         let claude = resolve_model("default", None);
         assert_eq!(claude.provider, "claude");
         assert_eq!(claude.cli_model, "default");
@@ -798,7 +904,7 @@ mod tests {
         let db_path = setup_test_db(dir.path());
         let conn = rusqlite::Connection::open(&db_path).unwrap();
         conn.execute(
-            "INSERT INTO sessions (id, workspace_id, status, effort_level, permission_mode) VALUES ('s1', 'w1', 'idle', 'high', 'acceptEdits')",
+            "INSERT INTO sessions (id, workspace_id, status, effort_level, permission_mode) VALUES ('s1', 'w1', 'idle', 'high', 'bypassPermissions')",
             [],
         ).unwrap();
 
@@ -816,7 +922,7 @@ mod tests {
             "opus",
             "Reply",
             None, // effort_level = None → should keep 'high'
-            None, // permission_mode = None → should keep 'acceptEdits'
+            None, // permission_mode = None → should keep 'bypassPermissions'
             &AgentUsage {
                 input_tokens: None,
                 output_tokens: None,
@@ -840,7 +946,7 @@ mod tests {
             "effort_level should be preserved when None passed"
         );
         assert_eq!(
-            perm, "acceptEdits",
+            perm, "bypassPermissions",
             "permission_mode should be preserved when None passed"
         );
 

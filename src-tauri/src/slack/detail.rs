@@ -1,12 +1,11 @@
 //! Build the detail view for a single Slack inbox item.
 //!
-//! Two modes:
-//!   1. `thread_ts` is set → `conversations.replies` returns the full
-//!      thread including the root message. We render the whole tree.
-//!   2. `thread_ts` is None → `conversations.history` with the message's
-//!      `ts` as `latest`+`inclusive` gives a small context window around
-//!      a single DM / channel message. Better than showing the message
-//!      naked.
+//! The client sends `thread_ts=None` and lets the backend resolve it from
+//! the anchor `ts` (see [`resolve_thread`]):
+//!   - the anchor belongs to a thread (as the root OR a reply) → render the
+//!     whole thread via `conversations.replies`;
+//!   - otherwise it's a standalone message → a small `conversations.history`
+//!     context window around it, rather than showing the message naked.
 
 use anyhow::{bail, Context, Result};
 
@@ -31,14 +30,18 @@ pub fn get_thread_detail(
             true,
         )
     } else {
-        // Single-message preview: grab the last ~20 of channel history
-        // and flip newest-first → oldest-first for rendering. v1 takes
-        // the simple "last 20" slice — perfect-anchor centering can
-        // wait until we hear the UX demand it.
-        let mut messages = api::conversations_history(&creds, channel_id, None, 20)
-            .context("Failed to fetch channel history for detail view")?;
-        messages.reverse();
-        (messages, false)
+        // The client sends thread_ts=None and lets us resolve it from the
+        // anchor (see `resolve_thread`). A genuine standalone message has no
+        // thread → fall back to a small channel-history context window.
+        match resolve_thread(&creds, channel_id, anchor_ts) {
+            Some(thread) => (thread, true),
+            None => {
+                let mut messages = api::conversations_history(&creds, channel_id, None, 20)
+                    .context("Failed to fetch channel history for detail view")?;
+                messages.reverse();
+                (messages, false)
+            }
+        }
     };
 
     let channel_label =
@@ -63,6 +66,33 @@ pub fn get_thread_detail(
     })
 }
 
+/// Resolve the full thread an `anchor_ts` belongs to, or `None` when the
+/// anchor is a standalone (non-threaded) message.
+///
+/// `conversations.replies(anchor)` behaves differently by anchor kind:
+///   • root  → returns the entire thread (root + every reply).
+///   • reply → returns ONLY that single message (the web/xoxc API does not
+///     expand a thread from a reply's ts), but the returned message carries
+///     `thread_ts` pointing at the real root. We then re-fetch the root to
+///     pull in the whole thread the @-mention lives in.
+fn resolve_thread(
+    creds: &SlackCreds,
+    channel_id: &str,
+    anchor_ts: &str,
+) -> Option<Vec<RawMessage>> {
+    let first = api::conversations_replies(creds, channel_id, anchor_ts).ok()?;
+    if first.len() > 1 {
+        return Some(first); // anchor was the thread root
+    }
+    // Single message: a reply points at its real root via `thread_ts`.
+    let root = first.first()?.thread_ts.as_deref()?;
+    if root == anchor_ts {
+        return None; // a root with no replies → standalone message
+    }
+    let thread = api::conversations_replies(creds, channel_id, root).ok()?;
+    (thread.len() > 1).then_some(thread)
+}
+
 fn convert_message(team_id: &str, creds: &SlackCreds, raw: RawMessage) -> SlackMessage {
     let (author_name, author_avatar_url) = resolve_author(team_id, creds, &raw);
     let ts_millis = api::ts_to_millis(&raw.ts);
@@ -75,8 +105,11 @@ fn convert_message(team_id: &str, creds: &SlackCreds, raw: RawMessage) -> SlackM
     // `attachments`, but skip the `files` placeholder branch. When a
     // message is purely a file share, the inline preview rendered from
     // `files` below replaces what would otherwise be `📎 N files` —
-    // we don't want both showing.
-    let text = api::extract_message_body(&raw);
+    // we don't want both showing. Then resolve `<@U…>` mentions to the
+    // labeled `<@U…|display>` form so the frontend can render
+    // human-readable `@names` instead of opaque user ids.
+    let body = api::extract_message_body(&raw);
+    let text = api::resolve_mentions(team_id, creds, &body);
     let reactions = raw
         .reactions
         .iter()

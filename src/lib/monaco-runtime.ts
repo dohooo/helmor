@@ -86,6 +86,11 @@ let runtimePromise: Promise<MonacoRuntime> | null = null;
 
 /** Content cache for pre-fetched files — avoids IPC on first switch. */
 const fileContentCache = new Map<string, string>();
+const activeFileEditors = new Set<StandaloneEditor>();
+const activeDiffEditors = new Set<StandaloneDiffEditor>();
+const DEFAULT_MONACO_FONT_FAMILY =
+	'"SF Mono","Monaco","Cascadia Mono","Roboto Mono","Menlo",monospace';
+let cssFontProbe: HTMLDivElement | null = null;
 
 type EditorTheme = "light" | "dark";
 
@@ -101,6 +106,41 @@ function detectInitialTheme(): EditorTheme {
 
 function themeId(theme: EditorTheme): string {
 	return theme === "dark" ? "helmor-editor-dark" : "helmor-editor-light";
+}
+
+function resolveEditorFontFamily(): string {
+	if (
+		typeof document === "undefined" ||
+		typeof window === "undefined" ||
+		!document.body
+	) {
+		return DEFAULT_MONACO_FONT_FAMILY;
+	}
+
+	const probe = getCssFontProbe();
+	probe.style.fontFamily = "var(--font-mono)";
+	const resolved = window.getComputedStyle(probe).fontFamily.trim();
+	return resolved || DEFAULT_MONACO_FONT_FAMILY;
+}
+
+function getCssFontProbe(): HTMLDivElement {
+	if (!cssFontProbe) {
+		cssFontProbe = document.createElement("div");
+		cssFontProbe.style.cssText =
+			"position:absolute;visibility:hidden;pointer-events:none;width:0;height:0;";
+		document.body.appendChild(cssFontProbe);
+	}
+	return cssFontProbe;
+}
+
+function updateActiveEditorFonts() {
+	const fontFamily = resolveEditorFontFamily();
+	for (const editor of activeFileEditors) {
+		editor.updateOptions({ fontFamily });
+	}
+	for (const editor of activeDiffEditors) {
+		editor.updateOptions({ fontFamily });
+	}
 }
 
 export async function createFileEditor(options: {
@@ -129,8 +169,7 @@ export async function createFileEditor(options: {
 		codeLens: false,
 		colorDecorators: false,
 		contextmenu: false,
-		fontFamily:
-			'"SF Mono","Monaco","Cascadia Mono","Roboto Mono","Menlo",monospace',
+		fontFamily: resolveEditorFontFamily(),
 		fontLigatures: true,
 		fontSize: 13,
 		folding: false,
@@ -156,6 +195,7 @@ export async function createFileEditor(options: {
 		theme: themeId(desiredTheme),
 		wordWrap: "on",
 	});
+	activeFileEditors.add(editor);
 	const findWidgetTooltipPatch = suppressFindWidgetCloseTooltip(
 		options.container,
 	);
@@ -168,6 +208,7 @@ export async function createFileEditor(options: {
 		editor,
 		dispose() {
 			findWidgetTooltipPatch.dispose();
+			activeFileEditors.delete(editor);
 			editor.dispose();
 			// editor.dispose() does NOT release the bound model — leaking it
 			// keeps the file text + tokenization state alive across opens.
@@ -259,8 +300,7 @@ export async function createDiffEditor(options: {
 		colorDecorators: false,
 		contextmenu: false,
 		enableSplitViewResizing: true,
-		fontFamily:
-			'"SF Mono","Monaco","Cascadia Mono","Roboto Mono","Menlo",monospace',
+		fontFamily: resolveEditorFontFamily(),
 		fontLigatures: true,
 		fontSize: 13,
 		folding: false,
@@ -292,6 +332,7 @@ export async function createDiffEditor(options: {
 		suggestOnTriggerCharacters: false,
 		theme: themeId(desiredTheme),
 	});
+	activeDiffEditors.add(editor);
 
 	editor.setModel({
 		original: originalModel,
@@ -305,6 +346,7 @@ export async function createDiffEditor(options: {
 		editor,
 		dispose() {
 			findWidgetTooltipPatch.dispose();
+			activeDiffEditors.delete(editor);
 			editor.dispose();
 			originalModel.dispose();
 			modifiedModel.dispose();
@@ -390,7 +432,7 @@ async function ensureRuntime(): Promise<MonacoRuntime> {
 
 			installMonacoEnvironment();
 			installEditorTheme(monaco);
-			installThemeObserver(monaco);
+			installAppearanceObserver(monaco);
 			disableLanguageDiagnostics(monaco);
 
 			return { monaco };
@@ -400,9 +442,11 @@ async function ensureRuntime(): Promise<MonacoRuntime> {
 	return runtimePromise;
 }
 
-// Resync Monaco theme on `<html>` class changes; rAF-coalesced because one
-// user-visible switch flips multiple classes in a row.
-function installThemeObserver(monaco: MonacoModule) {
+// Sync Monaco with `<html>` appearance changes. Re-defines both themes on
+// class mutations — light/dark toggle AND preset theme switch both flip CSS
+// variables. Style mutations cover font overrides written by settings. Updates
+// are rAF-coalesced because one user-visible switch flips multiple attrs.
+function installAppearanceObserver(monaco: MonacoModule) {
 	if (
 		typeof document === "undefined" ||
 		typeof MutationObserver === "undefined"
@@ -410,20 +454,21 @@ function installThemeObserver(monaco: MonacoModule) {
 		return;
 	}
 	let scheduled = 0;
-	const syncTheme = () => {
+	const syncAppearance = () => {
 		scheduled = 0;
 		const nextTheme = detectInitialTheme();
 		defineHelmorThemes(monaco);
 		desiredTheme = nextTheme;
 		monaco.editor.setTheme(themeId(nextTheme));
+		updateActiveEditorFonts();
 	};
 	const observer = new MutationObserver(() => {
 		if (scheduled) return;
-		scheduled = requestAnimationFrame(syncTheme);
+		scheduled = requestAnimationFrame(syncAppearance);
 	});
 	observer.observe(document.documentElement, {
 		attributes: true,
-		attributeFilter: ["class"],
+		attributeFilter: ["class", "style"],
 	});
 }
 

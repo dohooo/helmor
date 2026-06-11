@@ -45,6 +45,19 @@ export function summarizeToolCall(part: ToolCallPart): string {
 			return "Running sub-agent";
 		case "TodoWrite":
 			return "Updating todos";
+		// Task tool family — replaced TodoWrite for Claude SDK/headless
+		// sessions in claude-agent-sdk v0.3.142. TaskCreate/TaskUpdate are
+		// normally folded into the TodoList widget by the pipeline, so these
+		// labels surface for the read-only TaskGet/TaskList and the brief
+		// streaming window before a mutation's input finishes arriving.
+		case "TaskCreate":
+			return "Adding task";
+		case "TaskUpdate":
+			return "Updating task";
+		case "TaskGet":
+			return "Reading task";
+		case "TaskList":
+			return "Listing tasks";
 		default: {
 			if (part.toolName.startsWith("mcp__")) {
 				const segments = part.toolName.split("__");

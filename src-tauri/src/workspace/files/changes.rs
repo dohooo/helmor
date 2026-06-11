@@ -39,6 +39,13 @@ impl FileStats {
 }
 
 pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFileListItem>> {
+    list_workspace_changes_for_workspace(workspace_root_path, None)
+}
+
+pub fn list_workspace_changes_for_workspace(
+    workspace_root_path: &str,
+    workspace_id: Option<&str>,
+) -> Result<Vec<EditorFileListItem>> {
     let workspace_root = Path::new(workspace_root_path);
     if !workspace_root.is_absolute() {
         bail!(
@@ -58,7 +65,7 @@ pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFil
         return Ok(Vec::new());
     }
 
-    let target_ref = resolve_target_ref(workspace_root)?;
+    let target_ref = resolve_target_ref_for_workspace(workspace_root, workspace_id)?;
 
     // Run all git commands in parallel — they're independent reads.
     //
@@ -325,9 +332,127 @@ pub(super) fn query_workspace_target(
     .and_then(|(remote, target)| Some((remote.unwrap_or_else(|| "origin".into()), target?)))
 }
 
-fn lookup_workspace_target(workspace_root: &Path) -> Option<(String, String)> {
-    let (repo_name, dir_name) = parse_workspace_path(workspace_root)?;
+pub(super) fn query_workspace_target_by_id(
+    conn: &Connection,
+    workspace_id: &str,
+    workspace_root: &Path,
+) -> Option<(String, String)> {
+    let sql = format!(
+        "SELECT r.remote,
+		        COALESCE(w.intended_target_branch, r.default_branch),
+		        r.name,
+		        w.directory_name,
+		        COALESCE(w.mode, 'worktree'),
+		        r.root_path
+		 FROM workspaces w
+		 JOIN repos r ON r.id = w.repository_id
+		 WHERE w.id = ?1 AND w.state {}",
+        workspace_state::OPERATIONAL_FILTER,
+    );
+    let mut stmt = conn.prepare(&sql).ok()?;
+
+    let (remote, target, repo_name, dir_name, mode, root_path): (
+        Option<String>,
+        Option<String>,
+        String,
+        String,
+        String,
+        Option<String>,
+    ) = stmt
+        .query_row(rusqlite::params![workspace_id], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        })
+        .ok()?;
+
+    let matches_root = match mode.as_str() {
+        "local" => root_path
+            .as_deref()
+            .is_some_and(|path| path_matches(workspace_root, path)),
+        "worktree" => parse_workspace_path(workspace_root)
+            .is_some_and(|(root_repo, root_dir)| root_repo == repo_name && root_dir == dir_name),
+        _ => false,
+    };
+    if !matches_root {
+        return None;
+    }
+
+    Some((remote.unwrap_or_else(|| "origin".into()), target?))
+}
+
+pub(super) fn query_local_workspace_target(
+    conn: &Connection,
+    workspace_root: &Path,
+) -> Option<(String, String)> {
+    let root_path = workspace_root.to_string_lossy();
+    query_local_workspace_target_by_root_path(conn, root_path.as_ref()).or_else(|| {
+        let canonical = workspace_root.canonicalize().ok()?;
+        let canonical_path = canonical.to_string_lossy();
+        if canonical_path == root_path {
+            return None;
+        }
+        query_local_workspace_target_by_root_path(conn, canonical_path.as_ref())
+    })
+}
+
+fn query_local_workspace_target_by_root_path(
+    conn: &Connection,
+    root_path: &str,
+) -> Option<(String, String)> {
+    let sql = format!(
+        "SELECT r.remote, COALESCE(w.intended_target_branch, r.default_branch)
+		 FROM workspaces w
+		 JOIN repos r ON r.id = w.repository_id
+		 WHERE r.root_path = ?1
+		   AND COALESCE(w.mode, 'worktree') = 'local'
+		   AND w.state {}",
+        workspace_state::OPERATIONAL_FILTER,
+    );
+    let mut stmt = conn.prepare(&sql).ok()?;
+
+    let mut rows = stmt.query(rusqlite::params![root_path]).ok()?;
+    let row = rows.next().ok()??;
+    let remote: Option<String> = row.get(0).ok()?;
+    let target: Option<String> = row.get(1).ok()?;
+    if rows.next().ok()?.is_some() {
+        return None;
+    }
+
+    Some((remote.unwrap_or_else(|| "origin".into()), target?))
+}
+
+fn path_matches(path: &Path, stored: &str) -> bool {
+    if path.to_string_lossy() == stored {
+        return true;
+    }
+
+    let stored_path = Path::new(stored);
+    match (path.canonicalize(), stored_path.canonicalize()) {
+        (Ok(path_canonical), Ok(stored_canonical)) => path_canonical == stored_canonical,
+        (Ok(path_canonical), Err(_)) => path_canonical.to_string_lossy() == stored,
+        (Err(_), Ok(stored_canonical)) => stored_canonical == path,
+        (Err(_), Err(_)) => false,
+    }
+}
+
+fn lookup_workspace_target(
+    workspace_root: &Path,
+    workspace_id: Option<&str>,
+) -> Option<(String, String)> {
     let conn = db::read_conn().ok()?;
+    if let Some(workspace_id) = workspace_id {
+        return query_workspace_target_by_id(&conn, workspace_id, workspace_root);
+    }
+    if let Some(target) = query_local_workspace_target(&conn, workspace_root) {
+        return Some(target);
+    }
+    let (repo_name, dir_name) = parse_workspace_path(workspace_root)?;
     query_workspace_target(&conn, repo_name, dir_name)
 }
 
@@ -339,10 +464,13 @@ fn lookup_workspace_target(workspace_root: &Path) -> Option<(String, String)> {
 ///
 /// Uses a single `git for-each-ref` call to batch-check all candidates
 /// instead of N sequential `rev-parse --verify` invocations.
-pub(super) fn resolve_target_ref(workspace_root: &Path) -> Result<String> {
+pub(super) fn resolve_target_ref_for_workspace(
+    workspace_root: &Path,
+    workspace_id: Option<&str>,
+) -> Result<String> {
     let mut candidates = Vec::<String>::new();
 
-    if let Some((remote, target)) = lookup_workspace_target(workspace_root) {
+    if let Some((remote, target)) = lookup_workspace_target(workspace_root, workspace_id) {
         candidates.push(format!("refs/remotes/{remote}/{target}"));
         candidates.push(format!("refs/heads/{target}"));
     }

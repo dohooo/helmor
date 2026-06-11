@@ -11,6 +11,8 @@ import crypto from "node:crypto";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { ActiveTurnRegistry } from "./active-turn-registry.js";
+import type { AgentProxySettings } from "./agent-proxy.js";
 import {
 	CodexAppServer,
 	type JsonRpcNotification,
@@ -67,15 +69,16 @@ function resolveCodexBinPath(): string {
 		try {
 			const require = createRequire(import.meta.url);
 			const pkgJson = require.resolve(`${platformPkg}/package.json`);
-			const candidate = join(
-				dirname(pkgJson),
-				"vendor",
-				triple,
-				"codex",
-				process.platform === "win32" ? "codex.exe" : "codex",
-			);
-			if (existsSync(candidate)) {
-				return candidate;
+			const vendorRoot = join(dirname(pkgJson), "vendor", triple);
+			const binName = process.platform === "win32" ? "codex.exe" : "codex";
+			// codex >=0.134 nests the binary under `bin/`; older builds used
+			// `codex/`. Probe both so a version bump can't silently drop us
+			// to the bare-PATH fallback. Mirrors `stage-vendor.ts`.
+			for (const sub of ["bin", "codex"]) {
+				const candidate = join(vendorRoot, sub, binName);
+				if (existsSync(candidate)) {
+					return candidate;
+				}
 			}
 		} catch {
 			// Platform sub-package missing (e.g. --omit=optional) — fall through.
@@ -365,6 +368,8 @@ interface AppServerContext {
 	notificationGate: Promise<void> | null;
 	/** Last send's model id; Codex usage notifications omit it. */
 	lastSentModel: string;
+	/** Stable key for the proxy env used to spawn this app-server. */
+	agentProxyKey: string;
 	/** Wall-clock ms of the most recent "Reconnecting…" line on the
 	 *  Codex child process's stderr. Used to suppress the transient
 	 *  {method:"error"} notifications that Codex emits during its own
@@ -441,6 +446,7 @@ export class CodexAppServerManager implements SessionManager {
 	private sessions = new Map<string, AppServerContext>();
 	private pendingApprovals = new Map<string, PendingApproval>();
 	private pendingUserInputs = new Map<string, PendingUserInput>();
+	private readonly turns = new ActiveTurnRegistry();
 
 	/** Called by index.ts when frontend responds to a permission prompt. */
 	resolvePermission(permissionId: string, behavior: "allow" | "deny"): void {
@@ -531,9 +537,16 @@ export class CodexAppServerManager implements SessionManager {
 			effortLevel,
 			permissionMode,
 			fastMode,
+			agentProxy,
 			additionalDirectories,
 			images,
 		} = params;
+		// Register the turn before any startup await (goal pre-flight +
+		// ensureContext) so a Stop pressed mid-startup emits `aborted`
+		// instantly and tears the turn down via `tearDownTurn`.
+		this.turns.begin(sessionId, requestId, emitter, () =>
+			this.tearDownTurn(sessionId),
+		);
 		const workDir = cwd ?? process.cwd();
 		const effectiveFastMode =
 			fastMode === true && modelSupportsFastMode("codex", model);
@@ -573,7 +586,16 @@ export class CodexAppServerManager implements SessionManager {
 			model,
 			permissionMode,
 			effectiveFastMode,
+			agentProxy,
 		);
+		// Stop pressed during startup — `requestStop` already emitted `aborted`.
+		// Kill the freshly-started server and bail instead of running the turn.
+		if (this.turns.isAbortRequested(sessionId)) {
+			ctx.server.kill();
+			this.sessions.delete(sessionId);
+			this.turns.end(sessionId);
+			return;
+		}
 		// Codex usage notifications do not include a model id.
 		if (model) ctx.lastSentModel = model;
 
@@ -618,8 +640,6 @@ export class CodexAppServerManager implements SessionManager {
 		);
 		turnStartParams.sandboxPolicy = sandboxPolicy;
 
-		let aborted = false;
-
 		// Stash the active stream's routing info so `steer()` can fire a
 		// synthetic user passthrough on the correct request id / emitter.
 		ctx.activeRequestId = requestId;
@@ -627,10 +647,7 @@ export class CodexAppServerManager implements SessionManager {
 
 		return new Promise<void>((resolve, reject) => {
 			ctx.turnResolve = resolve;
-			ctx.turnReject = (err) => {
-				aborted = true;
-				reject(err);
-			};
+			ctx.turnReject = reject;
 
 			const emit = (event: object) => {
 				emitter.passthrough(requestId, event);
@@ -1032,11 +1049,12 @@ export class CodexAppServerManager implements SessionManager {
 					reject(err);
 				});
 		}).finally(() => {
-			if (aborted) {
-				emitter.aborted(requestId, "user_requested");
-			} else {
+			// `aborted` is terminal — `requestStop` already emitted it. Only
+			// emit `end` on natural completion / error-resolve, then clear.
+			if (!this.turns.isAbortRequested(sessionId)) {
 				emitter.end(requestId);
 			}
+			this.turns.end(sessionId);
 			if (ctx.activeRequestId === requestId) {
 				ctx.activeRequestId = null;
 				ctx.activeEmitter = null;
@@ -1062,6 +1080,12 @@ export class CodexAppServerManager implements SessionManager {
 		const server = new CodexAppServer({
 			binaryPath: CODEX_BIN_PATH,
 			cwd,
+			agentProxy: options?.agentProxy,
+			// Title generation must never start the user's configured MCP
+			// servers: on a new worktree's first turn that races the real
+			// conversation's MCP init and can leave tools (e.g. Linear)
+			// unavailable. This is a throwaway one-shot, so disable MCP.
+			disableMcp: true,
 			onNotification: () => {},
 			onRequest: (req) => {
 				if (APPROVAL_METHODS.has(req.method)) {
@@ -1273,19 +1297,23 @@ export class CodexAppServerManager implements SessionManager {
 		// pause without that backup, this branch may silently no-op on
 		// the untracked turn.
 		if (action === "pause" && ctx.activeTurnId) {
-			try {
-				await ctx.server.sendRequest(
+			// Fire-and-forget: codex can take the full 5s to ACK turn/interrupt,
+			// and the Composer Stop path kills the child via stopSession right
+			// after this returns — so don't block the abort on the interrupt
+			// round-trip. The goal/set below (which actually persists the pause)
+			// is still awaited so the paused state lands before the kill.
+			ctx.server
+				.sendRequest(
 					"turn/interrupt",
 					{ threadId, turnId: ctx.activeTurnId },
 					5_000,
-				);
-			} catch (err) {
-				// Best-effort — don't let an interrupt failure block the
-				// goal state change. Codex may have just finished naturally.
-				logger.debug("mutateGoal interrupt failed (best-effort)", {
-					...errorDetails(err),
+				)
+				.catch((err) => {
+					// Best-effort — codex may have just finished naturally.
+					logger.debug("mutateGoal interrupt failed (best-effort)", {
+						...errorDetails(err),
+					});
 				});
-			}
 		}
 
 		try {
@@ -1355,7 +1383,11 @@ export class CodexAppServerManager implements SessionManager {
 
 	// ── stopSession / shutdown ───────────────────────────────────────────
 
-	async stopSession(sessionId: string): Promise<void> {
+	/** Tear down the active turn: drop pending prompts, interrupt the upstream
+	 *  turn (best-effort, no await), kill the app-server, reject the turn
+	 *  promise. No-op if no context is registered yet (mid-startup) — the
+	 *  post-`ensureContext` abort check kills the freshly-started server. */
+	private tearDownTurn(sessionId: string): void {
 		const ctx = this.sessions.get(sessionId);
 		if (!ctx) return;
 		logger.info(`stopSession ${sessionId}`, {
@@ -1375,24 +1407,34 @@ export class CodexAppServerManager implements SessionManager {
 		ctx.turnReject = null;
 		ctx.activeTurnId = null;
 
+		// Killing the app-server IS the abort. Fire `turn/interrupt`
+		// best-effort so codex can cancel the upstream turn, but DON'T await
+		// it — codex 0.134 can take the full 5s timeout to ACK, and gating
+		// the user-facing `aborted` on that round-trip is what made the Stop
+		// button lag. `kill()` clears this request's pending timeout.
 		if (ctx.providerThreadId && turnToInterrupt) {
-			try {
-				await ctx.server.sendRequest(
+			ctx.server
+				.sendRequest(
 					"turn/interrupt",
 					{ threadId: ctx.providerThreadId, turnId: turnToInterrupt },
 					5_000,
-				);
-			} catch {
-				// best-effort
-			}
+				)
+				.catch(() => {
+					// best-effort
+				});
 		}
 
 		ctx.server.kill();
 		this.sessions.delete(sessionId);
 
-		// Use AbortError so the index catch can distinguish user-stop from real errors
-		const abortErr = new DOMException("Session stopped by user", "AbortError");
-		pendingReject?.(abortErr);
+		// AbortError lets the index catch distinguish user-stop from real errors.
+		pendingReject?.(new DOMException("Session stopped by user", "AbortError"));
+	}
+
+	async stopSession(sessionId: string): Promise<void> {
+		// Emits `aborted` instantly + runs `tearDownTurn` — works at any point,
+		// including during the first turn's startup (spawn + thread/start).
+		this.turns.requestStop(sessionId);
 	}
 
 	/**
@@ -1504,12 +1546,12 @@ export class CodexAppServerManager implements SessionManager {
 	}
 
 	async shutdown(): Promise<void> {
-		for (const [_id, ctx] of this.sessions) {
+		for (const sessionId of [...this.sessions.keys()]) {
 			try {
-				ctx.turnReject?.(new Error("Sidecar shutdown"));
-				ctx.turnResolve = null;
-				ctx.turnReject = null;
-				ctx.server.kill();
+				// Abort any active turn (emits `aborted` + rejects), then make
+				// sure the server is dead even on idle sessions.
+				this.turns.requestStop(sessionId);
+				this.sessions.get(sessionId)?.server.kill();
 			} catch (err) {
 				logger.error("shutdown: kill failed", errorDetails(err));
 			}
@@ -1608,9 +1650,17 @@ export class CodexAppServerManager implements SessionManager {
 		model?: string,
 		permissionMode?: string,
 		fastMode?: boolean,
+		agentProxy?: AgentProxySettings,
 	): Promise<AppServerContext> {
+		const agentProxyKey = buildAgentProxyKey(agentProxy);
 		const existing = this.sessions.get(sessionId);
-		if (existing && !existing.server.killed) return existing;
+		if (existing && !existing.server.killed) {
+			if (existing.agentProxyKey === agentProxyKey || existing.activeTurnId) {
+				return existing;
+			}
+			existing.server.kill();
+			this.sessions.delete(sessionId);
+		}
 
 		// Forward-reference holder so the `onRetry` closure can reach the
 		// context that's constructed below — the callback only fires once
@@ -1621,6 +1671,7 @@ export class CodexAppServerManager implements SessionManager {
 		const server = new CodexAppServer({
 			binaryPath: CODEX_BIN_PATH,
 			cwd,
+			agentProxy,
 			onNotification: () => {},
 			onRequest: () => {},
 			onExit: (code, signal) => {
@@ -1720,6 +1771,7 @@ export class CodexAppServerManager implements SessionManager {
 			activeEmitter: null,
 			notificationGate: null,
 			lastSentModel: model ?? "",
+			agentProxyKey,
 			lastRetryAt: null,
 			lastRetryNotice: null,
 			subAgentTracker: new SubAgentTracker(server),
@@ -1942,39 +1994,29 @@ function parseSkillsResponse(
 	return Array.from(byName.values());
 }
 
+function buildAgentProxyKey(agentProxy?: AgentProxySettings): string {
+	if (!agentProxy) return "none";
+	if (agentProxy.mode === "system") return "system";
+	return `custom:${agentProxy.customUrl}`;
+}
+
 /**
- * Map Helmor's permissionMode to Codex's collaborationMode.
- * Returns undefined when no override is needed (i.e. default mode).
+ * Map Helmor's binary permissionMode to Codex's collaborationMode: `plan`
+ * (read-only) or full access. Always sent explicitly — Codex stays in plan mode
+ * across turns unless told otherwise.
  */
 function toCodexCollaborationMode(
 	permissionMode: string | undefined,
 	model: string | undefined,
 	effortLevel: string | undefined,
-): Record<string, unknown> | undefined {
-	if (permissionMode === "plan") {
-		return {
-			mode: "plan",
-			settings: {
-				...(model ? { model } : {}),
-				...(effortLevel ? { reasoning_effort: effortLevel } : {}),
-			},
-		};
-	}
-	// Explicitly switch to default mode — Codex stays in plan mode
-	// across turns unless told otherwise.
-	if (
-		permissionMode === "bypassPermissions" ||
-		permissionMode === "acceptEdits"
-	) {
-		return {
-			mode: "default",
-			settings: {
-				...(model ? { model } : {}),
-				...(effortLevel ? { reasoning_effort: effortLevel } : {}),
-			},
-		};
-	}
-	return undefined;
+): Record<string, unknown> {
+	return {
+		mode: permissionMode === "plan" ? "plan" : "default",
+		settings: {
+			...(model ? { model } : {}),
+			...(effortLevel ? { reasoning_effort: effortLevel } : {}),
+		},
+	};
 }
 
 // `bypassPermissions` uses `Granular` (not `"never"`) because Codex's
@@ -2004,10 +2046,10 @@ const BYPASS_GRANULAR_POLICY: CodexApprovalPolicy = {
 function toCodexApprovalPolicy(
 	permissionMode: string | undefined,
 ): CodexApprovalPolicy | undefined {
-	if (permissionMode === "bypassPermissions") return BYPASS_GRANULAR_POLICY;
-	if (permissionMode === "acceptEdits") return "untrusted";
-	// plan mode is read-only by design — leave to Codex default
-	return undefined;
+	// plan mode is read-only by design — leave to Codex default; everything else
+	// runs full access.
+	if (permissionMode === "plan") return undefined;
+	return BYPASS_GRANULAR_POLICY;
 }
 
 async function mergeAdditionalDirectories(

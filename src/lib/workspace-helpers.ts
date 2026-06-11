@@ -71,6 +71,11 @@ export function flattenWorkspaceRowsForNavigation(
 	return [...groups.flatMap((group) => group.rows), ...archivedRows];
 }
 
+/**
+ * Pick a replacement focus after removal. Group-aware: stay in the same
+ * bucket → next-non-empty group → archived. Callers MUST pass current/next
+ * in the same visual layout (`projectVisualSidebar` enforces this).
+ */
 export function findReplacementWorkspaceIdAfterRemoval({
 	currentGroups,
 	currentArchivedRows,
@@ -84,27 +89,65 @@ export function findReplacementWorkspaceIdAfterRemoval({
 	nextArchivedRows: WorkspaceRow[];
 	removedWorkspaceId: string;
 }): string | null {
-	const currentRows = flattenWorkspaceRowsForNavigation(
+	const removed = locateInLayout(
 		currentGroups,
 		currentArchivedRows,
-	);
-	const removedIndex = currentRows.findIndex(
-		(row) => row.id === removedWorkspaceId,
-	);
-	const nextRows = flattenWorkspaceRowsForNavigation(
-		nextGroups,
-		nextArchivedRows,
+		removedWorkspaceId,
 	);
 
-	if (nextRows.length === 0) {
-		return null;
+	// (1) Stay inside the removed workspace's bucket when it still has
+	// siblings.
+	if (removed.kind === "group") {
+		const nextSameGroup = nextGroups.find((g) => g.id === removed.groupId);
+		const rows = nextSameGroup?.rows ?? [];
+		if (rows.length > 0) {
+			return (
+				rows[removed.indexInGroup]?.id ??
+				rows[removed.indexInGroup - 1]?.id ??
+				rows[rows.length - 1]?.id ??
+				null
+			);
+		}
+	} else if (removed.kind === "archived") {
+		if (nextArchivedRows.length > 0) {
+			return (
+				nextArchivedRows[removed.indexInArchived]?.id ??
+				nextArchivedRows[removed.indexInArchived - 1]?.id ??
+				nextArchivedRows[nextArchivedRows.length - 1]?.id ??
+				null
+			);
+		}
 	}
 
-	if (removedIndex === -1) {
-		return nextRows[0]?.id ?? null;
+	// (2) Bucket exhausted — first non-empty group, then archived.
+	for (const group of nextGroups) {
+		const firstId = group.rows[0]?.id;
+		if (firstId) return firstId;
 	}
+	return nextArchivedRows[0]?.id ?? null;
+}
 
-	return nextRows[removedIndex]?.id ?? nextRows[removedIndex - 1]?.id ?? null;
+type WorkspaceLayoutLocation =
+	| { kind: "group"; groupId: string; indexInGroup: number }
+	| { kind: "archived"; indexInArchived: number }
+	| { kind: "none" };
+
+function locateInLayout(
+	groups: WorkspaceGroup[],
+	archivedRows: WorkspaceRow[],
+	id: string,
+): WorkspaceLayoutLocation {
+	for (const group of groups) {
+		const indexInGroup = group.rows.findIndex((r) => r.id === id);
+		if (indexInGroup !== -1) {
+			return { kind: "group", groupId: group.id, indexInGroup };
+		}
+	}
+	const indexInArchived = archivedRows.findIndex((r) => r.id === id);
+	if (indexInArchived !== -1) {
+		return { kind: "archived", indexInArchived };
+	}
+	return { kind: "none" };
 }
 
 export function hasWorkspaceId(
@@ -661,6 +704,16 @@ export function resolveSessionSelectedModelId({
 	if (!selectedModelId && session) {
 		selectedModelId = modelSelections[getComposerContextKey(null, session.id)];
 	}
+	// A persisted pick can outlive its model (e.g. the Cursor key was removed,
+	// dropping that section). Once the catalog has loaded, drop an id that's no
+	// longer in it so we fall back to a valid default instead of a dangling id.
+	if (
+		selectedModelId &&
+		modelSections.length > 0 &&
+		!findModelOption(modelSections, selectedModelId)
+	) {
+		selectedModelId = undefined;
+	}
 	return (
 		selectedModelId ??
 		inferDefaultModelId(session, modelSections, settingsDefaultModelId)
@@ -681,29 +734,34 @@ export function resolveSessionDisplayProvider({
 	modelSections: AgentModelSection[];
 	settingsDefaultModelId?: string | null;
 }): AgentProvider | null {
+	// The Session Tab only has the four provider icons, so drive it from the
+	// session's agent — not the composer model (an opencode session can run many
+	// sub-provider models whose own logos aren't one of our four).
+	const agentProvider = agentTypeToProvider(session.agentType);
+	if (agentProvider) {
+		return agentProvider;
+	}
+	// New sessions without an assigned agent fall back to the selected model's
+	// provider so the icon still reflects what the next turn will use.
 	const selectedModelId = resolveSessionSelectedModelId({
 		session,
 		modelSelections,
 		modelSections,
 		settingsDefaultModelId,
 	});
-	const selectedProvider = findModelOption(
-		modelSections,
-		selectedModelId,
-	)?.provider;
-	if (selectedProvider) {
-		return selectedProvider;
+	return findModelOption(modelSections, selectedModelId)?.provider ?? null;
+}
+
+function agentTypeToProvider(agentType?: string | null): AgentProvider | null {
+	switch (agentType) {
+		case "claude":
+		case "codex":
+		case "cursor":
+		case "opencode":
+			return agentType;
+		default:
+			return null;
 	}
-	if (session.agentType === "codex") {
-		return "codex";
-	}
-	if (session.agentType === "claude") {
-		return "claude";
-	}
-	if (session.agentType === "cursor") {
-		return "cursor";
-	}
-	return null;
 }
 
 /**
