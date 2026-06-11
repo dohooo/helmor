@@ -25,6 +25,9 @@ type CodeBlockProps = HTMLAttributes<HTMLDivElement> & {
 	showLineNumbers?: boolean;
 	wrapLines?: boolean;
 	variant?: "default" | "plain";
+	/** True while the surrounding markdown still streams deltas — cache
+	 *  writes are deferred so prefix snapshots don't churn the LRU. */
+	streaming?: boolean;
 };
 
 type CodeBlockContextType = {
@@ -61,6 +64,11 @@ function plainHtml(code: string) {
 	return `<pre><code>${escapeHtml(code)}</code></pre>`;
 }
 
+// Streaming flag for blocks rendered inside an actively streaming assistant
+// message — provided by `AssistantText`, consumed by `StreamdownPre`. Cache
+// writes are skipped while true so growing prefix snapshots don't churn the LRU.
+export const CodeBlockStreamingContext = createContext(false);
+
 // Highlighted-HTML LRU keyed by (language, lineNumbers, code). shiki's
 // codeToHtml is async, so a freshly mounted block paints plain for a beat and
 // then swaps to colors — visible as a white flash every time a row remounts
@@ -68,8 +76,16 @@ function plainHtml(code: string) {
 // distinct block: on remount the lazy useState initializer below starts from
 // the highlighted HTML, so the first frame is already colored. Map insertion
 // order gives us LRU eviction.
-const HIGHLIGHT_CACHE_LIMIT = 32;
-const highlightCache = new Map<string, { light: string; dark: string }>();
+//
+// Budget: shiki HTML runs ~10-20× the source, stored ×2 themes. Cap both the
+// entry count and total bytes; reject any single entry over the per-entry cap
+// so one giant block can't evict the whole cache for a single paint.
+const HIGHLIGHT_CACHE_MAX_ENTRIES = 32;
+const HIGHLIGHT_CACHE_MAX_BYTES = 6 * 1024 * 1024;
+const HIGHLIGHT_ENTRY_MAX_BYTES = 512 * 1024;
+type HighlightEntry = { light: string; dark: string; bytes: number };
+const highlightCache = new Map<string, HighlightEntry>();
+let highlightCacheBytes = 0;
 
 function readHighlightCache(key: string) {
 	const hit = highlightCache.get(key);
@@ -84,11 +100,29 @@ function storeHighlightCache(
 	key: string,
 	value: { light: string; dark: string },
 ) {
-	highlightCache.set(key, value);
-	if (highlightCache.size > HIGHLIGHT_CACHE_LIMIT) {
-		const oldest = highlightCache.keys().next().value;
-		if (oldest !== undefined) {
-			highlightCache.delete(oldest);
+	const bytes = value.light.length + value.dark.length;
+	if (bytes > HIGHLIGHT_ENTRY_MAX_BYTES) {
+		return;
+	}
+	const existing = highlightCache.get(key);
+	if (existing) {
+		highlightCacheBytes -= existing.bytes;
+		highlightCache.delete(key);
+	}
+	highlightCache.set(key, { ...value, bytes });
+	highlightCacheBytes += bytes;
+	while (
+		highlightCache.size > HIGHLIGHT_CACHE_MAX_ENTRIES ||
+		highlightCacheBytes > HIGHLIGHT_CACHE_MAX_BYTES
+	) {
+		const oldestKey = highlightCache.keys().next().value;
+		if (oldestKey === undefined) {
+			break;
+		}
+		const oldest = highlightCache.get(oldestKey);
+		highlightCache.delete(oldestKey);
+		if (oldest) {
+			highlightCacheBytes -= oldest.bytes;
 		}
 	}
 }
@@ -99,6 +133,7 @@ export const CodeBlock = ({
 	showLineNumbers = false,
 	wrapLines = false,
 	variant = "default",
+	streaming = false,
 	className,
 	children,
 	...props
@@ -177,7 +212,12 @@ export const CodeBlock = ({
 				}),
 			]);
 
-			storeHighlightCache(highlightCacheKey, { light, dark });
+			// Skip while streaming: each delta is a throwaway prefix snapshot.
+			// The final post-stream render (streaming=false) re-runs this effect
+			// and caches the settled block.
+			if (!streaming) {
+				storeHighlightCache(highlightCacheKey, { light, dark });
+			}
 			if (!cancelled) {
 				setLightHtml(light);
 				setDarkHtml(dark);
@@ -189,7 +229,7 @@ export const CodeBlock = ({
 		return () => {
 			cancelled = true;
 		};
-	}, [code, resolvedLanguage, showLineNumbers]);
+	}, [code, resolvedLanguage, showLineNumbers, streaming]);
 
 	const codePadding = isPlain
 		? "[&>pre]:p-3.5"
