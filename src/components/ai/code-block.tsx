@@ -25,6 +25,9 @@ type CodeBlockProps = HTMLAttributes<HTMLDivElement> & {
 	showLineNumbers?: boolean;
 	wrapLines?: boolean;
 	variant?: "default" | "plain";
+	/** True while the surrounding markdown still streams deltas — cache
+	 *  writes are deferred so prefix snapshots don't churn the LRU. */
+	streaming?: boolean;
 };
 
 type CodeBlockContextType = {
@@ -61,25 +64,104 @@ function plainHtml(code: string) {
 	return `<pre><code>${escapeHtml(code)}</code></pre>`;
 }
 
+// Streaming flag for blocks rendered inside an actively streaming assistant
+// message — provided by `AssistantText`, consumed by `StreamdownPre`. Cache
+// writes are skipped while true so growing prefix snapshots don't churn the LRU.
+export const CodeBlockStreamingContext = createContext(false);
+
+// Highlighted-HTML LRU keyed by (language, lineNumbers, code). shiki's
+// codeToHtml is async, so a freshly mounted block paints plain for a beat and
+// then swaps to colors — visible as a white flash every time a row remounts
+// (session switch, scroll-back). The cache makes the swap a one-time cost per
+// distinct block: on remount the lazy useState initializer below starts from
+// the highlighted HTML, so the first frame is already colored. Map insertion
+// order gives us LRU eviction.
+//
+// Budget: shiki HTML runs ~10-20× the source, stored ×2 themes. Cap both the
+// entry count and total bytes; reject any single entry over the per-entry cap
+// so one giant block can't evict the whole cache for a single paint.
+const HIGHLIGHT_CACHE_MAX_ENTRIES = 32;
+const HIGHLIGHT_CACHE_MAX_BYTES = 6 * 1024 * 1024;
+const HIGHLIGHT_ENTRY_MAX_BYTES = 512 * 1024;
+type HighlightEntry = { light: string; dark: string; bytes: number };
+const highlightCache = new Map<string, HighlightEntry>();
+let highlightCacheBytes = 0;
+
+function readHighlightCache(key: string) {
+	const hit = highlightCache.get(key);
+	if (hit) {
+		highlightCache.delete(key);
+		highlightCache.set(key, hit);
+	}
+	return hit;
+}
+
+function storeHighlightCache(
+	key: string,
+	value: { light: string; dark: string },
+) {
+	const bytes = value.light.length + value.dark.length;
+	if (bytes > HIGHLIGHT_ENTRY_MAX_BYTES) {
+		return;
+	}
+	const existing = highlightCache.get(key);
+	if (existing) {
+		highlightCacheBytes -= existing.bytes;
+		highlightCache.delete(key);
+	}
+	highlightCache.set(key, { ...value, bytes });
+	highlightCacheBytes += bytes;
+	while (
+		highlightCache.size > HIGHLIGHT_CACHE_MAX_ENTRIES ||
+		highlightCacheBytes > HIGHLIGHT_CACHE_MAX_BYTES
+	) {
+		const oldestKey = highlightCache.keys().next().value;
+		if (oldestKey === undefined) {
+			break;
+		}
+		const oldest = highlightCache.get(oldestKey);
+		highlightCache.delete(oldestKey);
+		if (oldest) {
+			highlightCacheBytes -= oldest.bytes;
+		}
+	}
+}
+
 export const CodeBlock = ({
 	code,
 	language,
 	showLineNumbers = false,
 	wrapLines = false,
 	variant = "default",
+	streaming = false,
 	className,
 	children,
 	...props
 }: CodeBlockProps) => {
-	const [lightHtml, setLightHtml] = useState(() => plainHtml(code));
-	const [darkHtml, setDarkHtml] = useState(() => plainHtml(code));
 	const resolvedLanguage = useMemo(() => resolveLanguage(language), [language]);
+	const highlightCacheKey = `${resolvedLanguage ?? ""}\u0000${showLineNumbers}\u0000${code}`;
+	const [lightHtml, setLightHtml] = useState(
+		() => readHighlightCache(highlightCacheKey)?.light ?? plainHtml(code),
+	);
+	const [darkHtml, setDarkHtml] = useState(
+		() => readHighlightCache(highlightCacheKey)?.dark ?? plainHtml(code),
+	);
 	const isPlain = variant === "plain";
 	const hasHeaderActions = !isPlain && Boolean(language);
 	const hasFloatingActions = !isPlain && !language && Boolean(children);
 
 	useEffect(() => {
 		let cancelled = false;
+
+		// Cache hit: swap in the highlighted HTML synchronously — no plain
+		// frame, no flash. (The lazy useState initializer already handles the
+		// mount case; this covers `code`/`language` changing on a live block.)
+		const cached = readHighlightCache(highlightCacheKey);
+		if (cached) {
+			setLightHtml(cached.light);
+			setDarkHtml(cached.dark);
+			return;
+		}
 
 		const render = async () => {
 			if (!resolvedLanguage) {
@@ -130,42 +212,24 @@ export const CodeBlock = ({
 				}),
 			]);
 
+			// Skip while streaming: each delta is a throwaway prefix snapshot.
+			// The final post-stream render (streaming=false) re-runs this effect
+			// and caches the settled block.
+			if (!streaming) {
+				storeHighlightCache(highlightCacheKey, { light, dark });
+			}
 			if (!cancelled) {
 				setLightHtml(light);
 				setDarkHtml(dark);
 			}
 		};
 
-		// Defer the shiki highlight (Oniguruma WASM init + grammar compile +
-		// double tokenization) off the urgent render frame. The plain-text
-		// fallback set in `useState` stays visible until this resolves, then
-		// `render()` swaps in the highlighted HTML — byte-identical to running
-		// eagerly, only later. Mirrors the preloadStreamdown idle pattern in
-		// features/panel/index.tsx (idle when available, short setTimeout as a
-		// fallback in environments without requestIdleCallback, e.g. jsdom).
-		const idleCallbackId =
-			typeof window !== "undefined" && "requestIdleCallback" in window
-				? window.requestIdleCallback(() => void render(), { timeout: 1000 })
-				: null;
-		const timeoutId =
-			idleCallbackId === null
-				? (setTimeout(() => void render(), 0) as unknown as number)
-				: null;
+		void render();
 
 		return () => {
 			cancelled = true;
-			if (
-				idleCallbackId !== null &&
-				typeof window !== "undefined" &&
-				"cancelIdleCallback" in window
-			) {
-				window.cancelIdleCallback(idleCallbackId);
-			}
-			if (timeoutId !== null) {
-				clearTimeout(timeoutId);
-			}
 		};
-	}, [code, resolvedLanguage, showLineNumbers]);
+	}, [code, resolvedLanguage, showLineNumbers, streaming]);
 
 	const codePadding = isPlain
 		? "[&>pre]:p-3.5"
@@ -174,9 +238,15 @@ export const CodeBlock = ({
 			: hasFloatingActions
 				? "[&>pre]:px-3.5 [&>pre]:py-3.5 [&>pre]:pr-11"
 				: "[&>pre]:p-3.5";
+	// `overflow-x-scroll` (not `auto`): a classic (non-overlay) horizontal
+	// scrollbar takes layout height when it appears, so an `auto` container
+	// grows by ~13px the moment content overflows — the row height jumps and
+	// everything below shifts. A permanent scroll container reserves that
+	// space from the first frame; the global scrollbar styling keeps the
+	// track transparent, so a non-overflowing block just shows nothing there.
 	const wrapClasses = wrapLines
 		? "overflow-x-hidden overflow-y-hidden [&>pre]:whitespace-pre-wrap [&>pre]:break-words [&_code]:whitespace-pre-wrap [&_code]:break-words"
-		: "overflow-x-auto overflow-y-hidden [&>pre]:min-w-full";
+		: "overflow-x-scroll overflow-y-hidden [&>pre]:min-w-full";
 	const codeBase =
 		"[&>pre]:m-0 [&>pre]:bg-transparent! [&>pre]:text-small [&>pre]:leading-5 [&>pre]:text-foreground! [&_code]:font-mono [&_code]:text-small";
 

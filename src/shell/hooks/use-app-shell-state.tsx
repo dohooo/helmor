@@ -31,6 +31,7 @@ import { useSettledWorkspaceId } from "@/shell/hooks/use-settled-workspace-id";
 import { useShellChromeState } from "@/shell/hooks/use-shell-chrome-state";
 import { useShellStartupEffects } from "@/shell/hooks/use-shell-startup-effects";
 import { useThemeApplication } from "@/shell/hooks/use-theme-application";
+import { useThreadFocusBackstop } from "@/shell/hooks/use-thread-focus-backstop";
 import { useUiSyncBridge } from "@/shell/hooks/use-ui-sync-bridge";
 import { useWorkspaceActionControllers } from "@/shell/hooks/use-workspace-action-controllers";
 import { useWorkspaceDataControllers } from "@/shell/hooks/use-workspace-data-controllers";
@@ -93,8 +94,14 @@ export function useAppShellState({
 	// git + inspector diff). The selection highlight tracks `selectedWorkspaceId`
 	// (router-instant, cheap); the heavy data load reads this settled id so a
 	// held-key burst only fetches/renders the workspace the user lands on. Warm
-	// (cached) and single/slow switches settle instantly — see the hook.
-	const settledWorkspaceId = useSettledWorkspaceId(selectedWorkspaceId);
+	// (cached) and single/slow switches settle instantly — see the hook. The
+	// displayed id gates the hold window: while a deferred/held flip diverges
+	// the paint track from the router, the settled id (and the inspector keyed
+	// off it) waits and swaps in the same commit as the held content.
+	const settledWorkspaceId = useSettledWorkspaceId(
+		selectedWorkspaceId,
+		displayedWorkspaceId,
+	);
 
 	// P0-A: cache the per-workspace session-selection history as a stable
 	// reference. `getSessionSelectionHistory` already returns a stable ref
@@ -143,6 +150,7 @@ export function useAppShellState({
 		handleSelectSession: sel.handleSelectSession,
 		selectedWorkspaceId,
 		settledWorkspaceId,
+		displayedWorkspaceId,
 		displayedSessionId,
 		workspaceReselectTick,
 		pendingCreatedWorkspaceSubmit: sel.pendingCreatedWorkspaceSubmit,
@@ -237,6 +245,14 @@ export function useAppShellState({
 		reloadSettings: () => publishShellEvent({ type: "reload-settings" }),
 		// Quick-panel "Open in Helmor": only the main window navigates.
 		onWorkspaceReveal: isQuickPanelWindow ? undefined : handleWorkspaceReveal,
+	});
+	// Event-fresh threads (`staleTime: Infinity`) get a focus-time backstop
+	// so a missed `sessionTurnPersisted` can't leave the on-screen thread
+	// stale forever.
+	useThreadFocusBackstop({
+		queryClient,
+		getDisplayedSessionId: () =>
+			sel.selectionStore.getState().displayedSessionId,
 	});
 
 	// Close-confirmation is handled by <QuitConfirmDialog /> which registers

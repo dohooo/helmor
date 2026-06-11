@@ -28,6 +28,7 @@ import type {
 	FileMentionPart,
 	ImagePart,
 	MessagePart,
+	PastedTextPart,
 	PlanReviewPart,
 	PromptSuggestionPart,
 	SystemNoticePart,
@@ -174,6 +175,10 @@ export function partStructurallyEqual(
 		case "file-mention": {
 			const fb = b as FileMentionPart;
 			return a.path === fb.path;
+		}
+		case "pasted-text": {
+			const pb = b as PastedTextPart;
+			return a.text === pb.text;
 		}
 		case "plan-review": {
 			const pb = b as PlanReviewPart;

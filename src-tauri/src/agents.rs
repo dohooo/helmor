@@ -191,6 +191,12 @@ pub struct AgentSendRequest {
     /// round-trip without regex re-extraction.
     #[serde(default)]
     pub images: Option<Vec<String>>,
+    /// UTF-16 ranges of pasted-text tag spans inside `prompt` (composer
+    /// badge pastes). Persisted with the user_prompt so the renderer shows
+    /// those spans as tag chips; the agent still receives the full prompt
+    /// text — this never alters the wire payload.
+    #[serde(default)]
+    pub pasted_texts: Option<Vec<crate::pipeline::types::PastedTextRange>>,
 }
 
 #[cfg(test)]
@@ -843,7 +849,7 @@ mod tests {
         };
 
         // 1. Persist user message
-        persist_user_message(&conn, &ctx, "Hello", &[], &[]).unwrap();
+        persist_user_message(&conn, &ctx, "Hello", &[], &[], &[]).unwrap();
 
         persist_result_and_finalize(
             &conn,
@@ -915,7 +921,7 @@ mod tests {
             user_message_id: Uuid::new_v4().to_string(),
         };
 
-        persist_user_message(&conn, &ctx, "Hi", &[], &[]).unwrap();
+        persist_user_message(&conn, &ctx, "Hi", &[], &[], &[]).unwrap();
         persist_result_and_finalize(
             &conn,
             &ctx,
@@ -974,7 +980,7 @@ mod tests {
         };
 
         // Persist user message
-        persist_user_message(&conn, &ctx, "Do something", &[], &[]).unwrap();
+        persist_user_message(&conn, &ctx, "Do something", &[], &[], &[]).unwrap();
 
         // Persist two intermediate turns
         let turn1 = CollectedTurn {
@@ -1045,7 +1051,7 @@ mod tests {
         };
 
         // 1. Initial prompt persisted via the normal path.
-        persist_user_message(&conn, &ctx, "investigate the bug", &[], &[]).unwrap();
+        persist_user_message(&conn, &ctx, "investigate the bug", &[], &[], &[]).unwrap();
 
         // 2. Drive the accumulator the same way the streaming loop does:
         //    assistant deltas, steer event, more assistant deltas, result.

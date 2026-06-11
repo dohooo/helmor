@@ -18,6 +18,7 @@ import {
 	type MouseEvent,
 	type ReactElement,
 	type ReactNode,
+	useContext,
 	useRef,
 } from "react";
 import {
@@ -26,7 +27,11 @@ import {
 	tableDataToCSV,
 	tableDataToMarkdown,
 } from "streamdown";
-import { CodeBlock, CodeBlockCopyButton } from "@/components/ai/code-block";
+import {
+	CodeBlock,
+	CodeBlockCopyButton,
+	CodeBlockStreamingContext,
+} from "@/components/ai/code-block";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -247,6 +252,7 @@ function childrenToText(children: ReactNode): string {
 }
 
 export function StreamdownPre({ children }: { children?: ReactNode }) {
+	const streaming = useContext(CodeBlockStreamingContext);
 	if (!isValidElement(children)) {
 		return children;
 	}
@@ -269,7 +275,7 @@ export function StreamdownPre({ children }: { children?: ReactNode }) {
 
 	const code = childrenToText(child.props.children);
 	return (
-		<CodeBlock code={code} language={language}>
+		<CodeBlock code={code} language={language} streaming={streaming}>
 			<CodeBlockCopyButton />
 		</CodeBlock>
 	);

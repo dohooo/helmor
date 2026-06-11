@@ -31,7 +31,10 @@ import {
 	steerAgentStream,
 	stopAgentStream,
 } from "@/lib/api";
-import type { ComposerCustomTag } from "@/lib/composer-insert";
+import {
+	type ComposerCustomTag,
+	locatePastedTextRanges,
+} from "@/lib/composer-insert";
 import { extractError, isRecoverableByPurge } from "@/lib/errors";
 import {
 	agentModelSectionsQueryOptions,
@@ -851,6 +854,11 @@ export function useConversationStreaming({
 				isFirstUserMessage && !isCompactCommand
 					? resolveGeneralPreferencePrefix(repoPreferences)
 					: null;
+			// Pasted-tag spans inside the prompt — rendered as tag chips (the
+			// composer badge, post-send) instead of inlining the full paste.
+			// Computed against `trimmedPrompt`, which is byte-identical to what
+			// the Rust side persists as the user_prompt body.
+			const pastedTexts = locatePastedTextRanges(trimmedPrompt, customTags);
 			const now = new Date().toISOString();
 			const userMessageId = crypto.randomUUID();
 			const optimisticUserMessage = createLiveThreadMessage({
@@ -860,6 +868,7 @@ export function useConversationStreaming({
 				createdAt: now,
 				files: filePaths,
 				images: imagePaths,
+				pastedTexts,
 			});
 			let titleSeed: string | null = null;
 			if (isFirstUserMessage && !isCompactCommand) {
@@ -982,6 +991,7 @@ export function useConversationStreaming({
 						userMessageId,
 						files: filePaths,
 						images: imagePaths,
+						pastedTexts: pastedTexts.length > 0 ? pastedTexts : null,
 					},
 					createStreamEventDispatcher({
 						contextKey,

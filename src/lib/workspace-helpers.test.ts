@@ -633,6 +633,128 @@ describe("splitTextWithFiles", () => {
 			{ type: "file-mention", id: "m1:mention:1", path: image },
 		]);
 	});
+
+	it("carves pasted ranges into pasted-text parts", () => {
+		const text = "帮我看看这个\nconst a = 1;\nconst b = 2;\n谢谢";
+		const start = 7; // after the 6 CJK chars + newline
+		const end = start + "const a = 1;\nconst b = 2;".length;
+		const result = splitTextWithFiles(text, [], "m1", [], [{ start, end }]);
+		expect(result).toEqual([
+			{ type: "text", id: "m1:txt:0", text: "帮我看看这个\n" },
+			{
+				type: "pasted-text",
+				id: "m1:pasted:0",
+				text: "const a = 1;\nconst b = 2;",
+			},
+			{ type: "text", id: "m1:txt:1", text: "\n谢谢" },
+		]);
+	});
+
+	it("drops invalid and overlapping pasted ranges", () => {
+		const text = "before PASTED after";
+		const result = splitTextWithFiles(
+			text,
+			[],
+			"m1",
+			[],
+			[
+				{ start: 7, end: 13 }, // valid: "PASTED"
+				{ start: 10, end: 16 }, // overlaps the first — dropped
+				{ start: 5, end: 5 }, // empty — dropped
+				{ start: 40, end: 500 }, // out of bounds — dropped
+			],
+		);
+		expect(result).toEqual([
+			{ type: "text", id: "m1:txt:0", text: "before " },
+			{ type: "pasted-text", id: "m1:pasted:0", text: "PASTED" },
+			{ type: "text", id: "m1:txt:1", text: " after" },
+		]);
+	});
+
+	it("ignores @path needles inside a pasted span", () => {
+		const text = "see @a.ts then PASTE WITH @a.ts INSIDE";
+		const result = splitTextWithFiles(
+			text,
+			["a.ts"],
+			"m1",
+			[],
+			[{ start: 15, end: 38 }],
+		);
+		expect(result).toEqual([
+			{ type: "text", id: "m1:txt:0", text: "see " },
+			{ type: "file-mention", id: "m1:mention:0", path: "a.ts" },
+			{ type: "text", id: "m1:txt:1", text: " then " },
+			{
+				type: "pasted-text",
+				id: "m1:pasted:0",
+				text: "PASTE WITH @a.ts INSIDE",
+			},
+		]);
+	});
+
+	// Parity with the Rust adapter's `user_prompt_with_pasted_range_mid_surrogate`
+	// snapshot: ranges landing inside a surrogate pair drop (their span stays
+	// plain text) instead of producing lone-surrogate chips.
+	it("drops ranges that split a surrogate pair (parity with Rust)", () => {
+		const text = "看 😀😀 ok"; // UTF-16: 看=0, sp=1, 😀=2..4, 😀=4..6, sp=6, o=7, k=8
+		const result = splitTextWithFiles(
+			text,
+			[],
+			"m1",
+			[],
+			[
+				{ start: 2, end: 5 }, // end lands mid-surrogate — dropped
+				{ start: 3, end: 6 }, // start lands mid-surrogate — dropped
+				{ start: 7, end: 9 }, // valid: "ok", ends at end-of-string
+			],
+		);
+		expect(result).toEqual([
+			{ type: "text", id: "m1:txt:0", text: "看 😀😀 " },
+			{ type: "pasted-text", id: "m1:pasted:0", text: "ok" },
+		]);
+	});
+
+	// Parity with Rust's (start, end) tuple sort: equal-start overlap keeps
+	// the smaller end regardless of input order.
+	it("keeps the smaller end when overlapping ranges share a start (parity with Rust)", () => {
+		const text = "before PASTED after";
+		const result = splitTextWithFiles(
+			text,
+			[],
+			"m1",
+			[],
+			[
+				{ start: 7, end: 13 }, // listed first, but the longer span loses
+				{ start: 7, end: 10 },
+			],
+		);
+		expect(result).toEqual([
+			{ type: "text", id: "m1:txt:0", text: "before " },
+			{ type: "pasted-text", id: "m1:pasted:0", text: "PAS" },
+			{ type: "text", id: "m1:txt:1", text: "TED after" },
+		]);
+	});
+
+	// Parity with the Rust adapter's `user_prompt_with_adjacent_pasted_ranges`
+	// snapshot: a shared boundary is not an overlap.
+	it("keeps adjacent ranges as separate chips (parity with Rust)", () => {
+		const text = "see AABBB";
+		const result = splitTextWithFiles(
+			text,
+			[],
+			"m1",
+			[],
+			[
+				{ start: 4, end: 6 },
+				{ start: 6, end: 9 },
+			],
+		);
+		expect(result).toEqual([
+			{ type: "text", id: "m1:txt:0", text: "see " },
+			{ type: "pasted-text", id: "m1:pasted:0", text: "AA" },
+			{ type: "pasted-text", id: "m1:pasted:1", text: "BBB" },
+		]);
+	});
 });
 
 describe("createLiveThreadMessage with image paths", () => {

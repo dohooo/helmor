@@ -5,7 +5,7 @@
     "": {
       "name": "helmor",
       "dependencies": {
-        "@chenglou/pretext": "0.0.4",
+        "@chenglou/pretext": "0.0.7",
         "@fontsource-variable/geist": "^5.2.8",
         "@fontsource-variable/geist-mono": "^5.2.7",
         "@lexical/react": "^0.42.0",
@@ -491,7 +491,7 @@
 
     "@changesets/write": ["@changesets/write@0.4.0", "", { "dependencies": { "@changesets/types": "^6.1.0", "fs-extra": "^7.0.1", "human-id": "^4.1.1", "prettier": "^2.7.1" } }, "sha512-CdTLvIOPiCNuH71pyDu3rA+Q0n65cmAbXnwWH84rKGiFumFzkmHNT8KHTMEchcxN+Kl8I54xGUhJ7l3E7X396Q=="],
 
-    "@chenglou/pretext": ["@chenglou/pretext@0.0.4", "", {}, "sha512-FnPAFMid1/p1j2V2gRPUVBarGUIb2PhkkC9YNnTOfPtTDgHKh8siO8PP9pCxpFfYlcodWPJpE1UbSHGQqt8pQQ=="],
+    "@chenglou/pretext": ["@chenglou/pretext@0.0.7", "", {}, "sha512-FV5hj3fGqpBlzbANUbR+s+6XuNRrghVVyuNs33zdH2SzU7MvK+7GlW6xREjDCreixKbexEn7OEkDgAFeWuu5Hg=="],
 
     "@chevrotain/cst-dts-gen": ["@chevrotain/cst-dts-gen@12.0.0", "", { "dependencies": { "@chevrotain/gast": "12.0.0", "@chevrotain/types": "12.0.0" } }, "sha512-fSL4KXjTl7cDgf0B5Rip9Q05BOrYvkJV/RrBTE/bKDN096E4hN/ySpcBK5B24T76dlQ2i32Zc3PAE27jFnFrKg=="],
 

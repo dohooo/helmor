@@ -1,0 +1,15 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: user
+  id: msg-1
+  content_length: 2
+  content:
+    - type: text
+      text: "看 😀😀 "
+    - type: pasted-text
+      text_length: 2
+      text_preview: ok
+  status: ~
+  streaming: ~

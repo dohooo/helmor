@@ -34,6 +34,17 @@ pub enum UiMutationEvent {
     SessionMessagesAppended {
         session_id: String,
     },
+    /// A turn's terminal rows really landed in `session_messages` — fired
+    /// after `persist_result_and_finalize` / `persist_error_message`
+    /// succeed (including the abnormal-exit cleanup path) and after an
+    /// aborted turn finalizes. Unlike
+    /// `SessionMessagesAppended` (active refetch for out-of-band inserts),
+    /// frontends only mark the thread cache stale (`refetchType: 'none'`)
+    /// so the next mount refetches; the live-stream dispatcher keeps
+    /// owning the on-screen snapshot.
+    SessionTurnPersisted {
+        session_id: String,
+    },
     WorkspaceFilesChanged {
         workspace_id: String,
     },
@@ -181,6 +192,9 @@ mod tests {
             UiMutationEvent::SessionMessagesAppended {
                 session_id: "s".into(),
             },
+            UiMutationEvent::SessionTurnPersisted {
+                session_id: "s".into(),
+            },
             UiMutationEvent::WorkspaceFilesChanged {
                 workspace_id: "w".into(),
             },
@@ -259,6 +273,17 @@ mod tests {
         };
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "sessionPlanChanged");
+        assert_eq!(json["sessionId"], "abc");
+        assert!(json.get("session_id").is_none());
+    }
+
+    #[test]
+    fn session_turn_persisted_uses_camel_case_type_and_field() {
+        let event = UiMutationEvent::SessionTurnPersisted {
+            session_id: "abc".into(),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "sessionTurnPersisted");
         assert_eq!(json["sessionId"], "abc");
         assert!(json.get("session_id").is_none());
     }

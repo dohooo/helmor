@@ -215,6 +215,12 @@ export type ProviderCapabilities = {
 	requiresApiKey: boolean;
 };
 
+/** UTF-16 code-unit range of one pasted-text tag inside a prompt string. */
+export type PastedTextRange = {
+	start: number;
+	end: number;
+};
+
 export type AgentSendRequest = {
 	provider: AgentProvider;
 	modelId: string;
@@ -238,6 +244,11 @@ export type AgentSendRequest = {
 	 *  matching `@<path>` substrings out as image attachments without
 	 *  re-parsing the text — paths may contain whitespace. */
 	images?: string[] | null;
+	/** UTF-16 ranges of pasted-text tag spans inside `prompt` (composer
+	 *  badge pastes — see `locatePastedTextRanges`). Persisted with the
+	 *  user_prompt so those spans render as tag chips; the agent still
+	 *  receives the full prompt text. */
+	pastedTexts?: PastedTextRange[] | null;
 };
 
 export type WorkspaceSummary = {
@@ -2200,6 +2211,7 @@ export type UiMutationEvent =
 	| { type: "codexGoalChanged"; sessionId: string }
 	| { type: "sessionPlanChanged"; sessionId: string }
 	| { type: "sessionMessagesAppended"; sessionId: string }
+	| { type: "sessionTurnPersisted"; sessionId: string }
 	| { type: "workspaceFilesChanged"; workspaceId: string }
 	| { type: "workspaceGitStateChanged"; workspaceId: string }
 	| { type: "workspaceForgeChanged"; workspaceId: string }
@@ -3482,6 +3494,14 @@ export type FileMentionPart = {
 	id: string;
 	path: string;
 };
+/** A span of the user's prompt that entered the composer as a pasted-text
+ *  tag badge. Renders as the same tag chip (hover previews the content);
+ *  the text itself is still part of the prompt the agent received. */
+export type PastedTextPart = {
+	type: "pasted-text";
+	id: string;
+	text: string;
+};
 export type PlanReviewAllowedPrompt = {
 	tool: string;
 	prompt: string;
@@ -3504,6 +3524,7 @@ export type MessagePart =
 	| ImagePart
 	| PromptSuggestionPart
 	| FileMentionPart
+	| PastedTextPart
 	| PlanReviewPart;
 
 export type CollapsedGroupPart = {
