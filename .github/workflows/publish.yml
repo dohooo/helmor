@@ -125,6 +125,11 @@ jobs:
       - name: Setup Rust Tauri
         uses: ./.github/actions/setup-rust-tauri
 
+      - name: Cache bundle archives
+        uses: ./.github/actions/cache-bundle-archives
+        with:
+          target-triple: ${{ matrix.target-triple }}
+
       - name: Build + stage bundle binaries
         uses: ./.github/actions/build-sidecar
         with:
@@ -216,6 +221,11 @@ jobs:
           cache-on-failure: true
           shared-key: windows-tauri-v1
           workspaces: src-tauri -> target
+
+      - name: Cache bundle archives
+        uses: ./.github/actions/cache-bundle-archives
+        with:
+          target-triple: x86_64-pc-windows-msvc
 
       # tauri-action's beforeBuildCommand runs prepare-sidecar.mjs, which
       # stages the win32 vendor tree, builds the bun sidecar + helmor-cli,

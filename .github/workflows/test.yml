@@ -64,6 +64,13 @@ jobs:
       - name: Setup Rust Tauri
         uses: ./.github/actions/setup-rust-tauri
 
+      # rust-test stages for the host arch (macos-latest is arm64) — `bun run
+      # build` below has no TAURI_TARGET_TRIPLE, so it downloads aarch64 archives.
+      - name: Cache bundle archives
+        uses: ./.github/actions/cache-bundle-archives
+        with:
+          target-triple: aarch64-apple-darwin
+
       # Stage the sidecar vendor tree, but NOT the release helmor-cli. The crate
       # compile needs `sidecar/dist/vendor/` (a Tauri bundle resource) to exist;
       # build.rs stubs the helmor-cli / helmor-sidecar externalBin placeholders,

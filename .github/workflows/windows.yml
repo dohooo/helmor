@@ -153,6 +153,11 @@ jobs:
           shared-key: windows-tauri-v1
           workspaces: src-tauri -> target
 
+      - name: Cache bundle archives
+        uses: ./.github/actions/cache-bundle-archives
+        with:
+          target-triple: x86_64-pc-windows-msvc
+
       # `tauri build`'s beforeBuildCommand runs prepare-sidecar.mjs, which stages
       # the win32 vendor tree, builds the bun sidecar + helmor-cli, then bundles.
       # NSIS only — WiX/MSI is not part of what this fork ships.

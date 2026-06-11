@@ -29,7 +29,7 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	claudeCodeArchivePlan,
@@ -65,9 +65,50 @@ const TAR_BIN = IS_WINDOWS
 const SIDECAR_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const NODE_MODULES = join(SIDECAR_ROOT, "node_modules");
 const DIST_VENDOR = join(SIDECAR_ROOT, "dist", "vendor");
+
+// Local extraction scratch — per-worktree so concurrent `bun run dev` in two
+// worktrees can't race `freshExtractDir` on the same slug.
 const BUNDLE_CACHE = join(SIDECAR_ROOT, ".bundle-cache");
 
-// Bumping any version: update SHA256 below + wipe sidecar/.bundle-cache.
+// Downloaded archives are the network-expensive part and SHA256-verified, so we
+// share one cache across all worktrees of this repo: a new worktree reuses
+// already-fetched gh/glab/cloudflared/llama-cpp/node archives instead of
+// re-downloading them. This is a dev-only optimization, so the cache lives
+// inside the PROJECT (the main worktree's `sidecar/.bundle-cache`) rather than a
+// global user dir — found via git's common dir, which every linked worktree
+// shares. Archive filenames are version-keyed, so different version pins coexist
+// safely. Override with HELMOR_BUNDLE_CACHE (CI pins it per-job).
+const ARCHIVE_CACHE = resolveArchiveCache();
+
+function resolveArchiveCache(): string {
+	const override = process.env.HELMOR_BUNDLE_CACHE?.trim();
+	if (override) return resolve(override);
+	const mainRoot = mainWorktreeRoot();
+	// Fall back to the local scratch dir when not in a git checkout (e.g. a
+	// detached tarball build) — degrades to per-worktree, never breaks.
+	if (!mainRoot) return BUNDLE_CACHE;
+	return join(mainRoot, "sidecar", ".bundle-cache");
+}
+
+/// Resolve the main worktree's root via git's common dir. From any linked
+/// worktree `git rev-parse --git-common-dir` points at `<mainRoot>/.git`, so its
+/// parent is the shared main checkout. Returns null if git is unavailable.
+function mainWorktreeRoot(): string | null {
+	try {
+		const commonDir = execFileSync("git", ["rev-parse", "--git-common-dir"], {
+			cwd: SIDECAR_ROOT,
+			encoding: "utf8",
+		}).trim();
+		if (!commonDir) return null;
+		return dirname(resolve(SIDECAR_ROOT, commonDir));
+	} catch {
+		return null;
+	}
+}
+
+// Bumping any version: update SHA256 below. Archives are version-keyed in the
+// shared ARCHIVE_CACHE, so no wipe is needed; a changed SHA256 forces a
+// re-download automatically.
 //   gh:          github.com/cli/cli/releases/download/v$VER/gh_${VER}_checksums.txt
 //   glab:        gitlab.com/gitlab-org/cli/-/releases/v$VER/downloads/checksums.txt
 //   codex:       shasum -a 256 of the npm tarball at
@@ -137,6 +178,7 @@ const ENTITLEMENTS_PLIST = join(
 
 function ensureCacheDir(): void {
 	mkdirSync(BUNDLE_CACHE, { recursive: true });
+	mkdirSync(ARCHIVE_CACHE, { recursive: true });
 }
 
 function sha256OfFile(path: string): string {
@@ -236,7 +278,7 @@ function stageGhBinary(target: TargetInfo): string {
 	// `gh_<ver>_windows_<arch>.zip`; both nest `bin/gh[.exe]`. The Windows plan
 	// carries no pinned sha256 (soft-verify); macOS stays strict.
 	const plan = ghArchivePlan(target);
-	const archive = join(BUNDLE_CACHE, plan.archiveName);
+	const archive = join(ARCHIVE_CACHE, plan.archiveName);
 	// downloadMaybeVerify is strict when a sha256 is pinned (macOS) and trusts
 	// HTTPS when it's empty (Windows soft-verify).
 	downloadMaybeVerify(plan.url, archive, plan.sha256);
@@ -259,7 +301,7 @@ function stageGlabBinary(target: TargetInfo): string {
 	// `extractArchive` (bsdtar) transparently handles both formats. Windows plan
 	// carries no pinned sha256 (soft-verify); macOS stays strict.
 	const plan = glabArchivePlan(target);
-	const archive = join(BUNDLE_CACHE, plan.archiveName);
+	const archive = join(ARCHIVE_CACHE, plan.archiveName);
 	downloadMaybeVerify(plan.url, archive, plan.sha256);
 
 	const extractDir = join(BUNDLE_CACHE, plan.slug);
@@ -288,7 +330,7 @@ function stageCloudflaredBinary(target: TargetInfo): string {
 	ensureCacheDir();
 	const binDest = join(DIST_VENDOR, "cloudflared", `cloudflared${EXE}`);
 	const plan = cloudflaredArchivePlan(target);
-	const archive = join(BUNDLE_CACHE, plan.archiveName);
+	const archive = join(ARCHIVE_CACHE, plan.archiveName);
 
 	// Windows: upstream publishes a bare `cloudflared-windows-<arch>.exe` (no
 	// archive), so download it straight to the destination (no extraction).
@@ -367,7 +409,7 @@ function stageClaudeCodeBinary(target: TargetInfo): string {
 	const version = readClaudeCodeVersion();
 	const plan = claudeCodeArchivePlan(target, version);
 	ensureCacheDir();
-	const archive = join(BUNDLE_CACHE, plan.archiveName);
+	const archive = join(ARCHIVE_CACHE, plan.archiveName);
 	downloadAndVerify(plan.url, archive, plan.sha256);
 
 	const extractDir = join(BUNDLE_CACHE, plan.slug);
@@ -508,7 +550,7 @@ function stageCodexBinary(target: TargetInfo): void {
 	const version = readCodexVersion();
 	const plan = codexArchivePlan(target, version);
 	ensureCacheDir();
-	const archive = join(BUNDLE_CACHE, plan.archiveName);
+	const archive = join(ARCHIVE_CACHE, plan.archiveName);
 	downloadAndVerify(plan.url, archive, plan.sha256);
 
 	const extractDir = join(BUNDLE_CACHE, plan.slug);
@@ -567,7 +609,7 @@ function stageOpencodeBinary(target: TargetInfo): string {
 	const version = readOpencodeVersion();
 	const plan = opencodeArchivePlan(target, version);
 	ensureCacheDir();
-	const archive = join(BUNDLE_CACHE, plan.archiveName);
+	const archive = join(ARCHIVE_CACHE, plan.archiveName);
 	downloadAndVerify(plan.url, archive, plan.sha256);
 
 	const extractDir = join(BUNDLE_CACHE, plan.slug);
@@ -635,7 +677,7 @@ function downloadMaybeVerify(
 function stageLlamaCppBinaries(target: TargetInfo): string {
 	ensureCacheDir();
 	const plan = llamaArchivePlan(target);
-	const archive = join(BUNDLE_CACHE, plan.archiveName);
+	const archive = join(ARCHIVE_CACHE, plan.archiveName);
 
 	// Windows: upstream ships `llama-<ver>-bin-win-cpu-x64.zip` (server + CLIs +
 	// their `.dll`s, no `bin/` wrapper). Stage the whole tree as a unit (the
@@ -786,7 +828,7 @@ function stageNodeRuntime(target: TargetInfo): string {
 	const plan = nodeArchivePlan(target);
 	const dest = join(DIST_VENDOR, "node", `node${EXE}`);
 	ensureCacheDir();
-	const archive = join(BUNDLE_CACHE, plan.archiveName);
+	const archive = join(ARCHIVE_CACHE, plan.archiveName);
 	downloadAndVerify(plan.url, archive, plan.sha256);
 	const extractDir = join(BUNDLE_CACHE, `${plan.slug}-extract`);
 	freshExtractDir(extractDir);
