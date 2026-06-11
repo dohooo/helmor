@@ -779,6 +779,15 @@ fn import_column_lists(conn: &Connection, table: &str) -> Result<(String, String
 
     for col in &main_cols {
         // Coalesce post-migration NOT NULL columns so pre-triage source DBs import cleanly.
+        if table == "sessions" && col == "session_kind" {
+            main_parts.push(col.clone());
+            source_parts.push(if source_set.contains("session_kind") {
+                "COALESCE(session_kind, 'gui') AS session_kind".to_string()
+            } else {
+                "'gui' AS session_kind".to_string()
+            });
+            continue;
+        }
         if table == "session_messages" && col == "is_ai_priming" {
             main_parts.push(col.clone());
             source_parts.push(if source_set.contains("is_ai_priming") {
@@ -1031,6 +1040,17 @@ mod tests {
         assert_eq!(ws_count, 1);
         assert_eq!(sess_count, 2);
         assert_eq!(msg_count, 2);
+
+        // session_kind is NOT NULL in main; source rows leave it NULL, so the
+        // import must coalesce to 'gui' (else INSERT OR IGNORE drops the rows).
+        let kind: String = conn
+            .query_row(
+                "SELECT session_kind FROM main.sessions WHERE id = 's1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kind, "gui");
     }
 
     #[test]

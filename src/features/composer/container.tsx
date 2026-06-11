@@ -13,6 +13,7 @@ import {
 	getShortcut,
 	getShortcutConflicts,
 } from "@/features/shortcuts/registry";
+import { findTerminalAgent } from "@/features/terminal/terminal-presets";
 import type {
 	AgentModelOption,
 	AgentModelSection,
@@ -539,6 +540,11 @@ export const WorkspaceComposerContainer = memo(
 		]
 			? null
 			: getShortcut(settings.shortcuts, "composer.togglePlanMode");
+		const toggleTerminalShortcut = shortcutConflicts.conflictById[
+			"composer.toggleTerminalMode"
+		]
+			? null
+			: getShortcut(settings.shortcuts, "composer.toggleTerminalMode");
 		const toggleFollowUpShortcut = shortcutConflicts.conflictById[
 			"composer.toggleFollowUpBehavior"
 		]
@@ -814,6 +820,14 @@ export const WorkspaceComposerContainer = memo(
 		const [goalReplaceConfirm, setGoalReplaceConfirm] =
 			useState<PendingGoalReplace | null>(null);
 
+		// Terminal-Mode toggle: composer-local, off on every mount. Only offered
+		// when the General setting is on and the provider has a terminal agent
+		// spec (cursor has no TUI CLI, so it stays hidden there).
+		const [terminalMode, setTerminalMode] = useState(false);
+		const showTerminalToggle =
+			settings.enableTerminalMode &&
+			findTerminalAgent(effectiveModel?.provider) !== null;
+
 		const handleComposerSubmitInner = useCallback(
 			(
 				prompt: string,
@@ -829,6 +843,23 @@ export const WorkspaceComposerContainer = memo(
 				},
 			) => {
 				if (!effectiveModel) {
+					return;
+				}
+				if (terminalMode && showTerminalToggle) {
+					// Terminal-Mode send: open the prompt in the provider's TUI
+					// instead of streaming a GUI turn. The shell listener creates
+					// the terminal session and boots it with the composer state.
+					publishShellEvent({
+						type: "create-terminal-session",
+						prompt,
+						provider: effectiveModel.provider,
+						modelId: effectiveModel.cliModel || null,
+						effortLevel: effortLevel || null,
+						permissionMode:
+							options?.permissionModeOverride ??
+							effectivePermissionMode ??
+							null,
+					});
 					return;
 				}
 				// Translate the per-submit "opposite" toggle into a concrete
@@ -865,6 +896,8 @@ export const WorkspaceComposerContainer = memo(
 				fastMode,
 				supportsFastMode,
 				settings.followUpBehavior,
+				terminalMode,
+				showTerminalToggle,
 			],
 		);
 
@@ -1194,6 +1227,7 @@ export const WorkspaceComposerContainer = memo(
 						}
 						focusShortcut={focusShortcut}
 						togglePlanShortcut={togglePlanShortcut}
+						toggleTerminalShortcut={toggleTerminalShortcut}
 						toggleFollowUpShortcut={toggleFollowUpShortcut}
 						toggleContextPanelShortcut={toggleContextPanelShortcut}
 						alwaysShowContextUsage={settings.alwaysShowContextUsage}
@@ -1218,6 +1252,10 @@ export const WorkspaceComposerContainer = memo(
 						showFastModePrelude={showFastModePrelude}
 						onChangeFastMode={
 							supportsFastMode ? handleChangeFastModeInner : undefined
+						}
+						terminalMode={terminalMode}
+						onChangeTerminalMode={
+							showTerminalToggle ? setTerminalMode : undefined
 						}
 						sendError={sendError}
 						restoreDraft={restoreDraft}

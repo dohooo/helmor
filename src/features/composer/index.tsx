@@ -15,6 +15,7 @@ import {
 	MessageSquareMore,
 	Plus,
 	Square,
+	SquareTerminal,
 	Zap,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -144,6 +145,10 @@ type WorkspaceComposerProps = {
 	fastMode?: boolean;
 	showFastModePrelude?: boolean;
 	onChangeFastMode?: (enabled: boolean) => void;
+	/** Terminal-Mode toggle; undefined handler hides the button. When on,
+	 *  sending opens the prompt in the agent's TUI instead of a GUI turn. */
+	terminalMode?: boolean;
+	onChangeTerminalMode?: (enabled: boolean) => void;
 	sendError?: string | null;
 	restoreDraft?: string | null;
 	restoreImages?: string[];
@@ -201,6 +206,7 @@ type WorkspaceComposerProps = {
 	agentType?: "claude" | "codex" | "cursor" | "opencode" | null;
 	focusShortcut?: string | null;
 	togglePlanShortcut?: string | null;
+	toggleTerminalShortcut?: string | null;
 	/** Hotkey that submits the current draft with the opposite follow-up
 	 *  behavior (queue ↔ steer) for one message. */
 	toggleFollowUpShortcut?: string | null;
@@ -294,6 +300,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	fastMode = false,
 	showFastModePrelude = false,
 	onChangeFastMode,
+	terminalMode = false,
+	onChangeTerminalMode,
 	sendError,
 	restoreDraft,
 	restoreImages = [],
@@ -329,6 +337,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	agentType = null,
 	focusShortcut = null,
 	togglePlanShortcut = null,
+	toggleTerminalShortcut = null,
 	toggleFollowUpShortcut = null,
 	toggleContextPanelShortcut = null,
 	contextPanelOpen = false,
@@ -719,6 +728,20 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				onChangePermissionMode(
 					permissionMode === "plan" ? "bypassPermissions" : "plan",
 				);
+				return;
+			}
+
+			// Terminal-Mode toggle — only when the toggle is offered (setting
+			// on + provider supports it), and workspace-composer only like plan.
+			if (
+				toggleTerminalShortcut &&
+				hotkey === toggleTerminalShortcut &&
+				onChangeTerminalMode &&
+				focusScope === "workspace-composer"
+			) {
+				event.preventDefault();
+				event.stopPropagation();
+				onChangeTerminalMode(!terminalMode);
 			}
 		},
 		[
@@ -728,6 +751,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			permissionMode,
 			supportsPlanMode,
 			togglePlanShortcut,
+			toggleTerminalShortcut,
+			onChangeTerminalMode,
+			terminalMode,
 			toggleFollowUpShortcut,
 			handleSubmitOpposite,
 			submitEnabled,
@@ -943,6 +969,47 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								</ShimmerText>
 							) : (
 								<>
+									{onChangeTerminalMode && (
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<ComposerButton
+													aria-label="Terminal mode"
+													disabled={toolbarDisabled}
+													className={cn(
+														composerToolbarTriggerClassName,
+														terminalMode
+															? "text-emerald-500 hover:bg-emerald-500/10 hover:text-emerald-500"
+															: "text-muted-foreground",
+														toolbarDisabled
+															? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
+															: null,
+													)}
+													onClick={() => onChangeTerminalMode(!terminalMode)}
+												>
+													<SquareTerminal
+														className={cn(
+															"size-[14px]",
+															terminalMode ? null : "opacity-55",
+														)}
+														strokeWidth={1.8}
+													/>
+												</ComposerButton>
+											</TooltipTrigger>
+											<TooltipContent
+												side="top"
+												sideOffset={4}
+												className="flex items-center gap-2"
+											>
+												<span>Terminal mode</span>
+												{toggleTerminalShortcut ? (
+													<InlineShortcutDisplay
+														hotkey={toggleTerminalShortcut}
+														className="text-background/60"
+													/>
+												) : null}
+											</TooltipContent>
+										</Tooltip>
+									)}
 									<DropdownMenu
 										open={modelPickerOpen}
 										onOpenChange={setModelPickerOpen}

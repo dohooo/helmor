@@ -6,6 +6,12 @@ import { resolveCssColor } from "@/lib/css-color";
 import { openUrl } from "@/lib/platform-bridge";
 import { useSettings } from "@/lib/settings";
 import "@xterm/xterm/css/xterm.css";
+import {
+	clearTerminalWrites,
+	disposeTerminalWrites,
+	flushTerminalWrites,
+	scheduleTerminalWrite,
+} from "./terminal-output-scheduler";
 
 type TerminalOutputProps = {
 	terminalRef?: React.RefObject<TerminalHandle | null>;
@@ -30,6 +36,13 @@ type TerminalOutputProps = {
 	 * interactive tools (vim, htop, less) re-layout.
 	 */
 	onResize?: (cols: number, rows: number) => void;
+	/**
+	 * Whether this terminal is currently visible (active sub-tab + panel open).
+	 * Hidden terminals release their WebGL context and coalesce writes in the
+	 * background scheduler, so N background terminals don't exhaust the GPU
+	 * context budget or starve the foreground one. Defaults to true.
+	 */
+	isVisible?: boolean;
 };
 
 export type TerminalHandle = {
@@ -260,6 +273,7 @@ function TerminalOutputImpl({
 	padding = "12px 2px 12px 12px",
 	onData,
 	onResize,
+	isVisible = true,
 }: TerminalOutputProps) {
 	const { settings } = useSettings();
 	const terminalFontFamily = fontFamily ?? settings.terminalFontFamily;
@@ -267,11 +281,16 @@ function TerminalOutputImpl({
 	const xtermRef = useRef<Terminal | null>(null);
 	const fitRef = useRef<FitAddon | null>(null);
 	const runFitRef = useRef<(() => void) | null>(null);
+	const webglRef = useRef<WebglAddon | null>(null);
+	// Set after a real context loss so we stop trying to rebuild WebGL.
+	const webglDisabledRef = useRef(false);
 	// Refs so xterm effect doesn't recreate on parent rerender.
 	const onDataRef = useRef<typeof onData>(onData);
 	const onResizeRef = useRef<typeof onResize>(onResize);
+	const isVisibleRef = useRef(isVisible);
 	onDataRef.current = onData;
 	onResizeRef.current = onResize;
+	isVisibleRef.current = isVisible;
 
 	useEffect(() => {
 		const container = containerRef.current;
@@ -306,24 +325,9 @@ function TerminalOutputImpl({
 		terminal.loadAddon(fit);
 		terminal.open(container);
 
-		// GPU renderer — drops per-frame cost on low-spec laptops. DOM
-		// renderer does an O(visible_cells) layout/paint per write; WebGL
-		// blits from a glyph atlas. `contextlost` fires on GPU reset /
-		// long sleep / driver crash; we dispose and let xterm fall back
-		// to the built-in DOM renderer automatically.
-		let webgl: WebglAddon | null = null;
-		try {
-			const addon = new WebglAddon();
-			addon.onContextLoss(() => {
-				addon.dispose();
-				webgl = null;
-			});
-			terminal.loadAddon(addon);
-			webgl = addon;
-		} catch {
-			// WebGL unavailable (headless / very old GPU). DOM renderer stays.
-			webgl = null;
-		}
+		// WebGL is attached/detached by the [isVisible] effect below so only
+		// visible terminals hold a GPU context — Chromium/WKWebView cap the
+		// number of live contexts, and N background terminals would exhaust it.
 
 		// Translate macOS Cmd combos to readline control codes.
 		terminal.attachCustomKeyEventHandler((event) => {
@@ -437,7 +441,9 @@ function TerminalOutputImpl({
 			if (suspendedWrites.length === 0) return;
 			const joined = suspendedWrites.join("");
 			suspendedWrites.length = 0;
-			terminal.write(joined);
+			scheduleTerminalWrite(terminal, joined, {
+				foreground: isVisibleRef.current,
+			});
 		};
 		terminalWriteFlushListeners.add(flushSuspendedWrites);
 
@@ -465,11 +471,14 @@ function TerminalOutputImpl({
 						suspendedWrites.push(data);
 						return;
 					}
-					terminal.write(data);
+					scheduleTerminalWrite(terminal, data, {
+						foreground: isVisibleRef.current,
+					});
 				},
 				// Scrollback wipe only — `reset()` here would race with replay.
 				clear: () => {
 					suspendedWrites.length = 0;
+					clearTerminalWrites(terminal);
 					terminal.clear();
 				},
 				dispose: () => terminal.dispose(),
@@ -494,7 +503,7 @@ function TerminalOutputImpl({
 			resizeObserver.disconnect();
 			terminalRefitListeners.delete(refitListener);
 			terminalWriteFlushListeners.delete(flushSuspendedWrites);
-			webgl?.dispose();
+			disposeTerminalWrites(terminal);
 			terminal.dispose();
 			xtermRef.current = null;
 			fitRef.current = null;
@@ -505,6 +514,38 @@ function TerminalOutputImpl({
 			}
 		};
 	}, [detectLinks, terminalRef]);
+
+	// Attach WebGL only while visible; release the GPU context when hidden so
+	// many background terminals don't exhaust the renderer's context budget.
+	// On becoming visible, flush output the scheduler coalesced while hidden
+	// and re-fit (dimensions may have drifted).
+	useEffect(() => {
+		const terminal = xtermRef.current;
+		if (!terminal || !isVisible) return;
+		if (!webglRef.current && !webglDisabledRef.current) {
+			try {
+				const addon = new WebglAddon();
+				addon.onContextLoss(() => {
+					addon.dispose();
+					webglRef.current = null;
+					// A real context loss means the budget is gone — stay on the
+					// DOM renderer instead of thrashing attach/loss.
+					webglDisabledRef.current = true;
+				});
+				terminal.loadAddon(addon);
+				webglRef.current = addon;
+			} catch {
+				// WebGL unavailable (headless / very old GPU). DOM renderer stays.
+				webglRef.current = null;
+			}
+		}
+		flushTerminalWrites(terminal);
+		runFitRef.current?.();
+		return () => {
+			webglRef.current?.dispose();
+			webglRef.current = null;
+		};
+	}, [isVisible]);
 
 	useEffect(() => {
 		const terminal = xtermRef.current;

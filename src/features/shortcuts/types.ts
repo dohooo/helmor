@@ -34,6 +34,7 @@ export type ShortcutId =
 	| "action.openPullRequest"
 	| "composer.focus"
 	| "composer.togglePlanMode"
+	| "composer.toggleTerminalMode"
 	| "composer.toggleContextPanel"
 	| "composer.openModelPicker"
 	| "composer.toggleFollowUpBehavior"
