@@ -15,7 +15,6 @@ describe("resolveMobileShellRoute", () => {
 		expect(
 			resolveMobileShellRoute({
 				booting: true,
-				onboardingCompleted: false,
 				pairing,
 			}),
 		).toBe("booting");
@@ -25,7 +24,6 @@ describe("resolveMobileShellRoute", () => {
 		expect(
 			resolveMobileShellRoute({
 				booting: false,
-				onboardingCompleted: false,
 				pairing,
 			}),
 		).toBe("paired");
@@ -35,19 +33,17 @@ describe("resolveMobileShellRoute", () => {
 		expect(
 			resolveMobileShellRoute({
 				booting: false,
-				onboardingCompleted: false,
 				pairing: null,
 			}),
 		).toBe("onboarding");
 	});
 
-	it("shows pairing after onboarding is complete", () => {
+	it("keeps completed unpaired users on onboarding", () => {
 		expect(
 			resolveMobileShellRoute({
 				booting: false,
-				onboardingCompleted: true,
 				pairing: null,
 			}),
-		).toBe("pairing");
+		).toBe("onboarding");
 	});
 });

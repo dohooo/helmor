@@ -5,7 +5,6 @@ import {
 	Image,
 	type NativeScrollEvent,
 	type NativeSyntheticEvent,
-	Pressable,
 	type ScrollView,
 	StyleSheet,
 	Text,
@@ -21,7 +20,6 @@ import { saveOnboardingCompleted } from "./onboarding-store";
 
 type MobileOnboardingProps = {
 	onOpenScanner: () => void;
-	onSkip: () => void;
 };
 
 type Slide = {
@@ -35,26 +33,23 @@ const HELMOR_ICON = require("../../../assets/icon.png");
 
 const SLIDES: Slide[] = [
 	{
-		label: "Secure by design",
-		title: "Helmor on your phone",
-		body: "Pair with your Mac to follow workspaces and conversations on the go.",
+		label: "Stay close to the work",
+		title: "Follow Helmor from your phone",
+		body: "Check active workspaces and conversations while your desktop keeps running the agents.",
 	},
 	{
-		label: "Your Mac stays in charge",
-		title: "Local agents, mobile view",
-		body: "Agents keep running locally on your machine while your phone stays connected.",
+		label: "Your desktop stays in charge",
+		title: "Local agents stay local",
+		body: "Your repos, tools, and agent sessions stay on your computer. Your phone is the companion view.",
 	},
 	{
-		label: "Connect in seconds",
-		title: "Scan your desktop code",
-		body: "Open Settings > Mobile companion on your Mac, then scan the pairing code.",
+		label: "Pair in seconds",
+		title: "Scan the pairing code",
+		body: "Open Helmor on your desktop, go to Settings > Mobile companion, then scan the QR code.",
 	},
 ];
 
-export function MobileOnboarding({
-	onOpenScanner,
-	onSkip,
-}: MobileOnboardingProps) {
+export function MobileOnboarding({ onOpenScanner }: MobileOnboardingProps) {
 	const theme = useHelmorTheme();
 	const styles = useThemedStyles(createStyles);
 	const insets = useSafeAreaInsets();
@@ -164,14 +159,6 @@ export function MobileOnboarding({
 					/>
 					<Text style={styles.brandText}>Helmor</Text>
 				</View>
-				<Pressable
-					accessibilityRole="button"
-					hitSlop={10}
-					onPress={() => void completeThen(onSkip)}
-					style={styles.skip}
-				>
-					<Text style={styles.skipText}>Skip</Text>
-				</Pressable>
 			</View>
 
 			<Animated.ScrollView
@@ -263,23 +250,11 @@ function createStyles(theme: HelmorTheme) {
 		header: {
 			alignItems: "center",
 			flexDirection: "row",
-			justifyContent: "space-between",
+			justifyContent: "flex-start",
 			left: theme.spacing.xl,
 			position: "absolute",
 			right: theme.spacing.xl,
 			zIndex: 2,
-		},
-		skip: {
-			marginRight: -theme.spacing.md,
-			paddingHorizontal: theme.spacing.md,
-			paddingVertical: theme.spacing.md,
-		},
-		skipText: {
-			color: "rgba(255, 255, 255, 0.72)",
-			fontFamily: "Avenir Next",
-			fontSize: theme.text.body,
-			fontWeight: "600",
-			letterSpacing: 0,
 		},
 		pager: {
 			flex: 1,
@@ -319,16 +294,17 @@ function createStyles(theme: HelmorTheme) {
 			fontFamily: "Avenir Next",
 			fontSize: theme.text.ui,
 			fontWeight: "700",
-			letterSpacing: 0.2,
+			letterSpacing: 0,
 			textTransform: "uppercase",
 		},
 		title: {
 			color: "#ffffff",
 			fontFamily: "Avenir Next",
-			fontSize: 44,
-			fontWeight: "500",
-			letterSpacing: -0.7,
-			lineHeight: 52,
+			fontSize: 40,
+			fontWeight: "600",
+			letterSpacing: 0,
+			lineHeight: 47,
+			maxWidth: 340,
 		},
 		body: {
 			color: "rgba(255, 255, 255, 0.72)",
@@ -336,7 +312,7 @@ function createStyles(theme: HelmorTheme) {
 			fontSize: 17,
 			fontWeight: "400",
 			lineHeight: 24,
-			maxWidth: 330,
+			maxWidth: 322,
 		},
 		dots: {
 			alignItems: "center",

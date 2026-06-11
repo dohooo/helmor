@@ -1,18 +1,25 @@
+import { BottomSheet, BottomSheetView } from "@expo/ui/community/bottom-sheet";
 import {
 	type BarcodeScanningResult,
 	CameraView,
 	useCameraPermissions,
 } from "expo-camera";
+import {
+	GlassView,
+	isGlassEffectAPIAvailable,
+	isLiquidGlassAvailable,
+} from "expo-glass-effect";
 import * as Haptics from "expo-haptics";
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import {
 	ActivityIndicator,
-	Modal,
 	Pressable,
 	StyleSheet,
 	Text,
+	useWindowDimensions,
 	View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useThemedStyles } from "../lib/use-themed-styles";
 import type { HelmorTheme } from "../theme";
@@ -34,10 +41,18 @@ export function ScanSheet({
 	onClose,
 	onScanned,
 }: ScanSheetProps) {
-	const theme = useHelmorTheme();
 	const styles = useThemedStyles(createStyles);
+	const insets = useSafeAreaInsets();
+	const { height } = useWindowDimensions();
 	const [permission, requestPermission] = useCameraPermissions();
 	const [locked, setLocked] = useState(false);
+	const liquidGlassAvailable = useMemo(() => {
+		try {
+			return isGlassEffectAPIAvailable() && isLiquidGlassAvailable();
+		} catch {
+			return false;
+		}
+	}, []);
 
 	useEffect(() => {
 		if (visible) setLocked(false);
@@ -55,31 +70,22 @@ export function ScanSheet({
 	};
 
 	return (
-		<Modal
-			animationType="fade"
-			transparent
-			visible={visible}
-			onRequestClose={onClose}
+		<BottomSheet
+			enablePanDownToClose
+			index={visible ? 0 : -1}
+			onClose={onClose}
+			snapPoints={["full"]}
 		>
-			<View style={styles.backdrop}>
-				<Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-				<View style={styles.sheet}>
-					<View style={styles.sheetHeader}>
-						<View>
-							<Text style={styles.title}>Scan pairing code</Text>
-							<Text style={styles.subtitle}>
-								Point at the QR code in Helmor Settings.
-							</Text>
-						</View>
-						<Pressable
-							accessibilityRole="button"
-							hitSlop={10}
-							onPress={onClose}
-						>
-							<Text style={styles.close}>Close</Text>
-						</Pressable>
-					</View>
-
+			<BottomSheetView
+				style={[
+					styles.sheetContent,
+					{
+						height: Math.max(height - Math.max(insets.top, 16), 0),
+						paddingBottom: Math.max(insets.bottom, 16),
+					},
+				]}
+			>
+				<GlassSurface enabled={liquidGlassAvailable}>
 					<View style={styles.cameraFrame}>
 						{permission?.granted ? (
 							<CameraView
@@ -93,9 +99,9 @@ export function ScanSheet({
 							/>
 						) : (
 							<View style={styles.permission}>
-								<Text style={styles.permissionTitle}>Camera access needed</Text>
+								<Text style={styles.permissionTitle}>Allow camera access</Text>
 								<Text style={styles.permissionCopy}>
-									Helmor uses the camera only to scan pairing QR codes.
+									The camera is only used to scan your Helmor pairing code.
 								</Text>
 								<PrimaryButton
 									label="Allow camera"
@@ -107,79 +113,105 @@ export function ScanSheet({
 							</View>
 						)}
 
-						<View pointerEvents="none" style={styles.scanWindow}>
-							<View style={[styles.corner, styles.cornerTopLeft]} />
-							<View style={[styles.corner, styles.cornerTopRight]} />
-							<View style={[styles.corner, styles.cornerBottomLeft]} />
-							<View style={[styles.corner, styles.cornerBottomRight]} />
+						<Pressable
+							accessibilityLabel="Close scanner"
+							accessibilityRole="button"
+							hitSlop={10}
+							onPress={onClose}
+							style={styles.closeButton}
+						>
+							<Text style={styles.close}>×</Text>
+						</Pressable>
+
+						<View pointerEvents="none" style={styles.statusPill}>
+							<Text style={styles.statusTitle}>Scan pairing code</Text>
+							<Text style={styles.statusText}>Looking for a Helmor QR</Text>
 						</View>
 
 						{busy ? (
 							<View style={styles.busyOverlay}>
-								<ActivityIndicator color={theme.colors.text} />
-								<Text style={styles.busyText}>Pairing...</Text>
+								<ActivityIndicator color="#ffffff" />
+								<Text style={styles.busyText}>Connecting to your desktop…</Text>
 							</View>
 						) : null}
 					</View>
 
 					{error ? (
-						<Text selectable style={styles.error}>
-							{error}
-						</Text>
+						<View style={styles.errorCard}>
+							<Text selectable style={styles.error}>
+								{error}
+							</Text>
+						</View>
 					) : null}
-				</View>
-			</View>
-		</Modal>
+				</GlassSurface>
+			</BottomSheetView>
+		</BottomSheet>
+	);
+}
+
+function GlassSurface({
+	children,
+	enabled,
+}: {
+	children: ReactNode;
+	enabled: boolean;
+}) {
+	const theme = useHelmorTheme();
+	const styles = useThemedStyles(createStyles);
+	if (!enabled) {
+		return <View style={styles.fallbackSurface}>{children}</View>;
+	}
+
+	return (
+		<GlassView
+			colorScheme={theme.mode}
+			glassEffectStyle="regular"
+			style={styles.glassSurface}
+		>
+			{children}
+		</GlassView>
 	);
 }
 
 function createStyles(theme: HelmorTheme) {
 	return StyleSheet.create({
-		backdrop: {
-			backgroundColor: theme.colors.backdrop,
-			flex: 1,
-			justifyContent: "center",
-			paddingHorizontal: theme.spacing.lg,
+		sheetContent: {
+			paddingHorizontal: 0,
 		},
-		sheet: {
-			backgroundColor: theme.colors.overlaySurface,
-			borderColor: theme.colors.border,
+		glassSurface: {
 			borderRadius: theme.radii.xl,
-			borderWidth: 1,
+			flex: 1,
 			overflow: "hidden",
-			padding: theme.spacing.md,
 		},
-		sheetHeader: {
-			alignItems: "flex-start",
-			flexDirection: "row",
-			justifyContent: "space-between",
-			marginBottom: theme.spacing.md,
-			paddingHorizontal: 2,
+		fallbackSurface: {
+			borderRadius: theme.radii.xl,
+			flex: 1,
+			overflow: "hidden",
 		},
-		title: {
-			color: theme.colors.text,
-			fontSize: theme.text.heading,
-			fontWeight: "800",
-			letterSpacing: 0,
-		},
-		subtitle: {
-			color: theme.colors.textMuted,
-			fontSize: theme.text.ui,
-			lineHeight: 18,
-			marginTop: 4,
-			maxWidth: 230,
+		closeButton: {
+			alignItems: "center",
+			backgroundColor: "rgba(0, 0, 0, 0.52)",
+			borderColor: "rgba(255, 255, 255, 0.18)",
+			borderRadius: 18,
+			borderWidth: 1,
+			height: 36,
+			justifyContent: "center",
+			position: "absolute",
+			right: theme.spacing.md,
+			top: theme.spacing.md,
+			width: 36,
+			zIndex: 2,
 		},
 		close: {
-			color: theme.colors.textMuted,
-			fontSize: theme.text.body,
+			color: "#ffffff",
+			fontSize: 22,
 			fontWeight: "700",
 			letterSpacing: 0,
-			paddingTop: 2,
+			lineHeight: 24,
 		},
 		cameraFrame: {
-			aspectRatio: 1,
 			backgroundColor: theme.colors.cameraBackground,
-			borderRadius: theme.radii.lg,
+			flex: 1,
 			overflow: "hidden",
 		},
 		permission: {
@@ -203,45 +235,33 @@ function createStyles(theme: HelmorTheme) {
 			marginBottom: theme.spacing.lg,
 			textAlign: "center",
 		},
-		scanWindow: {
+		statusPill: {
+			alignSelf: "stretch",
+			backgroundColor: "rgba(0, 0, 0, 0.56)",
 			borderColor: "rgba(255, 255, 255, 0.18)",
 			borderRadius: theme.radii.lg,
 			borderWidth: 1,
-			bottom: 38,
-			left: 38,
+			bottom: theme.spacing.lg,
+			left: theme.spacing.md,
+			paddingHorizontal: theme.spacing.md,
+			paddingVertical: theme.spacing.sm,
 			position: "absolute",
-			right: 38,
-			top: 38,
+			right: theme.spacing.md,
 		},
-		corner: {
-			borderColor: theme.colors.text,
-			height: 24,
-			position: "absolute",
-			width: 24,
+		statusTitle: {
+			color: "#ffffff",
+			fontSize: theme.text.body,
+			fontWeight: "800",
+			letterSpacing: 0,
+			textAlign: "center",
 		},
-		cornerTopLeft: {
-			borderLeftWidth: 3,
-			borderTopWidth: 3,
-			left: -1,
-			top: -1,
-		},
-		cornerTopRight: {
-			borderRightWidth: 3,
-			borderTopWidth: 3,
-			right: -1,
-			top: -1,
-		},
-		cornerBottomLeft: {
-			borderBottomWidth: 3,
-			borderLeftWidth: 3,
-			bottom: -1,
-			left: -1,
-		},
-		cornerBottomRight: {
-			borderBottomWidth: 3,
-			borderRightWidth: 3,
-			bottom: -1,
-			right: -1,
+		statusText: {
+			color: "rgba(255, 255, 255, 0.72)",
+			fontSize: theme.text.ui,
+			fontWeight: "700",
+			letterSpacing: 0,
+			marginTop: 2,
+			textAlign: "center",
 		},
 		busyOverlay: {
 			alignItems: "center",
@@ -255,16 +275,32 @@ function createStyles(theme: HelmorTheme) {
 			top: 0,
 		},
 		busyText: {
-			color: theme.colors.text,
+			color: "#ffffff",
 			fontSize: theme.text.body,
 			fontWeight: "700",
 			letterSpacing: 0,
+		},
+		errorCard: {
+			backgroundColor:
+				theme.mode === "light"
+					? "rgba(220, 38, 38, 0.08)"
+					: "rgba(251, 113, 133, 0.12)",
+			borderColor:
+				theme.mode === "light"
+					? "rgba(220, 38, 38, 0.22)"
+					: "rgba(251, 113, 133, 0.24)",
+			borderRadius: theme.radii.md,
+			borderWidth: 1,
+			bottom: theme.spacing.md,
+			left: theme.spacing.md,
+			padding: theme.spacing.sm,
+			position: "absolute",
+			right: theme.spacing.md,
 		},
 		error: {
 			color: theme.colors.danger,
 			fontSize: theme.text.ui,
 			lineHeight: 18,
-			marginTop: theme.spacing.md,
 			textAlign: "center",
 		},
 	});

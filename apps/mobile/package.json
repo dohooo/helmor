@@ -3,9 +3,11 @@
 	"version": "0.1.0",
 	"main": "expo-router/entry",
 	"dependencies": {
+		"@expo/ui": "56.0.16",
 		"expo": "~56.0.9",
 		"expo-camera": "~56.0.7",
 		"expo-constants": "~56.0.17",
+		"expo-glass-effect": "~56.0.4",
 		"expo-haptics": "~56.0.3",
 		"expo-linking": "~56.0.13",
 		"expo-router": "~56.2.9",

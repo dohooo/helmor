@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-import {
-	loadOnboardingCompleted,
-	saveOnboardingCompleted,
-} from "../features/onboarding/onboarding-store";
+import { saveOnboardingCompleted } from "../features/onboarding/onboarding-store";
 import type { NativePairing } from "../lib/pairing";
 import { validatePairing } from "../lib/pairing";
 import { clearPairing, loadPairing } from "../lib/pairing-store";
@@ -13,15 +10,13 @@ const LOG_PREFIX = "[helmor-mobile:pairing]";
 export function useMobileBootState() {
 	const [booting, setBooting] = useState(true);
 	const [pairing, setPairing] = useState<NativePairing | null>(null);
-	const [onboardingCompleted, setOnboardingCompleted] = useState(false);
 	const [bootError, setBootError] = useState<string | null>(null);
 
 	useEffect(() => {
 		let alive = true;
 
-		Promise.all([loadPairing(), loadOnboardingCompleted()])
-			.then(async ([saved, completed]) => {
-				if (alive) setOnboardingCompleted(completed);
+		loadPairing()
+			.then(async (saved) => {
 				logPairing("stored-pairing-loaded", {
 					hasPairing: !!saved,
 					baseUrl: saved?.baseUrl ?? null,
@@ -79,17 +74,14 @@ export function useMobileBootState() {
 
 	const completeOnboarding = useCallback(async () => {
 		await saveOnboardingCompleted();
-		setOnboardingCompleted(true);
 	}, []);
 
 	return {
 		bootError,
 		booting,
 		completeOnboarding,
-		onboardingCompleted,
 		pairing,
 		setBootError,
-		setOnboardingCompleted,
 		setPairing,
 	};
 }

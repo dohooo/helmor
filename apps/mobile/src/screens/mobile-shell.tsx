@@ -4,7 +4,6 @@ import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { CompanionWebView } from "../components/companion-web-view";
-import { PairingHome } from "../components/pairing-home";
 import { ScanSheet } from "../components/scan-sheet";
 import { MobileOnboarding } from "../features/onboarding";
 import { useMobileBootState } from "../hooks/use-mobile-boot-state";
@@ -21,16 +20,8 @@ export function MobileShell() {
 	const styles = useThemedStyles(createStyles);
 	const insets = useSafeAreaInsets();
 	const [scannerOpen, setScannerOpen] = useState(false);
-	const {
-		bootError,
-		booting,
-		completeOnboarding,
-		onboardingCompleted,
-		pairing,
-		setBootError,
-		setOnboardingCompleted,
-		setPairing,
-	} = useMobileBootState();
+	const { booting, completeOnboarding, pairing, setBootError, setPairing } =
+		useMobileBootState();
 	const handlePaired = useCallback(
 		(nextPairing: NativePairing) => {
 			setPairing(nextPairing);
@@ -92,20 +83,12 @@ export function MobileShell() {
 	}, [resetPairingError, setBootError, setPairing]);
 
 	const handleOnboardingOpenScanner = useCallback(() => {
-		setOnboardingCompleted(true);
 		resetPairingError();
 		setScannerOpen(true);
-	}, [resetPairingError, setOnboardingCompleted]);
-
-	const handleOnboardingSkip = useCallback(() => {
-		setOnboardingCompleted(true);
-		resetPairingError();
-		setScannerOpen(false);
-	}, [resetPairingError, setOnboardingCompleted]);
+	}, [resetPairingError]);
 
 	const route = resolveMobileShellRoute({
 		booting,
-		onboardingCompleted,
 		pairing,
 	});
 
@@ -129,10 +112,7 @@ export function MobileShell() {
 	if (route === "onboarding") {
 		return (
 			<View style={styles.container}>
-				<MobileOnboarding
-					onOpenScanner={handleOnboardingOpenScanner}
-					onSkip={handleOnboardingSkip}
-				/>
+				<MobileOnboarding onOpenScanner={handleOnboardingOpenScanner} />
 				<ScanSheet
 					busy={pairingBusy}
 					error={scannerOpen ? pairingError : null}
@@ -144,35 +124,7 @@ export function MobileShell() {
 		);
 	}
 
-	return (
-		<View
-			style={[
-				styles.container,
-				{
-					paddingTop: insets.top,
-					paddingBottom: Math.max(insets.bottom, 16),
-				},
-			]}
-		>
-			<PairingHome
-				busy={pairingBusy}
-				error={!scannerOpen ? (pairingError ?? bootError) : null}
-				onOpenScanner={() => {
-					setBootError(null);
-					resetPairingError();
-					setScannerOpen(true);
-				}}
-				onSubmitLink={(value) => void handleManualPairing(value)}
-			/>
-			<ScanSheet
-				busy={pairingBusy}
-				error={scannerOpen ? pairingError : null}
-				onClose={() => setScannerOpen(false)}
-				onScanned={handleScan}
-				visible={scannerOpen}
-			/>
-		</View>
-	);
+	return null;
 }
 
 function createStyles(theme: HelmorTheme) {
