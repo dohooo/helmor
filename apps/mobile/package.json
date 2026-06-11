@@ -13,6 +13,7 @@
 		"expo-router": "~56.2.9",
 		"expo-secure-store": "~56.0.4",
 		"expo-status-bar": "~56.0.4",
+		"expo-video": "56.1.2",
 		"react": "19.2.3",
 		"react-native": "0.85.3",
 		"react-native-safe-area-context": "~5.7.0",

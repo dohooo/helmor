@@ -15,7 +15,6 @@ describe("resolveMobileShellRoute", () => {
 		expect(
 			resolveMobileShellRoute({
 				booting: true,
-				onboardingCompleted: false,
 				pairing,
 			}),
 		).toBe("booting");
@@ -25,27 +24,15 @@ describe("resolveMobileShellRoute", () => {
 		expect(
 			resolveMobileShellRoute({
 				booting: false,
-				onboardingCompleted: false,
 				pairing,
 			}),
 		).toBe("paired");
 	});
 
-	it("shows onboarding for first-time unpaired users", () => {
+	it("shows the connection guide for first-time unpaired users", () => {
 		expect(
 			resolveMobileShellRoute({
 				booting: false,
-				onboardingCompleted: false,
-				pairing: null,
-			}),
-		).toBe("onboarding");
-	});
-
-	it("shows the connection guide for completed unpaired users", () => {
-		expect(
-			resolveMobileShellRoute({
-				booting: false,
-				onboardingCompleted: true,
 				pairing: null,
 			}),
 		).toBe("connectionGuide");

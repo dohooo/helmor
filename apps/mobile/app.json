@@ -24,7 +24,8 @@
 				{
 					"cameraPermission": "Allow Helmor to scan desktop pairing QR codes."
 				}
-			]
+			],
+			"expo-video"
 		],
 		"experiments": {
 			"typedRoutes": true

@@ -273,16 +273,16 @@ export function WorkspaceStartPage({
 					<div
 						aria-hidden={previewCard ? true : undefined}
 						className={cn(
-							"relative w-full overflow-hidden transition-[height,opacity,transform] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
+							"relative w-full overflow-hidden transition-[height,opacity,transform] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] max-[640px]:overflow-visible",
 							previewCard
 								? "pointer-events-none h-0 translate-y-2 opacity-0"
-								: "h-10 translate-y-0 opacity-100",
+								: "h-10 translate-y-0 opacity-100 max-[640px]:h-auto max-[640px]:min-h-16",
 						)}
 					>
 						<div
 							className={cn(
-								"absolute top-0 flex items-center gap-x-2 whitespace-nowrap text-center font-semibold leading-tight tracking-normal text-foreground transition-[left,transform,font-size] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-								"left-1/2 -translate-x-1/2 text-[24px]",
+								"absolute top-0 flex items-center gap-x-2 whitespace-nowrap text-center font-semibold leading-tight tracking-normal text-foreground transition-[left,transform,font-size] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] max-[640px]:relative max-[640px]:left-auto max-[640px]:top-auto max-[640px]:mx-auto max-[640px]:max-w-[calc(100vw-2rem)] max-[640px]:translate-x-0 max-[640px]:flex-wrap max-[640px]:justify-center max-[640px]:gap-x-1.5 max-[640px]:gap-y-1 max-[640px]:whitespace-normal max-[640px]:px-1",
+								"left-1/2 -translate-x-1/2 text-[24px] max-[640px]:text-[22px]",
 							)}
 						>
 							{mode === "chat" ? (
@@ -328,7 +328,7 @@ export function WorkspaceStartPage({
 														disabled={repositories.length === 0}
 														className={cn(
 															"font-semibold leading-none tracking-normal transition-[height,max-width,padding,font-size,gap] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-															"h-9 max-w-[18rem] gap-1.5 px-2 text-[24px]",
+															"h-9 max-w-[18rem] gap-1.5 px-2 text-[24px] max-[640px]:max-w-[calc(100vw-3rem)] max-[640px]:text-[22px]",
 														)}
 													>
 														{selectedRepository ? (
@@ -416,7 +416,7 @@ export function WorkspaceStartPage({
 							)}
 						</div>
 					</div>
-					<div className="w-full px-4">{children}</div>
+					<div className="w-full px-4 max-[640px]:px-2">{children}</div>
 					<div
 						className={cn(
 							"flex w-full items-center gap-2 overflow-hidden px-4 transition-[height,opacity,transform] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",

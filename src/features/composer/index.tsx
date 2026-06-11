@@ -486,7 +486,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		);
 	}, []);
 	const composerToolbarTriggerClassName =
-		"cursor-interactive rounded-[9px] px-1 py-0.5 text-ui font-medium transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50";
+		"cursor-interactive rounded-[9px] px-1 py-0.5 text-ui font-medium transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50 max-[960px]:px-0.5 max-[960px]:text-small";
 	// Shared gate for Send and Steer — the only difference is whether a
 	// stream is currently running. When sending, ⌘Enter / Enter still
 	// fires `handleSubmit`; the use-streaming hook dispatches to the
@@ -917,8 +917,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						</div>
 					) : null}
 
-					<div className="mt-2.5 flex items-end justify-between gap-3 max-[960px]:mt-2 max-[960px]:justify-end">
-						<div className="flex flex-wrap items-center gap-2 max-[960px]:absolute max-[960px]:left-0 max-[960px]:top-full max-[960px]:mt-1.5 max-[960px]:w-full max-[960px]:flex-nowrap max-[960px]:gap-1.5 max-[960px]:overflow-x-auto max-[960px]:pb-0.5">
+					<div className="mt-2.5 flex items-end justify-between gap-3 max-[960px]:mt-2 max-[960px]:items-center max-[960px]:gap-1.5">
+						<div className="flex flex-wrap items-center gap-2 max-[960px]:min-w-0 max-[960px]:flex-1 max-[960px]:flex-nowrap max-[960px]:gap-1 max-[960px]:overflow-x-auto max-[960px]:pb-0 max-[960px]:[scrollbar-width:none] max-[960px]:[&::-webkit-scrollbar]:hidden">
 							{modelsLoading ? (
 								<ShimmerText className="px-1 py-0.5 text-ui text-muted-foreground">
 									Loading models…
@@ -1132,7 +1132,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 												className="size-[13px]"
 												strokeWidth={1.8}
 											/>
-											<span>Plan</span>
+											<span className="max-[960px]:sr-only">Plan</span>
 										</ComposerButton>
 									) : null}
 									{onToggleContextPanel ? (
@@ -1175,18 +1175,25 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 							)}
 						</div>
 
-						<div className="flex items-center gap-1">
-							<UsageStatsIndicator agentType={agentType} disabled={disabled} />
-							{sessionId && supportsContextUsage ? (
-								<ContextUsageRing
-									sessionId={sessionId}
-									providerSessionId={providerSessionId}
-									composerModelId={selectedModel?.id ?? null}
-									cwd={workspaceRootPath}
+						<div className="flex items-center gap-1 max-[960px]:shrink-0 max-[960px]:justify-end">
+							<div className="max-[960px]:hidden">
+								<UsageStatsIndicator
 									agentType={agentType}
-									alwaysShow={alwaysShowContextUsage}
 									disabled={disabled}
 								/>
+							</div>
+							{sessionId && supportsContextUsage ? (
+								<div className="max-[960px]:hidden">
+									<ContextUsageRing
+										sessionId={sessionId}
+										providerSessionId={providerSessionId}
+										composerModelId={selectedModel?.id ?? null}
+										cwd={workspaceRootPath}
+										agentType={agentType}
+										alwaysShow={alwaysShowContextUsage}
+										disabled={disabled}
+									/>
+								</div>
 							) : null}
 							{/* Trailing actions sit behind a visible outline/border, while the
 							    indicators to the left don't — that pulls the perceived gap in
@@ -1253,14 +1260,23 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 													aria-label={preferredStartSubmitLabel}
 													onClick={() => handleStartSubmitMode(startSubmitMode)}
 													disabled={sendDisabled}
-													className="gap-1.5 px-2.5"
+													className="gap-1.5 px-2.5 max-[960px]:gap-1 max-[960px]:px-2"
 												>
 													{startSubmitMode === "saveForLater" ? (
 														<Clock3 className="size-3.5" strokeWidth={1.8} />
 													) : (
 														<ArrowUp className="size-3.5" strokeWidth={2.2} />
 													)}
-													<span>{preferredStartSubmitLabel}</span>
+													<span className="max-[960px]:hidden">
+														{preferredStartSubmitLabel}
+													</span>
+													<span className="hidden max-[960px]:inline">
+														{preferredStartSubmitLabel === "New Workspace"
+															? "New"
+															: preferredStartSubmitLabel === "Save for later"
+																? "Save"
+																: "Start"}
+													</span>
 												</Button>
 												<DropdownMenuTrigger asChild>
 													<Button
@@ -1268,7 +1284,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 														size="sm"
 														aria-label="Start options"
 														disabled={sendDisabled}
-														className="px-2.5"
+														className="px-2.5 max-[960px]:px-2"
 													>
 														<ChevronDown
 															className="size-3 text-muted-foreground"
