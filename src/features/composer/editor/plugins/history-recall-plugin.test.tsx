@@ -20,8 +20,10 @@ import {
 	$createRangeSelection,
 	$createTextNode,
 	$getRoot,
+	$isElementNode,
 	$setSelection,
 	createEditor,
+	type LexicalEditor,
 	type SerializedEditorState,
 } from "lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -85,7 +87,7 @@ function rect(top: number, bottom: number): DOMRect {
 	} as DOMRect;
 }
 
-function paragraphDraft(text: string): SerializedEditorState {
+function paragraphDraft(...lines: string[]): SerializedEditorState {
 	return {
 		root: {
 			type: "root",
@@ -93,28 +95,26 @@ function paragraphDraft(text: string): SerializedEditorState {
 			format: "",
 			indent: 0,
 			direction: null,
-			children: [
-				{
-					type: "paragraph",
-					version: 1,
-					format: "",
-					indent: 0,
-					direction: null,
-					textFormat: 0,
-					textStyle: "",
-					children: [
-						{
-							type: "text",
-							version: 1,
-							text,
-							format: 0,
-							mode: "normal",
-							style: "",
-							detail: 0,
-						},
-					],
-				},
-			],
+			children: lines.map((text) => ({
+				type: "paragraph",
+				version: 1,
+				format: "",
+				indent: 0,
+				direction: null,
+				textFormat: 0,
+				textStyle: "",
+				children: [
+					{
+						type: "text",
+						version: 1,
+						text,
+						format: 0,
+						mode: "normal",
+						style: "",
+						detail: 0,
+					},
+				],
+			})),
 		},
 	} as unknown as SerializedEditorState;
 }
@@ -417,6 +417,52 @@ describe("HistoryRecallPlugin", () => {
 		const persisted = JSON.stringify(loadPersistedDraft(contextKey));
 		expect(persisted).toContain("keep this draft");
 		expect(persisted).not.toContain("history prompt");
+	});
+
+	it("keeps the caret at the end of a multi-line draft restored via ArrowDown", async () => {
+		// Regression: returning to a multi-line in-progress draft must leave the
+		// caret at the end of the LAST paragraph. If the selection is lost (or
+		// lands on the first paragraph), the next ArrowUp re-enters recall
+		// instead of moving the caret within the draft.
+		const contextKey = "session:recall-multiline";
+		savePersistedDraft(contextKey, paragraphDraft("first line", "second line"));
+		renderComposer([textEntry("history prompt")], vi.fn(), contextKey);
+		const editorEl = screen.getByLabelText("Workspace input");
+		await waitFor(() => expect(editorEl.textContent).toContain("second line"));
+
+		const editor = (editorEl as unknown as { __lexicalEditor: LexicalEditor })
+			.__lexicalEditor;
+		expect(editor).toBeTruthy();
+
+		// Caret on the first paragraph so ArrowUp enters recall.
+		editor.update(
+			() => {
+				const first = $getRoot().getFirstChild();
+				if ($isElementNode(first)) first.selectStart();
+			},
+			{ discrete: true },
+		);
+
+		fireEvent.keyDown(editorEl, { key: "ArrowUp", code: "ArrowUp" });
+		await waitFor(() =>
+			expect(editorEl.textContent).toContain("history prompt"),
+		);
+
+		fireEvent.keyDown(editorEl, { key: "ArrowDown", code: "ArrowDown" });
+		await waitFor(() => expect(editorEl.textContent).toContain("second line"));
+
+		// Caret must be at the end of the restored draft (last paragraph).
+		let pos: { atFirstParagraph: boolean; atLastParagraph: boolean } | null =
+			null;
+		editor.getEditorState().read(() => {
+			pos = historyRecallTestUtils.$caretParagraphPosition();
+		});
+		expect(pos).toEqual({ atFirstParagraph: false, atLastParagraph: true });
+
+		// ArrowUp from the last paragraph must move the caret, not recall.
+		fireEvent.keyDown(editorEl, { key: "ArrowUp", code: "ArrowUp" });
+		expect(editorEl.textContent).toContain("second line");
+		expect(editorEl.textContent).not.toContain("history prompt");
 	});
 
 	it("refocuses the editor when ArrowDown restores a non-empty draft", async () => {

@@ -207,18 +207,20 @@ export function HistoryRecallPlugin({ getHistory, scopeKey }: Props) {
 		(serialized: SerializedEditorState | null) => {
 			if (serialized) {
 				try {
-					const parsed = editor.parseEditorState(serialized);
+					// Bake the caret into the parsed state itself. We're inside a
+					// command listener (editor mid-update), where `setEditorState`
+					// stashes the new state as pending WITHOUT committing — a
+					// follow-up `editor.update(selectEnd)` would run against the
+					// stale previous state, so the restored draft would commit
+					// with a null selection (caret lost on multi-line drafts).
+					const parsed = editor.parseEditorState(serialized, () => {
+						$getRoot().selectEnd();
+					});
 					editor.setEditorState(parsed, { tag: HISTORY_RECALL_RESTORE_TAG });
-					editor.update(
-						() => {
-							$getRoot().selectEnd();
-						},
-						{ tag: HISTORY_RECALL_RESTORE_TAG },
-					);
 					// `setEditorState` wipes the DOM selection (removeAllRanges),
-					// which blurs the contentEditable in WebKit. Re-placing the
-					// model selection above doesn't refocus it, so the caret stays
-					// invisible — refocus now that the selection is committed.
+					// which blurs the contentEditable in WebKit. The model selection
+					// alone doesn't refocus it, so the caret stays invisible —
+					// refocus now that the selection is committed.
 					editor.focus(undefined, { defaultSelection: "rootEnd" });
 					return;
 				} catch {
