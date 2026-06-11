@@ -916,6 +916,8 @@ export const WorkspaceComposerContainer = memo(
 				terminalMode,
 				showTerminalToggle,
 				linkedDirectories,
+				displayedWorkspaceId,
+				focusScope,
 			],
 		);
 

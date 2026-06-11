@@ -570,6 +570,7 @@ export function useStartSurfaceController(
 					// and stage its boot before anything selects it. The panel's
 					// spawn is gated on workspace readiness, so the PTY still
 					// waits for the worktree to finalize.
+					let terminalConverted = false;
 					if (payload.terminalMode) {
 						try {
 							await convertSessionToTerminal(sessionId, payload.model.provider);
@@ -587,10 +588,18 @@ export function useStartSurfaceController(
 									fastMode: payload.fastMode,
 								});
 							}
+							terminalConverted = true;
 						} catch (error) {
+							// Fall back to a REAL chat send: the pending payload below
+							// clears terminalMode, so the consumer streams a GUI turn
+							// instead of skipping it (which would drop the prompt).
 							console.error(
 								"[start] terminal conversion failed; continuing as chat:",
 								error,
+							);
+							pushToastRef.current(
+								"Couldn't open a terminal — sent as a chat message instead.",
+								"Terminal Mode unavailable",
 							);
 						}
 					}
@@ -615,6 +624,9 @@ export function useStartSurfaceController(
 							...payload,
 							workingDirectory:
 								preparedWorkingDirectory ?? payload.workingDirectory,
+							// Only keep the terminal intent when the conversion really
+							// happened — otherwise the consumer must stream a chat turn.
+							terminalMode: terminalConverted,
 						},
 						finalized: false,
 					});

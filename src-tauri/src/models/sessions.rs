@@ -314,16 +314,24 @@ pub fn workspace_id_for_session(session_id: &str) -> Result<Option<String>> {
 /// Convert a freshly-prepared GUI session into a Terminal session in place.
 /// Used by the start-surface terminal flow: the workspace-create pipeline
 /// mints a GUI session, and converting it (before it's ever used) avoids a
-/// throwaway placeholder. Only safe on message-less sessions.
+/// throwaway placeholder. The message-less invariant is enforced by the
+/// UPDATE itself — a session with history (or an unknown id) errors instead
+/// of silently rewriting kind/agent/title.
 pub fn convert_session_to_terminal(session_id: &str, agent_type: &str) -> Result<()> {
     let connection = db::write_conn()?;
-    connection
+    let rows = connection
         .execute(
             "UPDATE sessions SET session_kind = 'terminal', agent_type = ?2, title = 'Terminal' \
-             WHERE id = ?1",
+             WHERE id = ?1 \
+               AND NOT EXISTS (SELECT 1 FROM session_messages WHERE session_id = ?1)",
             rusqlite::params![session_id, agent_type],
         )
         .with_context(|| format!("Failed to convert session {session_id} to terminal"))?;
+    if rows != 1 {
+        anyhow::bail!(
+            "Refusing to convert session {session_id} to terminal: not found or it already has messages"
+        );
+    }
     Ok(())
 }
 
@@ -1385,6 +1393,57 @@ mod tests {
         )
         .unwrap();
         assert_eq!(gh_title, "Create PR");
+    }
+
+    #[test]
+    fn convert_session_to_terminal_enforces_message_less_invariant() {
+        // convert_session_to_terminal opens the app DB itself, so the test
+        // must redirect the data dir before touching it.
+        let _env = crate::testkit::TestEnv::new("convert-terminal");
+        {
+            let conn = db::write_conn().unwrap();
+            seed_with_active_session(&conn);
+        }
+
+        // Fresh, message-less session converts.
+        convert_session_to_terminal("s1", "claude").unwrap();
+        {
+            let conn = db::read_conn().unwrap();
+            let (kind, agent, title): (String, String, String) = conn
+                .query_row(
+                    "SELECT session_kind, agent_type, title FROM sessions WHERE id = 's1'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(kind, "terminal");
+            assert_eq!(agent, "claude");
+            assert_eq!(title, "Terminal");
+        }
+
+        // A session with history must be refused, untouched.
+        {
+            let conn = db::write_conn().unwrap();
+            conn.execute(
+                "INSERT INTO session_messages (id, session_id, role, content, created_at) \
+                 VALUES ('m1', 's1', 'user', 'hi', datetime('now'))",
+                [],
+            )
+            .unwrap();
+        }
+        assert!(convert_session_to_terminal("s1", "codex").is_err());
+        {
+            let conn = db::read_conn().unwrap();
+            let agent_after: String = conn
+                .query_row("SELECT agent_type FROM sessions WHERE id = 's1'", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(agent_after, "claude", "refused convert must not rewrite");
+        }
+
+        // Unknown ids error instead of silently no-opping.
+        assert!(convert_session_to_terminal("nope", "claude").is_err());
     }
 
     #[test]
