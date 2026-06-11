@@ -6,142 +6,60 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { CompanionWebView } from "../components/companion-web-view";
 import { PairingHome } from "../components/pairing-home";
 import { ScanSheet } from "../components/scan-sheet";
+import { MobileOnboarding } from "../features/onboarding";
+import { useMobileBootState } from "../hooks/use-mobile-boot-state";
+import { usePairingController } from "../hooks/use-pairing-controller";
 import type { NativePairing } from "../lib/pairing";
-import { parsePairingUrl, validatePairing } from "../lib/pairing";
-import { clearPairing, loadPairing, savePairing } from "../lib/pairing-store";
+import { clearPairing } from "../lib/pairing-store";
 import { useThemedStyles } from "../lib/use-themed-styles";
 import type { HelmorTheme } from "../theme";
 import { useHelmorTheme } from "../theme";
-
-const LOG_PREFIX = "[helmor-mobile:pairing]";
+import { resolveMobileShellRoute } from "./mobile-shell-state";
 
 export function MobileShell() {
 	const theme = useHelmorTheme();
 	const styles = useThemedStyles(createStyles);
 	const insets = useSafeAreaInsets();
-	const [booting, setBooting] = useState(true);
 	const [scannerOpen, setScannerOpen] = useState(false);
-	const [pairing, setPairing] = useState<NativePairing | null>(null);
-	const [pairingBusy, setPairingBusy] = useState(false);
-	const [error, setError] = useState<string | null>(null);
-
-	useEffect(() => {
-		let alive = true;
-
-		loadPairing()
-			.then((saved) => {
-				logPairing("stored-pairing-loaded", {
-					hasPairing: !!saved,
-					baseUrl: saved?.baseUrl ?? null,
-					token: saved ? tokenSummary(saved.token) : null,
-				});
-				if (!saved) return;
-				return validatePairing(saved, 5_000)
-					.then(() => {
-						logPairing("stored-pairing-validated", {
-							baseUrl: saved.baseUrl,
-						});
-						if (alive) setPairing(saved);
-					})
-					.catch((validationError) => {
-						logPairing(
-							"stored-pairing-validation-failed",
-							{
-								baseUrl: saved.baseUrl,
-								message:
-									validationError instanceof Error
-										? validationError.message
-										: String(validationError),
-							},
-							"warn",
-						);
-						void clearPairing();
-						if (alive) {
-							setError(
-								"Saved Helmor link is no longer reachable. Paste a fresh pairing link from the desktop app.",
-							);
-						}
-					});
-			})
-			.catch((loadError) => {
-				logPairing(
-					"stored-pairing-load-failed",
-					{
-						message:
-							loadError instanceof Error
-								? loadError.message
-								: String(loadError),
-					},
-					"warn",
-				);
-				if (alive) setError("Stored pairing could not be restored.");
-			})
-			.finally(() => {
-				if (alive) setBooting(false);
-			});
-
-		return () => {
-			alive = false;
-		};
-	}, []);
-
-	const handlePairingInput = useCallback(
-		async (raw: string, invalidMessage: string) => {
-			setPairingBusy(true);
-			setError(null);
-
-			try {
-				const parsed = parsePairingUrl(raw);
-				if (!parsed) {
-					logPairing("input-parse-failed", {
-						rawLength: raw.length,
-						prefix: raw.slice(0, 32),
-					});
-					throw new Error(invalidMessage);
-				}
-
-				logPairing("input-parsed", {
-					baseUrl: parsed.baseUrl,
-					originalScheme: parsed.originalUrl.split(":")[0],
-					token: tokenSummary(parsed.token),
-				});
-				await validatePairing(parsed);
-				logPairing("input-validated", { baseUrl: parsed.baseUrl });
-				await savePairing(parsed);
-				logPairing("input-saved", { baseUrl: parsed.baseUrl });
-				setPairing(parsed);
-				setScannerOpen(false);
-			} catch (scanError) {
-				logPairing(
-					"input-failed",
-					{
-						message:
-							scanError instanceof Error
-								? scanError.message
-								: String(scanError),
-					},
-					"warn",
-				);
-				setError(
-					scanError instanceof Error ? scanError.message : "Pairing failed.",
-				);
-			} finally {
-				setPairingBusy(false);
-			}
+	const {
+		bootError,
+		booting,
+		completeOnboarding,
+		onboardingCompleted,
+		pairing,
+		setBootError,
+		setOnboardingCompleted,
+		setPairing,
+	} = useMobileBootState();
+	const handlePaired = useCallback(
+		(nextPairing: NativePairing) => {
+			setPairing(nextPairing);
+			setScannerOpen(false);
 		},
-		[],
+		[setPairing],
 	);
+	const {
+		busy: pairingBusy,
+		error: pairingError,
+		resetError: resetPairingError,
+		setError: setPairingError,
+		submitManualLink,
+		submitScan,
+	} = usePairingController({
+		onPaired: handlePaired,
+	});
 
 	const handleScan = useCallback(
-		(raw: string) =>
-			handlePairingInput(raw, "This QR code is not a Helmor pairing code."),
-		[handlePairingInput],
+		(raw: string) => submitScan(raw),
+		[submitScan],
 	);
 
 	const handleManualPairing = useCallback(
-		(raw: string) =>
-			handlePairingInput(raw, "This is not a Helmor pairing link."),
-		[handlePairingInput],
+		(raw: string, completeOnSuccess = false) =>
+			submitManualLink(raw, {
+				onSuccess: completeOnSuccess ? completeOnboarding : undefined,
+			}),
+		[completeOnboarding, submitManualLink],
 	);
 
 	useEffect(() => {
@@ -149,30 +67,49 @@ export function MobileShell() {
 
 		Linking.getInitialURL()
 			.then((url) => {
-				if (alive && url) void handleManualPairing(url);
+				if (alive && url) void handleManualPairing(url, true);
 			})
 			.catch(() => {
-				if (alive) setError("Pairing link could not be opened.");
+				if (alive) setPairingError("Pairing link could not be opened.");
 			});
 
 		const subscription = Linking.addEventListener("url", ({ url }) => {
-			void handleManualPairing(url);
+			void handleManualPairing(url, true);
 		});
 
 		return () => {
 			alive = false;
 			subscription.remove();
 		};
-	}, [handleManualPairing]);
+	}, [handleManualPairing, setPairingError]);
 
 	const handleForget = useCallback(() => {
 		void clearPairing();
 		setPairing(null);
-		setError(null);
+		setBootError(null);
+		resetPairingError();
 		setScannerOpen(true);
-	}, []);
+	}, [resetPairingError, setBootError, setPairing]);
 
-	if (booting) {
+	const handleOnboardingOpenScanner = useCallback(() => {
+		setOnboardingCompleted(true);
+		resetPairingError();
+		setScannerOpen(true);
+	}, [resetPairingError, setOnboardingCompleted]);
+
+	const handleOnboardingSkip = useCallback(() => {
+		setOnboardingCompleted(true);
+		resetPairingError();
+		setScannerOpen(false);
+	}, [resetPairingError, setOnboardingCompleted]);
+
+	const route = resolveMobileShellRoute({
+		booting,
+		onboardingCompleted,
+		pairing,
+	});
+
+	if (route === "booting") {
 		return (
 			<View
 				style={[
@@ -185,8 +122,26 @@ export function MobileShell() {
 		);
 	}
 
-	if (pairing) {
+	if (route === "paired" && pairing) {
 		return <CompanionWebView pairing={pairing} onForget={handleForget} />;
+	}
+
+	if (route === "onboarding") {
+		return (
+			<View style={styles.container}>
+				<MobileOnboarding
+					onOpenScanner={handleOnboardingOpenScanner}
+					onSkip={handleOnboardingSkip}
+				/>
+				<ScanSheet
+					busy={pairingBusy}
+					error={scannerOpen ? pairingError : null}
+					onClose={() => setScannerOpen(false)}
+					onScanned={handleScan}
+					visible={scannerOpen}
+				/>
+			</View>
+		);
 	}
 
 	return (
@@ -201,35 +156,23 @@ export function MobileShell() {
 		>
 			<PairingHome
 				busy={pairingBusy}
-				error={!scannerOpen ? error : null}
+				error={!scannerOpen ? (pairingError ?? bootError) : null}
 				onOpenScanner={() => {
-					setError(null);
+					setBootError(null);
+					resetPairingError();
 					setScannerOpen(true);
 				}}
-				onSubmitLink={handleManualPairing}
+				onSubmitLink={(value) => void handleManualPairing(value)}
 			/>
 			<ScanSheet
 				busy={pairingBusy}
-				error={scannerOpen ? error : null}
+				error={scannerOpen ? pairingError : null}
 				onClose={() => setScannerOpen(false)}
 				onScanned={handleScan}
 				visible={scannerOpen}
 			/>
 		</View>
 	);
-}
-
-function logPairing(
-	message: string,
-	details?: Record<string, unknown> | null,
-	level: "info" | "warn" = "info",
-) {
-	const logger = level === "warn" ? console.warn : console.log;
-	logger(`${LOG_PREFIX} ${message}`, details ?? {});
-}
-
-function tokenSummary(token: string): string {
-	return `${token.length} chars, suffix=${token.slice(-4)}`;
 }
 
 function createStyles(theme: HelmorTheme) {
