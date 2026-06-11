@@ -586,6 +586,7 @@ export function useStartSurfaceController(
 								setPendingBoot(sessionId, {
 									bootCommand: boot,
 									fastMode: payload.fastMode,
+									prompt: payload.prompt,
 								});
 							}
 							terminalConverted = true;

@@ -34,6 +34,8 @@ pub async fn spawn_terminal(
     agent_kind: Option<String>,
     boot_command: Option<String>,
     fast_mode: Option<bool>,
+    initial_cols: Option<u16>,
+    initial_rows: Option<u16>,
     channel: Channel<ScriptEvent>,
 ) -> CmdResult<()> {
     let (repo, workspace) = tauri::async_runtime::spawn_blocking({
@@ -91,6 +93,12 @@ pub async fn spawn_terminal(
     };
     let mgr = manager.inner().clone();
     let script_type = make_script_type(&instance_id);
+    // Spawn the PTY at the renderer's real size. An inline TUI paints its first
+    // frame against this; a stale default leaves ghost rows after fit/SIGWINCH.
+    let initial_size = match (initial_cols, initial_rows) {
+        (Some(c), Some(r)) if c > 0 && r > 0 => Some((c, r)),
+        _ => None,
+    };
 
     tauri::async_runtime::spawn_blocking(move || {
         // Wrap the preset command: export the hook env (so the agent hook can
@@ -111,6 +119,7 @@ pub async fn spawn_terminal(
             &context,
             channel.clone(),
             boot_input.as_deref(),
+            initial_size,
         ) {
             let _ = channel.send(ScriptEvent::Error {
                 message: e.to_string(),

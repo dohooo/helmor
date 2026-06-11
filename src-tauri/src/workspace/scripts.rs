@@ -705,6 +705,7 @@ pub fn run_script(
         &shell,
         &args_ref,
         None,
+        None,
         stop,
     )
 }
@@ -730,6 +731,7 @@ pub fn run_terminal_session(
     context: &ScriptContext,
     channel: Channel<ScriptEvent>,
     boot_input: Option<&str>,
+    initial_size: Option<(u16, u16)>,
 ) -> Result<Option<i32>> {
     let (shell, args) = default_shell();
     let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -745,6 +747,7 @@ pub fn run_terminal_session(
         &shell,
         &args_ref,
         boot_input,
+        initial_size,
         None,
     )
 }
@@ -776,6 +779,7 @@ pub(crate) fn run_script_with_shell(
     shell_path: &str,
     shell_args: &[&str],
     boot_input: Option<&str>,
+    initial_size: Option<(u16, u16)>,
     stop: Option<ScriptStop>,
 ) -> Result<Option<i32>> {
     if let Some(s) = script {
@@ -821,7 +825,7 @@ pub(crate) fn run_script_with_shell(
     // Open a PTY, make the child a session + controlling-terminal leader, and
     // attach it. The OS-specific PTY mechanics live behind the
     // `platform::pty` seam; macOS/Unix is the reference, Windows fills ConPTY.
-    let session = crate::platform::pty::spawn(cmd)
+    let session = crate::platform::pty::spawn_with_size(cmd, initial_size)
         .with_context(|| format!("Failed to spawn {shell_path}"))?;
     // Writable PTY master, kept alive in `ProcessHandle` for the lifetime of
     // the child so `write_stdin` / `resize` can reach the PTY.
@@ -1325,6 +1329,7 @@ mod tests {
                 &[],
                 None,
                 None,
+                None,
             )
         }));
 
@@ -1451,6 +1456,7 @@ mod tests {
                 &[],
                 None,
                 None,
+                None,
             )
         });
 
@@ -1534,6 +1540,7 @@ mod tests {
                 ch,
                 "/bin/sh",
                 &[],
+                None,
                 None,
                 None,
             )
@@ -1628,6 +1635,7 @@ mod tests {
                 &[],
                 None,
                 None,
+                None,
             )
         });
 
@@ -1657,6 +1665,77 @@ mod tests {
         assert!(
             combined.contains("33 77"),
             "expected 33 77 from stty size; got: {combined:?}"
+        );
+    }
+
+    // ── initial PTY size threads to the spawned shell ─────────────────────
+    // The renderer's real cols/rows must reach the PTY at spawn time so an
+    // inline TUI paints its first frame correctly (no fit/SIGWINCH ghosting).
+    #[test]
+    fn initial_size_sets_pty_winsize() {
+        let _env = crate::testkit::TestEnv::new("initial-size-sets-pty-winsize");
+        let mgr = Arc::new(ScriptProcessManager::new());
+        let ctx = ScriptContext {
+            root_path: std::env::temp_dir().display().to_string(),
+            workspace_path: None,
+            workspace_name: None,
+            default_branch: None,
+            port_base: None,
+            port_count: None,
+        };
+        let key: ProcessKey = ("repo".into(), "run".into(), Some("ws".into()));
+
+        let (tx, rx) = mpsc::channel::<String>();
+        let ch = Channel::<ScriptEvent>::new(move |msg| {
+            if let tauri::ipc::InvokeResponseBody::Json(json) = msg {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
+                    if v.get("type").and_then(|t| t.as_str()) == Some("stdout") {
+                        if let Some(data) = v.get("data").and_then(|d| d.as_str()) {
+                            let _ = tx.send(data.to_string());
+                        }
+                    }
+                }
+            }
+            Ok(())
+        });
+
+        let mgr_c = mgr.clone();
+        let key_c = key.clone();
+        let tempdir = std::env::temp_dir().display().to_string();
+        let handle = std::thread::spawn(move || {
+            run_script_with_shell(
+                &mgr_c,
+                &key_c.0,
+                &key_c.1,
+                key_c.2.as_deref(),
+                // No resize — `stty size` must report the spawn-time winsize.
+                Some("/bin/stty size"),
+                &tempdir,
+                &ctx,
+                ch,
+                "/bin/sh",
+                &[],
+                None,
+                Some((90, 40)),
+                None,
+            )
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut combined = String::new();
+        while Instant::now() < deadline {
+            if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(100)) {
+                combined.push_str(&chunk);
+                // `stty size` prints "<rows> <cols>" — 40 rows, 90 cols.
+                if combined.contains("40 90") {
+                    break;
+                }
+            }
+        }
+        let _ = handle.join();
+        assert!(
+            combined.contains("40 90"),
+            "expected 40 90 from stty size; got: {combined:?}"
         );
     }
 
@@ -1692,6 +1771,7 @@ mod tests {
             make_channel(),
             shell_path,
             shell_args,
+            None,
             None,
             None,
         )
@@ -1790,6 +1870,7 @@ mod tests {
             &[],
             None,
             None,
+            None,
         )
         .unwrap();
         assert_eq!(exit, Some(0));
@@ -1864,6 +1945,7 @@ mod tests {
             ch,
             "/bin/sh",
             &[],
+            None,
             None,
             None,
         )
@@ -2000,6 +2082,7 @@ mod tests {
                 "/bin/sh",
                 &[],
                 None,
+                None,
                 Some(stop),
             )
         });
@@ -2081,6 +2164,7 @@ mod tests {
                 ch,
                 "/bin/sh",
                 &[],
+                None,
                 None,
                 Some(stop),
             )

@@ -4666,6 +4666,8 @@ export async function spawnTerminal(
 	bootCommand?: string | null,
 	agentKind?: string | null,
 	fastMode?: boolean,
+	initialCols?: number | null,
+	initialRows?: number | null,
 ): Promise<void> {
 	const channel = new Channel<ScriptEvent>();
 	channel.onmessage = onEvent;
@@ -4676,6 +4678,8 @@ export async function spawnTerminal(
 		agentKind: agentKind ?? null,
 		bootCommand: bootCommand ?? null,
 		fastMode: fastMode ?? null,
+		initialCols: initialCols ?? null,
+		initialRows: initialRows ?? null,
 		channel,
 	});
 }
