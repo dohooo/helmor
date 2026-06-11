@@ -598,7 +598,6 @@ function ProgressiveConversationViewport({
 	stopScroll: () => void;
 	streamingIndicatorStartTime?: number;
 }) {
-	const isTauri = true;
 	const [committedScrollState, setCommittedScrollState] = useState({
 		scrollTop: 0,
 		viewportHeight: 0,
@@ -688,11 +687,12 @@ function ProgressiveConversationViewport({
 					nextViewportHeight - current.viewportHeight,
 				);
 				const isScrollingUp = nextScrollTop < current.scrollTop;
-				const commitThreshold = isTauri
-					? isScrollingUp
-						? Math.max(24, Math.floor(buffer / 8))
-						: Math.max(96, Math.floor(buffer / 3))
-					: buffer / 2;
+				// Asymmetric hysteresis: commit a scroll-up sooner (cheaper
+				// threshold) so the tail union never exposes unmounted rows
+				// mid-scroll; a scroll-down can wait for a larger delta.
+				const commitThreshold = isScrollingUp
+					? Math.max(24, Math.floor(buffer / 8))
+					: Math.max(96, Math.floor(buffer / 3));
 				if (scrollDelta < commitThreshold && viewportDelta < 8) {
 					return current;
 				}
@@ -743,7 +743,7 @@ function ProgressiveConversationViewport({
 			scrollParent.removeEventListener("scroll", scheduleCommit);
 			observer?.disconnect();
 		};
-	}, [flushDeferredMeasuredHeights, isTauri, scrollParent]);
+	}, [flushDeferredMeasuredHeights, scrollParent]);
 
 	// Flush row heights deferred during shell resize once the drag ends.
 	useEffect(() => {
@@ -853,6 +853,9 @@ function ProgressiveConversationViewport({
 		0,
 		totalRowsHeight - (effectiveScrollTop + effectiveViewportHeight),
 	);
+	// The stable-bottom zone (4x) stays WIDER than the tail floor (1.5x) so that
+	// on scroll-up within the zone the scroll-window clamp — not the tail — is the
+	// binding constraint in the union below (locked by the scroll-up union test).
 	const tauriStableBottomZoneHeight = effectiveViewportHeight * 4;
 	const tauriStableBottomTailHeight =
 		resolveStableBottomTailHeight(viewportHeight);
@@ -861,7 +864,12 @@ function ProgressiveConversationViewport({
 			measureSync(
 				"viewport:visible-rows",
 				() => {
-					if (isTauri && distanceFromBottom <= tauriStableBottomZoneHeight) {
+					// Two exclusive mount modes keep the "hold the bottom" paths from
+					// overlapping: near the bottom (within the zone) → bottom tail UNION
+					// the scroll window; scrolled far up → the regular window plus the
+					// streaming pinTailRows append. (The settle pin is orthogonal — it
+					// moves scrollTop, not which rows mount.)
+					if (distanceFromBottom <= tauriStableBottomZoneHeight) {
 						// Bottom-anchored tail (cheap: a giant row sitting above the
 						// window stays unmounted) UNION the regular scroll window, so a
 						// scroll-up within the stable-bottom zone can never expose
@@ -907,7 +915,6 @@ function ProgressiveConversationViewport({
 			buffer,
 			distanceFromBottom,
 			effectiveViewportHeight,
-			isTauri,
 			pinTailRows,
 			rows,
 			tauriStableBottomTailHeight,
@@ -967,6 +974,8 @@ function ProgressiveConversationViewport({
 			if (Math.abs(scrollParent.scrollTop - target) > 1) {
 				scrollParent.scrollTop = target;
 			}
+			// The absolute settle pin supersedes any per-row delta queued by
+			// handleHeightChange — drop it so the two paths can't double-apply.
 			pendingScrollAdjustmentRef.current = 0;
 			return;
 		}
@@ -1001,9 +1010,8 @@ function ProgressiveConversationViewport({
 			// as the main pane width changes, and committing all of them would
 			// thrash React. Same buffered path as user-scrolling.
 			if (
-				isTauri &&
-				((hasUserScrolledRef.current && isUserScrollingRef.current) ||
-					isShellResizing())
+				(hasUserScrolledRef.current && isUserScrollingRef.current) ||
+				isShellResizing()
 			) {
 				deferredMeasuredHeightsRef.current[rowKey] = roundedHeight;
 				return;
@@ -1051,7 +1059,7 @@ function ProgressiveConversationViewport({
 				startTransition(commit);
 			}
 		},
-		[headerHeight, isInitialSettleActive, isTauri, scrollParent],
+		[headerHeight, isInitialSettleActive, scrollParent],
 	);
 
 	if (data.length === 0) {
@@ -1096,14 +1104,12 @@ function ProgressiveConversationViewport({
 					return (
 						<MeasuredConversationRow
 							key={row.key}
-							disableContentVisibility={isTauri}
 							onDomMount={
 								isStreamingMessage ? handleStreamingRowMount : undefined
 							}
 							onHeightChange={handleHeightChange}
 							rowKey={row.key}
 							top={row.top}
-							estimatedHeight={row.height}
 						>
 							{itemContent(row.index, row.message)}
 						</MeasuredConversationRow>
@@ -1117,16 +1123,12 @@ function ProgressiveConversationViewport({
 
 function MeasuredConversationRow({
 	children,
-	disableContentVisibility,
-	estimatedHeight,
 	onDomMount,
 	onHeightChange,
 	rowKey,
 	top,
 }: {
 	children: ReactNode;
-	disableContentVisibility: boolean;
-	estimatedHeight: number;
 	/**
 	 * Optional callback fired with the row's outer DOM node when it mounts
 	 * (and `null` when it unmounts). Used by the parent to wire a
@@ -1176,15 +1178,11 @@ function MeasuredConversationRow({
 		};
 	}, [onHeightChange, rowKey]);
 
-	const intrinsicSize = `auto ${Math.max(24, Math.round(estimatedHeight))}px`;
 	return (
 		<div
 			ref={setRowRef}
 			style={{
-				...(disableContentVisibility
-					? conversationRowIsolationStyle
-					: measuredRowIsolationStyle),
-				containIntrinsicSize: intrinsicSize,
+				...conversationRowIsolationStyle,
 				left: 0,
 				position: "absolute",
 				right: 0,
@@ -1200,12 +1198,6 @@ function MeasuredConversationRow({
 const conversationRowIsolationStyle = {
 	contain: "paint",
 	isolation: "isolate",
-} as const;
-
-const measuredRowIsolationStyle = {
-	...conversationRowIsolationStyle,
-	contentVisibility: "auto",
-	containIntrinsicSize: "auto 100px",
 } as const;
 
 function ConversationRowShell({ children }: { children: ReactNode }) {
