@@ -11,6 +11,7 @@ import {
 	attach,
 	detach,
 	ensureTerminal,
+	type PendingBoot,
 	resize,
 	TRUNCATION_NOTICE,
 	takePendingBoot,
@@ -54,7 +55,7 @@ export function TerminalSessionPanel({
 	const queryClient = useQueryClient();
 	const termRef = useRef<TerminalHandle | null>(null);
 	// Spawn-to-first-byte takes a moment (worktree finalize + CLI cold start
-	// + the boot-echo gate); show a spinner instead of a blank screen.
+	// + the boot-echo gate); show an overlay instead of a blank screen.
 	const [booting, setBooting] = useState(true);
 	// Resume the agent's prior session when we have its id at mount time;
 	// otherwise run the fresh preset command. (M4) Pinned in a ref: the boot
@@ -75,25 +76,29 @@ export function TerminalSessionPanel({
 				: null) ?? presetBootCommand(agentKind);
 	}
 
+	// Consume the composer-initiated boot once (boot command + fast mode).
+	// Lazy-init ref so an effect re-run never re-reads it as null.
+	const pendingBootRef = useRef<PendingBoot | null | undefined>(undefined);
+	if (pendingBootRef.current === undefined) {
+		pendingBootRef.current = takePendingBoot(sessionId);
+	}
+
+	// Attach the live listener + one-shot replay. Independent of spawn: the
+	// listener is keyed by sessionId and receives output once the PTY starts.
+	const focusAssertedRef = useRef(false);
 	useEffect(() => {
-		if (!repoId || !workspaceReady) return;
-		// A composer-initiated terminal carries its own boot (prompt + composer
-		// state, incl. fast mode); ensureTerminal is idempotent so the consumed
-		// value only matters on the spawning mount.
-		const pending = takePendingBoot(sessionId);
-		const boot = pending?.bootCommand ?? bootCommandRef.current ?? null;
-		ensureTerminal(
-			repoId,
-			workspaceId,
-			sessionId,
-			boot,
-			agentKind,
-			pending?.fastMode ?? false,
-		);
 		const existing = attach(sessionId, {
 			onChunk: (data) => {
 				setBooting(false);
 				termRef.current?.write(data);
+				// First real output ≈ the TUI is up and has enabled focus
+				// reporting. Re-assert focus (no-op unless already focused) so a
+				// CLI that booted after our mount-time focus() gets the focus-in
+				// it missed and positions its cursor instead of parking it at home.
+				if (!focusAssertedRef.current) {
+					focusAssertedRef.current = true;
+					requestAnimationFrame(() => termRef.current?.reassertFocus());
+				}
 			},
 			onStatusChange: () => {},
 		});
@@ -119,6 +124,43 @@ export function TerminalSessionPanel({
 		return () => {
 			if (rafId !== null) cancelAnimationFrame(rafId);
 			detach(sessionId);
+		};
+	}, [sessionId]);
+
+	// Spawn the PTY once the workspace is ready AND the renderer has a real
+	// size. Polls `proposeSize()` (container-derived, NOT an onResize change
+	// event) so a panel whose first fit yields no size delta still spawns —
+	// otherwise the PTY launches at a stale default and the inline TUI paints
+	// its first frame at the wrong width (ghost rows after the fit/SIGWINCH).
+	const spawnedRef = useRef(false);
+	useEffect(() => {
+		if (!repoId || !workspaceReady || spawnedRef.current) return;
+		let rafId: number | null = null;
+		const trySpawn = () => {
+			rafId = null;
+			if (spawnedRef.current) return;
+			const size = termRef.current?.proposeSize();
+			if (!size) {
+				rafId = requestAnimationFrame(trySpawn);
+				return;
+			}
+			spawnedRef.current = true;
+			const pending = pendingBootRef.current;
+			const boot = pending?.bootCommand ?? bootCommandRef.current ?? null;
+			ensureTerminal(
+				repoId,
+				workspaceId,
+				sessionId,
+				boot,
+				agentKind,
+				pending?.fastMode ?? false,
+				size.cols,
+				size.rows,
+			);
+		};
+		trySpawn();
+		return () => {
+			if (rafId !== null) cancelAnimationFrame(rafId);
 		};
 	}, [repoId, workspaceId, sessionId, agentKind, workspaceReady]);
 

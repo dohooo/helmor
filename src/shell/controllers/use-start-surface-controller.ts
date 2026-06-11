@@ -684,6 +684,17 @@ export function useStartSurfaceController(
 							: current,
 					);
 					requestSidebarReconcile(queryClient);
+					// Backend finalize transitions the row initializing → ready /
+					// setup_pending but only syncs git watchers — it never publishes
+					// a UiMutationEvent, so `workspaceDetail` stays stale at
+					// `initializing`. The Terminal panel gates its PTY spawn on
+					// `workspace.state !== "initializing"`; without this refetch it
+					// stays on the loading overlay until a manual tab switch forces
+					// one. (Chat paths read the pending payload, so they never
+					// noticed the missing invalidation.)
+					void queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceDetail(outcome.workspaceId),
+					});
 					return { shouldStream: false };
 				}
 
