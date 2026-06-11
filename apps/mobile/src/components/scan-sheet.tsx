@@ -18,11 +18,9 @@ import {
 	type StyleProp,
 	StyleSheet,
 	Text,
-	useWindowDimensions,
 	View,
 	type ViewStyle,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useThemedStyles } from "../lib/use-themed-styles";
 import type { HelmorTheme } from "../theme";
@@ -45,8 +43,6 @@ export function ScanSheet({
 	onScanned,
 }: ScanSheetProps) {
 	const styles = useThemedStyles(createStyles);
-	const insets = useSafeAreaInsets();
-	const { height } = useWindowDimensions();
 	const [permission, requestPermission] = useCameraPermissions();
 	const [locked, setLocked] = useState(false);
 	const GlassViewComponent = useMemo(resolveGlassViewComponent, []);
@@ -68,20 +64,14 @@ export function ScanSheet({
 
 	return (
 		<BottomSheet
+			backgroundStyle={styles.transparentSheetBackground}
 			enablePanDownToClose
+			handleComponent={null}
 			index={visible ? 0 : -1}
 			onClose={onClose}
-			snapPoints={["100%"]}
+			snapPoints={["50%"]}
 		>
-			<BottomSheetView
-				style={[
-					styles.sheetContent,
-					{
-						height: Math.max(height - Math.max(insets.top, 16), 0),
-						paddingBottom: Math.max(insets.bottom, 16),
-					},
-				]}
-			>
+			<BottomSheetView style={styles.sheetContent}>
 				<GlassSurface GlassViewComponent={GlassViewComponent}>
 					<View style={styles.cameraFrame}>
 						{permission?.granted ? (
@@ -140,6 +130,7 @@ export function ScanSheet({
 							</Text>
 						</View>
 					) : null}
+					<View pointerEvents="none" style={styles.bottomSafeAreaCover} />
 				</GlassSurface>
 			</BottomSheetView>
 		</BottomSheet>
@@ -202,17 +193,19 @@ function resolveGlassViewComponent(): GlassViewComponent | null {
 function createStyles(theme: HelmorTheme) {
 	return StyleSheet.create({
 		sheetContent: {
+			flex: 1,
 			paddingHorizontal: 0,
 		},
+		transparentSheetBackground: {
+			backgroundColor: "transparent",
+		},
 		glassSurface: {
-			borderRadius: theme.radii.xl,
 			flex: 1,
-			overflow: "hidden",
+			overflow: "visible",
 		},
 		fallbackSurface: {
-			borderRadius: theme.radii.xl,
 			flex: 1,
-			overflow: "hidden",
+			overflow: "visible",
 		},
 		closeButton: {
 			alignItems: "center",
@@ -239,6 +232,14 @@ function createStyles(theme: HelmorTheme) {
 			backgroundColor: theme.colors.cameraBackground,
 			flex: 1,
 			overflow: "hidden",
+		},
+		bottomSafeAreaCover: {
+			backgroundColor: theme.colors.cameraBackground,
+			bottom: -48,
+			height: 48,
+			left: 0,
+			position: "absolute",
+			right: 0,
 		},
 		permission: {
 			alignItems: "center",
