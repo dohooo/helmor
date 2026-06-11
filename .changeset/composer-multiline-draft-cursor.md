@@ -2,4 +2,7 @@
 "helmor": patch
 ---
 
-Fix the text cursor getting lost when arrowing back down through input history to a multi-line in-progress draft, which made the next ArrowUp jump back into history instead of moving the cursor.
+Fix composer input-history recall stealing arrow keys in multi-line drafts.
+
+- Arrowing back down through history to a multi-line in-progress draft no longer loses the cursor.
+- ArrowUp on a blank Shift+Enter line now moves the caret up instead of recalling history.

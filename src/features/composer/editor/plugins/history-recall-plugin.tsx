@@ -2,10 +2,11 @@
  * Shell-style input recall: ArrowUp/ArrowDown at the editor's first /
  * last line walks back/forward through previously submitted prompts.
  *
- * Boundary check is hybrid: Lexical paragraph index (anchor's top-level
- * paragraph must equal root's first/last child) AND DOM visual-line
- * position. Lexical guards blank middle paragraphs; DOM handles
- * soft-wrap and multi-line recalled entries.
+ * Boundary check is hybrid: Lexical position (anchor's top-level
+ * paragraph must equal root's first/last child, with no Shift+Enter
+ * LineBreakNode before/after the caret inside it) AND DOM visual-line
+ * position. Lexical guards blank middle paragraphs and soft line
+ * breaks; DOM handles visual soft-wrap.
  *
  * Past the oldest/newest entry stays put; Down past newest restores the
  * in-progress draft snapshotted on first Up. Editing a recalled entry
@@ -20,10 +21,13 @@ import { mergeRegister } from "@lexical/utils";
 import {
 	$getRoot,
 	$getSelection,
+	$isElementNode,
+	$isLineBreakNode,
 	$isRangeSelection,
 	COMMAND_PRIORITY_LOW,
 	KEY_ARROW_DOWN_COMMAND,
 	KEY_ARROW_UP_COMMAND,
+	type LexicalNode,
 	type SerializedEditorState,
 } from "lexical";
 import { useCallback, useEffect, useRef } from "react";
@@ -122,8 +126,11 @@ function caretLinePosition(rootEl: HTMLElement): {
 	};
 }
 
-/** Lexical-side first/last paragraph check; `{true, true}` when no
- *  range selection so the DOM line check still decides. */
+/** Lexical-side first/last line check; `{true, true}` when no range
+ *  selection so the DOM line check still decides. Shift+Enter lines live
+ *  as LineBreakNodes inside ONE paragraph, so being in the first/last
+ *  top-level paragraph is not enough — the caret must also have no soft
+ *  line break before/after it within that paragraph. */
 function $caretParagraphPosition(): {
 	atFirstParagraph: boolean;
 	atLastParagraph: boolean;
@@ -139,18 +146,36 @@ function $caretParagraphPosition(): {
 		return { atFirstParagraph: true, atLastParagraph: true };
 	}
 	let node = selection.anchor.getNode();
+	// Direct child of the top-level node that contains the caret; null when
+	// the anchor is an element point on the top-level node itself.
+	let caretChild: LexicalNode | null = null;
 	let parent = node.getParent();
 	while (parent && parent.getKey() !== root.getKey()) {
+		caretChild = node;
 		node = parent;
 		parent = node.getParent();
 	}
 	if (!parent) {
 		return { atFirstParagraph: true, atLastParagraph: true };
 	}
+	let breakBefore = false;
+	let breakAfter = false;
+	if ($isElementNode(node)) {
+		const children = node.getChildren();
+		// Element-point offsets already count the children before the caret;
+		// for an inline child, breaks strictly before/after it decide.
+		const index = caretChild
+			? caretChild.getIndexWithinParent()
+			: selection.anchor.offset;
+		breakBefore = children.slice(0, index).some($isLineBreakNode);
+		breakAfter = children
+			.slice(caretChild ? index + 1 : index)
+			.some($isLineBreakNode);
+	}
 	const key = node.getKey();
 	return {
-		atFirstParagraph: firstChild.getKey() === key,
-		atLastParagraph: lastChild.getKey() === key,
+		atFirstParagraph: firstChild.getKey() === key && !breakBefore,
+		atLastParagraph: lastChild.getKey() === key && !breakAfter,
 	};
 }
 

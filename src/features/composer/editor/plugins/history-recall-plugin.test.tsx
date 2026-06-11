@@ -16,6 +16,7 @@ import {
 	waitFor,
 } from "@testing-library/react";
 import {
+	$createLineBreakNode,
 	$createParagraphNode,
 	$createRangeSelection,
 	$createTextNode,
@@ -115,6 +116,47 @@ function paragraphDraft(...lines: string[]): SerializedEditorState {
 					},
 				],
 			})),
+		},
+	} as unknown as SerializedEditorState;
+}
+
+/** ONE paragraph whose lines are separated by linebreak nodes — the shape
+ *  Shift+Enter produces. An empty string yields a blank soft line. */
+function softLineDraft(...lines: string[]): SerializedEditorState {
+	const children: object[] = [];
+	lines.forEach((text, i) => {
+		if (i > 0) children.push({ type: "linebreak", version: 1 });
+		if (text) {
+			children.push({
+				type: "text",
+				version: 1,
+				text,
+				format: 0,
+				mode: "normal",
+				style: "",
+				detail: 0,
+			});
+		}
+	});
+	return {
+		root: {
+			type: "root",
+			version: 1,
+			format: "",
+			indent: 0,
+			direction: null,
+			children: [
+				{
+					type: "paragraph",
+					version: 1,
+					format: "",
+					indent: 0,
+					direction: null,
+					textFormat: 0,
+					textStyle: "",
+					children,
+				},
+			],
 		},
 	} as unknown as SerializedEditorState;
 }
@@ -296,6 +338,84 @@ describe("HistoryRecallPlugin", () => {
 				atLastParagraph: true,
 			});
 		});
+
+		// Shift+Enter lines live as LineBreakNodes inside ONE paragraph, so
+		// the first/last-child check alone can't see them.
+
+		it("treats text after a soft line break as not the first line", () => {
+			const editor = makeEditor();
+			editor.update(
+				() => {
+					const root = $getRoot();
+					root.clear();
+					const t2 = $createTextNode("second");
+					const p = $createParagraphNode();
+					p.append($createTextNode("first"), $createLineBreakNode(), t2);
+					root.append(p);
+					const selection = $createRangeSelection();
+					selection.anchor.set(t2.getKey(), 0, "text");
+					selection.focus.set(t2.getKey(), 0, "text");
+					$setSelection(selection);
+				},
+				{ discrete: true },
+			);
+			expect(readPosition(editor)).toEqual({
+				atFirstParagraph: false,
+				atLastParagraph: true,
+			});
+		});
+
+		it("treats text before a soft line break as not the last line", () => {
+			const editor = makeEditor();
+			editor.update(
+				() => {
+					const root = $getRoot();
+					root.clear();
+					const t1 = $createTextNode("first");
+					const p = $createParagraphNode();
+					p.append(t1, $createLineBreakNode(), $createTextNode("second"));
+					root.append(p);
+					const selection = $createRangeSelection();
+					selection.anchor.set(t1.getKey(), t1.getTextContentSize(), "text");
+					selection.focus.set(t1.getKey(), t1.getTextContentSize(), "text");
+					$setSelection(selection);
+				},
+				{ discrete: true },
+			);
+			expect(readPosition(editor)).toEqual({
+				atFirstParagraph: true,
+				atLastParagraph: false,
+			});
+		});
+
+		it("treats an empty soft line between breaks as neither first nor last", () => {
+			// Caret on a blank Shift+Enter line: element point on the paragraph,
+			// offset between the two linebreak nodes.
+			const editor = makeEditor();
+			editor.update(
+				() => {
+					const root = $getRoot();
+					root.clear();
+					const p = $createParagraphNode();
+					p.append(
+						$createTextNode("top"),
+						$createLineBreakNode(),
+						$createLineBreakNode(),
+						$createTextNode("bottom"),
+					);
+					root.append(p);
+					const selection = $createRangeSelection();
+					selection.anchor.set(p.getKey(), 2, "element");
+					selection.focus.set(p.getKey(), 2, "element");
+					$setSelection(selection);
+				},
+				{ discrete: true },
+			);
+			expect(readPosition(editor)).toEqual({
+				atFirstParagraph: false,
+				atLastParagraph: false,
+			});
+		});
 	});
 
 	it("does nothing when history is empty", async () => {
@@ -463,6 +583,60 @@ describe("HistoryRecallPlugin", () => {
 		fireEvent.keyDown(editorEl, { key: "ArrowUp", code: "ArrowUp" });
 		expect(editorEl.textContent).toContain("second line");
 		expect(editorEl.textContent).not.toContain("history prompt");
+	});
+
+	it("does not recall from a blank Shift+Enter line with text above it", async () => {
+		// Shift+Enter lines live in ONE paragraph as LineBreakNodes. With the
+		// caret on a blank soft line (between two breaks) the collapsed DOM
+		// range has no rect, so only the Lexical-side check can tell there is
+		// still a line above — ArrowUp must move the caret, not recall.
+		const contextKey = "session:recall-softline";
+		savePersistedDraft(contextKey, softLineDraft("top", "", "bottom"));
+		renderComposer([textEntry("history prompt")], vi.fn(), contextKey);
+		const editorEl = screen.getByLabelText("Workspace input");
+		await waitFor(() => expect(editorEl.textContent).toContain("bottom"));
+
+		const editor = (editorEl as unknown as { __lexicalEditor: LexicalEditor })
+			.__lexicalEditor;
+		// `editor.read` flushes pending updates first — DOM textContent can lag
+		// a recall applied inside the keydown dispatch.
+		const committedText = () => editor.read(() => $getRoot().getTextContent());
+
+		// Caret at the end of the last soft line: ArrowUp must NOT recall.
+		editor.update(
+			() => {
+				$getRoot().selectEnd();
+			},
+			{ discrete: true },
+		);
+		fireEvent.keyDown(editorEl, { key: "ArrowUp", code: "ArrowUp" });
+		expect(committedText()).not.toContain("history prompt");
+
+		// Caret on the blank middle soft line (element point between breaks).
+		editor.update(
+			() => {
+				const first = $getRoot().getFirstChild();
+				if (!$isElementNode(first)) return;
+				const selection = $createRangeSelection();
+				selection.anchor.set(first.getKey(), 2, "element");
+				selection.focus.set(first.getKey(), 2, "element");
+				$setSelection(selection);
+			},
+			{ discrete: true },
+		);
+		fireEvent.keyDown(editorEl, { key: "ArrowUp", code: "ArrowUp" });
+		expect(committedText()).not.toContain("history prompt");
+
+		// Caret at the very start (first soft line): ArrowUp SHOULD recall.
+		editor.update(
+			() => {
+				const first = $getRoot().getFirstChild();
+				if ($isElementNode(first)) first.selectStart();
+			},
+			{ discrete: true },
+		);
+		fireEvent.keyDown(editorEl, { key: "ArrowUp", code: "ArrowUp" });
+		await waitFor(() => expect(committedText()).toContain("history prompt"));
 	});
 
 	it("refocuses the editor when ArrowDown restores a non-empty draft", async () => {
