@@ -498,3 +498,152 @@ pub async fn permanently_delete_workspace(app: AppHandle, workspace_id: String) 
     git_watcher::notify_workspace_changed(&app);
     Ok(())
 }
+
+/// Guards against a second cleanup run starting while one is in flight —
+/// the deletes are idempotent but a concurrent run would misreport every
+/// already-deleted workspace as a failure.
+static ARCHIVE_CLEANUP_RUNNING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Bulk-delete every archived workspace through the same per-workspace
+/// path as `permanently_delete_workspace` (FS mutation lock, git unwatch,
+/// DB transaction, leftover-dir removal). Deletions run strictly one at a
+/// time; the command resolves only after the whole run finishes, but the
+/// run itself is backend-owned — it completes even if the frontend stops
+/// listening.
+#[tauri::command]
+pub async fn cleanup_archived_workspaces(
+    app: AppHandle,
+) -> CmdResult<workspaces::CleanupArchivedWorkspacesResponse> {
+    use std::sync::atomic::Ordering;
+
+    if ARCHIVE_CLEANUP_RUNNING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err(anyhow::anyhow!("Archive cleanup is already running").into());
+    }
+    let result = cleanup_archived_workspaces_inner(&app).await;
+    ARCHIVE_CLEANUP_RUNNING.store(false, Ordering::SeqCst);
+    result
+}
+
+async fn cleanup_archived_workspaces_inner(
+    app: &AppHandle,
+) -> CmdResult<workspaces::CleanupArchivedWorkspacesResponse> {
+    let archived = run_blocking(workspaces::list_archived_workspaces).await?;
+    let titles: std::collections::HashMap<String, String> = archived
+        .iter()
+        .map(|workspace| (workspace.id.clone(), workspace.title.clone()))
+        .collect();
+    let mut remaining: Vec<String> = archived.into_iter().map(|workspace| workspace.id).collect();
+    let total = remaining.len();
+
+    let mut deleted_count = 0usize;
+    let failures: Vec<workspaces::CleanupArchivedFailure>;
+
+    // Multi-pass: deleting a middle layer of a PR stack is blocked while
+    // other workspaces are stacked on it, so a pass that made progress
+    // earns the leftovers a retry (children get deleted first, then their
+    // parents become deletable). Stops as soon as a full pass deletes
+    // nothing — whatever is left is a genuine failure.
+    loop {
+        let mut failed_this_pass: Vec<(String, String)> = Vec::new();
+        let mut progressed = false;
+
+        for workspace_id in remaining.drain(..) {
+            // Same per-workspace serialization as the single-delete
+            // command: a concurrent restore of this workspace either
+            // finishes first (then the still-archived re-check skips it)
+            // or waits until the row is gone.
+            let ws_lock = db::workspace_fs_mutation_lock(&workspace_id);
+            let _lock = ws_lock.lock().await;
+            app.state::<git_watcher::GitWatcherManager>()
+                .unwatch(&workspace_id);
+
+            let id_for_task = workspace_id.clone();
+            let result = tauri::async_runtime::spawn_blocking(move || {
+                workspaces::delete_workspace_if_archived(&id_for_task)
+            })
+            .await;
+
+            match result {
+                Ok(Ok(true)) => {
+                    deleted_count += 1;
+                    progressed = true;
+                    tracing::info!(
+                        workspace_id,
+                        deleted_count,
+                        total,
+                        "Archive cleanup: workspace deleted"
+                    );
+                    crate::ui_sync::publish(
+                        app,
+                        crate::ui_sync::UiMutationEvent::WorkspaceListChanged,
+                    );
+                }
+                Ok(Ok(false)) => {
+                    tracing::info!(
+                        workspace_id,
+                        "Archive cleanup: workspace no longer archived, skipping"
+                    );
+                }
+                Ok(Err(error)) => {
+                    tracing::warn!(
+                        workspace_id,
+                        error = %format!("{error:#}"),
+                        "Archive cleanup: delete failed"
+                    );
+                    failed_this_pass.push((workspace_id, crate::error::outermost_message(&error)));
+                }
+                Err(error) => {
+                    tracing::error!(workspace_id, %error, "Archive cleanup: delete task crashed");
+                    failed_this_pass.push((workspace_id, error.to_string()));
+                }
+            }
+        }
+
+        if failed_this_pass.is_empty() || !progressed {
+            failures = failed_this_pass
+                .into_iter()
+                .map(
+                    |(workspace_id, message)| workspaces::CleanupArchivedFailure {
+                        title: titles.get(&workspace_id).cloned().unwrap_or_default(),
+                        workspace_id,
+                        message,
+                    },
+                )
+                .collect();
+            break;
+        }
+        remaining = failed_this_pass.into_iter().map(|(id, _)| id).collect();
+    }
+
+    // Deleting rows only frees pages for reuse inside the SQLite file;
+    // compact once at the end so the space actually goes back to the OS.
+    // Best-effort — a busy vacuum must not turn a successful cleanup into
+    // a failure.
+    if deleted_count > 0 {
+        let vacuum_started = std::time::Instant::now();
+        match run_blocking(workspaces::vacuum_database).await {
+            Ok(()) => tracing::info!(
+                elapsed_ms = vacuum_started.elapsed().as_millis(),
+                "Archive cleanup: database vacuum finished"
+            ),
+            Err(error) => tracing::warn!(?error, "Archive cleanup: database vacuum failed"),
+        }
+    }
+
+    git_watcher::notify_workspace_changed(app);
+    tracing::info!(
+        deleted_count,
+        failed = failures.len(),
+        total,
+        "Archive cleanup finished"
+    );
+
+    Ok(workspaces::CleanupArchivedWorkspacesResponse {
+        deleted_count,
+        failures,
+    })
+}

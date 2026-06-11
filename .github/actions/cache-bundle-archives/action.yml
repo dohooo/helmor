@@ -1,0 +1,36 @@
+name: Cache Bundle Archives
+description: >-
+  Restore/save stage-vendor's downloaded vendor archives (gh, glab, cloudflared,
+  llama-cpp, node, and any cross-arch claude/codex/opencode tarballs) so CI jobs
+  don't re-download them on every run. Points HELMOR_BUNDLE_CACHE at a stable
+  per-workspace path and caches it via actions/cache, keyed on the version pins.
+
+inputs:
+  target-triple:
+    description: >-
+      Bundle target triple. Archives are arch-specific, so each target gets its
+      own cache entry (the two macOS matrix jobs share an arm64 runner but stage
+      different-arch binaries, so they must NOT share one key).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # Redirect stage-vendor's archive cache to a stable, cacheable path. Set via
+    # $GITHUB_ENV so the later staging step (build-sidecar / tauri-action) reads
+    # it. Extraction scratch still goes to the per-job sidecar/.bundle-cache.
+    - name: Point HELMOR_BUNDLE_CACHE at a stable path
+      shell: bash
+      run: echo "HELMOR_BUNDLE_CACHE=${{ github.workspace }}/.ci-bundle-cache" >> "$GITHUB_ENV"
+
+    - name: Cache vendor download archives
+      uses: actions/cache@v4
+      with:
+        path: ${{ github.workspace }}/.ci-bundle-cache
+        # Version pins + SHA256 tables live in vendor-platform.ts; the npm
+        # agent versions live in sidecar/package.json. Either changing busts the
+        # cache; a partial restore-keys hit still avoids re-downloading the
+        # archives whose versions didn't move (changed SHA re-downloads itself).
+        key: bundle-archives-${{ inputs.target-triple }}-${{ hashFiles('sidecar/scripts/vendor-platform.ts', 'sidecar/package.json') }}
+        restore-keys: |
+          bundle-archives-${{ inputs.target-triple }}-

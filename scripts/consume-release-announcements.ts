@@ -16,6 +16,12 @@ type ReleaseAnnouncementAction =
 	| {
 			type: "openSettings";
 			section?: string;
+	  }
+	| {
+			type: "openStartPage";
+	  }
+	| {
+			type: "toggleQuickPanel";
 	  };
 
 type ReleaseAnnouncementItem = {

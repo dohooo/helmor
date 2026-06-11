@@ -168,6 +168,40 @@ describe("useEnsureDefaultModel", () => {
 		});
 	});
 
+	it("pins the repaired default to the claude `default` entry, not the first option", () => {
+		// Fable 5 leads the picker but is too expensive to be the app
+		// default — the repair must skip it and land on `default` (Opus).
+		const { updateSettings } = renderUseEnsureDefaultModel({
+			defaultModelId: null,
+			sections: [
+				{
+					id: "claude",
+					label: "Claude Code",
+					status: "ready",
+					options: [
+						{
+							id: "claude-fable-5[1m]",
+							provider: "claude",
+							label: "Fable 5 1M",
+							cliModel: "claude-fable-5[1m]",
+						},
+						{
+							id: "default",
+							provider: "claude",
+							label: "Opus 4.8 1M",
+							cliModel: "default",
+						},
+					],
+				},
+				{ id: "codex", label: "Codex", status: "unavailable", options: [] },
+			],
+		});
+
+		expect(updateSettings).toHaveBeenCalledWith(
+			expect.objectContaining({ defaultModelId: "default" }),
+		);
+	});
+
 	it("preserves an invalid saved model while any provider is still in error", () => {
 		const { updateSettings } = renderUseEnsureDefaultModel({
 			defaultModelId: "gpt-legacy",

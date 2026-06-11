@@ -1336,6 +1336,29 @@ pub fn verify_remote_ref_exists(workspace_dir: &Path, remote: &str, branch: &str
     }
 }
 
+/// Returns `true` when `<remote>` actually has a branch named `<branch>`.
+/// Network call (bounded by `GIT_NETWORK_TIMEOUT`). Used as a fallback when
+/// the local worktree has no remote-tracking ref but the branch may still be
+/// published — e.g. a push that never updated the local ref, or a pruned ref.
+pub fn remote_branch_exists(workspace_dir: &Path, remote: &str, branch: &str) -> bool {
+    let workspace_dir = workspace_dir.display().to_string();
+    run_git_with_timeout(
+        [
+            "-C",
+            workspace_dir.as_str(),
+            "ls-remote",
+            "--exit-code",
+            "--heads",
+            remote,
+            branch,
+        ],
+        None,
+        GIT_NETWORK_TIMEOUT,
+    )
+    .map(|output| !output.trim().is_empty())
+    .unwrap_or(false)
+}
+
 /// Resolve `refs/remotes/<remote>/<branch>` to its current commit SHA.
 pub fn remote_ref_sha(workspace_dir: &Path, remote: &str, branch: &str) -> Result<String> {
     let workspace_dir = workspace_dir.display().to_string();
@@ -1806,6 +1829,46 @@ mod tests {
         assert_eq!(
             resolve_remote_tracking_ref(wt_dir.path(), Some("origin")).as_deref(),
             Some("origin/feature/published"),
+        );
+    }
+
+    #[test]
+    fn remote_branch_exists_detects_published_branch_without_local_ref() {
+        // Branch is pushed to the remote, then the local remote-tracking ref
+        // + upstream are wiped (mirrors a push that never updated the local
+        // ref). `resolve_remote_tracking_ref` goes blind, but the remote
+        // lookup still finds the branch.
+        let (_origin, clone) = init_repo_with_remote();
+        let wt_dir = tempfile::tempdir().unwrap();
+        create_worktree_from_start_point(
+            clone.path(),
+            wt_dir.path(),
+            "feature/ghost-ref",
+            "origin/main",
+        )
+        .unwrap();
+        run(
+            wt_dir.path(),
+            &["push", "origin", "HEAD:refs/heads/feature/ghost-ref"],
+        );
+        // Wipe the local remote-tracking ref so only the remote knows.
+        run(
+            wt_dir.path(),
+            &["update-ref", "-d", "refs/remotes/origin/feature/ghost-ref"],
+        );
+
+        assert_eq!(
+            resolve_remote_tracking_ref(wt_dir.path(), Some("origin")),
+            None,
+            "local lookup should be blind once the tracking ref is gone",
+        );
+        assert!(
+            remote_branch_exists(wt_dir.path(), "origin", "feature/ghost-ref"),
+            "remote lookup should still find the published branch",
+        );
+        assert!(
+            !remote_branch_exists(wt_dir.path(), "origin", "feature/never-pushed"),
+            "remote lookup should not invent a branch that was never pushed",
         );
     }
 

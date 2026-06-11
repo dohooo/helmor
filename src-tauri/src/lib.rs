@@ -20,6 +20,7 @@ pub mod mcp;
 pub mod models;
 pub mod pipeline;
 pub(crate) mod platform;
+pub mod quick_panel;
 pub mod rate_limits;
 pub mod schema;
 pub mod service;
@@ -99,7 +100,13 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // The quick panel positions itself (bottom-center, stage-anchored
+        // resizes) — restoring stale geometry would fight that.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_denylist(&[quick_panel::QUICK_PANEL_LABEL])
+                .build(),
+        )
         // Inline Slack file previews. The webview hits
         // `slack-file://files-tmb/T…-F…/image.png`, we proxy the request
         // through the workspace cookie, and stream the bytes back as a
@@ -268,6 +275,12 @@ pub fn run() {
                     "Degraded orphaned workspaces to archived (chat history preserved)"
                 ),
                 Err(e) => tracing::warn!("Failed to reconcile orphaned workspaces: {e:#}"),
+            }
+
+            // Terminal sessions left at 'streaming' from a prior run have dead
+            // PTYs; reset them so the sidebar doesn't show a phantom spinner.
+            if let Err(e) = models::sessions::reset_stale_terminal_statuses() {
+                tracing::warn!("Failed to reset stale terminal statuses: {e:#}");
             }
 
             // Repair `.agent-contexts/` provisioning for existing worktree
@@ -665,6 +678,7 @@ pub fn run() {
             commands::terminal_commands::stop_terminal,
             commands::terminal_commands::write_terminal_stdin,
             commands::terminal_commands::resize_terminal,
+            commands::terminal_commands::set_terminal_session_busy,
             commands::triage_commands::get_triage_config,
             commands::triage_commands::update_triage_config,
             commands::triage_commands::get_triage_active_status,
@@ -734,6 +748,7 @@ pub fn run() {
             commands::editors::open_workspace_in_editor,
             commands::editors::open_workspace_in_finder,
             commands::workspace_commands::permanently_delete_workspace,
+            commands::workspace_commands::cleanup_archived_workspaces,
             commands::workspace_commands::restore_workspace,
             commands::editor_commands::stat_editor_file,
             commands::conductor_commands::conductor_source_available,
@@ -757,6 +772,9 @@ pub fn run() {
             commands::settings_commands::load_auto_close_opt_in_asked,
             commands::settings_commands::save_auto_close_opt_in_asked,
             global_hotkey::sync_global_hotkey,
+            quick_panel::toggle_quick_panel,
+            quick_panel::hide_quick_panel,
+            quick_panel::reveal_workspace_in_main_window,
             ui_sync::subscribe_ui_mutations,
             ui_sync::unsubscribe_ui_mutations,
             commands::updater_commands::get_app_update_status,
@@ -837,6 +855,18 @@ pub fn run() {
             // window quits the app.
             #[cfg(not(target_os = "macos"))]
             emit_quit_requested(app_handle);
+        }
+        // Quick panel: closing always just hides it (its conversation state
+        // lives in the webview and must survive across summons).
+        tauri::RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::CloseRequested { api, .. },
+            ..
+        } if label == quick_panel::QUICK_PANEL_LABEL => {
+            api.prevent_close();
+            if let Some(window) = app_handle.get_webview_window(quick_panel::QUICK_PANEL_LABEL) {
+                let _ = window.hide();
+            }
         }
         // macOS Dock-icon click while the window is hidden: show it again.
         #[cfg(target_os = "macos")]

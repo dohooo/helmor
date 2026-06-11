@@ -68,6 +68,8 @@ type Props = {
 	startComposerContextKey: string;
 	startCreateContext: ComposerCreateContext | null;
 	startLinkedDirectoriesController: ConversationProps["composerLinkedDirectoriesController"];
+	/** Quick panel: composer pinned to the bottom of the start surface. */
+	startComposerAtBottom?: boolean;
 	// Conversation (chat) only
 	repoId: string | null;
 	sessionSelectionHistory: string[];
@@ -116,6 +118,7 @@ export function WorkspacePaneSurface({
 	startComposerContextKey,
 	startCreateContext,
 	startLinkedDirectoriesController,
+	startComposerAtBottom,
 	repoId,
 	sessionSelectionHistory,
 	workspaceChangeRequest,
@@ -201,6 +204,7 @@ export function WorkspacePaneSurface({
 							onPendingPromptConsumed={handlePendingPromptConsumed}
 							queuePendingPromptForSession={queuePendingPromptForSession}
 							headerLeading={headerLeadingNode}
+							composerAtBottom={startComposerAtBottom}
 						/>
 					) : (
 						<ShellWorkspaceConversation

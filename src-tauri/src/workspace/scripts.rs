@@ -50,6 +50,12 @@ const PTY_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const PTY_WRITE_RETRY: Duration = Duration::from_millis(5);
 const PTY_WRITE_DEADLINE: Duration = Duration::from_millis(500);
 const STOP_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// PTY reader output coalescing: buffer bytes and emit one Stdout event per
+/// flush window or byte threshold (whichever first) to cut per-event IPC cost
+/// on high-throughput output.
+const PTY_FLUSH_INTERVAL: Duration = Duration::from_millis(8);
+const PTY_FLUSH_BYTES: usize = 16 * 1024;
+const PTY_READ_BUF_BYTES: usize = 16 * 1024;
 
 /// Graceful-stop bundle: the user-provided cleanup command + everything
 /// `graceful_kill` needs to spawn it (same env, same cwd, output piped
@@ -887,21 +893,79 @@ pub(crate) fn run_script_with_shell(
         .name("script-pty".into())
         .spawn(move || {
             let mut master = reader_file;
-            let mut buf = [0u8; 4096];
+            let mut buf = [0u8; PTY_READ_BUF_BYTES];
             // 100ms tick is just a stop-flag fallback — kill() also closes
             // the PTY which triggers EIO/POLLHUP and wakes us instantly.
             const POLL_TIMEOUT_MS: i32 = 100;
+
+            // Coalesce output: buffer bytes and emit one Stdout event per flush
+            // window instead of one per read, collapsing a chatty producer's
+            // hundreds of tiny IPC sends into a few large ones.
+            let mut pending: Vec<u8> = Vec::with_capacity(PTY_READ_BUF_BYTES);
+            let mut last_flush = Instant::now();
+
+            // Emit the valid UTF-8 prefix, keeping any trailing incomplete
+            // multi-byte sequence buffered until its remaining bytes arrive.
+            let flush_pending = |pending: &mut Vec<u8>, last_flush: &mut Instant| {
+                if pending.is_empty() {
+                    return;
+                }
+                let valid = match std::str::from_utf8(pending) {
+                    Ok(_) => pending.len(),
+                    Err(e) => e.valid_up_to(),
+                };
+                if valid == 0 {
+                    // Incomplete leading sequence — wait for the rest. Guard
+                    // against genuine garbage stalling the buffer by flushing
+                    // lossily once it exceeds the max UTF-8 sequence length.
+                    if pending.len() > 4 {
+                        let data = String::from_utf8_lossy(pending).into_owned();
+                        let _ = ch.send(ScriptEvent::Stdout { data });
+                        pending.clear();
+                        *last_flush = Instant::now();
+                    }
+                    return;
+                }
+                let data = String::from_utf8_lossy(&pending[..valid]).into_owned();
+                let _ = ch.send(ScriptEvent::Stdout { data });
+                pending.drain(..valid);
+                *last_flush = Instant::now();
+            };
             loop {
                 if stop_reader_in_thread.load(Ordering::Relaxed) {
                     break;
                 }
 
+                // While bytes are buffered, cap the wait at the time left in
+                // the flush window — otherwise a lone small burst (a keystroke
+                // echo, a spinner frame) sits unflushed for the full 100ms
+                // idle tick and typing feels laggy.
+                let timeout_ms: i32 = if pending.is_empty() {
+                    POLL_TIMEOUT_MS
+                } else {
+                    let elapsed = last_flush.elapsed();
+                    if elapsed >= PTY_FLUSH_INTERVAL {
+                        // Past the window with bytes still buffered — only an
+                        // unflushable incomplete UTF-8 tail does that (the loop
+                        // tail flushes everything else). Wait for its rest at
+                        // the idle tick instead of spinning at 0ms.
+                        POLL_TIMEOUT_MS
+                    } else {
+                        (PTY_FLUSH_INTERVAL - elapsed).as_millis().max(1) as i32
+                    }
+                };
+
                 // POLLHUP / POLLERR fire when the slave fd is closed (child
                 // exited). We still try to read first so any pending bytes
                 // ahead of the hangup are delivered.
-                let hung_up = match master.poll_readable(POLL_TIMEOUT_MS) {
-                    Ok(crate::platform::pty::PollResult::TimedOut)
-                    | Ok(crate::platform::pty::PollResult::Interrupted) => continue,
+                let hung_up = match master.poll_readable(timeout_ms) {
+                    Ok(crate::platform::pty::PollResult::TimedOut) => {
+                        // Idle wake — flush any buffered tail so a quiet PTY
+                        // doesn't sit on coalesced bytes until the next read.
+                        flush_pending(&mut pending, &mut last_flush);
+                        continue;
+                    }
+                    Ok(crate::platform::pty::PollResult::Interrupted) => continue,
                     Ok(crate::platform::pty::PollResult::Ready { hung_up }) => hung_up,
                     Err(err) => {
                         tracing::debug!(error = %err, "PTY poll failed");
@@ -918,8 +982,12 @@ pub(crate) fn run_script_with_shell(
                             break;
                         }
                         Ok(n) => {
-                            let data = String::from_utf8_lossy(&buf[..n]).into_owned();
-                            let _ = ch.send(ScriptEvent::Stdout { data });
+                            pending.extend_from_slice(&buf[..n]);
+                            // Bound buffer growth within one drain so a fast
+                            // producer can't balloon memory before the timer.
+                            if pending.len() >= PTY_FLUSH_BYTES {
+                                flush_pending(&mut pending, &mut last_flush);
+                            }
                         }
                         Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                             // Drained for now — back to poll().
@@ -935,9 +1003,22 @@ pub(crate) fn run_script_with_shell(
                         }
                     }
                 }
+
+                // Time-based flush once this wake cycle is drained.
+                if last_flush.elapsed() >= PTY_FLUSH_INTERVAL {
+                    flush_pending(&mut pending, &mut last_flush);
+                }
+
                 if should_exit {
                     break;
                 }
+            }
+
+            // Final flush — emit remaining bytes (lossy for an incomplete
+            // trailing sequence) so the tail isn't dropped on exit.
+            if !pending.is_empty() {
+                let data = String::from_utf8_lossy(&pending).into_owned();
+                let _ = ch.send(ScriptEvent::Stdout { data });
             }
         })
         .ok();
@@ -1215,6 +1296,7 @@ mod tests {
     /// invariant.
     #[test]
     fn kill_all_does_not_deadlock_against_concurrent_unregister() {
+        let _env = crate::testkit::TestEnv::new("kill-all-does-not-deadlock-against-concu");
         let mgr = std::sync::Arc::new(ScriptProcessManager::new());
         let ctx = ScriptContext {
             root_path: std::env::temp_dir().display().to_string(),
@@ -1339,6 +1421,7 @@ mod tests {
 
     #[test]
     fn kill_terminates_running_script_quickly() {
+        let _env = crate::testkit::TestEnv::new("kill-terminates-running-script-quickly");
         let mgr = Arc::new(ScriptProcessManager::new());
         let ctx = ScriptContext {
             root_path: std::env::temp_dir().display().to_string(),
@@ -1405,6 +1488,7 @@ mod tests {
 
     #[test]
     fn write_stdin_delivers_bytes_to_running_script() {
+        let _env = crate::testkit::TestEnv::new("write-stdin-delivers-bytes-to-running-sc");
         let mgr = Arc::new(ScriptProcessManager::new());
         let ctx = ScriptContext {
             root_path: std::env::temp_dir().display().to_string(),
@@ -1496,6 +1580,7 @@ mod tests {
 
     #[test]
     fn resize_updates_pty_winsize() {
+        let _env = crate::testkit::TestEnv::new("resize-updates-pty-winsize");
         let mgr = Arc::new(ScriptProcessManager::new());
         let ctx = ScriptContext {
             root_path: std::env::temp_dir().display().to_string(),
@@ -1621,11 +1706,13 @@ mod tests {
 
     #[test]
     fn run_script_true_exits_zero() {
+        let _env = crate::testkit::TestEnv::new("run-script-true-exits-zero");
         assert_eq!(run_simple("true"), Some(0));
     }
 
     #[test]
     fn run_script_failing_command_exits_nonzero() {
+        let _env = crate::testkit::TestEnv::new("run-script-failing-command-exits-nonzero");
         assert_eq!(run_simple("exit 42"), Some(42));
     }
 
@@ -1657,6 +1744,7 @@ mod tests {
     /// keep working alongside the new ones.
     #[test]
     fn script_env_includes_helmor_port_vars_when_range_present() {
+        let _env = crate::testkit::TestEnv::new("script-env-includes-helmor-port-vars-whe");
         let mgr = ScriptProcessManager::new();
         let dir = std::env::temp_dir();
         let ctx = ScriptContext {
@@ -1734,6 +1822,7 @@ mod tests {
     /// `${HELMOR_PORT:-3000}` keep their default.
     #[test]
     fn script_env_omits_helmor_port_vars_when_range_missing() {
+        let _env = crate::testkit::TestEnv::new("script-env-omits-helmor-port-vars-when-r");
         let mgr = ScriptProcessManager::new();
         let dir = std::env::temp_dir();
         let ctx = ScriptContext {

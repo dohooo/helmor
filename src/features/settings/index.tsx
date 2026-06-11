@@ -66,6 +66,7 @@ import { SettingsSelect } from "./components/settings-select";
 import { AccountPanel } from "./panels/account";
 import { AppUpdatesPanel } from "./panels/app-updates";
 import { AppearancePanel } from "./panels/appearance";
+import { ArchiveCleanupPanel } from "./panels/archive-cleanup";
 import { ComponentsPanel } from "./panels/components";
 import { ConductorImportPanel } from "./panels/conductor-import";
 import { DevToolsPanel } from "./panels/dev-tools";
@@ -344,6 +345,18 @@ export const SettingsDialog = memo(function SettingsDialog({
 										/>
 									</SettingsRow>
 									<SettingsRow
+										title="Terminal Mode"
+										releaseMarker={{ kind: "feature" }}
+										description="Adds a composer toggle that opens your prompt in the agent's terminal UI instead of a chat session. Claude and Codex only."
+									>
+										<Switch
+											checked={settings.enableTerminalMode}
+											onCheckedChange={(checked) =>
+												updateSettings({ enableTerminalMode: checked })
+											}
+										/>
+									</SettingsRow>
+									<SettingsRow
 										title="Always show context usage"
 										description="By default, context usage is only shown when more than 70% is used."
 									>
@@ -367,7 +380,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 									</SettingsRow>
 									<SettingsRow
 										title="Auto-archive on merge"
-										releaseMarker={{ kind: "feature" }}
 										description="When a workspace's linked PR/MR is merged, archive the workspace automatically."
 									>
 										<Switch
@@ -502,6 +514,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 											</ToggleGroupItem>
 										</ToggleGroup>
 									</SettingsRow>
+									<ArchiveCleanupPanel />
 									<AppUpdatesPanel />
 									<ComponentsPanel />
 								</SettingsGroup>

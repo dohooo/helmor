@@ -31,6 +31,8 @@ pub struct WorkspaceSessionSummary {
     /// uses this to drive post-stream verifiers and the auto-close behavior.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action_kind: Option<ActionKind>,
+    /// "gui" (SDK chat session) or "terminal" (live PTY in the message area).
+    pub session_kind: String,
     pub active: bool,
 }
 
@@ -60,7 +62,8 @@ pub fn list_workspace_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessio
               s.updated_at,
               s.last_user_message_at,
               s.is_hidden,
-              s.action_kind
+              s.action_kind,
+              s.session_kind
             FROM sessions s
             WHERE s.workspace_id = ?1 AND COALESCE(s.is_hidden, 0) = 0
             ORDER BY
@@ -89,6 +92,7 @@ pub fn list_workspace_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessio
             last_user_message_at: row.get(13)?,
             is_hidden: row.get::<_, i64>(14)? != 0,
             action_kind: row.get(15)?,
+            session_kind: row.get(16)?,
         })
     })?;
 
@@ -262,6 +266,63 @@ fn map_historical_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoricalRec
         parsed_content,
         created_at: row.get(3)?,
     })
+}
+
+/// Set a session's `status` column (e.g. 'streaming' / 'idle'). Terminal
+/// sessions use this to mirror the agent-stream busy lifecycle.
+pub fn set_session_status(session_id: &str, status: &str) -> Result<()> {
+    let connection = db::write_conn()?;
+    connection
+        .execute(
+            "UPDATE sessions SET status = ?2, updated_at = datetime('now') WHERE id = ?1",
+            (session_id, status),
+        )
+        .with_context(|| format!("Failed to set status for session {session_id}"))?;
+    Ok(())
+}
+
+/// Persist the agent's real session id (from a Terminal-Mode agent hook) so a
+/// later relaunch can `--resume`. Written by `helmor terminal-hook`.
+pub fn set_provider_session_id(session_id: &str, provider_session_id: &str) -> Result<()> {
+    let connection = db::write_conn()?;
+    connection
+        .execute(
+            "UPDATE sessions SET provider_session_id = ?2, updated_at = datetime('now') WHERE id = ?1",
+            (session_id, provider_session_id),
+        )
+        .with_context(|| {
+            format!("Failed to set provider_session_id for session {session_id}")
+        })?;
+    Ok(())
+}
+
+/// The workspace a session belongs to. Used by `helmor terminal-hook` to route
+/// its busy/idle signal to the right workspace.
+pub fn workspace_id_for_session(session_id: &str) -> Result<Option<String>> {
+    let connection = db::read_conn()?;
+    let workspace_id: Option<String> = connection
+        .query_row(
+            "SELECT workspace_id FROM sessions WHERE id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .with_context(|| format!("Failed to read workspace for session {session_id}"))?;
+    Ok(workspace_id)
+}
+
+/// Reset Terminal sessions stuck at 'streaming' (their PTY died with the last
+/// app exit). Called on startup so the sidebar doesn't show a phantom spinner.
+pub fn reset_stale_terminal_statuses() -> Result<()> {
+    let connection = db::write_conn()?;
+    connection
+        .execute(
+            "UPDATE sessions SET status = 'idle' \
+             WHERE session_kind = 'terminal' AND status = 'streaming'",
+            [],
+        )
+        .context("Failed to reset stale terminal statuses")?;
+    Ok(())
 }
 
 // ---- Session read/unread functions ----
@@ -454,6 +515,11 @@ pub struct CreateSessionOverrides<'a> {
     /// `cache/paste/<seed>/` files end up owned by this session.
     /// Malformed → fresh UUID (see `lifecycle::resolve_seed_session_id`).
     pub seed_session_id: Option<&'a str>,
+    /// "gui" (default) or "terminal". Terminal sessions render a live PTY.
+    pub session_kind: Option<&'a str>,
+    /// Pin `agent_type` at creation. Terminal sessions store their preset CLI
+    /// here; GUI sessions leave it null until the first send sets it.
+    pub agent_type: Option<&'a str>,
 }
 
 pub fn create_session(
@@ -498,17 +564,22 @@ pub fn create_session(
 
     let session_id =
         crate::workspace::lifecycle::resolve_seed_session_id(overrides.seed_session_id);
-    let title = default_session_title_for_action_kind_with_workspace(
-        &transaction,
-        workspace_id,
-        action_kind,
-    )?;
+    let session_kind = overrides.session_kind.unwrap_or("gui");
+    let title = if session_kind == "terminal" {
+        "Terminal".to_string()
+    } else {
+        default_session_title_for_action_kind_with_workspace(
+            &transaction,
+            workspace_id,
+            action_kind,
+        )?
+    };
 
     transaction
         .execute(
             r#"
-            INSERT INTO sessions (id, workspace_id, status, title, permission_mode, action_kind, model, effort_level, fast_mode)
-            VALUES (?1, ?2, 'idle', ?3, ?4, ?5, ?6, ?7, ?8)
+            INSERT INTO sessions (id, workspace_id, status, title, permission_mode, action_kind, model, effort_level, fast_mode, session_kind, agent_type)
+            VALUES (?1, ?2, 'idle', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             "#,
             (
                 &session_id,
@@ -519,6 +590,8 @@ pub fn create_session(
                 model,
                 &effort_level,
                 fast_mode as i64,
+                session_kind,
+                overrides.agent_type,
             ),
         )
         .context("Failed to create session")?;
@@ -835,7 +908,7 @@ pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSu
               s.id, s.workspace_id, s.title, s.agent_type, s.status, s.model,
               s.permission_mode, s.provider_session_id, s.effort_level,
               s.unread_count, s.fast_mode, s.created_at, s.updated_at,
-              s.last_user_message_at, s.is_hidden, s.action_kind
+              s.last_user_message_at, s.is_hidden, s.action_kind, s.session_kind
             FROM sessions s
             WHERE s.workspace_id = ?1 AND s.is_hidden = 1
             ORDER BY datetime(s.created_at) ASC
@@ -864,6 +937,7 @@ pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSu
                 last_user_message_at: row.get(13)?,
                 is_hidden: row.get::<_, i64>(14)? != 0,
                 action_kind: row.get(15)?,
+                session_kind: row.get(16)?,
             })
         })
         .context("Failed to query hidden sessions")?;

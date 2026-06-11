@@ -24,6 +24,7 @@ mod send;
 mod session;
 mod settings;
 mod system;
+mod terminal_hook;
 mod workspace;
 
 use std::process::ExitCode;
@@ -159,6 +160,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
         C::Scripts { action } => scripts::dispatch(action, cli),
         C::Conductor { action } => conductor::dispatch(action, cli),
         C::Mcp => crate::mcp::run_mcp_server(),
+        C::TerminalHook { agent } => terminal_hook::run(agent, cli),
     }
 }
 

@@ -1399,6 +1399,7 @@ mod tests {
 
     #[test]
     fn allocate_picks_from_workspace_names() {
+        let _env = crate::testkit::TestEnv::new("allocate-picks-from-workspace-names");
         let (conn, _dir) = test_db();
         let name = allocate_directory_name_with_conn(&conn, "r1").unwrap();
         assert!(
@@ -1409,6 +1410,7 @@ mod tests {
 
     #[test]
     fn allocate_avoids_used_names() {
+        let _env = crate::testkit::TestEnv::new("allocate-avoids-used-names");
         let (conn, _dir) = test_db();
 
         // Use all names except one
@@ -1432,6 +1434,7 @@ mod tests {
 
     #[test]
     fn allocate_uses_v2_suffix_when_all_taken() {
+        let _env = crate::testkit::TestEnv::new("allocate-uses-v2-suffix-when-all-taken");
         let (conn, _dir) = test_db();
 
         // Use all names
@@ -1462,6 +1465,7 @@ mod tests {
 
     #[test]
     fn allocate_is_random_not_sequential() {
+        let _env = crate::testkit::TestEnv::new("allocate-is-random-not-sequential");
         let (_conn, _dir) = test_db();
 
         // Allocate multiple names and check they're not always the same order
@@ -1483,6 +1487,7 @@ mod tests {
 
     #[test]
     fn allocate_is_case_insensitive() {
+        let _env = crate::testkit::TestEnv::new("allocate-is-case-insensitive");
         let (conn, _dir) = test_db();
 
         // Insert with uppercase — should still be recognized as used
@@ -1504,6 +1509,7 @@ mod tests {
 
     #[test]
     fn allocate_scoped_to_repo() {
+        let _env = crate::testkit::TestEnv::new("allocate-scoped-to-repo");
         let (conn, _dir) = test_db();
         conn.execute(
             "INSERT INTO repos (id, name) VALUES ('r2', 'other-repo')",

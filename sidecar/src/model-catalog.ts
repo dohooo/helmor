@@ -9,12 +9,22 @@ const CURSOR_REASONING_LEVELS = ["low", "medium", "high"] as const;
 // `list_agent_model_sections` command; this one feeds `listModels`.
 const MODEL_CATALOG: Record<Provider, readonly ProviderModelInfo[]> = {
 	claude: [
+		// Fable 5 leads the list as the most capable pick, but it burns limits
+		// ~2x faster than Opus — `useEnsureDefaultModel` pins the app default
+		// to the `default` (Opus) entry below, NOT to the first entry. No fast
+		// mode (Opus 4.6+ only).
+		{
+			id: "claude-fable-5[1m]",
+			label: "Fable 5 1M",
+			cliModel: "claude-fable-5[1m]",
+			effortLevels: ["low", "medium", "high", "xhigh", "max"],
+		},
 		// `default` resolves to the newest Opus the bundled claude-code knows
-		// about — in 2.1.154 that is Opus 4.8 (1M context, adaptive thinking,
+		// about — in 2.1.170 that is Opus 4.8 (1M context, adaptive thinking,
 		// default high effort, fast mode at 2x rate / 2.5x speed). Kept as
 		// `default` (rather than pinned `claude-opus-4-8`) so it stays the
-		// auto-latest pick AND remains the catalog's first entry, which
-		// `useEnsureDefaultModel` selects as the app default.
+		// auto-latest pick AND remains the app default selection (see
+		// `useEnsureDefaultModel`, which prefers id == "default").
 		{
 			id: "default",
 			label: "Opus 4.8 1M",

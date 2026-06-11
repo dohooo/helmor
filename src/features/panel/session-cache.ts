@@ -6,12 +6,14 @@ export function buildOptimisticSession(
 	workspaceId: string,
 	sessionId: string,
 	createdAt: string,
+	sessionKind: "gui" | "terminal" = "gui",
+	agentType: string | null = null,
 ): WorkspaceSessionSummary {
 	return {
 		id: sessionId,
 		workspaceId,
-		title: "Untitled",
-		agentType: null,
+		title: sessionKind === "terminal" ? "Terminal" : "Untitled",
+		agentType,
 		status: "idle",
 		model: null,
 		permissionMode: "default",
@@ -24,6 +26,7 @@ export function buildOptimisticSession(
 		lastUserMessageAt: null,
 		isHidden: false,
 		actionKind: null,
+		sessionKind,
 		active: true,
 	};
 }
@@ -35,6 +38,8 @@ type SeedNewSessionInCacheOptions = {
 	workspace?: WorkspaceDetail | null;
 	existingSessions?: WorkspaceSessionSummary[];
 	createdAt?: string;
+	sessionKind?: "gui" | "terminal";
+	agentType?: string | null;
 };
 
 export function seedNewSessionInCache({
@@ -44,11 +49,15 @@ export function seedNewSessionInCache({
 	workspace = null,
 	existingSessions,
 	createdAt = new Date().toISOString(),
+	sessionKind = "gui",
+	agentType = null,
 }: SeedNewSessionInCacheOptions): WorkspaceSessionSummary {
 	const optimisticSession = buildOptimisticSession(
 		workspaceId,
 		sessionId,
 		createdAt,
+		sessionKind,
+		agentType,
 	);
 
 	queryClient.setQueryData(
@@ -62,7 +71,7 @@ export function seedNewSessionInCache({
 			return {
 				...base,
 				activeSessionId: sessionId,
-				activeSessionTitle: "Untitled",
+				activeSessionTitle: optimisticSession.title,
 				activeSessionAgentType: null,
 				activeSessionStatus: "idle",
 				sessionCount:

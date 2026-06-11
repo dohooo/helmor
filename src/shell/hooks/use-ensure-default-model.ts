@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import type { AgentModelSection } from "@/lib/api";
 import { agentModelSectionsQueryOptions } from "@/lib/query-client";
 import { type AppSettings, useSettings } from "@/lib/settings";
+import { isQuickPanelWindow } from "@/lib/window-role";
 import { findModelOption } from "@/lib/workspace-helpers";
 
 const KNOWN_MODEL_PROVIDERS = ["claude", "codex"] as const;
@@ -32,6 +33,9 @@ export function useEnsureDefaultModel() {
 	const sections = modelSectionsQuery.data;
 
 	useEffect(() => {
+		// Settings self-repair runs from one window only to avoid racing
+		// concurrent `updateSettings` patches across webviews.
+		if (isQuickPanelWindow) return;
 		if (!isLoaded) return;
 		if (!sections || sections.length === 0) return;
 		const settled = isModelCatalogSettled(sections);
@@ -63,8 +67,14 @@ export function useEnsureDefaultModel() {
 		// Repair the default when it's never been set, or was set but is now
 		// definitively gone (wait for every provider to settle first).
 		if (!defaultValid && (settled || !settings.defaultModelId)) {
+			// Prefer the Claude `default` entry (auto-latest Opus) over the
+			// first listed option — pricier models (Fable 5) sit above it in
+			// the picker but must not become the app default.
+			const claudeOptions =
+				sections.find((s) => s.id === "claude")?.options ?? [];
 			const pick =
-				sections.find((s) => s.id === "claude")?.options[0]?.id ??
+				claudeOptions.find((o) => o.id === "default")?.id ??
+				claudeOptions[0]?.id ??
 				allOptions[0]?.id ??
 				null;
 			if (pick) {

@@ -2,6 +2,8 @@ import type { QueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect } from "react";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import type { SessionCloseRequest } from "@/features/panel/use-confirm-session-close";
+import { buildTerminalBootCommand } from "@/features/terminal/terminal-presets";
+import { setPendingBoot } from "@/features/terminal/terminal-session-store";
 import {
 	closeMainWindow,
 	createSession,
@@ -14,6 +16,7 @@ import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import { isNewSession } from "@/lib/workspace-helpers";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
 import type { SelectionActions } from "@/shell/controllers/use-selection-controller";
+import { useShellEvent } from "@/shell/event-bus";
 
 /**
  * Session-level mutations AppShell exposes to keyboard shortcuts and the
@@ -114,56 +117,81 @@ export function useSessionActions({
 		});
 	}, [getCloseableCurrentSession, queryClient, requestCloseSession]);
 
-	const handleCreateSession = useCallback(async () => {
-		const workspaceId = selectionActions.getSnapshot().workspaceId;
-		if (!workspaceId) {
-			return;
-		}
+	const handleCreateSession = useCallback(
+		async (
+			sessionKind: "gui" | "terminal" = "gui",
+			agentType?: string | null,
+			// Runs after the session row exists but BEFORE it is selected —
+			// the slot a composer-initiated terminal uses to stage its boot
+			// command ahead of the panel's spawning mount.
+			onCreated?: (sessionId: string) => void,
+		) => {
+			const workspaceId = selectionActions.getSnapshot().workspaceId;
+			if (!workspaceId) {
+				return;
+			}
 
-		try {
-			const { sessionId } = await createSession(workspaceId);
-			const cachedWorkspace =
-				queryClient.getQueryData<WorkspaceDetail | null>(
-					helmorQueryKeys.workspaceDetail(workspaceId),
-				) ?? null;
-			seedNewSessionInCache({
-				queryClient,
-				workspaceId,
-				sessionId,
-				workspace: cachedWorkspace,
-				existingSessions:
-					queryClient.getQueryData<WorkspaceSessionSummary[]>(
-						helmorQueryKeys.workspaceSessions(workspaceId),
-					) ?? [],
-			});
-			handleSelectSession(sessionId);
+			try {
+				const { sessionId } = await createSession(workspaceId, {
+					sessionKind,
+					agentType,
+				});
+				onCreated?.(sessionId);
+				const cachedWorkspace =
+					queryClient.getQueryData<WorkspaceDetail | null>(
+						helmorQueryKeys.workspaceDetail(workspaceId),
+					) ?? null;
+				seedNewSessionInCache({
+					queryClient,
+					workspaceId,
+					sessionId,
+					workspace: cachedWorkspace,
+					sessionKind,
+					agentType,
+					existingSessions:
+						queryClient.getQueryData<WorkspaceSessionSummary[]>(
+							helmorQueryKeys.workspaceSessions(workspaceId),
+						) ?? [],
+				});
+				handleSelectSession(sessionId);
 
-			requestSidebarReconcile(queryClient);
-			void Promise.all([
-				...(cachedWorkspace
-					? [
-							queryClient.invalidateQueries({
-								queryKey: helmorQueryKeys.repoScripts(
-									cachedWorkspace.repoId,
-									workspaceId,
-								),
-							}),
-						]
-					: []),
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
-				}),
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
-				}),
-			]);
-		} catch (error) {
-			pushWorkspaceToast(
-				error instanceof Error ? error.message : String(error),
-				"Unable to create session",
-			);
-		}
-	}, [handleSelectSession, pushWorkspaceToast, queryClient]);
+				requestSidebarReconcile(queryClient);
+				void Promise.all([
+					...(cachedWorkspace
+						? [
+								queryClient.invalidateQueries({
+									queryKey: helmorQueryKeys.repoScripts(
+										cachedWorkspace.repoId,
+										workspaceId,
+									),
+								}),
+							]
+						: []),
+					queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
+					}),
+					queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
+					}),
+				]);
+			} catch (error) {
+				pushWorkspaceToast(
+					error instanceof Error ? error.message : String(error),
+					"Unable to create session",
+				);
+			}
+		},
+		[handleSelectSession, pushWorkspaceToast, queryClient, selectionActions],
+	);
+
+	// Composer Terminal-Mode submit → terminal session booting the provider's
+	// TUI with the prompt + composer state as the initial invocation.
+	useShellEvent("create-terminal-session", (event) => {
+		const boot = buildTerminalBootCommand(event.provider, event);
+		void handleCreateSession("terminal", event.provider, (sessionId) => {
+			if (boot) setPendingBoot(sessionId, boot);
+		});
+	});
 
 	useEffect(() => {
 		if (workspaceViewMode !== "conversation") {

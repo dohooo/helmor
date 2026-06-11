@@ -193,7 +193,8 @@ pub fn build_group_summary(tools: &[MessagePart], active: bool) -> String {
 ///
 /// Rules:
 /// - Consecutive search/read tool-calls accumulate into a group
-/// - A reasoning part passes through without breaking the group
+/// - A reasoning part flushes the group (keeps thread order: a group of
+///   reads must render BEFORE thinking that happened after them)
 /// - A text part or non-collapsible tool-call flushes the group
 /// - Groups of >= 2 tools are collapsed; single tools are kept as-is
 /// - The last group in a streaming message is marked active if its
@@ -264,7 +265,9 @@ fn collapse_tool_calls_in_parts(
                 }
             }
             ExtendedMessagePart::Basic(MessagePart::Reasoning { .. }) => {
-                // Reasoning passes through without breaking the group
+                // Flush first: letting reads straddle a thinking block used
+                // to move the whole group after thinking that happened later.
+                flush_group(&mut current_group, &mut result, is_streaming);
                 result.push(part);
             }
             _ => {
@@ -297,6 +300,66 @@ fn collapse_tool_calls_in_parts(
     result
 }
 
+/// Merge runs of adjacent reasoning parts into one chip. Omitted-thinking
+/// turns split one thinking phase into several blocks; rendering each as
+/// its own "Thought for Ns" chip reads as spam. Same-id parts are duplicate
+/// copies of one block (live snapshot + partial) — later copy wins; distinct
+/// ids are consecutive segments — durations sum, non-empty texts join.
+fn merge_adjacent_reasoning(parts: Vec<ExtendedMessagePart>) -> Vec<ExtendedMessagePart> {
+    let mut out: Vec<ExtendedMessagePart> = Vec::with_capacity(parts.len());
+    for part in parts {
+        let ExtendedMessagePart::Basic(MessagePart::Reasoning {
+            id,
+            text,
+            streaming,
+            duration_ms,
+        }) = part
+        else {
+            out.push(part);
+            continue;
+        };
+        let Some(ExtendedMessagePart::Basic(MessagePart::Reasoning {
+            id: prev_id,
+            text: prev_text,
+            streaming: prev_streaming,
+            duration_ms: prev_duration,
+        })) = out.last_mut()
+        else {
+            out.push(ExtendedMessagePart::Basic(MessagePart::Reasoning {
+                id,
+                text,
+                streaming,
+                duration_ms,
+            }));
+            continue;
+        };
+        if *prev_id == id {
+            // Duplicate copy of the same block — replace content, keep id.
+            *prev_text = text;
+            *prev_duration = duration_ms.or(*prev_duration);
+        } else {
+            if !text.is_empty() {
+                if !prev_text.is_empty() {
+                    prev_text.push_str("\n\n");
+                }
+                prev_text.push_str(&text);
+            }
+            *prev_duration = match (*prev_duration, duration_ms) {
+                (Some(a), Some(b)) => Some(a + b),
+                (a, b) => a.or(b),
+            };
+        }
+        // `Some(true)` (still thinking) wins; else `Some(false)` (just
+        // finished) wins over `None` (historical).
+        *prev_streaming = match (*prev_streaming, streaming) {
+            (Some(true), _) | (_, Some(true)) => Some(true),
+            (Some(false), _) | (_, Some(false)) => Some(false),
+            _ => None,
+        };
+    }
+    out
+}
+
 /// Apply the collapse pass to all assistant messages in the thread.
 pub fn collapse_pass(messages: &mut [ThreadMessageLike]) {
     for msg in messages.iter_mut() {
@@ -305,6 +368,7 @@ pub fn collapse_pass(messages: &mut [ThreadMessageLike]) {
         }
         let is_streaming = msg.streaming.unwrap_or(false);
         let parts = std::mem::take(&mut msg.content);
+        let parts = merge_adjacent_reasoning(parts);
         msg.content = collapse_tool_calls_in_parts(parts, is_streaming);
     }
 }
@@ -375,20 +439,81 @@ mod tests {
     }
 
     #[test]
-    fn reasoning_does_not_break_group() {
+    fn reasoning_flushes_group_and_keeps_order() {
         let parts = vec![
             tc("grep", json!({"pattern": "a"}), Some(json!("r1"))),
             reasoning("thinking..."),
             tc("grep", json!({"pattern": "a"}), Some(json!("r2"))),
         ];
         let result = collapse_tool_calls_in_parts(parts, false);
-        // reasoning + collapsed group
-        assert_eq!(result.len(), 2);
+        // Tool stays BEFORE the reasoning that happened after it — groups
+        // never straddle a thinking block (single tools stay ungrouped).
+        assert_eq!(result.len(), 3);
         assert!(matches!(
             result[0],
+            ExtendedMessagePart::Basic(MessagePart::ToolCall { .. })
+        ));
+        assert!(matches!(
+            result[1],
             ExtendedMessagePart::Basic(MessagePart::Reasoning { .. })
         ));
-        assert!(matches!(result[1], ExtendedMessagePart::CollapsedGroup(_)));
+        assert!(matches!(
+            result[2],
+            ExtendedMessagePart::Basic(MessagePart::ToolCall { .. })
+        ));
+    }
+
+    fn reasoning_with(id: &str, dur: Option<u64>, streaming: Option<bool>) -> ExtendedMessagePart {
+        ExtendedMessagePart::Basic(MessagePart::Reasoning {
+            id: id.to_string(),
+            text: String::new(),
+            streaming,
+            duration_ms: dur,
+        })
+    }
+
+    #[test]
+    fn adjacent_reasoning_segments_merge_into_one_chip() {
+        let parts = vec![
+            reasoning_with("r1", Some(1200), Some(false)),
+            reasoning_with("r2", Some(800), Some(false)),
+            tc("edit", json!({"file_path": "a"}), Some(json!("ok"))),
+            reasoning_with("r3", Some(50), None),
+        ];
+        let result = merge_adjacent_reasoning(parts);
+        assert_eq!(result.len(), 3);
+        let ExtendedMessagePart::Basic(MessagePart::Reasoning {
+            id, duration_ms, ..
+        }) = &result[0]
+        else {
+            panic!("expected merged reasoning first");
+        };
+        // First segment's id survives (stable React key), durations sum.
+        assert_eq!(id, "r1");
+        assert_eq!(*duration_ms, Some(2000));
+    }
+
+    #[test]
+    fn duplicate_reasoning_copy_replaces_not_sums() {
+        // Live snapshot + pending partial re-send the SAME block (same id):
+        // later copy wins, duration must not double.
+        let parts = vec![
+            reasoning_with("r1", None, Some(true)),
+            reasoning_with("r1", Some(900), Some(false)),
+        ];
+        let result = merge_adjacent_reasoning(parts);
+        assert_eq!(result.len(), 1);
+        let ExtendedMessagePart::Basic(MessagePart::Reasoning {
+            duration_ms,
+            streaming,
+            ..
+        }) = &result[0]
+        else {
+            panic!("expected single reasoning");
+        };
+        assert_eq!(*duration_ms, Some(900));
+        // One copy still flagged live keeps the chip in its live state.
+        assert_eq!(*streaming, Some(true));
     }
 
     #[test]

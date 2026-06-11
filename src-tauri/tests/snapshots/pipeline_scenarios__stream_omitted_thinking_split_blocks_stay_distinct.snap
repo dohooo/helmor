@@ -1,0 +1,139 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: normalize_stream_fingerprint(&fingerprint)
+---
+emissions:
+  - kind: partial
+    line_index: 0
+    event_type: stream_event
+    message:
+      role: assistant
+      id: msg-1
+      content:
+        - type: reasoning
+          text_preview: ""
+          streaming: true
+          has_duration: false
+      streaming: true
+  - kind: partial
+    line_index: 1
+    event_type: stream_event
+    message:
+      role: assistant
+      id: msg-1
+      content:
+        - type: reasoning
+          text_preview: ""
+          streaming: true
+          has_duration: false
+      streaming: true
+  - kind: full
+    line_index: 2
+    event_type: assistant
+    messages:
+      - role: assistant
+        id: msg-1
+        content:
+          - type: reasoning
+            text_preview: ""
+            streaming: false
+            has_duration: true
+        streaming: ~
+  - kind: partial
+    line_index: 4
+    event_type: stream_event
+    message:
+      role: assistant
+      id: msg-1
+      content:
+        - type: reasoning
+          text_preview: ""
+          streaming: true
+          has_duration: false
+      streaming: true
+  - kind: partial
+    line_index: 5
+    event_type: stream_event
+    message:
+      role: assistant
+      id: msg-1
+      content:
+        - type: reasoning
+          text_preview: ""
+          streaming: true
+          has_duration: false
+      streaming: true
+  - kind: full
+    line_index: 6
+    event_type: assistant
+    messages:
+      - role: assistant
+        id: msg-1
+        content:
+          - type: reasoning
+            text_preview: ""
+            streaming: false
+            has_duration: true
+        streaming: ~
+  - kind: full
+    line_index: 8
+    event_type: assistant
+    messages:
+      - role: assistant
+        id: msg-1
+        content:
+          - type: reasoning
+            text_preview: ""
+            streaming: false
+            has_duration: true
+          - type: other
+            original_type: "tool-call:Edit"
+        streaming: ~
+  - kind: full
+    line_index: 9
+    event_type: user
+    messages:
+      - role: assistant
+        id: msg-1
+        content:
+          - type: reasoning
+            text_preview: ""
+            streaming: false
+            has_duration: true
+          - type: other
+            original_type: "tool-call:Edit"
+        streaming: ~
+final_render:
+  - role: assistant
+    id: msg-1
+    content:
+      - type: reasoning
+        text_preview: ""
+        streaming: false
+        has_duration: true
+      - type: other
+        original_type: "tool-call:Edit"
+    streaming: ~
+persisted_turn_blocks:
+  - - type: thinking
+      has_duration_ms: true
+    - type: thinking
+      has_duration_ms: true
+    - type: tool_use
+      has_duration_ms: false
+  - - type: tool_result
+      has_duration_ms: false
+      other_keys:
+        - content
+        - tool_use_id
+historical_render:
+  - role: assistant
+    id: msg-2
+    content:
+      - type: reasoning
+        text_preview: ""
+        streaming: ~
+        has_duration: true
+      - type: other
+        original_type: "tool-call:Edit"
+    streaming: ~

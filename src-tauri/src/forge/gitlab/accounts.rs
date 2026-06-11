@@ -79,6 +79,10 @@ impl ForgeAccountBackend for GitlabAccountBackend {
         check_gitlab_auth(host, login)
     }
 
+    fn validate_auth(&self, host: &str, login: &str) -> AuthCheck {
+        validated_gitlab_auth(host, login)
+    }
+
     fn repo_access(&self, host: &str, _login: &str, owner: &str, name: &str) -> Result<RepoAccess> {
         gitlab_repo_access(host, owner, name)
     }
@@ -195,6 +199,60 @@ fn check_gitlab_auth(host: &str, login: &str) -> AuthCheck {
             );
             AuthCheck::Indeterminate
         }
+    }
+}
+
+/// Live-validated auth check via `glab api user` — exercises the
+/// stored token against the API rather than config presence. Mirrors
+/// `github::accounts::validated_github_auth`. Bypasses the profile
+/// cache: arbitration of a fresh 401 must not be answered from a
+/// 30s-old snapshot.
+fn validated_gitlab_auth(host: &str, login: &str) -> AuthCheck {
+    let output = match run_command("glab", ["api", "--hostname", host, "user"]) {
+        Ok(output) => output,
+        Err(error) => {
+            tracing::warn!(
+                host = %host,
+                login = %login,
+                error = %error,
+                "glab auth validation probe failed; treating as Indeterminate"
+            );
+            return AuthCheck::Indeterminate;
+        }
+    };
+    if output.success {
+        return validated_user_verdict(&output.stdout, login);
+    }
+    let detail = command_detail(&output);
+    if looks_like_auth_error(&detail) || looks_like_definitively_unauthenticated(&detail) {
+        return AuthCheck::LoggedOut;
+    }
+    tracing::warn!(
+        host = %host,
+        login = %login,
+        detail = %detail,
+        "glab auth validation output inconclusive; treating as Indeterminate"
+    );
+    AuthCheck::Indeterminate
+}
+
+/// Pure verdict from a successful `glab api user` payload: the token
+/// works, but it must still belong to the bound login (glab is
+/// one-account-per-host — a re-login under a different user means the
+/// bound login is effectively logged out). Undecodable → Indeterminate.
+fn validated_user_verdict(stdout: &str, login: &str) -> AuthCheck {
+    let Ok(parsed) = serde_json::from_str::<GitlabUserResponse>(stdout) else {
+        return AuthCheck::Indeterminate;
+    };
+    match parsed.username.as_deref().map(str::trim) {
+        Some(username) if !username.is_empty() => {
+            if username == login {
+                AuthCheck::LoggedIn
+            } else {
+                AuthCheck::LoggedOut
+            }
+        }
+        _ => AuthCheck::Indeterminate,
     }
 }
 
@@ -630,6 +688,40 @@ mod tests {
     fn parse_glab_logged_in_pairs_empty_on_no_logins() {
         assert!(parse_glab_logged_in_pairs("").is_empty());
         assert!(parse_glab_logged_in_pairs("✗ Not logged in to any host").is_empty());
+    }
+
+    // ---------------- validated_user_verdict ----------------
+
+    #[test]
+    fn validated_user_verdict_logged_in_when_username_matches() {
+        let stdout = r#"{ "username": "liangeqiang", "name": "L" }"#;
+        assert_eq!(
+            validated_user_verdict(stdout, "liangeqiang"),
+            AuthCheck::LoggedIn
+        );
+    }
+
+    #[test]
+    fn validated_user_verdict_logged_out_when_token_belongs_to_other_user() {
+        // glab is one-account-per-host: a valid token under a different
+        // username means the bound login no longer has credentials.
+        let stdout = r#"{ "username": "someone-else" }"#;
+        assert_eq!(
+            validated_user_verdict(stdout, "liangeqiang"),
+            AuthCheck::LoggedOut
+        );
+    }
+
+    #[test]
+    fn validated_user_verdict_indeterminate_on_missing_or_malformed_username() {
+        assert_eq!(
+            validated_user_verdict(r#"{ "name": "no username" }"#, "x"),
+            AuthCheck::Indeterminate
+        );
+        assert_eq!(
+            validated_user_verdict("{not json", "x"),
+            AuthCheck::Indeterminate
+        );
     }
 
     // ---------------- looks_like_definitively_unauthenticated ----------------

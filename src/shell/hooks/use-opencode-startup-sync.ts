@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useOpencodeModelSync } from "@/features/settings/panels/providers/use-opencode-model-sync";
 import { useSettings } from "@/lib/settings";
+import { isQuickPanelWindow } from "@/lib/window-role";
 
 /** On app start, restart `opencode serve` once to re-read ~/.config/opencode,
  *  so config edits made while Helmor was closed land in the composer's model
@@ -13,6 +14,9 @@ export function useOpencodeStartupSync() {
 
 	const usedOpencode = settings.opencodeProvider.cachedModels !== null;
 	useEffect(() => {
+		// One restart per APP start — the main window owns it; the quick panel
+		// mounting later must not bounce the server again.
+		if (isQuickPanelWindow) return;
 		if (!isLoaded || ranRef.current || !usedOpencode) return;
 		ranRef.current = true;
 		void sync({ forceReload: true });

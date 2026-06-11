@@ -15,6 +15,7 @@ import {
 	MessageSquareMore,
 	Plus,
 	Square,
+	SquareTerminal,
 	Zap,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -54,6 +55,7 @@ import type {
 } from "@/lib/composer-insert";
 import { recordComposerRender } from "@/lib/dev-render-debug";
 import { cn } from "@/lib/utils";
+import { isQuickPanelWindow } from "@/lib/window-role";
 import { clampEffort } from "@/lib/workspace-helpers";
 import { ComposerButton } from "./button";
 import { ContextBar } from "./context-bar";
@@ -144,6 +146,10 @@ type WorkspaceComposerProps = {
 	fastMode?: boolean;
 	showFastModePrelude?: boolean;
 	onChangeFastMode?: (enabled: boolean) => void;
+	/** Terminal-Mode toggle; undefined handler hides the button. When on,
+	 *  sending opens the prompt in the agent's TUI instead of a GUI turn. */
+	terminalMode?: boolean;
+	onChangeTerminalMode?: (enabled: boolean) => void;
 	sendError?: string | null;
 	restoreDraft?: string | null;
 	restoreImages?: string[];
@@ -201,6 +207,7 @@ type WorkspaceComposerProps = {
 	agentType?: "claude" | "codex" | "cursor" | "opencode" | null;
 	focusShortcut?: string | null;
 	togglePlanShortcut?: string | null;
+	toggleTerminalShortcut?: string | null;
 	/** Hotkey that submits the current draft with the opposite follow-up
 	 *  behavior (queue ↔ steer) for one message. */
 	toggleFollowUpShortcut?: string | null;
@@ -294,6 +301,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	fastMode = false,
 	showFastModePrelude = false,
 	onChangeFastMode,
+	terminalMode = false,
+	onChangeTerminalMode,
 	sendError,
 	restoreDraft,
 	restoreImages = [],
@@ -329,6 +338,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	agentType = null,
 	focusShortcut = null,
 	togglePlanShortcut = null,
+	toggleTerminalShortcut = null,
 	toggleFollowUpShortcut = null,
 	toggleContextPanelShortcut = null,
 	contextPanelOpen = false,
@@ -679,6 +689,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		alternateStartSubmitMode === "saveForLater"
 			? "Save for later"
 			: "Start now";
+	// Narrow surfaces show only the first word ("New" / "Save" / "Start");
+	// the dropdown items keep the full labels.
+	const compactStartSubmitLabel = preferredStartSubmitLabel.split(" ")[0];
 
 	const handleComposerKeyDownCapture = useCallback(
 		(event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -719,6 +732,20 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				onChangePermissionMode(
 					permissionMode === "plan" ? "bypassPermissions" : "plan",
 				);
+				return;
+			}
+
+			// Terminal-Mode toggle — only when the toggle is offered (setting
+			// on + provider supports it), and workspace-composer only like plan.
+			if (
+				toggleTerminalShortcut &&
+				hotkey === toggleTerminalShortcut &&
+				onChangeTerminalMode &&
+				focusScope === "workspace-composer"
+			) {
+				event.preventDefault();
+				event.stopPropagation();
+				onChangeTerminalMode(!terminalMode);
 			}
 		},
 		[
@@ -728,6 +755,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			permissionMode,
 			supportsPlanMode,
 			togglePlanShortcut,
+			toggleTerminalShortcut,
+			onChangeTerminalMode,
+			terminalMode,
 			toggleFollowUpShortcut,
 			handleSubmitOpposite,
 			submitEnabled,
@@ -741,7 +771,10 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			data-focus-scope={focusScope}
 			onKeyDownCapture={handleComposerKeyDownCapture}
 			className={cn(
-				"relative flex flex-col rounded-2xl border border-border/40 bg-sidebar shadow-[0_-1px_8px_rgba(0,0,0,0.05),0_0_0_1px_rgba(255,255,255,0.02)]",
+				// Named container: the footer toolbar sheds label text and
+				// re-aligns in narrow surfaces (quick panel, mini mode) via
+				// pure CSS container queries — no JS width checks.
+				"@container/composer relative flex flex-col rounded-2xl border border-border/40 bg-sidebar shadow-[0_-1px_8px_rgba(0,0,0,0.05),0_0_0_1px_rgba(255,255,255,0.02)]",
 				// Pending-interaction panels fill the shell edge-to-edge and own
 				// their own internal padding; the default composer gets the
 				// legacy px-4 pt-3 pb-3 breathing room.
@@ -935,7 +968,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						</div>
 					) : null}
 
-					<div className="mt-2.5 flex items-end justify-between gap-3">
+					<div className="@max-lg/composer:items-center mt-2.5 flex items-end justify-between gap-3">
 						<div className="flex flex-wrap items-center gap-2">
 							{modelsLoading ? (
 								<ShimmerText className="px-1 py-0.5 text-ui text-muted-foreground">
@@ -943,6 +976,47 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								</ShimmerText>
 							) : (
 								<>
+									{onChangeTerminalMode && (
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<ComposerButton
+													aria-label="Terminal mode"
+													disabled={toolbarDisabled}
+													className={cn(
+														composerToolbarTriggerClassName,
+														terminalMode
+															? "text-emerald-500 hover:bg-emerald-500/10 hover:text-emerald-500"
+															: "text-muted-foreground",
+														toolbarDisabled
+															? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
+															: null,
+													)}
+													onClick={() => onChangeTerminalMode(!terminalMode)}
+												>
+													<SquareTerminal
+														className={cn(
+															"size-[14px]",
+															terminalMode ? null : "opacity-55",
+														)}
+														strokeWidth={1.8}
+													/>
+												</ComposerButton>
+											</TooltipTrigger>
+											<TooltipContent
+												side="top"
+												sideOffset={4}
+												className="flex items-center gap-2"
+											>
+												<span>Terminal mode</span>
+												{toggleTerminalShortcut ? (
+													<InlineShortcutDisplay
+														hotkey={toggleTerminalShortcut}
+														className="text-background/60"
+													/>
+												) : null}
+											</TooltipContent>
+										</Tooltip>
+									)}
 									<DropdownMenu
 										open={modelPickerOpen}
 										onOpenChange={setModelPickerOpen}
@@ -1143,8 +1217,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										</DropdownMenu>
 									)}
 									{supportsPlanMode ? (
-										<ComposerButton
-											aria-label="Plan mode"
+										<PlanModeButton
 											disabled={toolbarDisabled}
 											className={cn(
 												`gap-1 px-1.5 text-mini ${composerToolbarTriggerClassName}`,
@@ -1152,20 +1225,14 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 													? "text-plan hover:text-plan"
 													: "text-muted-foreground/70 hover:text-muted-foreground/70",
 											)}
-											onClick={() =>
+											onToggle={() =>
 												onChangePermissionMode(
 													permissionMode === "plan"
 														? "bypassPermissions"
 														: "plan",
 												)
 											}
-										>
-											<ClipboardList
-												className="size-[13px]"
-												strokeWidth={1.8}
-											/>
-											<span>Plan</span>
-										</ComposerButton>
+										/>
 									) : null}
 									{onToggleContextPanel ? (
 										<Tooltip>
@@ -1292,7 +1359,12 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 													) : (
 														<ArrowUp className="size-3.5" strokeWidth={2.2} />
 													)}
-													<span>{preferredStartSubmitLabel}</span>
+													<span className="@max-lg/composer:hidden">
+														{preferredStartSubmitLabel}
+													</span>
+													<span className="hidden @max-lg/composer:inline">
+														{compactStartSubmitLabel}
+													</span>
 												</Button>
 												<DropdownMenuTrigger asChild>
 													<Button
@@ -1360,6 +1432,47 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		</div>
 	);
 });
+
+function PlanModeButton({
+	disabled,
+	className,
+	onToggle,
+}: {
+	disabled: boolean;
+	className: string;
+	onToggle: () => void;
+}) {
+	const button = (
+		<ComposerButton
+			aria-label="Plan mode"
+			disabled={disabled}
+			className={className}
+			onClick={onToggle}
+		>
+			<ClipboardList className="size-[13px]" strokeWidth={1.8} />
+			{/* Collapses to icon-only in narrow surfaces. */}
+			<span className="@max-lg/composer:hidden">Plan</span>
+		</ComposerButton>
+	);
+	// Main window: the bare button, exactly as before this feature (also keeps
+	// composer tests free of a TooltipProvider requirement). Quick panel: the
+	// label collapses to icon-only, so hover gets a tooltip.
+	if (!isQuickPanelWindow) {
+		return button;
+	}
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>{button}</TooltipTrigger>
+			<TooltipContent
+				side="top"
+				sideOffset={4}
+				className="flex h-[24px] items-center rounded-md px-2 text-small leading-none"
+			>
+				<span>Plan</span>
+			</TooltipContent>
+		</Tooltip>
+	);
+}
 
 function EffortBrainIcon({ level }: { level: string }) {
 	const cls = "shrink-0";

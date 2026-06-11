@@ -31,6 +31,7 @@ import {
 } from "@/lib/query-client";
 import { SCHEDULE_AFTER_PAINT_FALLBACK_MS } from "@/lib/schedule-after-paint";
 import type { AppSettings } from "@/lib/settings";
+import { isQuickPanelWindow } from "@/lib/window-role";
 import { router } from "@/router";
 import { locationToSelection } from "@/router/location-mapping";
 import {
@@ -239,6 +240,10 @@ export function useSelectionController(
 	// and the `openStart` persist write. Always reads the latest
 	// `updateSettings` through the ref so the subscription can mount once.
 	useEffect(() => {
+		// Only the main window persists its location. The quick panel navigates
+		// its own router (start → fresh workspace) and must not clobber the
+		// `lastSurface` / `lastWorkspaceId` the main window restores at boot.
+		if (isQuickPanelWindow) return;
 		return installLocationPersistence((patch) => {
 			void updateSettingsRef.current(patch);
 		});

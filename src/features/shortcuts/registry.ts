@@ -74,7 +74,7 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		id: "session.reopenClosed",
 		title: "Reopen closed session",
 		group: "Session",
-		defaultHotkey: "Mod+Shift+T",
+		defaultHotkey: "Mod+Shift+R",
 		scopes: ["app"],
 		editable: true,
 	},
@@ -210,6 +210,17 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		editable: true,
 	},
 	{
+		// OS-level hotkey registered by the Rust backend. The default below
+		// MUST stay in sync with `default_hotkey` in src-tauri/src/global_hotkey.rs.
+		id: "quickPanel.hotkey",
+		title: "Quick panel hotkey",
+		description: "Open the quick task panel from anywhere.",
+		group: "System",
+		defaultHotkey: "Shift+Alt+Space",
+		scopes: ["app"],
+		editable: true,
+	},
+	{
 		id: "theme.toggle",
 		title: "Toggle theme (dark/light)",
 		group: "System",
@@ -293,6 +304,14 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		// no UI on the start surface. Bound to the narrower sibling scope so
 		// the start surface can reclaim Shift+Tab for cycling repositories
 		// without scope-overlap forcing both to disable each other.
+		scopes: ["workspace-composer"],
+		editable: true,
+	},
+	{
+		id: "composer.toggleTerminalMode",
+		title: "Toggle terminal mode",
+		group: "Composer",
+		defaultHotkey: "Mod+Shift+T",
 		scopes: ["workspace-composer"],
 		editable: true,
 	},

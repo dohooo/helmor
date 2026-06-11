@@ -1765,6 +1765,12 @@ describe("ClaudeSessionManager.listModels", () => {
 
 		expect(models).toEqual([
 			{
+				id: "claude-fable-5[1m]",
+				label: "Fable 5 1M",
+				cliModel: "claude-fable-5[1m]",
+				effortLevels: ["low", "medium", "high", "xhigh", "max"],
+			},
+			{
 				id: "default",
 				label: "Opus 4.8 1M",
 				cliModel: "default",
