@@ -273,7 +273,8 @@ fn load_asset(state: &AppState, path: &str) -> Option<Response> {
 /// the transport onto HTTP/SSE. The bearer token is delivered separately (URL
 /// hash → localStorage), so the marker itself carries no secret.
 pub(super) fn inject_companion_marker(html: Vec<u8>) -> Vec<u8> {
-    const MARKER: &str = "<script>window.__HELMOR_COMPANION__={};</script>";
+    const MARKER: &str =
+        "<script>window.__HELMOR_COMPANION__=window.__HELMOR_COMPANION__||{};</script>";
     let Ok(text) = String::from_utf8(html) else {
         return Vec::new();
     };

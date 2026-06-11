@@ -18,6 +18,7 @@ import {
 	DROP_COMMAND,
 } from "lexical";
 import { useEffect, useRef } from "react";
+import { isCompanionClient, listen } from "@/lib/ipc";
 import { $createFileBadgeNode } from "../file-badge-node";
 import { $createImageBadgeNode } from "../image-badge-node";
 
@@ -49,57 +50,56 @@ export function DropFilePlugin() {
 		unlistenRef.current?.();
 		unlistenRef.current = null;
 
-		import("@tauri-apps/api/event")
-			.then(({ listen }) => {
-				if (cancelledRef.current) return; // effect was cleaned up
+		if (isCompanionClient()) {
+			return () => {
+				cancelledRef.current = true;
+				unregisterDrop();
+			};
+		}
 
-				listen<{ paths: string[] }>("tauri://drag-drop", (event) => {
-					const paths = event.payload.paths;
-					if (!paths || paths.length === 0) return;
+		void listen<{ paths: string[] }>("tauri://drag-drop", (event) => {
+			const paths = event.payload.paths;
+			if (!paths || paths.length === 0) return;
 
-					// Dedup: ignore if same paths within DROP_DEDUP_MS
-					const key = paths.join("|");
-					const now = Date.now();
-					if (
-						key === lastDropRef.current.key &&
-						now - lastDropRef.current.ts < DROP_DEDUP_MS
-					) {
-						return;
-					}
-					lastDropRef.current = { key, ts: now };
+			// Dedup: ignore if same paths within DROP_DEDUP_MS
+			const key = paths.join("|");
+			const now = Date.now();
+			if (
+				key === lastDropRef.current.key &&
+				now - lastDropRef.current.ts < DROP_DEDUP_MS
+			) {
+				return;
+			}
+			lastDropRef.current = { key, ts: now };
 
-					editor.update(() => {
-						const root = $getRoot();
-						let lastChild = root.getLastChild();
-						if (!lastChild || !$isElementNode(lastChild)) {
-							lastChild = $createParagraphNode();
-							root.append(lastChild);
-						}
-						const paragraph = lastChild as import("lexical").ElementNode;
+			editor.update(() => {
+				const root = $getRoot();
+				let lastChild = root.getLastChild();
+				if (!lastChild || !$isElementNode(lastChild)) {
+					lastChild = $createParagraphNode();
+					root.append(lastChild);
+				}
+				const paragraph = lastChild as import("lexical").ElementNode;
 
-						for (const filePath of paths) {
-							if (IMAGE_EXT_RE.test(filePath)) {
-								paragraph.append($createImageBadgeNode(filePath));
-							} else {
-								paragraph.append($createFileBadgeNode(filePath));
-							}
-						}
-
-						const spacer = $createTextNode(" ");
-						paragraph.append(spacer);
-						spacer.select(1, 1);
-					});
-				}).then((fn) => {
-					if (cancelledRef.current) {
-						fn(); // already cleaned up, immediately unlisten
+				for (const filePath of paths) {
+					if (IMAGE_EXT_RE.test(filePath)) {
+						paragraph.append($createImageBadgeNode(filePath));
 					} else {
-						unlistenRef.current = fn;
+						paragraph.append($createFileBadgeNode(filePath));
 					}
-				});
-			})
-			.catch(() => {
-				// Not in Tauri environment
+				}
+
+				const spacer = $createTextNode(" ");
+				paragraph.append(spacer);
+				spacer.select(1, 1);
 			});
+		}).then((fn) => {
+			if (cancelledRef.current) {
+				fn(); // already cleaned up, immediately unlisten
+			} else {
+				unlistenRef.current = fn;
+			}
+		});
 
 		return () => {
 			cancelledRef.current = true;

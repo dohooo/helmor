@@ -1,10 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { Switch } from "@/components/ui/switch";
 import {
 	allocateStableUrl,
 	type CompanionPairingPayload,
 	type CompanionStatus,
+	disableCompanion,
+	disableCompanionTunnel,
 	enableCompanion,
+	enableLanCompanion,
 	getCompanionStatus,
 	listPairedDevices,
 	pairCompanionDevice,
@@ -33,22 +37,23 @@ function errorText(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-function pairingMatchesPublicUrl(
+function pairingMatchesBaseUrl(
 	pairing: CompanionPairingPayload | null,
-	publicUrl: string | null,
+	baseUrl: string | null,
 ): boolean {
-	if (!pairing || !publicUrl) return false;
+	if (!pairing || !baseUrl) return false;
 	try {
-		return new URL(pairing.url).origin === new URL(publicUrl).origin;
+		return new URL(pairing.baseUrl).origin === new URL(baseUrl).origin;
 	} catch {
 		return false;
 	}
 }
 
-/// Settings → Mobile panel for the mobile browser companion. Opening this
-/// panel starts the loopback server + a cloudflared tunnel; the advanced
-/// "Keep the same link" section upgrades the ephemeral quick tunnel to a stable
-/// remote-*.helmor.ai address; pairing mints a per-device token shown as a QR.
+/// Settings → Mobile panel for the mobile browser companion. The access switch
+/// starts/stops the LAN companion server; the Cloudflare switch upgrades that
+/// local connection to a public tunnel. The advanced "Keep the same link"
+/// section upgrades the ephemeral quick tunnel to a stable remote-*.helmor.ai
+/// address; pairing mints a per-device token shown as a QR.
 export function MobileCompanionPanel() {
 	const queryClient = useQueryClient();
 	const [copied, setCopied] = useState(false);
@@ -71,22 +76,62 @@ export function MobileCompanionPanel() {
 	});
 
 	const publicUrl = statusQuery.data?.publicUrl ?? null;
+	const lanUrl = statusQuery.data?.lanUrl ?? null;
 	const signedIn = statusQuery.data?.signedIn ?? false;
 	const stableHost = statusQuery.data?.stableHost ?? null;
 	const hasFixedLink = stableHost !== null;
 	const devices = devicesQuery.data ?? [];
 	const pairing = pairingQuery.data ?? null;
-	const pairingIsCurrent = pairingMatchesPublicUrl(pairing, publicUrl);
+	const connectionUrl = publicUrl ?? lanUrl;
+	const pairingIsCurrent = pairingMatchesBaseUrl(pairing, connectionUrl);
 	const replacePendingDeviceId = pairing?.deviceId;
+	const accessEnabled = statusQuery.data?.running ?? false;
+	const cloudflareEnabled = publicUrl !== null;
 
 	const setStatus = (status: CompanionStatus) =>
 		queryClient.setQueryData(COMPANION_STATUS_KEY, status);
 	const setPairingCode = (payload: CompanionPairingPayload | null) =>
 		queryClient.setQueryData(COMPANION_PAIRING_KEY, payload);
 
-	const enableMutation = useMutation({
+	const enableLanMutation = useMutation({
+		mutationFn: enableLanCompanion,
+		onSuccess: (status) => {
+			setStatus(status);
+			void queryClient.invalidateQueries({ queryKey: COMPANION_STATUS_KEY });
+		},
+	});
+	const enableTunnelMutation = useMutation({
 		mutationFn: enableCompanion,
 		onSuccess: (status) => {
+			setStatus(status);
+			void queryClient.invalidateQueries({ queryKey: COMPANION_STATUS_KEY });
+		},
+	});
+	const disableMutation = useMutation({
+		mutationFn: disableCompanion,
+		onSuccess: () => {
+			setPairingCode(null);
+			queryClient.setQueryData<CompanionStatus | undefined>(
+				COMPANION_STATUS_KEY,
+				(current) =>
+					current
+						? {
+								...current,
+								running: false,
+								addr: null,
+								lanUrl: null,
+								publicUrl: null,
+								mode: "none",
+							}
+						: current,
+			);
+			void queryClient.invalidateQueries({ queryKey: COMPANION_STATUS_KEY });
+		},
+	});
+	const disableTunnelMutation = useMutation({
+		mutationFn: disableCompanionTunnel,
+		onSuccess: (status) => {
+			setPairingCode(null);
 			setStatus(status);
 			void queryClient.invalidateQueries({ queryKey: COMPANION_STATUS_KEY });
 		},
@@ -140,31 +185,19 @@ export function MobileCompanionPanel() {
 		},
 	});
 
-	// Gate on the public URL, not `running`: the server can be up loopback-only
-	// (HELMOR_COMPANION auto-start, or a stable-URL tunnel that failed at launch)
-	// with no tunnel, and pairing needs a public origin. `companion_enable` is
-	// idempotent on the server and just brings the missing tunnel up.
+	const starting =
+		statusQuery.isPending ||
+		enableLanMutation.isPending ||
+		enableTunnelMutation.isPending;
+	const stopping = disableMutation.isPending;
 	useEffect(() => {
-		if (!statusQuery.isSuccess) return;
-		if (publicUrl || enableMutation.isPending || enableMutation.isError) return;
-		enableMutation.mutate();
-	}, [
-		statusQuery.isSuccess,
-		publicUrl,
-		enableMutation.isPending,
-		enableMutation.isError,
-		enableMutation.mutate,
-	]);
-
-	const starting = statusQuery.isPending || enableMutation.isPending;
-	useEffect(() => {
-		if (!publicUrl || starting || pairingCodeMutation.isPending) return;
+		if (!connectionUrl || starting || pairingCodeMutation.isPending) return;
 		if (pairingIsCurrent) return;
 		pairingCodeMutation.mutate({
 			replaceDeviceId: replacePendingDeviceId,
 		});
 	}, [
-		publicUrl,
+		connectionUrl,
 		starting,
 		pairingIsCurrent,
 		replacePendingDeviceId,
@@ -172,16 +205,29 @@ export function MobileCompanionPanel() {
 		pairingCodeMutation.mutate,
 	]);
 
-	const connectDescription = enableMutation.isError
+	const connectDescription = enableLanMutation.isError
 		? "Mobile access could not start."
-		: pairingCodeMutation.isError
-			? "Could not create a pairing code."
-			: !pairing
-				? "Preparing a private link for your device."
-				: hasFixedLink
-					? "Scan with your device's camera. This fixed link survives Helmor restarts."
-					: "Scan with your device's camera. The current temporary link changes after Helmor or the tunnel restarts.";
-	const fixedLinkActionReady = !starting && !enableMutation.isError;
+		: disableMutation.isError
+			? "Mobile access could not stop."
+			: enableTunnelMutation.isError
+				? "Cloudflare tunnel could not start."
+				: disableTunnelMutation.isError
+					? "Cloudflare tunnel could not stop."
+					: pairingCodeMutation.isError
+						? "Could not create a pairing code."
+						: !accessEnabled
+							? "Turn on mobile access to create a LAN pairing link."
+							: !connectionUrl
+								? "Could not find a local network address. Check Wi-Fi or network permissions."
+								: !pairing
+									? "Preparing a private link for your device."
+									: cloudflareEnabled && hasFixedLink
+										? "Scan with your device's camera. This fixed link survives Helmor restarts."
+										: cloudflareEnabled
+											? "Scan with your device's camera. The current temporary link changes after Helmor or the tunnel restarts."
+											: "Scan with your device's camera while the device is on the same Wi-Fi or LAN.";
+	const fixedLinkActionReady =
+		accessEnabled && !starting && !enableTunnelMutation.isError;
 	const fixedLinkSetupState = stableHost
 		? {
 				kind: "fixed" as const,
@@ -202,11 +248,65 @@ export function MobileCompanionPanel() {
 
 	return (
 		<SettingsGroup>
+			<div className="flex items-start justify-between gap-3 py-5">
+				<div className="min-w-0 flex-1">
+					<p className="text-ui font-medium text-foreground">Mobile access</p>
+					<p className="mt-1 text-small leading-snug text-muted-foreground">
+						{accessEnabled
+							? "LAN pairing is available. Cloudflare stays off unless you enable the tunnel below."
+							: "Starts LAN pairing for devices on the same Wi-Fi or local network."}
+					</p>
+				</div>
+				<Switch
+					checked={accessEnabled}
+					disabled={statusQuery.isPending || starting || stopping}
+					onCheckedChange={(checked) => {
+						if (checked) {
+							enableLanMutation.mutate();
+						} else {
+							disableMutation.mutate();
+						}
+					}}
+				/>
+			</div>
+
+			<div className="flex items-start justify-between gap-3 py-5">
+				<div className="min-w-0 flex-1">
+					<p className="text-ui font-medium text-foreground">
+						Cloudflare tunnel
+					</p>
+					<p className="mt-1 text-small leading-snug text-muted-foreground">
+						{cloudflareEnabled
+							? "Remote access is using Cloudflare. Turn it off to fall back to LAN pairing."
+							: "Optional remote access for devices outside your local network."}
+					</p>
+				</div>
+				<Switch
+					checked={cloudflareEnabled}
+					disabled={
+						!accessEnabled ||
+						statusQuery.isPending ||
+						enableTunnelMutation.isPending ||
+						disableTunnelMutation.isPending
+					}
+					onCheckedChange={(checked) => {
+						if (checked) {
+							enableTunnelMutation.mutate();
+						} else {
+							disableTunnelMutation.mutate();
+						}
+					}}
+				/>
+			</div>
+
 			<ConnectPhoneSection
-				canRefresh={Boolean(publicUrl)}
+				canRefresh={Boolean(connectionUrl)}
 				connectDescription={connectDescription}
 				copied={copied}
-				isMobileAccessError={enableMutation.isError}
+				isMobileAccessEnabled={accessEnabled}
+				isMobileAccessError={
+					enableLanMutation.isError || enableTunnelMutation.isError
+				}
 				isPreparing={starting}
 				isRefreshing={pairingCodeMutation.isPending}
 				pairedDevicesList={
@@ -229,7 +329,7 @@ export function MobileCompanionPanel() {
 						replaceDeviceId: replacePendingDeviceId,
 					})
 				}
-				onRetryMobileAccess={() => enableMutation.mutate()}
+				onRetryMobileAccess={() => enableLanMutation.mutate()}
 			/>
 
 			<FixedLinkSetup
@@ -248,9 +348,24 @@ export function MobileCompanionPanel() {
 				onSignOutCloudflare={() => signOutMutation.mutate()}
 			/>
 
-			{enableMutation.isError ? (
+			{enableLanMutation.isError ? (
 				<p className="py-2 text-small text-destructive">
-					{errorText(enableMutation.error)}
+					{errorText(enableLanMutation.error)}
+				</p>
+			) : null}
+			{disableMutation.isError ? (
+				<p className="py-2 text-small text-destructive">
+					{errorText(disableMutation.error)}
+				</p>
+			) : null}
+			{enableTunnelMutation.isError ? (
+				<p className="py-2 text-small text-destructive">
+					{errorText(enableTunnelMutation.error)}
+				</p>
+			) : null}
+			{disableTunnelMutation.isError ? (
+				<p className="py-2 text-small text-destructive">
+					{errorText(disableTunnelMutation.error)}
 				</p>
 			) : null}
 			{pairingCodeMutation.isError ? (

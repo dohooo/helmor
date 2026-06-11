@@ -4568,6 +4568,8 @@ export type CompanionStatus = {
 	running: boolean;
 	/** Loopback address the server is bound to (`127.0.0.1:<port>`). */
 	addr: string | null;
+	/** LAN URL for same-network devices, when a local interface is available. */
+	lanUrl: string | null;
 	/** Public tunnel URL, when a tunnel is up. */
 	publicUrl: string | null;
 	/** `"named"` (stable URL), `"quick"` (ephemeral), or `"none"`. */
@@ -4587,7 +4589,9 @@ export type CompanionPairingPayload = {
 	label: string;
 	/** Plaintext pending PAT — shown once, never persisted in plaintext. */
 	pat: string;
-	/** Full pairing URL to encode as a QR: `<origin>/#pair=<pat>`. */
+	/** Connection URL that the mobile WebView opens after pairing. */
+	baseUrl: string;
+	/** Deep-link pairing URL to encode as a QR. */
 	url: string;
 };
 
@@ -4603,6 +4607,16 @@ export async function getCompanionStatus(): Promise<CompanionStatus> {
 	return invoke<CompanionStatus>("companion_status");
 }
 
+export async function enableLanCompanion(): Promise<CompanionStatus> {
+	try {
+		return await invoke<CompanionStatus>("companion_enable_lan");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to enable LAN mobile access."),
+		);
+	}
+}
+
 export async function enableCompanion(): Promise<CompanionStatus> {
 	try {
 		return await invoke<CompanionStatus>("companion_enable");
@@ -4615,6 +4629,10 @@ export async function enableCompanion(): Promise<CompanionStatus> {
 
 export async function disableCompanion(): Promise<void> {
 	await invoke<void>("companion_disable");
+}
+
+export async function disableCompanionTunnel(): Promise<CompanionStatus> {
+	return invoke<CompanionStatus>("companion_disable_tunnel");
 }
 
 export async function pairCompanionDevice(

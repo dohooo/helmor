@@ -44,6 +44,7 @@ function LinkIconButton({
 export function ConnectPhoneSection({
 	connectDescription,
 	copied,
+	isMobileAccessEnabled,
 	isMobileAccessError,
 	isPreparing,
 	isRefreshing,
@@ -56,6 +57,7 @@ export function ConnectPhoneSection({
 }: {
 	connectDescription: string;
 	copied: boolean;
+	isMobileAccessEnabled: boolean;
 	isMobileAccessError: boolean;
 	isPreparing: boolean;
 	isRefreshing: boolean;
@@ -99,14 +101,15 @@ export function ConnectPhoneSection({
 						{pairing ? (
 							<QRCodeSVG value={pairing.url} size={148} />
 						) : (
-							<span className="text-small text-muted-foreground">
-								Preparing…
+							<span className="text-small text-muted-foreground/80">
+								{isMobileAccessEnabled ? "Preparing…" : "Off"}
 							</span>
 						)}
 					</div>
 					<div className="flex h-8 min-w-0 items-center gap-1 rounded-md border border-border/40 bg-muted/25 px-2">
 						<span className="min-w-0 flex-1 truncate font-mono text-nano text-muted-foreground">
-							{pairing?.url ?? "Preparing link…"}
+							{pairing?.baseUrl ??
+								(isMobileAccessEnabled ? "Preparing link…" : "Not running")}
 						</span>
 						<LinkIconButton
 							label={copied ? "Copied" : "Copy link"}

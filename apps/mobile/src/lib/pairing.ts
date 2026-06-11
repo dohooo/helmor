@@ -19,6 +19,30 @@ export function parsePairingUrl(
 		return null;
 	}
 
+	if (url.protocol === "helmor:") {
+		const token = url.searchParams.get("pair") ?? url.searchParams.get("token");
+		const baseUrlRaw =
+			url.searchParams.get("baseUrl") ?? url.searchParams.get("url");
+		if (!token?.trim() || !baseUrlRaw?.trim()) return null;
+
+		let baseUrl: URL;
+		try {
+			baseUrl = new URL(baseUrlRaw);
+		} catch {
+			return null;
+		}
+		if (baseUrl.protocol !== "https:" && baseUrl.protocol !== "http:") {
+			return null;
+		}
+
+		return {
+			baseUrl: baseUrl.origin,
+			token: token.trim(),
+			pairedAt: now().toISOString(),
+			originalUrl: url.toString(),
+		};
+	}
+
 	if (url.protocol !== "https:" && url.protocol !== "http:") return null;
 
 	const token =

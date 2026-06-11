@@ -1,14 +1,14 @@
 //! Mobile browser companion.
 //!
-//! A localhost-bound axum server that mirrors the Tauri IPC surface over
+//! A LAN-reachable axum server that mirrors the Tauri IPC surface over
 //! HTTP/SSE so the SAME responsive frontend can be served to — and driven
-//! from — a phone browser over a public tunnel (Cloudflare). This keeps the
-//! desktop and mobile experiences on a single codebase: the frontend's
+//! from — a phone browser over the local network or a public tunnel
+//! (Cloudflare). This keeps the desktop and mobile experiences on a single codebase: the frontend's
 //! `invoke()` / `Channel` / `listen` primitives are re-pointed at HTTP in
 //! `src/lib/ipc.ts` when the page is served by this server.
 //!
 //! ## Slice 0 scope (this module today)
-//! - Server lifecycle (`start` / `shutdown`), bound to `127.0.0.1:0`.
+//! - Server lifecycle (`start` / `shutdown`), bound to `0.0.0.0:0`.
 //! - Bearer-token auth (in-memory dev token; the SHA-256 `paired_devices`
 //!   table + rotating pairing codes land in a later slice).
 //! - `GET /v1/health`, a generic `POST /rpc/{cmd}` dispatcher for pure read
@@ -36,7 +36,7 @@ pub use tunnel::{
     sign_out_cloudflare, TunnelState,
 };
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
@@ -69,24 +69,33 @@ pub fn paired_device_verifier(app: tauri::AppHandle) -> Verifier {
     })
 }
 
-/// Bring the companion fully up: start the loopback server, then a public
+/// Start the companion HTTP server without starting a public tunnel. This is
+/// the LAN path used by Settings → Mobile companion when Cloudflare is off.
+pub async fn start_local(
+    app: tauri::AppHandle,
+    companion: &CompanionState,
+) -> Result<CompanionInfo> {
+    let streamer = build_stream_starter(app.clone());
+    let dispatcher = build_dispatcher(app.clone());
+    let verifier = paired_device_verifier(app.clone());
+    let event_starter = build_event_stream_starter(app.clone());
+    companion
+        .start(app, streamer, dispatcher, verifier, event_starter)
+        .await
+}
+
+/// Bring the companion fully up: start the LAN server, then a public
 /// tunnel — **named** (stable `remote-*.helmor.ai`) when a stable URL has been
 /// provisioned, otherwise a **quick** ephemeral tunnel. Idempotent on the
 /// server; replaces any running tunnel. Shared by the `companion_enable`
-/// command and launch-time auto-start. Concrete `AppHandle` (Wry) because the
-/// streaming bridge is Wry-specific; both callers are on the real runtime.
+/// command. Concrete `AppHandle` (Wry) because the streaming bridge is
+/// Wry-specific; callers are on the real runtime.
 pub async fn start_with_tunnel(
     app: tauri::AppHandle,
     companion: &CompanionState,
     tunnel: &TunnelState,
 ) -> Result<()> {
-    let streamer = build_stream_starter(app.clone());
-    let dispatcher = build_dispatcher(app.clone());
-    let verifier = paired_device_verifier(app.clone());
-    let event_starter = build_event_stream_starter(app.clone());
-    let info = companion
-        .start(app, streamer, dispatcher, verifier, event_starter)
-        .await?;
+    let info = start_local(app, companion).await?;
     let port = info.addr.port();
 
     let provisioning = tauri::async_runtime::spawn_blocking(stable_url::load)
@@ -181,8 +190,9 @@ impl CompanionState {
         };
         let router = server::router(state);
 
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
-        let addr = listener.local_addr()?;
+        let listener = tokio::net::TcpListener::bind(("0.0.0.0", 0)).await?;
+        let bind_addr = listener.local_addr()?;
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), bind_addr.port());
 
         let (tx, rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
@@ -194,7 +204,7 @@ impl CompanionState {
             }
         });
 
-        tracing::info!(%addr, "companion server listening on loopback");
+        tracing::info!(%addr, bind = %bind_addr, "companion server listening on LAN and loopback");
         *guard = Some(Running {
             addr,
             token: token.clone(),

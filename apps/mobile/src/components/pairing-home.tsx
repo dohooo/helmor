@@ -1,16 +1,33 @@
-import { StyleSheet, Text, View } from "react-native";
+import { useCallback, useState } from "react";
+import { StyleSheet, Text, TextInput, View } from "react-native";
 
 import { useThemedStyles } from "../lib/use-themed-styles";
-import type { HelmorTheme } from "../theme";
+import { type HelmorTheme, useHelmorTheme } from "../theme";
 import { PrimaryButton } from "./primary-button";
 
 type PairingHomeProps = {
 	onOpenScanner: () => void;
+	onSubmitLink: (value: string) => void;
+	busy: boolean;
 	error: string | null;
 };
 
-export function PairingHome({ onOpenScanner, error }: PairingHomeProps) {
+export function PairingHome({
+	onOpenScanner,
+	onSubmitLink,
+	busy,
+	error,
+}: PairingHomeProps) {
+	const theme = useHelmorTheme();
 	const styles = useThemedStyles(createStyles);
+	const [manualLink, setManualLink] = useState("");
+	const trimmedLink = manualLink.trim();
+	const canSubmitLink = trimmedLink.length > 0 && !busy;
+
+	const handleSubmitLink = useCallback(() => {
+		if (!canSubmitLink) return;
+		onSubmitLink(trimmedLink);
+	}, [canSubmitLink, onSubmitLink, trimmedLink]);
 
 	return (
 		<View style={styles.container}>
@@ -40,7 +57,39 @@ export function PairingHome({ onOpenScanner, error }: PairingHomeProps) {
 				</Text>
 			) : null}
 
-			<PrimaryButton label="Scan pairing code" onPress={onOpenScanner} />
+			<View style={styles.actions}>
+				<PrimaryButton
+					disabled={busy}
+					label="Scan pairing code"
+					onPress={onOpenScanner}
+				/>
+
+				<View style={styles.manual}>
+					<Text style={styles.manualLabel}>Pairing link</Text>
+					<TextInput
+						autoCapitalize="none"
+						autoCorrect={false}
+						editable={!busy}
+						keyboardType="url"
+						onChangeText={setManualLink}
+						onSubmitEditing={handleSubmitLink}
+						placeholder="helmor://pair?baseUrl=..."
+						placeholderTextColor={theme.colors.textSubtle}
+						returnKeyType="go"
+						selectTextOnFocus
+						style={styles.input}
+						textContentType="URL"
+						value={manualLink}
+					/>
+					<PrimaryButton
+						disabled={!canSubmitLink}
+						label="Connect with link"
+						loading={busy}
+						onPress={handleSubmitLink}
+						tone="secondary"
+					/>
+				</View>
+			</View>
 		</View>
 	);
 }
@@ -126,6 +175,29 @@ function createStyles(theme: HelmorTheme) {
 			lineHeight: 20,
 			marginBottom: theme.spacing.md,
 			textAlign: "center",
+		},
+		actions: {
+			gap: theme.spacing.md,
+		},
+		manual: {
+			gap: theme.spacing.sm,
+		},
+		manualLabel: {
+			color: theme.colors.textMuted,
+			fontSize: theme.text.ui,
+			fontWeight: "700",
+			letterSpacing: 0,
+		},
+		input: {
+			backgroundColor: theme.colors.surface,
+			borderColor: theme.colors.border,
+			borderRadius: theme.radii.md,
+			borderWidth: 1,
+			color: theme.colors.text,
+			fontSize: theme.text.body,
+			minHeight: 46,
+			paddingHorizontal: 12,
+			paddingVertical: 10,
 		},
 	});
 }

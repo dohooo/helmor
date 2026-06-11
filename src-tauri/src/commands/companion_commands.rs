@@ -2,9 +2,12 @@
 //!
 //! These wire the UI to the companion server (`crate::companion`), the
 //! cloudflared tunnel (quick or named/stable), and the `paired_devices` store.
-//! Enabling starts a loopback server plus a tunnel; pairing mints a per-device
-//! PAT and returns the QR payload the phone scans; the stable-URL commands
-//! provision a permanent `remote-*.helmor.ai` hostname.
+//! LAN access starts the local server only; the Cloudflare tunnel is a separate
+//! explicit action. Pairing mints a per-device PAT and returns the QR payload
+//! the phone scans; the stable-URL commands provision a permanent
+//! `remote-*.helmor.ai` hostname.
+
+use std::net::{IpAddr, UdpSocket};
 
 use serde::Serialize;
 use tauri::{AppHandle, State};
@@ -22,6 +25,8 @@ pub struct CompanionStatus {
     pub running: bool,
     /// Loopback address the server is bound to (`127.0.0.1:<port>`).
     pub addr: Option<String>,
+    /// LAN URL for same-network devices, when a local interface is available.
+    pub lan_url: Option<String>,
     /// Public tunnel URL, when a tunnel is up.
     pub public_url: Option<String>,
     /// `"named"` (stable URL), `"quick"` (ephemeral), or `"none"`.
@@ -41,8 +46,39 @@ pub struct PairingPayload {
     pub label: String,
     /// Plaintext PAT — shown once, never persisted in plaintext.
     pub pat: String,
-    /// Full pairing URL to encode as a QR: `<origin>/#pair=<pat>`.
+    /// Connection URL that the mobile WebView opens after pairing.
+    pub base_url: String,
+    /// Deep-link pairing URL to encode as a QR.
     pub url: String,
+}
+
+fn local_lan_ip() -> Option<IpAddr> {
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    let ip = socket.local_addr().ok()?.ip();
+    if ip.is_loopback() || ip.is_unspecified() {
+        return None;
+    }
+    Some(ip)
+}
+
+fn format_host(ip: IpAddr) -> String {
+    match ip {
+        IpAddr::V4(v4) => v4.to_string(),
+        IpAddr::V6(v6) => format!("[{v6}]"),
+    }
+}
+
+fn lan_url_for(info: &companion::CompanionInfo) -> Option<String> {
+    local_lan_ip().map(|ip| format!("http://{}:{}", format_host(ip), info.addr.port()))
+}
+
+fn pairing_deep_link(base_url: &str, token: &str) -> String {
+    let mut url = url::Url::parse("helmor://pair").expect("static deep link is valid");
+    url.query_pairs_mut()
+        .append_pair("baseUrl", base_url)
+        .append_pair("token", token);
+    url.to_string()
 }
 
 async fn build_status(
@@ -59,7 +95,8 @@ async fn build_status(
     };
     Ok(CompanionStatus {
         running: info.is_some(),
-        addr: info.map(|i| i.addr.to_string()),
+        addr: info.as_ref().map(|i| i.addr.to_string()),
+        lan_url: info.as_ref().and_then(lan_url_for),
         public_url,
         mode: mode.to_string(),
         stable_host,
@@ -76,7 +113,18 @@ pub async fn companion_status(
     build_status(&companion, &tunnel).await
 }
 
-/// Start the loopback server + a tunnel (named when a stable URL is
+/// Start the LAN-reachable companion server without starting Cloudflare.
+#[tauri::command]
+pub async fn companion_enable_lan(
+    app: AppHandle,
+    companion: State<'_, CompanionState>,
+    tunnel: State<'_, TunnelState>,
+) -> CmdResult<CompanionStatus> {
+    companion::start_local(app, &companion).await?;
+    build_status(&companion, &tunnel).await
+}
+
+/// Start the local server + a tunnel (named when a stable URL is
 /// provisioned, else quick). All-or-nothing: rolls back on failure.
 #[tauri::command]
 pub async fn companion_enable(
@@ -93,7 +141,7 @@ pub async fn companion_enable(
 }
 
 /// Stop the tunnel and the companion server (leaves any stable-URL
-/// provisioning intact — it auto-starts again on next launch).
+/// provisioning intact; the user can start it again from Settings).
 #[tauri::command]
 pub async fn companion_disable(
     companion: State<'_, CompanionState>,
@@ -102,6 +150,16 @@ pub async fn companion_disable(
     tunnel.shutdown();
     companion.shutdown().await;
     Ok(())
+}
+
+/// Stop only the Cloudflare tunnel, leaving LAN access running.
+#[tauri::command]
+pub async fn companion_disable_tunnel(
+    companion: State<'_, CompanionState>,
+    tunnel: State<'_, TunnelState>,
+) -> CmdResult<CompanionStatus> {
+    tunnel.shutdown();
+    build_status(&companion, &tunnel).await
 }
 
 /// Open the Cloudflare sign-in flow (browser). One-time; writes `cert.pem`.
@@ -201,11 +259,13 @@ pub async fn companion_pair_device(
     tunnel: State<'_, TunnelState>,
 ) -> CmdResult<PairingPayload> {
     // The phone needs a reachable origin. Prefer the public tunnel URL; fall
-    // back to the loopback addr (only useful for same-machine browser testing).
+    // back to the LAN URL for same-network pairing.
     let origin = match tunnel.public_url() {
         Some(url) => url,
         None => match companion.info().await {
-            Some(info) => format!("http://{}", info.addr),
+            Some(info) => lan_url_for(&info).ok_or_else(|| {
+                anyhow::anyhow!("could not find a local network address for pairing")
+            })?,
             None => {
                 return Err(anyhow::anyhow!("enable the companion before pairing a device").into())
             }
@@ -220,11 +280,12 @@ pub async fn companion_pair_device(
     })
     .await?;
 
-    let url = format!("{}/#pair={}", origin.trim_end_matches('/'), pairing.pat);
+    let url = pairing_deep_link(origin.trim_end_matches('/'), &pairing.pat);
     Ok(PairingPayload {
         device_id: pairing.device_id,
         label: pairing.label,
         pat: pairing.pat,
+        base_url: origin,
         url,
     })
 }

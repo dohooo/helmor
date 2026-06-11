@@ -5,6 +5,11 @@ export type NativeSafeArea = {
 	bottom: number;
 };
 
+export function companionWebViewUrl(pairing: NativePairing): string {
+	const baseUrl = pairing.baseUrl.replace(/[#?].*$/, "").replace(/\/$/, "");
+	return `${baseUrl}/#token=${encodeURIComponent(pairing.token)}`;
+}
+
 export function companionBootstrapScript(
 	pairing: NativePairing,
 	safeArea: NativeSafeArea,
@@ -15,13 +20,130 @@ export function companionBootstrapScript(
 	return `
 (function () {
   var token = ${token};
+  var postDiagnostic = function (level, message, details) {
+    try {
+      if (!window.ReactNativeWebView) return;
+      window.ReactNativeWebView.postMessage(
+        JSON.stringify({
+          type: "helmor:webview-diagnostic",
+          level: level,
+          message: message,
+          details: details || null,
+          href: window.location ? window.location.href : null,
+          readyState: document ? document.readyState : null
+        })
+      );
+    } catch (error) {}
+  };
+  var errorDetails = function (error) {
+    if (!error) return null;
+    return {
+      name: error.name || null,
+      message: error.message ? String(error.message) : String(error),
+      stack: error.stack ? String(error.stack) : null
+    };
+  };
+  var stringifyArg = function (arg) {
+    try {
+      if (typeof arg === "string") return arg;
+      if (arg instanceof Error) return (arg.stack || arg.message || String(arg));
+      return JSON.stringify(arg);
+    } catch (error) {
+      return String(arg);
+    }
+  };
+
+  postDiagnostic("info", "bootstrap:start", {
+    tokenLength: token.length,
+    hasCompanionGlobal: !!window.__HELMOR_COMPANION__
+  });
+
+  try {
+    if (!window.__HELMOR_NATIVE_DIAGNOSTICS__) {
+      window.__HELMOR_NATIVE_DIAGNOSTICS__ = true;
+      var previousOnError = window.onerror;
+      window.onerror = function (message, source, lineno, colno, error) {
+        postDiagnostic("error", "window.onerror", {
+          message: String(message),
+          source: source || null,
+          lineno: lineno || null,
+          colno: colno || null,
+          error: errorDetails(error)
+        });
+        if (typeof previousOnError === "function") {
+          return previousOnError.apply(this, arguments);
+        }
+        return false;
+      };
+      window.addEventListener("unhandledrejection", function (event) {
+        postDiagnostic("error", "unhandledrejection", {
+          reason: errorDetails(event.reason) || stringifyArg(event.reason)
+        });
+      });
+      ["log", "warn", "error"].forEach(function (level) {
+        var original = console[level];
+        if (typeof original !== "function") return;
+        console[level] = function () {
+          try {
+            postDiagnostic(level === "log" ? "info" : level, "console." + level, {
+              args: Array.prototype.slice.call(arguments).map(stringifyArg)
+            });
+          } catch (error) {}
+          return original.apply(console, arguments);
+        };
+      });
+      document.addEventListener("DOMContentLoaded", function () {
+        try {
+          postDiagnostic("info", "dom:content-loaded", {
+            rootExists: !!document.getElementById("root"),
+            bodyTextLength: document.body && document.body.innerText
+              ? document.body.innerText.length
+              : 0
+          });
+        } catch (error) {}
+      });
+      window.addEventListener("load", function () {
+        try {
+          postDiagnostic("info", "window:load", {
+            rootChildCount: document.getElementById("root")
+              ? document.getElementById("root").childNodes.length
+              : null
+          });
+        } catch (error) {}
+      });
+    }
+  } catch (error) {
+    postDiagnostic("error", "diagnostics-install-failed", errorDetails(error));
+  }
+
+  try {
+    var companion = window.__HELMOR_COMPANION__ || {};
+    companion.token = token;
+    window.__HELMOR_COMPANION__ = companion;
+    postDiagnostic("info", "bootstrap:companion-global-ready", {
+      hasToken: !!window.__HELMOR_COMPANION__.token
+    });
+  } catch (error) {
+    postDiagnostic("error", "bootstrap:companion-global-failed", errorDetails(error));
+  }
+
   try {
     window.localStorage.setItem("helmor.companion.pat", token);
-  } catch (error) {}
+    postDiagnostic("info", "bootstrap:local-storage-ready", {
+      hasToken: window.localStorage.getItem("helmor.companion.pat") === token
+    });
+  } catch (error) {
+    postDiagnostic("error", "bootstrap:local-storage-failed", errorDetails(error));
+  }
 
   try {
     document.cookie = "helmor_companion_pat=" + token + "; path=/; SameSite=Strict";
-  } catch (error) {}
+    postDiagnostic("info", "bootstrap:cookie-written", {
+      hasCookie: document.cookie.indexOf("helmor_companion_pat=") !== -1
+    });
+  } catch (error) {
+    postDiagnostic("error", "bootstrap:cookie-failed", errorDetails(error));
+  }
 
   try {
     var viewport = document.querySelector('meta[name="viewport"]');
@@ -38,7 +160,10 @@ export function companionBootstrapScript(
     document.documentElement.style.overscrollBehavior = "none";
     if (document.body) document.body.style.overscrollBehavior = "none";
     ${nativeSafeAreaScript}
-  } catch (error) {}
+    postDiagnostic("info", "bootstrap:viewport-ready", {});
+  } catch (error) {
+    postDiagnostic("error", "bootstrap:viewport-failed", errorDetails(error));
+  }
 
   try {
     if (!window.__HELMOR_NATIVE_THEME_OBSERVER__) {
@@ -88,13 +213,21 @@ export function companionBootstrapScript(
 
       sendBackgroundColor();
       window.addEventListener("load", sendBackgroundColor);
-      window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", sendBackgroundColor);
+      var media = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+      if (media && typeof media.addEventListener === "function") {
+        media.addEventListener("change", sendBackgroundColor);
+      } else if (media && typeof media.addListener === "function") {
+        media.addListener(sendBackgroundColor);
+      }
       new MutationObserver(sendBackgroundColor).observe(document.documentElement, {
         attributes: true,
         attributeFilter: ["class", "style"],
       });
+      postDiagnostic("info", "bootstrap:theme-observer-ready", {});
     }
-  } catch (error) {}
+  } catch (error) {
+    postDiagnostic("error", "bootstrap:theme-observer-failed", errorDetails(error));
+  }
 })();
 true;
 `;

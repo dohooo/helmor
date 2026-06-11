@@ -12,6 +12,7 @@ import {
 	type ResolvedComposerInsertRequest,
 	resolveComposerInsertTarget,
 } from "@/lib/composer-insert";
+import { listen } from "@/lib/ipc";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
@@ -151,18 +152,16 @@ export function usePendingQueueController(
 	useEffect(() => {
 		let unlisten: (() => void) | undefined;
 
-		void import("@tauri-apps/api/event").then(({ listen }) => {
-			void listen("tauri://focus", async () => {
-				// Smart fetch: refresh target branch for the active workspace so
-				// file tree diffs stay current after the user returns.
-				const wsId = getActiveWorkspaceIdRef.current();
-				if (wsId) {
-					triggerWorkspaceFetch(wsId);
-				}
-				await processPendingCliSends();
-			}).then((fn) => {
-				unlisten = fn;
-			});
+		void listen("tauri://focus", async () => {
+			// Smart fetch: refresh target branch for the active workspace so
+			// file tree diffs stay current after the user returns.
+			const wsId = getActiveWorkspaceIdRef.current();
+			if (wsId) {
+				triggerWorkspaceFetch(wsId);
+			}
+			await processPendingCliSends();
+		}).then((fn) => {
+			unlisten = fn;
 		});
 
 		return () => {

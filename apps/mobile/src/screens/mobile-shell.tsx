@@ -1,3 +1,4 @@
+import * as Linking from "expo-linking";
 import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -11,6 +12,8 @@ import { clearPairing, loadPairing, savePairing } from "../lib/pairing-store";
 import { useThemedStyles } from "../lib/use-themed-styles";
 import type { HelmorTheme } from "../theme";
 import { useHelmorTheme } from "../theme";
+
+const LOG_PREFIX = "[helmor-mobile:pairing]";
 
 export function MobileShell() {
 	const theme = useHelmorTheme();
@@ -27,9 +30,50 @@ export function MobileShell() {
 
 		loadPairing()
 			.then((saved) => {
-				if (alive) setPairing(saved);
+				logPairing("stored-pairing-loaded", {
+					hasPairing: !!saved,
+					baseUrl: saved?.baseUrl ?? null,
+					token: saved ? tokenSummary(saved.token) : null,
+				});
+				if (!saved) return;
+				return validatePairing(saved, 5_000)
+					.then(() => {
+						logPairing("stored-pairing-validated", {
+							baseUrl: saved.baseUrl,
+						});
+						if (alive) setPairing(saved);
+					})
+					.catch((validationError) => {
+						logPairing(
+							"stored-pairing-validation-failed",
+							{
+								baseUrl: saved.baseUrl,
+								message:
+									validationError instanceof Error
+										? validationError.message
+										: String(validationError),
+							},
+							"warn",
+						);
+						void clearPairing();
+						if (alive) {
+							setError(
+								"Saved Helmor link is no longer reachable. Paste a fresh pairing link from the desktop app.",
+							);
+						}
+					});
 			})
-			.catch(() => {
+			.catch((loadError) => {
+				logPairing(
+					"stored-pairing-load-failed",
+					{
+						message:
+							loadError instanceof Error
+								? loadError.message
+								: String(loadError),
+					},
+					"warn",
+				);
 				if (alive) setError("Stored pairing could not be restored.");
 			})
 			.finally(() => {
@@ -41,28 +85,85 @@ export function MobileShell() {
 		};
 	}, []);
 
-	const handleScan = useCallback(async (raw: string) => {
-		setPairingBusy(true);
-		setError(null);
+	const handlePairingInput = useCallback(
+		async (raw: string, invalidMessage: string) => {
+			setPairingBusy(true);
+			setError(null);
 
-		try {
-			const parsed = parsePairingUrl(raw);
-			if (!parsed) {
-				throw new Error("This QR code is not a Helmor pairing code.");
+			try {
+				const parsed = parsePairingUrl(raw);
+				if (!parsed) {
+					logPairing("input-parse-failed", {
+						rawLength: raw.length,
+						prefix: raw.slice(0, 32),
+					});
+					throw new Error(invalidMessage);
+				}
+
+				logPairing("input-parsed", {
+					baseUrl: parsed.baseUrl,
+					originalScheme: parsed.originalUrl.split(":")[0],
+					token: tokenSummary(parsed.token),
+				});
+				await validatePairing(parsed);
+				logPairing("input-validated", { baseUrl: parsed.baseUrl });
+				await savePairing(parsed);
+				logPairing("input-saved", { baseUrl: parsed.baseUrl });
+				setPairing(parsed);
+				setScannerOpen(false);
+			} catch (scanError) {
+				logPairing(
+					"input-failed",
+					{
+						message:
+							scanError instanceof Error
+								? scanError.message
+								: String(scanError),
+					},
+					"warn",
+				);
+				setError(
+					scanError instanceof Error ? scanError.message : "Pairing failed.",
+				);
+			} finally {
+				setPairingBusy(false);
 			}
+		},
+		[],
+	);
 
-			await validatePairing(parsed);
-			await savePairing(parsed);
-			setPairing(parsed);
-			setScannerOpen(false);
-		} catch (scanError) {
-			setError(
-				scanError instanceof Error ? scanError.message : "Pairing failed.",
-			);
-		} finally {
-			setPairingBusy(false);
-		}
-	}, []);
+	const handleScan = useCallback(
+		(raw: string) =>
+			handlePairingInput(raw, "This QR code is not a Helmor pairing code."),
+		[handlePairingInput],
+	);
+
+	const handleManualPairing = useCallback(
+		(raw: string) =>
+			handlePairingInput(raw, "This is not a Helmor pairing link."),
+		[handlePairingInput],
+	);
+
+	useEffect(() => {
+		let alive = true;
+
+		Linking.getInitialURL()
+			.then((url) => {
+				if (alive && url) void handleManualPairing(url);
+			})
+			.catch(() => {
+				if (alive) setError("Pairing link could not be opened.");
+			});
+
+		const subscription = Linking.addEventListener("url", ({ url }) => {
+			void handleManualPairing(url);
+		});
+
+		return () => {
+			alive = false;
+			subscription.remove();
+		};
+	}, [handleManualPairing]);
 
 	const handleForget = useCallback(() => {
 		void clearPairing();
@@ -99,11 +200,13 @@ export function MobileShell() {
 			]}
 		>
 			<PairingHome
+				busy={pairingBusy}
 				error={!scannerOpen ? error : null}
 				onOpenScanner={() => {
 					setError(null);
 					setScannerOpen(true);
 				}}
+				onSubmitLink={handleManualPairing}
 			/>
 			<ScanSheet
 				busy={pairingBusy}
@@ -114,6 +217,19 @@ export function MobileShell() {
 			/>
 		</View>
 	);
+}
+
+function logPairing(
+	message: string,
+	details?: Record<string, unknown> | null,
+	level: "info" | "warn" = "info",
+) {
+	const logger = level === "warn" ? console.warn : console.log;
+	logger(`${LOG_PREFIX} ${message}`, details ?? {});
+}
+
+function tokenSummary(token: string): string {
+	return `${token.length} chars, suffix=${token.slice(-4)}`;
 }
 
 function createStyles(theme: HelmorTheme) {

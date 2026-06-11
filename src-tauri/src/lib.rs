@@ -505,41 +505,9 @@ pub fn run() {
                 });
             }
 
-            // Auto-start the companion when a stable URL has been provisioned,
-            // so a paired phone reconnects at its permanent hostname after a
-            // desktop restart. No-op when the user never allocated one.
-            {
-                let handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    match companion::stable_url::load() {
-                        Ok(Some(record)) => {
-                            let companion_state = handle.state::<companion::CompanionState>();
-                            let tunnel_state = handle.state::<companion::TunnelState>();
-                            match companion::start_with_tunnel(
-                                handle.clone(),
-                                &companion_state,
-                                &tunnel_state,
-                            )
-                            .await
-                            {
-                                Ok(()) => tracing::info!(
-                                    host = %record.hostname,
-                                    "companion stable URL auto-started",
-                                ),
-                                Err(error) => tracing::error!(
-                                    error = %format!("{error:#}"),
-                                    host = %record.hostname,
-                                    "companion stable-url auto-start failed",
-                                ),
-                            }
-                        }
-                        Ok(None) => {}
-                        Err(error) => {
-                            tracing::warn!(error = %error, "failed to read companion stable url")
-                        }
-                    }
-                });
-            }
+            // Stable companion URLs are persisted, but the cloudflared tunnel is
+            // user-controlled from Settings → Mobile companion. Do not auto-start
+            // Cloudflare on launch merely because a stable URL exists.
 
             // On macOS, the default app-menu Quit item goes straight to
             // NSApplication.terminate:, which bypasses our event loop.
@@ -773,8 +741,10 @@ pub fn run() {
             commands::slack_commands::slack_list_emoji,
             commands::slack_commands::slack_prepare_thread_context,
             commands::companion_commands::companion_status,
+            commands::companion_commands::companion_enable_lan,
             commands::companion_commands::companion_enable,
             commands::companion_commands::companion_disable,
+            commands::companion_commands::companion_disable_tunnel,
             commands::companion_commands::companion_pair_device,
             commands::companion_commands::companion_list_devices,
             commands::companion_commands::companion_revoke_device,

@@ -10,7 +10,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // `vi.resetModules()` re-evaluates the module-level `COMPANION` const per test.
 describe("companion auth state", () => {
 	const TOKEN_KEY = "helmor.companion.pat";
-	type CompanionWindow = { __HELMOR_COMPANION__?: unknown };
+	type CompanionWindow = {
+		__HELMOR_COMPANION__?: unknown;
+		__HELMOR_NATIVE_APP__?: unknown;
+	};
 
 	beforeEach(() => {
 		vi.resetModules();
@@ -23,7 +26,9 @@ describe("companion auth state", () => {
 	});
 
 	afterEach(() => {
-		(window as unknown as CompanionWindow).__HELMOR_COMPANION__ = undefined;
+		const companionWindow = window as unknown as CompanionWindow;
+		companionWindow.__HELMOR_COMPANION__ = undefined;
+		companionWindow.__HELMOR_NATIVE_APP__ = undefined;
 		vi.unstubAllGlobals();
 		localStorage.clear();
 		sessionStorage.clear();
@@ -33,6 +38,28 @@ describe("companion auth state", () => {
 	it("is unauthed at boot when no pairing token is stored", async () => {
 		const ipc = await import("./ipc");
 		expect(ipc.getCompanionAuthState()).toBe("unauthed");
+	});
+
+	it("installs a crypto.randomUUID fallback in companion browsers", async () => {
+		const originalRandomUUID = crypto.randomUUID;
+		Object.defineProperty(crypto, "randomUUID", {
+			configurable: true,
+			value: undefined,
+		});
+
+		await import("./ipc");
+
+		try {
+			expect(typeof crypto.randomUUID).toBe("function");
+			expect(crypto.randomUUID()).toMatch(
+				/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+			);
+		} finally {
+			Object.defineProperty(crypto, "randomUUID", {
+				configurable: true,
+				value: originalRandomUUID,
+			});
+		}
 	});
 
 	it("stages a scanned #pair= token but keeps it in the URL for Add to Home Screen", async () => {
@@ -46,6 +73,20 @@ describe("companion auth state", () => {
 		// The token stays in the URL so the user can save it to the home screen
 		// before confirming; it's consumed only on confirm.
 		expect(window.location.hash).toContain("pair=hlm_scanned");
+	});
+
+	it("commits a native WebView #token immediately without the browser confirm step", async () => {
+		(window as unknown as CompanionWindow).__HELMOR_NATIVE_APP__ = {
+			platform: "ios",
+		};
+		window.location.hash = "#token=hlm_native";
+
+		const ipc = await import("./ipc");
+
+		expect(ipc.getPendingPairingToken()).toBeNull();
+		expect(localStorage.getItem(TOKEN_KEY)).toBe("hlm_native");
+		expect(window.location.hash).toBe("");
+		expect(ipc.getCompanionAuthState()).toBe("unknown");
 	});
 
 	it("skips confirm and consumes the hash when already paired with that token", async () => {

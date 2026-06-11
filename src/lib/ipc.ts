@@ -62,6 +62,12 @@ function companionConfig(): CompanionGlobal | null {
 	return w.__HELMOR_COMPANION__ ?? null;
 }
 
+function isNativeCompanionWebView(): boolean {
+	if (typeof window === "undefined") return false;
+	const w = window as Window & { __HELMOR_NATIVE_APP__?: unknown };
+	return w.__HELMOR_NATIVE_APP__ !== undefined;
+}
+
 /** True only when this page is served by the companion server in a browser. */
 export function isCompanionClient(): boolean {
 	return !isTauriRuntime() && companionConfig() !== null;
@@ -74,6 +80,7 @@ const COMPANION = isCompanionClient();
 // (`#pair=<token>`). Persist it, then strip it so the secret doesn't linger in
 // history or get shared.
 if (COMPANION && typeof window !== "undefined") {
+	installCompanionCryptoRandomUUIDFallback();
 	stagePairingFromHash();
 	syncCompanionCookie();
 	// A pairing link opened in the *same* tab (e.g. pasted into the address bar)
@@ -86,6 +93,48 @@ if (COMPANION && typeof window !== "undefined") {
 			window.location.reload();
 		}
 	});
+}
+
+function installCompanionCryptoRandomUUIDFallback(): void {
+	if (
+		typeof crypto !== "undefined" &&
+		typeof crypto.randomUUID === "function"
+	) {
+		return;
+	}
+
+	const randomUUID =
+		(): `${string}-${string}-${string}-${string}-${string}` => {
+			const bytes = new Uint8Array(16);
+			if (
+				typeof crypto !== "undefined" &&
+				typeof crypto.getRandomValues === "function"
+			) {
+				crypto.getRandomValues(bytes);
+			} else {
+				for (let index = 0; index < bytes.length; index += 1) {
+					bytes[index] = Math.floor(Math.random() * 256);
+				}
+			}
+			bytes[6] = (bytes[6] & 0x0f) | 0x40;
+			bytes[8] = (bytes[8] & 0x3f) | 0x80;
+			const hex = Array.from(bytes, (byte) =>
+				byte.toString(16).padStart(2, "0"),
+			).join("");
+			return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+		};
+
+	try {
+		if (typeof crypto !== "undefined") {
+			Object.defineProperty(crypto, "randomUUID", {
+				configurable: true,
+				value: randomUUID,
+			});
+		}
+	} catch {
+		// If the host exposes a sealed Crypto object, calls that require
+		// `crypto.randomUUID` will still fail and surface through WebView logs.
+	}
 }
 
 /**
@@ -128,6 +177,15 @@ function stagePairingFromHash(): void {
 	if (!match) return;
 	const token = decodeURIComponent(match[1]);
 	try {
+		if (isNativeCompanionWebView()) {
+			// The React Native shell already parsed and verified the pairing link
+			// before loading this WebView, so there is no extra browser-confirm
+			// step here. Commit immediately and boot the companion app.
+			localStorage.setItem(TOKEN_KEY, token);
+			sessionStorage.removeItem(PENDING_KEY);
+			stripPairingHash();
+			return;
+		}
 		if (localStorage.getItem(TOKEN_KEY) === token) {
 			// Already paired with this exact token — nothing to confirm. Consume
 			// the hash and let the app boot authed from localStorage.

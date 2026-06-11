@@ -4,13 +4,17 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import WebView from "react-native-webview";
 import type {
 	WebViewErrorEvent,
+	WebViewHttpErrorEvent,
 	WebViewMessageEvent,
+	WebViewNavigation,
+	WebViewNavigationEvent,
 } from "react-native-webview/lib/WebViewTypes";
 import type { NativePairing } from "../lib/pairing";
 import { useThemedStyles } from "../lib/use-themed-styles";
 import {
 	companionBootstrapScript,
 	companionNativeSafeAreaScript,
+	companionWebViewUrl,
 } from "../lib/webview-bootstrap";
 import type { HelmorTheme } from "../theme";
 import { useHelmorTheme } from "../theme";
@@ -23,6 +27,7 @@ type CompanionWebViewProps = {
 
 const TOP_SAFE_AREA_COMPRESSION = 12;
 const BOTTOM_SAFE_AREA_COMPRESSION = 12;
+const LOG_PREFIX = "[helmor-mobile:webview]";
 
 export function CompanionWebView({ pairing, onForget }: CompanionWebViewProps) {
 	const theme = useHelmorTheme();
@@ -45,10 +50,19 @@ export function CompanionWebView({ pairing, onForget }: CompanionWebViewProps) {
 		() => companionBootstrapScript(pairing, nativeSafeArea),
 		[pairing, nativeSafeArea],
 	);
+	const sourceUri = useMemo(() => companionWebViewUrl(pairing), [pairing]);
 	const pageBackgroundStyle = useMemo(
 		() => ({ backgroundColor: pageBackgroundColor }),
 		[pageBackgroundColor],
 	);
+
+	useEffect(() => {
+		logWebView("mount", {
+			baseUrl: pairing.baseUrl,
+			sourceUri: sanitizeUrl(sourceUri),
+			token: tokenSummary(pairing.token),
+		});
+	}, [pairing.baseUrl, pairing.token, sourceUri]);
 
 	useEffect(() => {
 		setPageBackgroundColor(theme.colors.bg);
@@ -61,16 +75,62 @@ export function CompanionWebView({ pairing, onForget }: CompanionWebViewProps) {
 	}, [nativeSafeArea]);
 
 	const retry = () => {
+		logWebView("retry", { sourceUri: sanitizeUrl(sourceUri) });
 		setError(null);
 		setIsLoading(true);
 		webViewRef.current?.reload();
 	};
 
 	const handleMessage = (event: WebViewMessageEvent) => {
+		const diagnostic = parseDiagnosticMessage(event.nativeEvent.data);
+		if (diagnostic) {
+			logWebView(diagnostic.message, diagnostic.details, diagnostic.level);
+			return;
+		}
 		const nextBackgroundColor = parseBackgroundColorMessage(
 			event.nativeEvent.data,
 		);
-		if (nextBackgroundColor) setPageBackgroundColor(nextBackgroundColor);
+		if (nextBackgroundColor) {
+			logWebView("background-color", { value: nextBackgroundColor });
+			setPageBackgroundColor(nextBackgroundColor);
+		}
+	};
+
+	const handleLoadStart = (event: WebViewNavigationEvent) => {
+		logWebView("loadStart", navigationSummary(event.nativeEvent));
+		setError(null);
+		setIsLoading(true);
+	};
+
+	const handleLoadEnd = (event: WebViewNavigationEvent | WebViewErrorEvent) => {
+		logWebView("loadEnd", navigationSummary(event.nativeEvent));
+		setIsLoading(false);
+	};
+
+	const handleLoad = (event: WebViewNavigationEvent) => {
+		logWebView("load", navigationSummary(event.nativeEvent));
+	};
+
+	const handleNavigationStateChange = (navigation: WebViewNavigation) => {
+		logWebView("navigationStateChange", navigationSummary(navigation));
+	};
+
+	const handleHttpError = (event: WebViewHttpErrorEvent) => {
+		logWebView(
+			"httpError",
+			{
+				...navigationSummary(event.nativeEvent),
+				statusCode: event.nativeEvent.statusCode,
+				description: event.nativeEvent.description,
+			},
+			"warn",
+		);
+	};
+
+	const handleError = (event: WebViewErrorEvent) => {
+		logWebView("error", navigationSummary(event.nativeEvent), "error");
+		setIsLoading(false);
+		setError(event.nativeEvent.description || "Unable to load Helmor.");
 	};
 
 	return (
@@ -94,18 +154,24 @@ export function CompanionWebView({ pairing, onForget }: CompanionWebViewProps) {
 					injectedJavaScript={bootstrapScript}
 					injectedJavaScriptBeforeContentLoaded={bootstrapScript}
 					javaScriptEnabled
-					onError={(event: WebViewErrorEvent) => {
+					onContentProcessDidTerminate={() => {
+						logWebView(
+							"contentProcessDidTerminate",
+							{ sourceUri: sanitizeUrl(sourceUri) },
+							"error",
+						);
 						setIsLoading(false);
-						setError(event.nativeEvent.description || "Unable to load Helmor.");
+						setError("Helmor WebView process terminated.");
 					}}
-					onLoadEnd={() => setIsLoading(false)}
-					onLoadStart={() => {
-						setError(null);
-						setIsLoading(true);
-					}}
+					onError={handleError}
+					onHttpError={handleHttpError}
+					onLoad={handleLoad}
+					onLoadEnd={handleLoadEnd}
+					onLoadStart={handleLoadStart}
 					onMessage={handleMessage}
+					onNavigationStateChange={handleNavigationStateChange}
 					onShouldStartLoadWithRequest={(request) =>
-						isAllowedNavigation(request.url, pairing.baseUrl)
+						loggedAllowedNavigation(request.url, pairing.baseUrl)
 					}
 					originWhitelist={["http://*", "https://*", "about:*"]}
 					pullToRefreshEnabled={false}
@@ -114,7 +180,7 @@ export function CompanionWebView({ pairing, onForget }: CompanionWebViewProps) {
 					sharedCookiesEnabled
 					showsHorizontalScrollIndicator={false}
 					showsVerticalScrollIndicator={false}
-					source={{ uri: pairing.baseUrl }}
+					source={{ uri: sourceUri }}
 					style={[styles.webView, pageBackgroundStyle]}
 				/>
 
@@ -147,6 +213,99 @@ export function CompanionWebView({ pairing, onForget }: CompanionWebViewProps) {
 			</View>
 		</View>
 	);
+}
+
+function logWebView(
+	message: string,
+	details?: Record<string, unknown> | null,
+	level: "info" | "warn" | "error" = "info",
+) {
+	const logger =
+		level === "error"
+			? console.error
+			: level === "warn"
+				? console.warn
+				: console.log;
+	logger(`${LOG_PREFIX} ${message}`, sanitizeDetails(details ?? {}));
+}
+
+function tokenSummary(token: string): string {
+	return `${token.length} chars, suffix=${token.slice(-4)}`;
+}
+
+function navigationSummary(event: {
+	url?: string;
+	title?: string;
+	loading?: boolean;
+	canGoBack?: boolean;
+	canGoForward?: boolean;
+	code?: number;
+	description?: string;
+}): Record<string, unknown> {
+	return {
+		url: sanitizeUrl(event.url),
+		title: event.title,
+		loading: event.loading,
+		canGoBack: event.canGoBack,
+		canGoForward: event.canGoForward,
+		code: event.code,
+		description: event.description,
+	};
+}
+
+function loggedAllowedNavigation(url: string, baseUrl: string): boolean {
+	const allowed = isAllowedNavigation(url, baseUrl);
+	logWebView("shouldStartLoad", { url: sanitizeUrl(url), baseUrl, allowed });
+	return allowed;
+}
+
+function sanitizeUrl(url: string | undefined): string | undefined {
+	if (!url) return url;
+	return url
+		.replace(/([#?&](?:pair|token)=)[^&#]+/gi, "$1<redacted>")
+		.replace(/([?&]baseUrl=)[^&#]+/gi, "$1<redacted-base-url>");
+}
+
+function sanitizeDetails(value: unknown): unknown {
+	if (typeof value === "string") return sanitizeUrl(value) ?? value;
+	if (!value || typeof value !== "object") return value;
+	if (Array.isArray(value)) return value.map(sanitizeDetails);
+	const result: Record<string, unknown> = {};
+	for (const [key, entry] of Object.entries(value)) {
+		result[key] = sanitizeDetails(entry);
+	}
+	return result;
+}
+
+function parseDiagnosticMessage(data: string): {
+	level: "info" | "warn" | "error";
+	message: string;
+	details: Record<string, unknown> | null;
+} | null {
+	try {
+		const message = JSON.parse(data) as {
+			type?: unknown;
+			level?: unknown;
+			message?: unknown;
+			details?: unknown;
+		};
+		if (message.type !== "helmor:webview-diagnostic") return null;
+		const level =
+			message.level === "warn" || message.level === "error"
+				? message.level
+				: "info";
+		return {
+			level,
+			message:
+				typeof message.message === "string" ? message.message : "diagnostic",
+			details:
+				message.details && typeof message.details === "object"
+					? (message.details as Record<string, unknown>)
+					: null,
+		};
+	} catch {
+		return null;
+	}
 }
 
 function parseBackgroundColorMessage(data: string): string | null {
