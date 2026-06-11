@@ -32,11 +32,13 @@ const COLLAPSED_GROUP_HEIGHT = 24;
 const USER_BUBBLE_VERTICAL_PADDING = 16;
 const USER_BUBBLE_HORIZONTAL_PADDING = 24;
 const USER_BUBBLE_WIDTH_RATIO = 0.75;
-// A user message with more than this many SOURCE lines of typed text renders
-// line-clamped with a "Show more" control (see ChatUserMessage). Exported so
-// the renderer and the estimator share one gate: the estimator prices such a
-// row at the clamped height — expanding happens on a mounted row, where the
-// real measurement takes over, so expansion state never reaches the estimator.
+// A user message taller than this many VISUAL lines renders line-clamped
+// with a "Show more" control (see ChatUserMessage — the browser reports the
+// actual truncation, so wrapped paragraphs count the same as hard newlines).
+// Exported so the renderer's clamp and the estimator share one constant: the
+// estimator prices an over-cap row at the clamped height — expanding happens
+// on a mounted row, where the real measurement takes over, so expansion
+// state never reaches the estimator.
 export const USER_MESSAGE_CLAMP_LINES = 20;
 // The "Show more" control row under the clamped text.
 const USER_CLAMP_CONTROL_HEIGHT = 28;
@@ -469,12 +471,13 @@ function estimateUserMessageHeight(
 			: 0;
 
 	let contentHeight = Math.max(USER_LINE_HEIGHT, textHeight + pastedChipHeight);
-	// Same gate as the renderer: over the source-line limit the bubble
-	// renders clamped to N visual lines plus the Show-more control row.
-	if (text.split("\n").length > USER_MESSAGE_CLAMP_LINES) {
-		contentHeight =
-			Math.min(contentHeight, USER_MESSAGE_CLAMP_LINES * USER_LINE_HEIGHT) +
-			USER_CLAMP_CONTROL_HEIGHT;
+	// Same semantics as the renderer's truncation probe: content taller than
+	// the visual-line cap renders clamped plus the Show-more control row.
+	// `contentHeight` already IS the visual-line height (pretext wraps the
+	// text exactly like the bubble does), so no line counting here either.
+	const clampCapHeight = USER_MESSAGE_CLAMP_LINES * USER_LINE_HEIGHT;
+	if (contentHeight > clampCapHeight) {
+		contentHeight = clampCapHeight + USER_CLAMP_CONTROL_HEIGHT;
 	}
 
 	return (

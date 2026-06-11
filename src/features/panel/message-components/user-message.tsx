@@ -1,4 +1,5 @@
 import { ChevronDown, Tag } from "lucide-react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { FileMentionBadge } from "@/components/file-mention-badge";
 import { InlineBadge } from "@/components/inline-badge";
 import type { MessagePart } from "@/lib/api";
@@ -50,20 +51,46 @@ export function ChatUserMessage({ message }: { message: RenderedMessage }) {
 	const parts = message.content as MessagePart[];
 	const { settings } = useSettings();
 
-	// Long typed messages clamp to the first N visual lines with a
-	// "Show more" control. The gate counts SOURCE lines of the text parts
-	// (the same rule the estimator caps heights with) — pasted tags are
-	// already one-line chips and don't count. Expansion state lives in the
-	// session-scoped provider so it survives a row unmount and resets on
-	// session switch.
-	const sourceLineCount = parts
-		.filter(isTextPart)
-		.map((part) => part.text)
-		.join("\n")
-		.split("\n").length;
-	const clampable = sourceLineCount > USER_MESSAGE_CLAMP_LINES;
+	// Long messages clamp to the first N VISUAL lines with a "Show more"
+	// control. The body always carries the line-clamp while collapsed and the
+	// browser itself reports whether anything was actually cut off
+	// (scrollHeight > clientHeight) — no line counting, no prediction, so a
+	// single unbroken paragraph that wraps to dozens of lines clamps exactly
+	// like one with hard newlines. Width and font changes re-report through
+	// the ResizeObserver. Expansion state lives in the session-scoped
+	// provider so it survives a row unmount and resets on session switch.
 	const { expanded, toggle } = useUserMessageExpansion(message.id);
-	const clamped = clampable && !expanded;
+	const clamped = !expanded;
+	const bodyRef = useRef<HTMLParagraphElement | null>(null);
+	const [truncated, setTruncated] = useState(false);
+	const measureTruncation = useCallback(() => {
+		const el = bodyRef.current;
+		if (!el) return;
+		// +1 absorbs fractional line-height rounding in the integer metrics.
+		setTruncated(el.scrollHeight > el.clientHeight + 1);
+	}, []);
+	// Re-probe synchronously (pre-paint) whenever the clamp toggles, so
+	// collapsing doesn't hide the control for a frame until the
+	// ResizeObserver below catches up.
+	useLayoutEffect(() => {
+		measureTruncation();
+	}, [measureTruncation, clamped]);
+	useLayoutEffect(() => {
+		const el = bodyRef.current;
+		if (!el || typeof ResizeObserver === "undefined") {
+			return;
+		}
+		const observer = new ResizeObserver(() => {
+			measureTruncation();
+		});
+		observer.observe(el);
+		return () => {
+			observer.disconnect();
+		};
+	}, [measureTruncation]);
+	// While expanded nothing is cut off, so `truncated` is false — the
+	// control stays visible as "Show less" via `expanded`.
+	const showClampControl = truncated || expanded;
 
 	return (
 		<div
@@ -77,6 +104,7 @@ export function ChatUserMessage({ message }: { message: RenderedMessage }) {
 					style={{ fontSize: `${settings.chatFontSize}px` }}
 				>
 					<p
+						ref={bodyRef}
 						className="whitespace-pre-wrap break-words"
 						style={
 							clamped
@@ -102,7 +130,7 @@ export function ChatUserMessage({ message }: { message: RenderedMessage }) {
 							return null;
 						})}
 					</p>
-					{clampable && (
+					{showClampControl && (
 						<button
 							type="button"
 							onClick={toggle}

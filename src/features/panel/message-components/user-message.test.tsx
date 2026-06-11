@@ -75,24 +75,52 @@ describe("ChatUserMessage pasted-text tags", () => {
 });
 
 describe("ChatUserMessage line clamp", () => {
-	const lines = (n: number) =>
-		Array.from({ length: n }, (_, i) => `line ${i}`).join("\n");
-
 	function textMessage(text: string): ThreadMessageLike {
 		return makeMessage([{ type: "text", id: "t0", text }]);
 	}
 
-	it("shows no clamp control at or under the line limit", () => {
-		render(<ChatUserMessage message={textMessage(lines(20))} />);
+	// jsdom does no layout, so the truncation probe (scrollHeight >
+	// clientHeight on the clamped body) is driven by stubbed geometry:
+	// "overflowing" content reports a full height taller than the clamped
+	// box, complete content reports them equal. Keyed off the inline clamp
+	// style, exactly like the real browser's clamp behaves.
+	function stubBodyGeometry({ overflowing }: { overflowing: boolean }) {
+		const fullHeight = overflowing ? 980 : 360;
+		Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+			configurable: true,
+			get(this: HTMLElement) {
+				return fullHeight;
+			},
+		});
+		Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+			configurable: true,
+			get(this: HTMLElement) {
+				const clamped = this.style?.webkitLineClamp !== "";
+				return clamped ? Math.min(fullHeight, 560) : fullHeight;
+			},
+		});
+	}
+
+	afterEach(() => {
+		delete (HTMLElement.prototype as { scrollHeight?: unknown }).scrollHeight;
+		delete (HTMLElement.prototype as { clientHeight?: unknown }).clientHeight;
+	});
+
+	it("shows no control when nothing is cut off", () => {
+		stubBodyGeometry({ overflowing: false });
+		render(<ChatUserMessage message={textMessage("short\nmessage")} />);
 		expect(screen.queryByRole("button", { name: /Show more/ })).toBeNull();
 	});
 
-	it("clamps over-limit messages and expands in place via Show more", () => {
-		render(<ChatUserMessage message={textMessage(lines(30))} />);
+	it("clamps cut-off content and expands in place via Show more", () => {
+		stubBodyGeometry({ overflowing: true });
+		render(<ChatUserMessage message={textMessage("an overflowing body")} />);
 
-		// Clamped: the body carries the line-clamp style and the control
-		// shows "Show more".
-		const body = screen.getByText(/line 29/).closest("p") as HTMLElement;
+		// Collapsed: the body carries the line-clamp style and the browser
+		// probe reports a cut-off, so the control shows "Show more".
+		const body = screen
+			.getByText(/an overflowing body/)
+			.closest("p") as HTMLElement;
 		expect(body.style.webkitLineClamp).toBe("20");
 		const control = screen.getByRole("button", { name: /Show more/ });
 		expect(control).toHaveAttribute("aria-expanded", "false");
@@ -102,12 +130,16 @@ describe("ChatUserMessage line clamp", () => {
 		expect(body.style.webkitLineClamp).toBe("");
 		fireEvent.click(screen.getByRole("button", { name: /Show less/ }));
 		expect(body.style.webkitLineClamp).toBe("20");
+		expect(
+			screen.getByRole("button", { name: /Show more/ }),
+		).toBeInTheDocument();
 	});
 
 	it("re-clamps when the provider's session changes", () => {
+		stubBodyGeometry({ overflowing: true });
 		const { rerender } = render(
 			<UserMessageExpansionProvider sessionId="s1">
-				<ChatUserMessage message={textMessage(lines(30))} />
+				<ChatUserMessage message={textMessage("an overflowing body")} />
 			</UserMessageExpansionProvider>,
 		);
 		fireEvent.click(screen.getByRole("button", { name: /Show more/ }));
@@ -117,23 +149,11 @@ describe("ChatUserMessage line clamp", () => {
 
 		rerender(
 			<UserMessageExpansionProvider sessionId="s2">
-				<ChatUserMessage message={textMessage(lines(30))} />
+				<ChatUserMessage message={textMessage("an overflowing body")} />
 			</UserMessageExpansionProvider>,
 		);
 		expect(
 			screen.getByRole("button", { name: /Show more/ }),
 		).toBeInTheDocument();
-	});
-
-	it("does not count a pasted tag toward the clamp gate", () => {
-		render(
-			<ChatUserMessage
-				message={makeMessage([
-					{ type: "text", id: "t0", text: lines(5) },
-					{ type: "pasted-text", id: "p0", text: lines(100) },
-				])}
-			/>,
-		);
-		expect(screen.queryByRole("button", { name: /Show more/ })).toBeNull();
 	});
 });

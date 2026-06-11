@@ -197,10 +197,10 @@ describe("estimateThreadRowHeights", () => {
 		expect(inlined).toBeGreaterThan(giant);
 	});
 
-	// Typed messages over the source-line gate render line-clamped with a
+	// Messages taller than the visual-line cap render line-clamped with a
 	// Show-more control (see ChatUserMessage), so the estimator prices them
-	// at the clamped height — invariant to how far past the gate they go.
-	it("caps over-the-line-gate user messages at the clamped height", () => {
+	// at the clamped height — invariant to how far past the cap they go.
+	it("caps over-the-cap user messages at the clamped height", () => {
 		const lines = (n: number) =>
 			Array.from({ length: n }, (_, i) => `line ${i}`).join("\n");
 
@@ -222,9 +222,35 @@ describe("estimateThreadRowHeights", () => {
 		});
 
 		expect(at300).toBe(at30);
-		// Under the gate the height still tracks the content.
+		// Under the cap the height still tracks the content.
 		expect(at20).toBeGreaterThan(at10);
 		expect(at30).toBeGreaterThan(at20);
+	});
+
+	// The cap is VISUAL lines, not newlines: a single unbroken paragraph that
+	// wraps past the cap prices the same as one full of hard newlines. (This
+	// was the original bug — a newline-free CJK paragraph wrapped to dozens
+	// of lines but never hit a source-line counter.)
+	it("caps a single unbroken paragraph that wraps past the cap", () => {
+		const [wrapped2k] = estimateThreadRowHeights(
+			[makeUserMessage("x".repeat(2000))],
+			{ fontSize: 14, paneWidth: 822 },
+		);
+		const [wrapped8k] = estimateThreadRowHeights(
+			[makeUserMessage("x".repeat(8000))],
+			{ fontSize: 14, paneWidth: 822 },
+		);
+		const [hardLines] = estimateThreadRowHeights(
+			[
+				makeUserMessage(
+					Array.from({ length: 60 }, (_, i) => `line ${i}`).join("\n"),
+				),
+			],
+			{ fontSize: 14, paneWidth: 822 },
+		);
+
+		expect(wrapped8k).toBe(wrapped2k);
+		expect(wrapped2k).toBe(hardLines);
 	});
 });
 
