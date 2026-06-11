@@ -92,6 +92,54 @@ export function ChatUserMessage({ message }: { message: RenderedMessage }) {
 	// control stays visible as "Show less" via `expanded`.
 	const showClampControl = truncated || expanded;
 
+	// "Expand upward": DOM content always grows downward, so pin the clicked
+	// control to its viewport position instead — record its top before the
+	// toggle and offset the scroller by the delta pre-paint. The control (and
+	// everything below it) stays pixel-still while the content unfolds above;
+	// collapse is symmetric. Same anchoring pattern as the load-earlier flow.
+	// At the document edges the browser clamps the offset — there's simply
+	// nothing left to scroll, which is the right degradation.
+	const controlRef = useRef<HTMLButtonElement | null>(null);
+	const pendingToggleAnchorRef = useRef<{
+		scroller: HTMLElement;
+		controlTop: number;
+	} | null>(null);
+	const handleToggleAnchored = useCallback(() => {
+		const control = controlRef.current;
+		const scroller = control?.closest(".conversation-scroll-viewport");
+		if (control && scroller instanceof HTMLElement) {
+			pendingToggleAnchorRef.current = {
+				scroller,
+				controlTop: control.getBoundingClientRect().top,
+			};
+		}
+		if (expanded) {
+			// Collapsing re-truncates (it was truncated before expanding —
+			// that's why the control exists). Set it optimistically in the
+			// same commit so the control never leaves the tree and the anchor
+			// effect below can measure it. The truncation probe re-runs after
+			// the commit anyway and corrects the rare case where it no longer
+			// truncates (e.g. the pane got wider while expanded).
+			setTruncated(true);
+		}
+		toggle();
+	}, [toggle, expanded]);
+	useLayoutEffect(() => {
+		const anchor = pendingToggleAnchorRef.current;
+		if (!anchor) {
+			return;
+		}
+		pendingToggleAnchorRef.current = null;
+		const control = controlRef.current;
+		if (!control) {
+			return;
+		}
+		const delta = control.getBoundingClientRect().top - anchor.controlTop;
+		if (delta !== 0) {
+			anchor.scroller.scrollTop += delta;
+		}
+	}, [expanded]);
+
 	return (
 		<div
 			data-message-id={message.id}
@@ -132,8 +180,9 @@ export function ChatUserMessage({ message }: { message: RenderedMessage }) {
 					</p>
 					{showClampControl && (
 						<button
+							ref={controlRef}
 							type="button"
-							onClick={toggle}
+							onClick={handleToggleAnchored}
 							aria-expanded={expanded}
 							className="mt-1 flex cursor-pointer items-center gap-1 text-muted-foreground transition-colors hover:text-foreground"
 						>

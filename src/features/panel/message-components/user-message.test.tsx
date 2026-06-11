@@ -156,4 +156,54 @@ describe("ChatUserMessage line clamp", () => {
 			screen.getByRole("button", { name: /Show more/ }),
 		).toBeInTheDocument();
 	});
+
+	it("pins the control's viewport position across expand and collapse", () => {
+		stubBodyGeometry({ overflowing: true });
+		// The anchor reads the control's rect before and after the toggle and
+		// offsets the scroller by the delta. Stub the rect off the control's
+		// own expanded state: collapsed → top 200, expanded → top 700 (the
+		// body above it grew by 500px).
+		Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", {
+			configurable: true,
+			value(this: HTMLElement) {
+				const top = this.getAttribute("aria-expanded") === "true" ? 700 : 200;
+				return {
+					top,
+					y: top,
+					left: 0,
+					x: 0,
+					right: 0,
+					bottom: 0,
+					width: 0,
+					height: 0,
+					toJSON: () => ({}),
+				} as DOMRect;
+			},
+		});
+		try {
+			render(
+				<div className="conversation-scroll-viewport">
+					<ChatUserMessage message={textMessage("an overflowing body")} />
+				</div>,
+			);
+			const scroller = document.querySelector(
+				".conversation-scroll-viewport",
+			) as HTMLElement;
+			scroller.scrollTop = 1000;
+
+			// Expand: the control's document position moved down 500px, so the
+			// scroller follows — the control stays put in the viewport and the
+			// content visually unfolds upward.
+			fireEvent.click(screen.getByRole("button", { name: /Show more/ }));
+			expect(scroller.scrollTop).toBe(1500);
+
+			// Collapse: symmetric.
+			fireEvent.click(screen.getByRole("button", { name: /Show less/ }));
+			expect(scroller.scrollTop).toBe(1000);
+		} finally {
+			// Removes the prototype shadow, restoring jsdom's implementation.
+			delete (HTMLElement.prototype as { getBoundingClientRect?: unknown })
+				.getBoundingClientRect;
+		}
+	});
 });
