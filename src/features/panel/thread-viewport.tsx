@@ -1220,16 +1220,16 @@ function ConversationBottomSpacer() {
 }
 
 function StreamingFooter({ startTime }: { startTime: number }) {
-	const [elapsed, setElapsed] = useState(() =>
-		Math.floor((Date.now() - startTime) / 1000),
-	);
+	// Derive elapsed from a ticking clock so a startTime change (e.g. workspace
+	// switch) reflects immediately instead of waiting for the next tick.
+	const [now, setNow] = useState(() => Date.now());
 
 	useEffect(() => {
-		const intervalId = window.setInterval(() => {
-			setElapsed(Math.floor((Date.now() - startTime) / 1000));
-		}, 1000);
+		const intervalId = window.setInterval(() => setNow(Date.now()), 1000);
 		return () => window.clearInterval(intervalId);
-	}, [startTime]);
+	}, []);
+
+	const elapsed = Math.max(0, Math.floor((now - startTime) / 1000));
 
 	const display =
 		elapsed < 60

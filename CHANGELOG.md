@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.34.1
+
+### Patch Changes
+
+- [#780](https://github.com/dohooo/helmor/pull/780) [`1ceadbf`](https://github.com/dohooo/helmor/commit/1ceadbf1f945c1ca056ca8cb54dbadff5a07b2a5) Thanks [@natllian](https://github.com/natllian)! - Fix Claude streaming render glitches introduced by the claude-code 2.1.170 upgrade:
+
+  - Thinking phases no longer render as a run of duplicated "Thought for Ns" chips — split thinking segments now merge into one chip with the real total duration.
+  - Edits no longer leave phantom "+0 -0" cards spinning forever after the turn has finished.
+  - Collapsed read/search groups now stay in chronological order instead of jumping below thinking that happened later.
+
+- [#781](https://github.com/dohooo/helmor/pull/781) [`16be910`](https://github.com/dohooo/helmor/commit/16be91071c4c8631c5dc94108eebb2a33a595872) Thanks [@natllian](https://github.com/natllian)! - Make the Connect GitHub/GitLab state reliable:
+
+  - A transient API 401 no longer flips a workspace to "Connect" — Helmor now re-validates the account with the forge CLI before treating it as logged out.
+  - When an account logout is detected, every workspace of the same repository updates together instead of showing inconsistent Connect states.
+
+- [#778](https://github.com/dohooo/helmor/pull/778) [`60cd37e`](https://github.com/dohooo/helmor/commit/60cd37e74dc66ce29b641006caae7bd7d5abab7d) Thanks [@natllian](https://github.com/natllian)! - Fix the streaming timer briefly showing the previous session's elapsed time when switching workspaces, so it now updates to the correct value immediately.
+
+## 0.34.0
+
+### Minor Changes
+
+- [#771](https://github.com/dohooo/helmor/pull/771) [`2c4e311`](https://github.com/dohooo/helmor/commit/2c4e3110c74b0bea4988e35bc2589543aebaf9a8) Thanks [@dohooo](https://github.com/dohooo)! - Add Claude Fable 5 support:
+
+  - Fable 5 (1M context) now sits at the top of the Claude Code model list. Opus 4.8 stays the app default — Fable 5 uses limits about 2× faster.
+  - Upgrade the bundled Claude Code CLI to 2.1.170.
+
+- [#773](https://github.com/dohooo/helmor/pull/773) [`3eb477a`](https://github.com/dohooo/helmor/commit/3eb477a857dec857876132f7640d1977b8eb1aaf) Thanks [@dohooo](https://github.com/dohooo)! - Add a "Clean up archived workspaces" action in Settings → General that permanently deletes all archived workspaces and compacts the database to free up disk space.
+
+### Patch Changes
+
+- [#762](https://github.com/dohooo/helmor/pull/762) [`96ec646`](https://github.com/dohooo/helmor/commit/96ec6466b793e0bb75173bc62ce291cc74be015e) Thanks [@dohooo](https://github.com/dohooo)! - Move the Update button to the bottom-right of the left sidebar, on the same row as the Settings and Feedback buttons.
+
+- [#775](https://github.com/dohooo/helmor/pull/775) [`81a0955`](https://github.com/dohooo/helmor/commit/81a09557d5e8e1e5ffcbb894f4d4c60d6b146267) Thanks [@natllian](https://github.com/natllian)! - Fix auto-closed action sessions hijacking your selection — completing an action in a background workspace no longer switches you away from the workspace you're viewing or leaves it with no session selected.
+
+- [#774](https://github.com/dohooo/helmor/pull/774) [`aa25401`](https://github.com/dohooo/helmor/commit/aa254010d873a8bfac9b3f25ece7156abce62cf6) Thanks [@natllian](https://github.com/natllian)! - Fix the composer's text cursor disappearing when you arrow back down through input history to your in-progress draft.
+
+- [#767](https://github.com/dohooo/helmor/pull/767) [`2f7d8cb`](https://github.com/dohooo/helmor/commit/2f7d8cbf920d0175f8886cc238aeb0dbeac96484) Thanks [@natllian](https://github.com/natllian)! - Cursor now retries transient network failures (Cursor's API occasionally resets the connection) instead of failing the turn, and a dropped connection no longer crashes the Cursor worker with "Cursor worker exited unexpectedly".
+
+- [#765](https://github.com/dohooo/helmor/pull/765) [`7e9ec54`](https://github.com/dohooo/helmor/commit/7e9ec544fac48c108552bc520aec044e19ed66b1) Thanks [@natllian](https://github.com/natllian)! - Fix Cursor tool calls (running shell commands, editing files, searching) failing — Cursor would chat normally but every tool call came back empty, as if its shell produced no output. Cursor now runs on a bundled Node runtime instead of Bun, which resolves it.
+
+- [#755](https://github.com/dohooo/helmor/pull/755) [`036bcdb`](https://github.com/dohooo/helmor/commit/036bcdb056823932a4a88347a7a22ccf83e837cd) Thanks [@natllian](https://github.com/natllian)! - Fix a leak where OpenCode server processes could pile up over time — Helmor now reliably shuts them down and clears any left orphaned by a previous run.
+
+- [#760](https://github.com/dohooo/helmor/pull/760) [`11585d9`](https://github.com/dohooo/helmor/commit/11585d985f4f61825787a6d9edd4ecd1dd6e1f9e) Thanks [@dohooo](https://github.com/dohooo)! - Fix auto-archiving untouched triage workspaces that have no Git HEAD yet.
+
+- [#758](https://github.com/dohooo/helmor/pull/758) [`c5fcda6`](https://github.com/dohooo/helmor/commit/c5fcda67c1c164ad467172ca41ef865d3c22d7df) Thanks [@dohooo](https://github.com/dohooo)! - Refactor navigation to TanStack Router, with snappier rapid workspace switching and two memory-leak fixes.
+
 ## 0.33.0
 
 ### Minor Changes
@@ -7,7 +53,7 @@
 - [#738](https://github.com/dohooo/helmor/pull/738) [`e50a005`](https://github.com/dohooo/helmor/commit/e50a005cd54bbc115c1e99c922fef6e7fa60a98a) Thanks [@natllian](https://github.com/natllian)! - Improve the Cursor agent:
   - Add Plan mode for Cursor — it drafts a read-only plan first and shows a plan-review card you can approve with "Implement" or send back with "Request changes", matching Claude.
   - Fix Cursor dropping image attachments, so it can now see images you paste or attach to a message.
-  - 
+  -
 - [#739](https://github.com/dohooo/helmor/pull/739) [`6cea31b`](https://github.com/dohooo/helmor/commit/6cea31b094c3363879c3efdde66fdff8ea69f7f0) Thanks [@JRBusiness](https://github.com/JRBusiness)! - Add Windows (x64) support, so Helmor now installs and runs on Windows with its agents, terminals, and bundled CLIs.
 
 ### Patch Changes

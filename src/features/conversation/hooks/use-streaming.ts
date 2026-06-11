@@ -929,6 +929,7 @@ export function useConversationStreaming({
 					pendingPartial: null,
 					needsFlush: false,
 					frameId: null,
+					fallbackTimerId: null,
 				};
 
 				// Refresh the Changes diff WHILE streaming. 7s (was 3s) cuts the

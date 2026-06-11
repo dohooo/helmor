@@ -54,7 +54,16 @@ export type StreamAccumulator = {
 	pendingPartial: ThreadMessageLike | null;
 	needsFlush: boolean;
 	frameId: number | null;
+	fallbackTimerId?: number | null;
 };
+
+const STREAM_FLUSH_FALLBACK_MS = 120;
+
+function clearFallbackTimer(accumulator: StreamAccumulator): void {
+	if (accumulator.fallbackTimerId == null) return;
+	window.clearTimeout(accumulator.fallbackTimerId);
+	accumulator.fallbackTimerId = null;
+}
 
 export type StreamDispatchDeps = {
 	// Send-time invariants. Captured once at the top of handleComposerSubmit.
@@ -200,6 +209,13 @@ export function createStreamEventDispatcher(
 				window.cancelAnimationFrame(deps.accumulator.frameId);
 				deps.accumulator.frameId = null;
 			}
+			// Terminal state renders from the final Full only. The backend
+			// always emits a closing Full (result / materialized abort), so a
+			// pending partial here is stale — flushing it would freeze
+			// duplicate reasoning chips and phantom spinning tool cards into
+			// the thread cache forever (no DB re-read happens after done).
+			deps.accumulator.pendingPartial = null;
+			deps.accumulator.needsFlush = true;
 			deps.flushStreamMessages();
 			deps.cleanup();
 			deps.clearPendingPermissions(deps.contextKey);
@@ -316,6 +332,7 @@ export function createStreamFlushers(opts: {
 } {
 	const flushStreamMessages = () => {
 		opts.accumulator.frameId = null;
+		clearFallbackTimer(opts.accumulator);
 		if (!opts.accumulator.needsFlush) return;
 		opts.accumulator.needsFlush = false;
 
@@ -342,10 +359,20 @@ export function createStreamFlushers(opts: {
 
 	const scheduleFlush = () => {
 		opts.accumulator.needsFlush = true;
-		if (opts.accumulator.frameId !== null) return;
-		opts.accumulator.frameId = window.requestAnimationFrame(() =>
-			flushStreamMessages(),
-		);
+		if (opts.accumulator.frameId === null) {
+			opts.accumulator.frameId = window.requestAnimationFrame(() =>
+				flushStreamMessages(),
+			);
+		}
+		if (opts.accumulator.fallbackTimerId == null) {
+			opts.accumulator.fallbackTimerId = window.setTimeout(() => {
+				if (opts.accumulator.frameId !== null) {
+					window.cancelAnimationFrame(opts.accumulator.frameId);
+					opts.accumulator.frameId = null;
+				}
+				flushStreamMessages();
+			}, STREAM_FLUSH_FALLBACK_MS);
+		}
 	};
 
 	const cleanup = () => {
@@ -357,6 +384,7 @@ export function createStreamFlushers(opts: {
 			window.cancelAnimationFrame(opts.accumulator.frameId);
 			opts.accumulator.frameId = null;
 		}
+		clearFallbackTimer(opts.accumulator);
 	};
 
 	return { flushStreamMessages, scheduleFlush, cleanup };

@@ -16,12 +16,11 @@ on:
         required: false
         default: "latest"
         type: string
-      # Platforms expected in latest.json. The updater currently ships for
-      # macOS; Windows ships as an NSIS installer attached to the release.
+      # Platforms expected in latest.json.
       expected_platforms:
         description: "Comma-separated platform keys the manifest MUST contain"
         required: false
-        default: "darwin-aarch64,darwin-x86_64"
+        default: "darwin-aarch64,darwin-x86_64,windows-x86_64"
         type: string
 
 permissions:

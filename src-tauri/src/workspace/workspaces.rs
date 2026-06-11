@@ -1669,6 +1669,55 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupArchivedFailure {
+    pub workspace_id: String,
+    pub title: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupArchivedWorkspacesResponse {
+    pub deleted_count: usize,
+    pub failures: Vec<CleanupArchivedFailure>,
+}
+
+/// Compact the SQLite file after a bulk delete. Dropping rows only marks
+/// their pages as free for reuse — the file itself never shrinks — so a
+/// cleanup whose entire point is reclaiming disk space must `VACUUM` once
+/// at the end to hand the space back to the OS. In WAL mode the vacuum's
+/// rewrite lands in the `-wal` file and the main file only shrinks at the
+/// next checkpoint, so force a truncating checkpoint right away instead
+/// of leaving the reclaim to whenever the auto-checkpointer fires.
+pub fn vacuum_database() -> Result<()> {
+    let connection = db::write_conn()?;
+    connection
+        .execute_batch("VACUUM")
+        .context("Failed to vacuum database")?;
+    connection
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+        .context("Failed to checkpoint WAL after vacuum")?;
+    Ok(())
+}
+
+/// Delete a workspace via [`permanently_delete_workspace`] only if it is
+/// still archived when we get to it. Returns `Ok(false)` (skip, not an
+/// error) when the row is gone or no longer archived — the bulk archive
+/// cleanup snapshots its id list up front, and a workspace restored (or
+/// deleted elsewhere) mid-run must be left alone. Callers hold the
+/// per-workspace FS mutation lock, so the check can't race a restore.
+pub fn delete_workspace_if_archived(workspace_id: &str) -> Result<bool> {
+    match workspace_models::load_workspace_record_by_id(workspace_id)? {
+        Some(record) if record.state == WorkspaceState::Archived => {
+            permanently_delete_workspace(workspace_id)?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2450,6 +2499,57 @@ mod tests {
             )
             .unwrap();
         assert_eq!(remaining, 0, "DB row must be gone too");
+    }
+
+    #[test]
+    fn delete_workspace_if_archived_deletes_archived_row() {
+        let env = TestEnv::new("cleanup-archived-deletes");
+        let conn = env.db_connection();
+        insert_repo(&conn, "r1", "demo", None);
+        insert_workspace(
+            &conn,
+            &WorkspaceFixture {
+                id: "w-archived",
+                repo_id: "r1",
+                directory_name: "alpha",
+                state: WorkspaceState::Archived.as_str(),
+                branch: Some("feature/alpha"),
+                intended_target_branch: None,
+            },
+        );
+
+        let deleted = delete_workspace_if_archived("w-archived").unwrap();
+
+        assert!(deleted, "archived row must be deleted");
+        assert_eq!(count_workspaces(&env), 0);
+    }
+
+    #[test]
+    fn delete_workspace_if_archived_skips_operational_and_missing_rows() {
+        let env = TestEnv::new("cleanup-archived-skips");
+        let conn = env.db_connection();
+        insert_repo(&conn, "r1", "demo", None);
+        insert_workspace(
+            &conn,
+            &WorkspaceFixture {
+                id: "w-ready",
+                repo_id: "r1",
+                directory_name: "alpha",
+                state: WorkspaceState::Ready.as_str(),
+                branch: Some("feature/alpha"),
+                intended_target_branch: None,
+            },
+        );
+
+        assert!(
+            !delete_workspace_if_archived("w-ready").unwrap(),
+            "operational row must be skipped, not deleted"
+        );
+        assert!(
+            !delete_workspace_if_archived("w-missing").unwrap(),
+            "missing row must be a silent skip"
+        );
+        assert_eq!(count_workspaces(&env), 1, "operational row must remain");
     }
 
     #[test]

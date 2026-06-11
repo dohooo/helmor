@@ -418,4 +418,34 @@ describe("HistoryRecallPlugin", () => {
 		expect(persisted).toContain("keep this draft");
 		expect(persisted).not.toContain("history prompt");
 	});
+
+	it("refocuses the editor when ArrowDown restores a non-empty draft", async () => {
+		// Regression: `setEditorState` clears the DOM selection, blurring the
+		// contentEditable in WebKit. Restoring the draft must refocus the editor
+		// so the caret stays visible. jsdom can't reproduce the blur, so assert
+		// the explicit refocus call instead.
+		const focusSpy = vi.spyOn(
+			Object.getPrototypeOf(createEditor()) as { focus: () => void },
+			"focus",
+		);
+		try {
+			const contextKey = "session:recall-refocus";
+			savePersistedDraft(contextKey, paragraphDraft("my draft"));
+			renderComposer([textEntry("history prompt")], vi.fn(), contextKey);
+			const editor = screen.getByLabelText("Workspace input");
+
+			await waitFor(() => expect(editor.textContent).toContain("my draft"));
+			fireEvent.keyDown(editor, { key: "ArrowUp", code: "ArrowUp" });
+			await waitFor(() =>
+				expect(editor.textContent).toContain("history prompt"),
+			);
+
+			focusSpy.mockClear();
+			fireEvent.keyDown(editor, { key: "ArrowDown", code: "ArrowDown" });
+			await waitFor(() => expect(editor.textContent).toContain("my draft"));
+			expect(focusSpy).toHaveBeenCalled();
+		} finally {
+			focusSpy.mockRestore();
+		}
+	});
 });

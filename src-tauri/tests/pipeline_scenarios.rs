@@ -428,6 +428,27 @@ fn opencode_reasoning_carries_thought_duration() {
     assert_yaml_snapshot!(run_normalized(msgs));
 }
 
+#[test]
+fn opencode_session_error_notice_round_trips() {
+    let assistant = json!({
+        "type": "opencode_message",
+        "session_id": "ses_1",
+        "role": "assistant",
+        "parts": [{
+            "type": "system-notice",
+            "severity": "error",
+            "label": "OpenCode error",
+            "body": "Quota exceeded. Try again in 5 hours.",
+        }],
+    });
+    let msgs = vec![make_record(
+        "om1",
+        "assistant",
+        &serde_json::to_string(&assistant).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
 // opencode write/edit/apply_patch carry opencode's per-file unified diff
 // (`fileDiffs`), which the adapter reshapes into the shared apply_patch
 // `changes:[{path,diff}]` view so a colored diff renders on reload too.
@@ -444,6 +465,29 @@ fn opencode_write_tool_renders_unified_diff() {
             "fileDiffs": [
                 { "path": "a.txt", "diff": "--- a.txt\n+++ a.txt\n@@ -0,0 +1 @@\n+hi\n" },
             ],
+        }],
+    });
+    let msgs = vec![make_record(
+        "om1",
+        "assistant",
+        &serde_json::to_string(&assistant).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+// opencode bash output can arrive while the tool is still running under
+// `state.metadata.output`; the live accumulator maps that to `output` so
+// streaming renders don't wait for `status=completed`.
+#[test]
+fn opencode_running_tool_renders_output() {
+    let assistant = json!({
+        "type": "opencode_message",
+        "session_id": "ses_1",
+        "role": "assistant",
+        "parts": [{
+            "type": "tool", "callID": "c1", "tool": "bash", "status": "running",
+            "input": { "command": "printf hi" },
+            "output": "hi",
         }],
     });
     let msgs = vec![make_record(
@@ -905,6 +949,137 @@ fn stream_omitted_thinking_shows_thinking_chip() {
 
     let fingerprint = replay_stream_events("claude", &events);
     assert_yaml_snapshot!(normalize_stream_fingerprint(&fingerprint));
+}
+
+#[test]
+fn stream_omitted_thinking_split_blocks_stay_distinct() {
+    // Omitted-thinking turns split ONE thinking phase into SEVERAL blocks,
+    // each finalized in its own `assistant` event with the SAME message.id
+    // and a distinct signature. The type-only cumulative-snapshot check used
+    // to misjudge block 2 as a re-send of block 1: it reused block 1's
+    // `__part_id`, inherited its `__duration_ms`, and `collect_message`
+    // appended a second copy — rendering N identical "Thought for Ns" chips
+    // (the SDK-0.3.170 regression this fixture family pins). Locks in:
+    //
+    //   1. Each finalized thinking block gets its OWN part id + duration.
+    //   2. The live final render shows ONE merged reasoning chip (collapse
+    //      merges adjacent reasoning segments, durations summed).
+    //   3. Persisted blocks keep both thinking blocks (no silent drop) so
+    //      the historical reload renders the same single merged chip.
+    let mk_block_start = |index: usize| {
+        json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {"type": "thinking", "thinking": "", "signature": ""},
+            },
+            "session_id": "session-1",
+        })
+    };
+    let events = vec![
+        mk_block_start(0),
+        json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "signature_delta", "signature": "sig-A"},
+            },
+            "session_id": "session-1",
+        }),
+        // Block 0 finalized — same message.id reused by every event below.
+        json!({
+            "type": "assistant",
+            "message": {
+                "id": "msg_1",
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "", "signature": "sig-A"}],
+            },
+            "session_id": "session-1",
+        }),
+        json!({
+            "type": "stream_event",
+            "event": {"type": "content_block_stop", "index": 0},
+            "session_id": "session-1",
+        }),
+        // Second thinking block of the SAME phase — distinct signature.
+        mk_block_start(1),
+        json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "signature_delta", "signature": "sig-B"},
+            },
+            "session_id": "session-1",
+        }),
+        json!({
+            "type": "assistant",
+            "message": {
+                "id": "msg_1",
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "", "signature": "sig-B"}],
+            },
+            "session_id": "session-1",
+        }),
+        json!({
+            "type": "stream_event",
+            "event": {"type": "content_block_stop", "index": 1},
+            "session_id": "session-1",
+        }),
+        // The phase ends in a tool call so the merged chip has a neighbor.
+        json!({
+            "type": "assistant",
+            "message": {
+                "id": "msg_1",
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "Edit",
+                    "input": {"file_path": "a.go", "old_string": "x", "new_string": "y"},
+                }],
+            },
+            "session_id": "session-1",
+        }),
+        json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": "ok",
+                }],
+            },
+            "session_id": "session-1",
+        }),
+    ];
+
+    let fingerprint = replay_stream_events("claude", &events);
+    assert_yaml_snapshot!(normalize_stream_fingerprint(&fingerprint));
+}
+
+#[test]
+fn collapse_group_stays_before_later_reasoning() {
+    // A collapsible read group followed by thinking followed by more reads
+    // must render in thread order: group, reasoning, group. Reasoning used
+    // to pass through WITHOUT flushing the group, so all reads straddling a
+    // thinking block merged into one group placed after it ("Read 5 files"
+    // rendered below the thoughts that came later).
+    let msgs = vec![assistant_json(
+        "a1",
+        json!([
+            { "type": "tool_use", "id": "t1", "name": "Read", "input": { "file_path": "a.go" } },
+            { "type": "tool_use", "id": "t2", "name": "Read", "input": { "file_path": "b.go" } },
+            { "type": "thinking", "thinking": "compare the two", "signature": "sig", "__duration_ms": 1200 },
+            { "type": "tool_use", "id": "t3", "name": "Read", "input": { "file_path": "c.go" } },
+            { "type": "tool_use", "id": "t4", "name": "Read", "input": { "file_path": "d.go" } },
+        ]),
+        None,
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
 }
 
 #[test]

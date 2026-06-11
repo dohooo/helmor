@@ -1,11 +1,11 @@
 name: Publish Release
 
-# macOS publish. Matrix produces:
+# Release publish. Matrix/jobs produce:
 #   - macOS aarch64 DMG + .app.tar.gz updater artifact
 #   - macOS x86_64 DMG + .app.tar.gz updater artifact
+#   - Windows x86_64 NSIS installer + updater artifact
 # tauri-action@v0.6 merges each runner's per-platform entry into the same
-# latest.json on the release. Windows NSIS installers are built in CI by
-# windows.yml (uploaded as a workflow artifact; no release publishing yet).
+# latest.json on the release.
 
 on:
   workflow_dispatch:
@@ -97,7 +97,7 @@ jobs:
           fi
 
   build-and-publish:
-    name: Build and Publish (${{ matrix.target-triple }})
+    name: Build and Publish macOS (${{ matrix.target-triple }})
     needs: preflight
     strategy:
       fail-fast: false
@@ -183,9 +183,65 @@ jobs:
             scripts/cleanup-macos-signing.sh "${{ steps.signing.outputs.APPLE_KEYCHAIN_PATH }}"
           fi
 
+  build-and-publish-windows:
+    name: Build and Publish Windows (x86_64-pc-windows-msvc)
+    needs: preflight
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      # src-tauri/.cargo/config.toml sets rustc-wrapper = "sccache" for the
+      # macOS jobs; Windows runners don't install it, so clear the wrapper.
+      RUSTC_WRAPPER: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+        with:
+          install-sccache: "false"
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # boring-sys2 (transitive native dep) assembles with NASM on Windows.
+      - name: Setup NASM
+        uses: ilammy/setup-nasm@v1
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          shared-key: windows-tauri-v1
+          workspaces: src-tauri -> target
+
+      # tauri-action's beforeBuildCommand runs prepare-sidecar.mjs, which
+      # stages the win32 vendor tree, builds the bun sidecar + helmor-cli,
+      # then bundles. NSIS only; WiX/MSI is not part of what Helmor ships.
+      - name: Build and publish Windows NSIS
+        id: tauri
+        uses: tauri-apps/tauri-action@v0.6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          HELMOR_UPDATER_PUBKEY: ${{ secrets.HELMOR_UPDATER_PUBKEY }}
+          HELMOR_UPDATER_ENDPOINTS: ${{ secrets.HELMOR_UPDATER_ENDPOINTS }}
+        with:
+          tagName: v__VERSION__
+          releaseName: Helmor v__VERSION__
+          releaseBody: ${{ needs.preflight.outputs.release_body }}
+          releaseDraft: ${{ needs.preflight.outputs.draft == 'true' }}
+          prerelease: false
+          includeUpdaterJson: true
+          args: --bundles nsis
+          tauriScript: bun run tauri
+
   notify-marketing:
     name: Notify marketing site
-    needs: [preflight, build-and-publish]
+    needs: [preflight, build-and-publish, build-and-publish-windows]
     if: needs.preflight.outputs.draft == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 2

@@ -193,13 +193,16 @@ function collapseAssistantParts(
 	const result: ExtendedMessagePart[] = [];
 	const currentGroup: ToolCallPart[] = [];
 	// A streaming turn's thinking block surfaces in BOTH the stable base
-	// snapshot and the pending partial when this run is merged — every
-	// `system thinking_tokens` event triggers a full render that races the
-	// streaming partial, so the same reasoning lands twice. Both copies share
-	// the same `__part_id`, so dedupe by id (the same block index is never two
-	// different thoughts). Without this, omitted-thinking turns — where the
-	// reasoning text stays empty the whole time — render two "Thinking…" rows.
+	// snapshot and the pending partial when this run is merged — the same
+	// reasoning lands twice. Same `__part_id` → duplicate copy (later wins);
+	// different adjacent ids → consecutive segments of one thinking phase
+	// (omitted thinking splits a phase into many blocks), merged into one
+	// chip exactly like Rust `collapse.rs::merge_adjacent_reasoning`.
 	const reasoningIndexById = new Map<string, number>();
+	// Tool calls dedupe by toolCallId: the pending partial re-sends a tool
+	// the base already finalized — without this a phantom copy (empty args,
+	// no result, live spinner) renders next to the real card.
+	const toolIndexById = new Map<string, number>();
 
 	const flushGroup = () => {
 		if (currentGroup.length === 0) {
@@ -213,31 +216,95 @@ function collapseAssistantParts(
 		currentGroup.length = 0;
 	};
 
+	const pushGroupTool = (tool: ToolCallPart) => {
+		const seen = currentGroup.findIndex(
+			(t) => t.toolCallId === tool.toolCallId,
+		);
+		if (seen === -1) {
+			currentGroup.push(tool);
+			return;
+		}
+		// Prefer the copy that carries a result.
+		if (tool.result != null || currentGroup[seen]!.result == null) {
+			currentGroup[seen] = tool;
+		}
+	};
+
 	for (const part of parts) {
 		if (part.type === "collapsed-group") {
-			currentGroup.push(...part.tools);
+			for (const tool of part.tools) {
+				pushGroupTool(tool);
+			}
 			continue;
 		}
 		if (
 			part.type === "tool-call" &&
 			isCollapsibleWithArgs(part.toolName, part.args)
 		) {
-			currentGroup.push(part);
+			pushGroupTool(part);
 			continue;
 		}
 		if (part.type === "reasoning") {
+			// Flush first — mirrors Rust collapse.rs: a group of reads must
+			// render BEFORE thinking that happened after them.
+			flushGroup();
 			const seenIdx = reasoningIndexById.get(part.id);
 			if (seenIdx !== undefined) {
 				// Same logical block already shown — keep the latest copy so
 				// newer duration / content wins.
 				result[seenIdx] = part;
-			} else {
-				reasoningIndexById.set(part.id, result.length);
-				result.push(part);
+				continue;
 			}
+			const prev = result[result.length - 1];
+			if (prev?.type === "reasoning") {
+				// Adjacent segment of the same thinking phase — fold into the
+				// previous chip. Skip the text concat when the previous chip
+				// already ends with this text: the pending partial re-sends
+				// the in-flight segment the base snapshot already absorbed.
+				const text =
+					part.text && !prev.text.endsWith(part.text)
+						? prev.text
+							? `${prev.text}\n\n${part.text}`
+							: part.text
+						: prev.text;
+				const durationMs =
+					prev.durationMs != null || part.durationMs != null
+						? (prev.durationMs ?? 0) + (part.durationMs ?? 0)
+						: undefined;
+				const streaming =
+					prev.streaming === true || part.streaming === true
+						? true
+						: (prev.streaming ?? part.streaming);
+				result[result.length - 1] = {
+					...prev,
+					text,
+					durationMs,
+					streaming,
+				};
+				continue;
+			}
+			reasoningIndexById.set(part.id, result.length);
+			result.push(part);
 			continue;
 		}
+		// Flush so the group stays BEFORE this part — letting reads straddle
+		// a reasoning/text block reorders the thread.
 		flushGroup();
+		if (part.type === "tool-call") {
+			const seenIdx = toolIndexById.get(part.toolCallId);
+			if (seenIdx !== undefined) {
+				const existing = result[seenIdx];
+				if (
+					existing?.type !== "tool-call" ||
+					part.result != null ||
+					existing.result == null
+				) {
+					result[seenIdx] = part;
+				}
+				continue;
+			}
+			toolIndexById.set(part.toolCallId, result.length);
+		}
 		result.push(part);
 	}
 

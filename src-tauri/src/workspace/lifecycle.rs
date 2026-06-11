@@ -1721,6 +1721,7 @@ mod tests {
 
     #[test]
     fn archive_hook_inner_returns_workspace_missing_for_unknown_id() {
+        let _env = crate::testkit::TestEnv::new("archive-hook-inner-returns-workspace-mis");
         let tmp = std::env::temp_dir();
         let outcome = run_archive_hook_inner("nonexistent-workspace-id", &tmp, &tmp);
         // Whatever the DB state, an unknown workspace id must short-circuit to

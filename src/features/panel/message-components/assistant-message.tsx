@@ -30,6 +30,7 @@ import {
 	isImagePart,
 	isPlanReviewPart,
 	isReasoningPart,
+	isSystemNoticePart,
 	isTextPart,
 	isTodoListPart,
 	isToolCallPart,
@@ -42,6 +43,7 @@ import {
 	SubAgentSpawnGroup,
 	SubAgentToolCall,
 } from "./subagent-tool";
+import { SystemNotice } from "./system-message";
 import { AssistantToolCall, CollapsedToolGroup } from "./tool-call";
 
 // --- AssistantText ---
@@ -287,6 +289,16 @@ export function ChatAssistantMessage({
 				}
 				if (isImagePart(part)) {
 					return <ImageBlock key={key} part={part} />;
+				}
+				if (isSystemNoticePart(part)) {
+					return (
+						<div
+							key={key}
+							className="min-w-0 py-1 text-mini leading-snug text-muted-foreground"
+						>
+							<SystemNotice part={part} wrap />
+						</div>
+					);
 				}
 				if (isPlanReviewPart(part)) {
 					return <PlanReviewCard key={key} part={part} />;

@@ -53,6 +53,6 @@ historical_render:
         - tool-call
         - reasoning
         - text
-        - reasoning
         - collapsed-group
+        - reasoning
         - text

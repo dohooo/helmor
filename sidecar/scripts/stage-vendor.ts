@@ -851,8 +851,9 @@ function stageCursorWorkerDeps(target: TargetInfo): string {
 	console.log(
 		`[stage-vendor] installing @cursor/sdk@${version} for ${npmOs}-${npmArch} (cursor worker)`,
 	);
+	const installCommand = IS_WINDOWS ? "npm.cmd" : process.execPath;
 	execFileSync(
-		process.execPath,
+		installCommand,
 		["install", `--cpu=${npmArch}`, `--os=${npmOs}`],
 		{
 			cwd: dest,

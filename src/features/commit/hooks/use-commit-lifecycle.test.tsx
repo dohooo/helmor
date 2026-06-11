@@ -348,6 +348,84 @@ describe("useWorkspaceCommitLifecycle", () => {
 		});
 	});
 
+	it("auto-closes without stealing selection when the user is on another workspace", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		queryClient.setQueryData<WorkspaceDetail | null>(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			{
+				id: "workspace-1",
+				activeSessionId: "session-after-close",
+				status: "in-progress",
+			} as unknown as WorkspaceDetail,
+		);
+
+		// Dispatch happens on workspace-1; the user then navigates away.
+		let liveWorkspaceId: string | null = "workspace-1";
+		const onSelectSession = vi.fn();
+
+		const { result, rerender } = renderHook(
+			({
+				completedSessionIds,
+				busySessionIds,
+			}: {
+				completedSessionIds: Set<string>;
+				busySessionIds: Set<string>;
+			}) =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					getSelectedWorkspaceId: () => liveWorkspaceId,
+					selectedRepoId: "repo-1",
+					selectedWorkspaceTargetBranch: "main",
+					changeRequest: null,
+					forgeActionStatus: EMPTY_FORGE_ACTION_STATUS,
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds,
+					interactionRequiredSessionIds: new Set<string>(),
+					busySessionIds,
+					onSelectSession,
+				}),
+			{
+				initialProps: {
+					completedSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
+				},
+				wrapper: createWrapper(queryClient),
+			},
+		);
+
+		await act(async () => {
+			await result.current.handleInspectorCommitAction("create-pr");
+		});
+		act(() => {
+			result.current.handlePendingPromptConsumed();
+		});
+		onSelectSession.mockClear();
+
+		// User switches to a different workspace while the action runs.
+		liveWorkspaceId = "workspace-2";
+
+		rerender({
+			completedSessionIds: new Set<string>(),
+			busySessionIds: new Set(["session-action"]),
+		});
+		rerender({
+			completedSessionIds: new Set(["session-action"]),
+			busySessionIds: new Set<string>(),
+		});
+
+		// Session still auto-closes, but selection stays untouched.
+		await waitFor(() => {
+			expect(apiMocks.hideSession).toHaveBeenCalledWith("session-action");
+		});
+		await waitFor(() => {
+			expect(result.current.commitButtonState).toBe("idle");
+		});
+		expect(onSelectSession).not.toHaveBeenCalled();
+	});
+
 	it("clears the lifecycle when the tracked action session is aborted", async () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { queries: { retry: false } },

@@ -91,6 +91,14 @@ pub(crate) trait ForgeAccountBackend: Sync {
     /// failures as `Indeterminate`, never `LoggedOut`.
     fn check_auth(&self, host: &str, login: &str) -> AuthCheck;
 
+    /// Live-validated auth check: exercises the stored credential
+    /// against the provider (CLI token validation / authenticated API
+    /// call), not mere presence in the account store. Used by
+    /// [`confirm_forge_logged_out`] to arbitrate an API 401 before the
+    /// logged-out verdict is pinned. Same `Indeterminate` contract as
+    /// [`ForgeAccountBackend::check_auth`].
+    fn validate_auth(&self, host: &str, login: &str) -> AuthCheck;
+
     /// 200 with explicit push → `RepoAccess::Push`. 200 without
     /// membership data → `RepoAccess::Probable` (auto-bind fallback).
     /// 404 / auth-rejected → `RepoAccess::None`. Anything else → `Err`.
@@ -270,6 +278,21 @@ mod auth_verdict {
 /// leaves the prior verdict untouched.
 pub(crate) fn note_forge_auth(host: &str, login: &str, verdict: AuthCheck) {
     auth_verdict::note(host, login, verdict);
+}
+
+/// A provider API call just came back "unauthenticated". Arbitrate it:
+/// re-validate the credential via the provider's live probe and only
+/// pin (and report) the logged-out verdict when the probe confirms it.
+/// `false` → treat the rejection as transient (caller surfaces an
+/// error state instead of flipping the Connect CTA).
+pub(crate) fn confirm_forge_logged_out(provider: ForgeProvider, host: &str, login: &str) -> bool {
+    let verdict = match backend_for(provider) {
+        Some(backend) => backend.validate_auth(host, login),
+        // No probe available — trust the API signal as-is.
+        None => AuthCheck::LoggedOut,
+    };
+    note_forge_auth(host, login, verdict);
+    verdict.is_definitely_logged_out()
 }
 
 /// Whether `(host, login)` is known logged-out from the last real signal.

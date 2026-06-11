@@ -788,6 +788,7 @@ mod tests {
 
     #[test]
     fn resolve_model_infers_provider() {
+        let _env = crate::testkit::TestEnv::new("resolve-model-infers-provider");
         let claude = resolve_model("default", None);
         assert_eq!(claude.provider, "claude");
         assert_eq!(claude.cli_model, "default");

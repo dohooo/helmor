@@ -50,6 +50,7 @@ async fn dispatch(
         "backfill_forge_repo_bindings" => to_value(crate::commands::forge_commands::backfill_forge_repo_bindings(app.clone()).await?),
         "cache_forge_avatar" => to_value(crate::commands::forge_commands::cache_forge_avatar(arg_string(&args, "url")?).await?),
         "check_for_app_update" => to_value(crate::commands::updater_commands::check_for_app_update(app.clone(), arg_opt_bool(&args, "force")).await?),
+        "cleanup_archived_workspaces" => to_value(crate::commands::workspace_commands::cleanup_archived_workspaces(app.clone()).await?),
         "clone_repository_from_url" => to_value(crate::commands::repository_commands::clone_repository_from_url(arg_string(&args, "gitUrl")?, arg_string(&args, "cloneDirectory")?).await?),
         "close_workspace_change_request" => to_value(crate::commands::forge_commands::close_workspace_change_request(arg_string(&args, "workspaceId")?, app.clone()).await?),
         "complete_workspace_setup" => {
