@@ -2886,7 +2886,12 @@ export type ChangeRequestInfo = {
 	isMerged: boolean;
 };
 
-export type ActionStatusKind = "success" | "pending" | "running" | "failure";
+export type ActionStatusKind =
+	| "success"
+	| "skipped"
+	| "pending"
+	| "running"
+	| "failure";
 export type ActionProvider = "github" | "gitlab" | "vercel" | "unknown";
 export type WorkspaceGitSyncStatus = "upToDate" | "behind" | "unknown";
 export type WorkspacePushStatus = "published" | "unpublished" | "unknown";

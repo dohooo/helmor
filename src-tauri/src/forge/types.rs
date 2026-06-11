@@ -83,6 +83,7 @@ pub struct ChangeRequestInfo {
 #[serde(rename_all = "camelCase")]
 pub enum ActionStatusKind {
     Success,
+    Skipped,
     Pending,
     Running,
     Failure,
