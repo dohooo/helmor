@@ -60,28 +60,30 @@ export function resolveConversationRowHeight({
 	return measuredHeight ?? estimatedHeight;
 }
 
-// Height of the Tauri stable-bottom tail window: 6x viewport of bottom rows.
-// The first frame must mount this in full, not a narrower slice — a row taller
-// than the slice that sits just above it (e.g. a multi-hundred-line pasted code
-// message) would otherwise stay unmounted, keeping its UNDER-estimated height
-// in the explicit container height until it mounts a frame later. That late
-// estimate→measured correction grows the container and re-pins the bottom AFTER
-// the first paint, which reads as the thread flashing from one region to
-// another. Mounting the giant row on frame one lets its mount-time measurement
-// land in the container height before paint (see the initial-settle pin).
+// Floor for the Tauri stable-bottom tail window. Kept small on purpose: near the
+// bottom, visibleRows mounts this tail UNIONED with the regular scroll window, so
+// a giant row sitting above the window stays unmounted and the switch commit only
+// builds the visible region's DOM (the old 6x full-mount built thousands of
+// off-screen nodes per switch — that was the bulk of the switch jank). The small
+// mount is flash-free because the height estimator is now accurate (tab-normalized
+// pretext measurement): the bottom anchor lands on the right row without mounting
+// everything to force a measurement, and the union guarantees a scroll-up within
+// the zone never exposes unmounted rows.
 export function resolveStableBottomTailHeight(viewportHeight: number): number {
 	const effectiveHeight =
 		viewportHeight > 0 ? viewportHeight : PROGRESSIVE_VIEWPORT_DEFAULT_HEIGHT;
-	return effectiveHeight * 6;
+	return effectiveHeight * 1.5;
 }
 
 // How long after a session switch the viewport stays in its "initial settle"
-// regime. Within it, measurement corrections commit at urgent priority and
-// the true bottom is re-pinned pre-paint on every height wave (tail
-// expansion, late measures): the deferred flip lets the estimate-positioned
-// first layout and each correction wave PAINT as distinct frames (the old
-// synchronous switch commit hid them), which reads as the list flashing
-// through several regions. Ends early on the first real user scroll.
+// regime. Within it, measurement corrections commit at urgent priority and the
+// true bottom is re-pinned pre-paint on every height wave (a late measure — e.g.
+// a giant visible row landing its real height, or async fonts/highlighting): the
+// deferred flip lets the estimate-positioned first layout and each correction
+// wave PAINT as distinct frames (the old synchronous switch commit hid them),
+// which reads as the list flashing through several regions. With an accurate
+// estimator this is a no-op for light sessions and only fires for the rare giant
+// visible row. Ends early on the first real user scroll.
 export const INITIAL_SETTLE_WINDOW_MS = 1000;
 
 // Measurement-correction commit priority: urgent while the initial settle is
@@ -860,9 +862,13 @@ function ProgressiveConversationViewport({
 				"viewport:visible-rows",
 				() => {
 					if (isTauri && distanceFromBottom <= tauriStableBottomZoneHeight) {
-						const tailWindowTop = Math.max(
-							0,
-							totalRowsHeight - tauriStableBottomTailHeight,
+						// Bottom-anchored tail (cheap: a giant row sitting above the
+						// window stays unmounted) UNION the regular scroll window, so a
+						// scroll-up within the stable-bottom zone can never expose
+						// unmounted rows — the tail alone is narrower than the zone.
+						const tailWindowTop = Math.min(
+							Math.max(0, totalRowsHeight - tauriStableBottomTailHeight),
+							windowTop,
 						);
 						return rows.filter((row) => row.top + row.height >= tailWindowTop);
 					}

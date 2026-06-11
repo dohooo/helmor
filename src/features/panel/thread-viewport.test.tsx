@@ -74,22 +74,26 @@ describe("ActiveThreadViewport", () => {
 // ---------------------------------------------------------------------------
 // First-frame tail window
 //
-// The first commit of a session mounts the full 6x-viewport bottom tail (not a
-// narrower slice): a row taller than the slice that sits just above it must be
-// measured on frame one, or its under-estimated height stays in the container
-// height until it mounts a frame later — that late correction re-pins the
-// bottom AFTER paint and flashes.
+// Near the bottom, visibleRows mounts a small bottom tail (1.5x viewport)
+// UNIONED with the regular scroll window — NOT a 6x full slice. A row taller
+// than the window that sits above it stays unmounted: its under-estimated
+// height stays in the container, and the correction is absorbed by the
+// deferred upward-scroll adjustment if it later mounts. No flash at switch
+// (nothing mounts/corrects there) and no visible jump on scroll-up.
 //
 // Fixture: 100 user-role messages (user messages render synchronously — no
 // lazy streamdown), estimator mocked to 100px/row, offsetHeight pinned to
 // 100px so MeasuredConversationRow's mount-time report matches the estimate
 // and no measured-height churn perturbs the math. jsdom clientHeight is 0, so
-// the viewport takes the 900px fallback path:
-//   totalRowsHeight 10000, header 24, spacer 40 → bottom scrollTop 10064
-//   tail = 6 x 900 = 5400 → tailTop 4600 → rows 45..99 (55 rows)
+// the viewport takes the 900px fallback path. After the initial-scroll effect
+// pins the bottom:
+//   totalRowsHeight 10000, header 24, spacer 40 → scrollTop 10064
+//   effectiveScrollTop 10040, buffer 900 → windowTop 9140
+//   tail = 1.5 x 900 = 1350 → tailTop 8650; union min(8650, 9140) = 8650
+//   → rows 86..99 (14 rows). At the bottom windowTop > tailTop so the pure
+//     tail binds; the scroll-window union only widens the mount upward once
+//     scrolled up (windowTop < tailTop) — see the scroll-up union test.
 // ---------------------------------------------------------------------------
-
-const TAIL_INDICES = range(45, 99);
 
 function range(first: number, last: number): number[] {
 	return Array.from({ length: last - first + 1 }, (_, i) => first + i);
@@ -126,6 +130,21 @@ function mountedIndices(prefix: string): number[] {
 		.filter((text) => text.startsWith(`${prefix}:`))
 		.map((text) => Number(text.slice(prefix.length + 1)))
 		.sort((a, b) => a - b);
+}
+
+// The Stage 2 invariant: the first-frame mount is a SMALL window pinned to the
+// bottom — not the old 6x slice (55 rows, 45..99). The exact top row shifts a
+// few indices with the union / initial-scroll timing (synthetic vs applied
+// bottom: 86..99 once the initial-scroll effect runs, 81..99 on the synthetic
+// switch anchor), so assert the shape, not an exact array.
+function assertSmallBottomTail(mounted: number[]) {
+	expect(mounted).toContain(99); // bottom pinned
+	expect(mounted.length).toBeGreaterThanOrEqual(12);
+	expect(mounted.length).toBeLessThanOrEqual(22);
+	expect(Math.min(...mounted)).toBeGreaterThanOrEqual(78);
+	for (let i = 1; i < mounted.length; i += 1) {
+		expect(mounted[i]).toBe(mounted[i - 1]! + 1); // contiguous to the bottom
+	}
 }
 
 function renderPane(pane: PresentedSessionPane) {
@@ -207,43 +226,69 @@ describe("first-frame tail window", () => {
 		});
 	});
 
-	it("mounts the full 6x tail on the first frame, including after a session switch", () => {
+	it("mounts a small bottom tail on the first frame (not a 6x slice), including after a session switch", () => {
 		const { rerenderPane } = renderPane(makePane("s1", "m1", 100));
-		// No expansion step — the first commit already mounts the 6x tail.
-		expect(mountedIndices("m1")).toEqual(TAIL_INDICES);
+		// The first commit mounts a small bottom window — not the old 6x slice,
+		// and no narrow-then-expand step.
+		assertSmallBottomTail(mountedIndices("m1"));
 
 		rerenderPane(makePane("s2", "m2", 100));
-		expect(mountedIndices("m2")).toEqual(TAIL_INDICES);
+		assertSmallBottomTail(mountedIndices("m2"));
 	});
 
-	it("mounts a row taller than the tail slice on the first frame so its measurement lands pre-paint", () => {
-		// The flash this guards against: a row under-estimated by the layout
-		// estimator (e.g. a multi-hundred-line pasted-code message) must mount
-		// — and therefore measure — on frame one. Here m1-50 reports 4000px
-		// (40x its 100px estimate); even so it sits within the 6x tail and
-		// mounts immediately.
-		const originalOffsetHeight = Object.getOwnPropertyDescriptor(
-			HTMLElement.prototype,
-			"offsetHeight",
-		);
-		Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+	it("does NOT eagerly mount a giant row above the tail window (cheap switch)", () => {
+		// The inverse of the old 6x behavior. A row far above the bottom
+		// window — e.g. a multi-hundred-line pasted-code message — must NOT
+		// mount on the switch frame: mounting it would rebuild thousands of
+		// off-screen DOM nodes per switch (the bulk of the old switch jank).
+		// Leaving it unmounted is safe because nothing mounts/corrects at the
+		// bottom on switch (no flash), and a later scroll-up mounts it under
+		// the deferred upward-scroll correction (no visible jump — verified in
+		// the live app). m1:50 estimates to 100px at content [5000,5100], far
+		// above the tail top (8650), so it stays unmounted while the bottom
+		// rows 86..99 mount.
+		renderPane(makePane("s1", "m1", 100));
+		const mounted = mountedIndices("m1");
+		expect(mounted).not.toContain(50);
+		assertSmallBottomTail(mounted);
+	});
+
+	it("widens the mount upward via the scroll-window union on scroll-up (no blank gap)", () => {
+		// Locks the union in resolveStableBottomTailHeight's caller: at the
+		// bottom the small tail binds, but scrolling up drops windowTop below
+		// tailTop, so the mount must extend from windowTop down to the bottom —
+		// otherwise the visible region (now above the pure tail) is unmounted
+		// and paints blank. (scrollHeight is left unstubbed = 0 so the settle
+		// pin's `scrollHeight > 0` guard keeps it inert and our scrollTop holds.)
+		renderPane(makePane("s1", "m1", 100));
+		assertSmallBottomTail(mountedIndices("m1"));
+
+		const scroller = document.querySelector(
+			".conversation-scroll-viewport",
+		) as HTMLElement;
+		Object.defineProperty(scroller, "clientHeight", {
 			configurable: true,
-			get(this: HTMLElement) {
-				return this.textContent?.startsWith("m1:50") ? 4000 : 100;
-			},
+			get: () => 900,
 		});
-		try {
-			renderPane(makePane("s1", "m1", 100));
-			// The tall row (index 50) is mounted on the first frame.
-			expect(mountedIndices("m1")).toContain(50);
-		} finally {
-			if (originalOffsetHeight) {
-				Object.defineProperty(
-					HTMLElement.prototype,
-					"offsetHeight",
-					originalOffsetHeight,
-				);
+
+		// Scroll up ~3000px from the synthetic bottom. windowTop = 6976 - 900 =
+		// 6076 < tailTop 8650, so the union mounts rows 60..99.
+		act(() => {
+			scroller.scrollTop = 7000;
+			scroller.dispatchEvent(new Event("scroll"));
+			for (const [id, callback] of [...frameCallbacks]) {
+				frameCallbacks.delete(id);
+				callback(performance.now());
 			}
+		});
+
+		const scrolledUp = mountedIndices("m1");
+		// Union widened the mount above the pure-tail floor (86)…
+		expect(Math.min(...scrolledUp)).toBeLessThan(80);
+		// …and the bottom stayed mounted, contiguous — no blank gap anywhere.
+		expect(scrolledUp).toContain(99);
+		for (let i = 1; i < scrolledUp.length; i += 1) {
+			expect(scrolledUp[i]).toBe(scrolledUp[i - 1]! + 1);
 		}
 	});
 

@@ -6,12 +6,12 @@ import {
 } from "./thread-viewport";
 
 describe("resolveStableBottomTailHeight", () => {
-	it("covers 6x the viewport", () => {
-		expect(resolveStableBottomTailHeight(800)).toBe(4800);
+	it("is a small 1.5x-viewport floor (the scroll-window union covers the rest)", () => {
+		expect(resolveStableBottomTailHeight(800)).toBe(1200);
 	});
 
 	it("falls back to the 900px default height when the viewport is unmeasured", () => {
-		expect(resolveStableBottomTailHeight(0)).toBe(5400);
+		expect(resolveStableBottomTailHeight(0)).toBe(1350);
 	});
 });
 
