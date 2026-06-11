@@ -202,7 +202,6 @@ export function useSessionActions({
 					setPendingBoot(sessionId, {
 						bootCommand: boot,
 						fastMode: event.fastMode,
-						prompt: event.prompt ?? null,
 					});
 				}
 			},

@@ -76,46 +76,29 @@ export function TerminalSessionPanel({
 				: null) ?? presetBootCommand(agentKind);
 	}
 
-	// Consume the composer-initiated boot once (prompt + composer state, incl.
-	// fast mode). Lazy-init ref so an effect re-run never re-reads it as null.
+	// Consume the composer-initiated boot once (boot command + fast mode).
+	// Lazy-init ref so an effect re-run never re-reads it as null.
 	const pendingBootRef = useRef<PendingBoot | null | undefined>(undefined);
 	if (pendingBootRef.current === undefined) {
 		pendingBootRef.current = takePendingBoot(sessionId);
 	}
-	const pendingPrompt = pendingBootRef.current?.prompt ?? null;
-
-	// Spawn the PTY at the renderer's real size — an inline TUI paints its
-	// first frame against it, so we wait for the first fit. `spawnedRef` keeps
-	// it one-shot across the resize handler and the workspace-ready effect.
-	const spawnedRef = useRef(false);
-	const sizeRef = useRef<{ cols: number; rows: number } | null>(null);
-
-	const maybeSpawn = useCallback(() => {
-		if (spawnedRef.current || !repoId || !workspaceReady) return;
-		const size = sizeRef.current;
-		if (!size) return;
-		spawnedRef.current = true;
-		const pending = pendingBootRef.current;
-		const boot = pending?.bootCommand ?? bootCommandRef.current ?? null;
-		ensureTerminal(
-			repoId,
-			workspaceId,
-			sessionId,
-			boot,
-			agentKind,
-			pending?.fastMode ?? false,
-			size.cols,
-			size.rows,
-		);
-	}, [repoId, workspaceReady, workspaceId, sessionId, agentKind]);
 
 	// Attach the live listener + one-shot replay. Independent of spawn: the
 	// listener is keyed by sessionId and receives output once the PTY starts.
+	const focusAssertedRef = useRef(false);
 	useEffect(() => {
 		const existing = attach(sessionId, {
 			onChunk: (data) => {
 				setBooting(false);
 				termRef.current?.write(data);
+				// First real output ≈ the TUI is up and has enabled focus
+				// reporting. Re-assert focus (no-op unless already focused) so a
+				// CLI that booted after our mount-time focus() gets the focus-in
+				// it missed and positions its cursor instead of parking it at home.
+				if (!focusAssertedRef.current) {
+					focusAssertedRef.current = true;
+					requestAnimationFrame(() => termRef.current?.reassertFocus());
+				}
 			},
 			onStatusChange: () => {},
 		});
@@ -144,11 +127,42 @@ export function TerminalSessionPanel({
 		};
 	}, [sessionId]);
 
-	// Try to spawn once the workspace is ready (the first fit may already have
-	// landed a size before finalize completed).
+	// Spawn the PTY once the workspace is ready AND the renderer has a real
+	// size. Polls `proposeSize()` (container-derived, NOT an onResize change
+	// event) so a panel whose first fit yields no size delta still spawns —
+	// otherwise the PTY launches at a stale default and the inline TUI paints
+	// its first frame at the wrong width (ghost rows after the fit/SIGWINCH).
+	const spawnedRef = useRef(false);
 	useEffect(() => {
-		maybeSpawn();
-	}, [maybeSpawn]);
+		if (!repoId || !workspaceReady || spawnedRef.current) return;
+		let rafId: number | null = null;
+		const trySpawn = () => {
+			rafId = null;
+			if (spawnedRef.current) return;
+			const size = termRef.current?.proposeSize();
+			if (!size) {
+				rafId = requestAnimationFrame(trySpawn);
+				return;
+			}
+			spawnedRef.current = true;
+			const pending = pendingBootRef.current;
+			const boot = pending?.bootCommand ?? bootCommandRef.current ?? null;
+			ensureTerminal(
+				repoId,
+				workspaceId,
+				sessionId,
+				boot,
+				agentKind,
+				pending?.fastMode ?? false,
+				size.cols,
+				size.rows,
+			);
+		};
+		trySpawn();
+		return () => {
+			if (rafId !== null) cancelAnimationFrame(rafId);
+		};
+	}, [repoId, workspaceId, sessionId, agentKind, workspaceReady]);
 
 	// Focus follows visibility, not mount — switching back to a kept-mounted
 	// terminal should put the cursor in it again.
@@ -161,14 +175,8 @@ export function TerminalSessionPanel({
 		[sessionId],
 	);
 	const handleResize = useCallback(
-		(cols: number, rows: number) => {
-			sizeRef.current = { cols, rows };
-			// First fit → spawn at the real size; later fits → resize the PTY
-			// (resize no-ops until the instance exists).
-			maybeSpawn();
-			resize(sessionId, cols, rows);
-		},
-		[sessionId, maybeSpawn],
+		(cols: number, rows: number) => resize(sessionId, cols, rows),
+		[sessionId],
 	);
 
 	const agentLabel = (agentKind && AGENT_LABELS[agentKind]) || "terminal";
@@ -183,34 +191,16 @@ export function TerminalSessionPanel({
 				isVisible={isActive}
 			/>
 			{booting ? (
-				pendingPrompt ? (
-					// Fake-TUI waiting state: echo the prompt + a thinking spinner so
-					// the worktree finalize + CLI cold start reads as "the agent is
-					// already working", not a stalled blank screen.
-					<div className="absolute inset-0 z-10 flex flex-col gap-3 bg-terminal-background px-4 py-3 font-mono text-small">
-						<div className="flex gap-2 text-terminal-foreground">
-							<span className="text-muted-foreground">❯</span>
-							<span className="whitespace-pre-wrap break-words">
-								{pendingPrompt}
-							</span>
-						</div>
-						<div className="flex items-center gap-2 text-muted-foreground">
-							<Loader2 className="size-3.5 animate-spin" strokeWidth={1.8} />
-							<span>Waiting for {agentLabel}…</span>
-						</div>
+				<div className="absolute inset-0 z-10 flex items-center justify-center bg-panel">
+					<div className="flex items-center gap-2.5 text-small text-muted-foreground">
+						<Loader2 className="size-4 animate-spin" strokeWidth={1.8} />
+						<span>
+							{workspaceReady
+								? `Starting ${agentLabel}…`
+								: "Preparing workspace…"}
+						</span>
 					</div>
-				) : (
-					<div className="absolute inset-0 z-10 flex items-center justify-center bg-panel">
-						<div className="flex items-center gap-2.5 text-small text-muted-foreground">
-							<Loader2 className="size-4 animate-spin" strokeWidth={1.8} />
-							<span>
-								{workspaceReady
-									? `Starting ${agentLabel}…`
-									: "Preparing workspace…"}
-							</span>
-						</div>
-					</div>
-				)
+				</div>
 			) : null}
 		</div>
 	);

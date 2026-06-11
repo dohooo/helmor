@@ -62,6 +62,21 @@ export type TerminalHandle = {
 	 * new terminal is spawned via `+` / shortcut.
 	 */
 	focus: () => void;
+	/**
+	 * The cols/rows FitAddon would fit to at the container's current pixel
+	 * size, or null while the container is still 0×0 (laid out / hidden).
+	 * Lets a caller spawn a PTY at the renderer's real size without waiting
+	 * for an `onResize` (which only fires on a size *change*).
+	 */
+	proposeSize: () => { cols: number; rows: number } | null;
+	/**
+	 * Re-emit a focus-in (`CSI I`) to a focus-tracking TUI by bouncing the
+	 * textarea's DOM focus — but only when it is already the active element,
+	 * so this never steals focus. A TUI (e.g. claude) that enabled focus
+	 * reporting AFTER our initial `focus()` never saw the event and parks its
+	 * cursor at home until the next keystroke; this delivers the missed event.
+	 */
+	reassertFocus: () => void;
 };
 
 const URL_PATTERN = /https?:\/\/[^\s<>"'`]+/gi;
@@ -484,6 +499,17 @@ function TerminalOutputImpl({
 				dispose: () => terminal.dispose(),
 				refit: () => runFit(),
 				focus: () => terminal.focus(),
+				proposeSize: () => {
+					const d = fit.proposeDimensions();
+					return d ? { cols: d.cols, rows: d.rows } : null;
+				},
+				reassertFocus: () => {
+					const ta = terminal.textarea;
+					if (ta && document.activeElement === ta) {
+						ta.blur();
+						ta.focus();
+					}
+				},
 			};
 		}
 
@@ -541,6 +567,10 @@ function TerminalOutputImpl({
 		}
 		flushTerminalWrites(terminal);
 		runFitRef.current?.();
+		// A freshly (re)attached WebGL renderer can paint the cursor cell at the
+		// stale home position until the next cursor move — force a full redraw so
+		// it reflects the buffer's real cursor row after a tab switch back.
+		terminal.refresh(0, terminal.rows - 1);
 		return () => {
 			webglRef.current?.dispose();
 			webglRef.current = null;

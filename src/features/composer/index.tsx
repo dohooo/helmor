@@ -986,7 +986,10 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 														composerToolbarTriggerClassName,
 														terminalMode
 															? "text-emerald-500 hover:bg-emerald-500/10 hover:text-emerald-500"
-															: "text-muted-foreground",
+															: // Pin the hover text color (like the Plan toggle) so the
+																// toolbar base `hover:text-foreground` can't flash the icon
+																// white for a frame while `transition-colors` runs on toggle.
+																"text-muted-foreground hover:text-muted-foreground",
 														toolbarDisabled
 															? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
 															: null,

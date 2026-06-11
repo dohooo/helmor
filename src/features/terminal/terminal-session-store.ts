@@ -50,9 +50,6 @@ export type PendingBoot = {
 	bootCommand: string;
 	/** claude only: rides the injected --settings file (no CLI flag). */
 	fastMode: boolean;
-	/** The user's prompt, shown in the fake-TUI waiting overlay so the
-	 * finalize + cold-start latency reads as "the agent is thinking". */
-	prompt?: string | null;
 };
 
 /** sessionId → one-shot boot for a composer-initiated terminal
