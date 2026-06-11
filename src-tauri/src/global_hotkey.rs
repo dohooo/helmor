@@ -1,4 +1,4 @@
-use std::{str::FromStr, sync::Mutex};
+use std::{collections::HashMap, str::FromStr, sync::Mutex};
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
@@ -9,28 +9,59 @@ use crate::error::CommandError;
 
 const SHORTCUTS_SETTING_KEY: &str = "app.shortcuts";
 const GLOBAL_HOTKEY_ID: &str = "global.hotkey";
+const QUICK_PANEL_HOTKEY_ID: &str = "quickPanel.hotkey";
+const OS_HOTKEY_IDS: [&str; 2] = [GLOBAL_HOTKEY_ID, QUICK_PANEL_HOTKEY_ID];
 const MAIN_WINDOW_LABEL: &str = "main";
 
 // Rust owns plugin registration, so no frontend plugin capability is needed.
-// Startup reads only stored overrides; keep the TS default null unless this
-// module learns the registry default too.
+// The registry defaults below MUST stay in sync with `defaultHotkey` in
+// src/features/shortcuts/registry.ts: the startup sync registers them when the
+// stored overrides have no entry for the id, while an explicit `null` override
+// means the user unbound the hotkey.
+fn default_hotkey(id: &str) -> Option<&'static str> {
+    match id {
+        QUICK_PANEL_HOTKEY_ID => Some("Shift+Alt+Space"),
+        _ => None,
+    }
+}
+
+/// Registered accelerators by hotkey id.
 #[derive(Default)]
 pub struct GlobalHotkeyState {
-    current: Mutex<Option<String>>,
+    current: Mutex<HashMap<String, String>>,
 }
 
 pub fn sync_from_settings(app: &AppHandle) -> Result<()> {
     let raw = crate::settings::load_setting_value(SHORTCUTS_SETTING_KEY)?;
-    let hotkey = raw.as_deref().and_then(global_hotkey_from_shortcuts_json);
-    sync_global_hotkey_inner(app, hotkey)
+    let mut first_error = None;
+    for id in OS_HOTKEY_IDS {
+        let hotkey = hotkey_from_shortcuts_json(raw.as_deref(), id);
+        // One hotkey failing to register must not block the other.
+        if let Err(error) = sync_hotkey_inner(app, id, hotkey) {
+            tracing::warn!(
+                error = %format!("{error:#}"),
+                hotkey_id = id,
+                "Failed to register startup global hotkey",
+            );
+            first_error.get_or_insert(error);
+        }
+    }
+    first_error.map_or(Ok(()), Err)
 }
 
 #[tauri::command]
-pub fn sync_global_hotkey(app: AppHandle, hotkey: Option<String>) -> Result<(), CommandError> {
-    Ok(sync_global_hotkey_inner(&app, hotkey)?)
+pub fn sync_global_hotkey(
+    app: AppHandle,
+    id: String,
+    hotkey: Option<String>,
+) -> Result<(), CommandError> {
+    if !OS_HOTKEY_IDS.contains(&id.as_str()) {
+        return Err(anyhow!("Unknown global hotkey id {id}").into());
+    }
+    Ok(sync_hotkey_inner(&app, &id, hotkey)?)
 }
 
-fn sync_global_hotkey_inner(app: &AppHandle, hotkey: Option<String>) -> Result<()> {
+fn sync_hotkey_inner(app: &AppHandle, id: &str, hotkey: Option<String>) -> Result<()> {
     let normalized = hotkey
         .as_deref()
         .map(str::trim)
@@ -40,11 +71,12 @@ fn sync_global_hotkey_inner(app: &AppHandle, hotkey: Option<String>) -> Result<(
 
     let state = app.state::<GlobalHotkeyState>();
     let mut current = state.current.lock().expect("global hotkey state poisoned");
-    if *current == normalized {
+    if current.get(id).cloned() == normalized {
         return Ok(());
     }
 
-    let previous = current.clone();
+    let handler = handler_for(id);
+    let previous = current.get(id).cloned();
     if let Some(previous) = previous.as_deref() {
         app.global_shortcut()
             .unregister(previous)
@@ -52,32 +84,36 @@ fn sync_global_hotkey_inner(app: &AppHandle, hotkey: Option<String>) -> Result<(
     }
 
     if let Some(next) = normalized.as_deref() {
-        if let Err(error) = app
-            .global_shortcut()
-            .on_shortcut(next, handle_global_hotkey)
-        {
+        if let Err(error) = app.global_shortcut().on_shortcut(next, handler) {
             if let Some(previous) = previous.as_deref() {
-                if let Err(restore_error) = app
-                    .global_shortcut()
-                    .on_shortcut(previous, handle_global_hotkey)
-                {
+                if let Err(restore_error) = app.global_shortcut().on_shortcut(previous, handler) {
                     tracing::warn!(
                         error = %restore_error,
                         hotkey = %previous,
                         "Failed to restore previous global hotkey",
                     );
-                    *current = None;
+                    current.remove(id);
                 }
             }
             return Err(error).with_context(|| format!("Failed to register global hotkey {next}"));
         }
     }
 
-    *current = normalized;
+    match normalized {
+        Some(accelerator) => current.insert(id.to_owned(), accelerator),
+        None => current.remove(id),
+    };
     Ok(())
 }
 
-fn handle_global_hotkey(
+fn handler_for(id: &str) -> fn(&AppHandle, &Shortcut, ShortcutEvent) {
+    match id {
+        QUICK_PANEL_HOTKEY_ID => handle_quick_panel_hotkey,
+        _ => handle_main_hotkey,
+    }
+}
+
+fn handle_main_hotkey(
     app: &AppHandle,
     _shortcut: &tauri_plugin_global_shortcut::Shortcut,
     event: ShortcutEvent,
@@ -87,6 +123,19 @@ fn handle_global_hotkey(
     }
     if let Err(error) = toggle_main_window(app) {
         tracing::warn!(error = %format!("{error:#}"), "Failed to toggle main window from global hotkey");
+    }
+}
+
+fn handle_quick_panel_hotkey(
+    app: &AppHandle,
+    _shortcut: &tauri_plugin_global_shortcut::Shortcut,
+    event: ShortcutEvent,
+) {
+    if event.state != ShortcutState::Pressed {
+        return;
+    }
+    if let Err(error) = crate::quick_panel::toggle(app) {
+        tracing::warn!(error = %format!("{error:#}"), "Failed to toggle quick panel from global hotkey");
     }
 }
 
@@ -106,12 +155,21 @@ fn toggle_main_window(app: &AppHandle) -> Result<()> {
     Ok(())
 }
 
-fn global_hotkey_from_shortcuts_json(raw: &str) -> Option<String> {
-    let value = serde_json::from_str::<Value>(raw).ok()?;
-    value
-        .get(GLOBAL_HOTKEY_ID)
-        .and_then(Value::as_str)
-        .map(str::to_owned)
+fn hotkey_from_shortcuts_json(raw: Option<&str>, id: &str) -> Option<String> {
+    let fallback = || default_hotkey(id).map(str::to_owned);
+    let Some(raw) = raw else {
+        return fallback();
+    };
+    let Ok(value) = serde_json::from_str::<Value>(raw) else {
+        return fallback();
+    };
+    match value.get(id) {
+        // No override stored: the registry default applies.
+        None => fallback(),
+        // Explicit null: the user unbound this hotkey.
+        Some(Value::Null) => None,
+        Some(other) => other.as_str().map(str::to_owned),
+    }
 }
 
 fn to_tauri_accelerator(hotkey: &str) -> Result<String> {
@@ -151,12 +209,50 @@ mod tests {
     #[test]
     fn extracts_global_hotkey_from_shortcuts_json() {
         assert_eq!(
-            global_hotkey_from_shortcuts_json(r#"{"global.hotkey":"Mod+Shift+Space"}"#),
+            hotkey_from_shortcuts_json(
+                Some(r#"{"global.hotkey":"Mod+Shift+Space"}"#),
+                GLOBAL_HOTKEY_ID
+            ),
             Some("Mod+Shift+Space".to_owned()),
         );
         assert_eq!(
-            global_hotkey_from_shortcuts_json(r#"{"global.hotkey":null}"#),
+            hotkey_from_shortcuts_json(Some(r#"{"global.hotkey":null}"#), GLOBAL_HOTKEY_ID),
             None,
+        );
+        // No override stored: global.hotkey has no registry default.
+        assert_eq!(hotkey_from_shortcuts_json(None, GLOBAL_HOTKEY_ID), None);
+        assert_eq!(
+            hotkey_from_shortcuts_json(Some("{}"), GLOBAL_HOTKEY_ID),
+            None,
+        );
+    }
+
+    #[test]
+    fn quick_panel_hotkey_falls_back_to_registry_default() {
+        // No settings / no override: the registry default applies.
+        assert_eq!(
+            hotkey_from_shortcuts_json(None, QUICK_PANEL_HOTKEY_ID),
+            Some("Shift+Alt+Space".to_owned()),
+        );
+        assert_eq!(
+            hotkey_from_shortcuts_json(Some("{}"), QUICK_PANEL_HOTKEY_ID),
+            Some("Shift+Alt+Space".to_owned()),
+        );
+        // Explicit null: the user unbound it.
+        assert_eq!(
+            hotkey_from_shortcuts_json(
+                Some(r#"{"quickPanel.hotkey":null}"#),
+                QUICK_PANEL_HOTKEY_ID
+            ),
+            None,
+        );
+        // Override wins over the default.
+        assert_eq!(
+            hotkey_from_shortcuts_json(
+                Some(r#"{"quickPanel.hotkey":"Mod+Shift+K"}"#),
+                QUICK_PANEL_HOTKEY_ID
+            ),
+            Some("Mod+Shift+K".to_owned()),
         );
     }
 
@@ -169,6 +265,10 @@ mod tests {
         assert_eq!(
             to_tauri_accelerator("Control+Alt+ArrowUp").unwrap(),
             "Ctrl+Alt+Up",
+        );
+        assert_eq!(
+            to_tauri_accelerator("Shift+Alt+Space").unwrap(),
+            "Shift+Alt+Space",
         );
     }
 

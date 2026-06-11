@@ -12,6 +12,12 @@ type Options = {
 	queryClient: QueryClient;
 	processPendingCliSends: () => Promise<void> | void;
 	reloadSettings: () => Promise<void> | void;
+	/**
+	 * "Open in Helmor" from the quick panel. Wired in the MAIN window only —
+	 * the event broadcasts to every webview, and the quick panel must not
+	 * navigate itself.
+	 */
+	onWorkspaceReveal?: (workspaceId: string, sessionId: string | null) => void;
 };
 
 function invalidateAllWorkspaceChanges(queryClient: QueryClient) {
@@ -301,6 +307,9 @@ function handleUiMutation(
 			});
 			return;
 		}
+		case "workspaceRevealRequested":
+			options.onWorkspaceReveal?.(event.workspaceId, event.sessionId);
+			return;
 	}
 }
 
@@ -308,14 +317,17 @@ export function useUiSyncBridge({
 	queryClient,
 	processPendingCliSends,
 	reloadSettings,
+	onWorkspaceReveal,
 }: Options) {
 	const processPendingCliSendsRef = useRef(processPendingCliSends);
 	const reloadSettingsRef = useRef(reloadSettings);
+	const onWorkspaceRevealRef = useRef(onWorkspaceReveal);
 
 	useEffect(() => {
 		processPendingCliSendsRef.current = processPendingCliSends;
 		reloadSettingsRef.current = reloadSettings;
-	}, [processPendingCliSends, reloadSettings]);
+		onWorkspaceRevealRef.current = onWorkspaceReveal;
+	}, [processPendingCliSends, reloadSettings, onWorkspaceReveal]);
 
 	useEffect(() => {
 		let disposed = false;
@@ -329,6 +341,8 @@ export function useUiSyncBridge({
 			handleUiMutation(event, queryClient, {
 				processPendingCliSends: () => processPendingCliSendsRef.current(),
 				reloadSettings: () => reloadSettingsRef.current(),
+				onWorkspaceReveal: (workspaceId, sessionId) =>
+					onWorkspaceRevealRef.current?.(workspaceId, sessionId),
 			});
 		}).then((cleanup) => {
 			if (disposed) {

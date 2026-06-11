@@ -12,12 +12,13 @@
 // verbatim out of the old inline AppShell body — call order, dependency arrays
 // and `getSnapshot()` readbacks are preserved exactly.
 import { useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { ComposerCreateContext } from "@/features/conversation";
 import { useDockUnreadBadge } from "@/features/dock-badge";
 import type { SettingsSection } from "@/features/settings";
 import { useAppUpdater } from "@/features/updater/use-app-updater";
 import { useSettings } from "@/lib/settings";
+import { isQuickPanelWindow } from "@/lib/window-role";
 import { useRouterSelection } from "@/router/use-router-selection";
 import { publishShellEvent } from "@/shell/event-bus";
 import { useEnsureDefaultModel } from "@/shell/hooks/use-ensure-default-model";
@@ -221,10 +222,21 @@ export function useAppShellState({
 		workspaceViewMode,
 	});
 
+	const handleWorkspaceReveal = useCallback(
+		(workspaceId: string, sessionId: string | null) => {
+			sel.handleSelectWorkspace(workspaceId);
+			if (sessionId) {
+				sel.handleSelectSession(sessionId);
+			}
+		},
+		[sel.handleSelectWorkspace, sel.handleSelectSession],
+	);
 	useUiSyncBridge({
 		queryClient,
 		processPendingCliSends: data.pendingQueueActions.processPendingCliSends,
 		reloadSettings: () => publishShellEvent({ type: "reload-settings" }),
+		// Quick-panel "Open in Helmor": only the main window navigates.
+		onWorkspaceReveal: isQuickPanelWindow ? undefined : handleWorkspaceReveal,
 	});
 
 	// Close-confirmation is handled by <QuitConfirmDialog /> which registers

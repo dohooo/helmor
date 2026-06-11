@@ -122,6 +122,12 @@ pub enum UiMutationEvent {
     /// The mobile-companion paired-device list changed (paired or revoked).
     /// Frontends invalidate the `pairedDevices` query.
     PairedDevicesChanged,
+    /// "Open in Helmor" from the quick panel. Only the MAIN window acts on
+    /// this (navigates to the workspace/session); the quick panel ignores it.
+    WorkspaceRevealRequested {
+        workspace_id: String,
+        session_id: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
