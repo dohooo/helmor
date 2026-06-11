@@ -4,6 +4,7 @@
  * missing or wrong-shaped field.
  */
 
+import { isAgentProviderEnabled } from "./agent-providers.js";
 import type { AgentProxySettings } from "./agent-proxy.js";
 import type {
 	GetContextUsageParams,
@@ -89,8 +90,12 @@ export function parseProvider(value: unknown): Provider {
 		value === "codex" ||
 		value === "cursor" ||
 		value === "opencode"
-	)
+	) {
+		if (!isAgentProviderEnabled(value)) {
+			throw new Error(`${value} agent is disabled in this build`);
+		}
 		return value;
+	}
 	throw new Error(`unknown provider: ${String(value)}`);
 }
 

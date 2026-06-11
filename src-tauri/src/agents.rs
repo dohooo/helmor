@@ -217,9 +217,8 @@ pub async fn list_agent_model_sections() -> CmdResult<Vec<AgentModelSection>> {
 #[tauri::command]
 pub async fn list_provider_capabilities(
 ) -> CmdResult<Vec<provider_capabilities::ProviderCapabilities>> {
-    Ok(provider_capabilities::KNOWN_PROVIDERS
-        .iter()
-        .map(|p| provider_capabilities::capabilities_for_provider(p))
+    Ok(provider_capabilities::enabled_providers()
+        .map(provider_capabilities::capabilities_for_provider)
         .collect())
 }
 
@@ -228,6 +227,7 @@ pub async fn list_cursor_models(
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
     api_key: Option<String>,
 ) -> CmdResult<Vec<queries::CursorModelEntry>> {
+    provider_capabilities::ensure_agent_provider_enabled("cursor")?;
     // Inline blocking — same pattern as `list_slash_commands`.
     queries::fetch_cursor_models(sidecar.inner(), api_key)
 }
@@ -237,6 +237,7 @@ pub async fn list_opencode_models(
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
     force_reload: Option<bool>,
 ) -> CmdResult<Vec<queries::OpencodeModelEntry>> {
+    provider_capabilities::ensure_agent_provider_enabled("opencode")?;
     // force_reload restarts the opencode server to pick up a just-written config.
     queries::fetch_opencode_models(sidecar.inner(), force_reload.unwrap_or(false))
 }
@@ -252,6 +253,8 @@ pub async fn send_agent_message_stream(
     if prompt.is_empty() {
         return Err(anyhow::anyhow!("Prompt cannot be empty.").into());
     }
+
+    provider_capabilities::ensure_agent_provider_enabled(&request.provider)?;
 
     // Inject triage priming as a hidden prefix; consumed flag flips only after sidecar accepts.
     let priming_session_to_consume: Option<String> = match request.helmor_session_id.as_deref() {

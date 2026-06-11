@@ -1,11 +1,11 @@
 import { createAsyncStoragePersister } from "@tanstack/query-async-storage-persister";
 import { focusManager, QueryClient, queryOptions } from "@tanstack/react-query";
+import { enabledProviderCapabilities } from "@/shared/agent-providers";
 import type { ThreadMessageLike } from "./api";
 import {
 	type ActionKind,
 	type AgentProvider,
 	type ChangeRequestInfo,
-	DEFAULT_PROVIDER_CAPABILITIES,
 	DEFAULT_WORKSPACE_GROUPS,
 	type DetectedEditor,
 	detectInstalledEditors,
@@ -443,7 +443,7 @@ export function providerCapabilitiesQueryOptions() {
 	return queryOptions({
 		queryKey: helmorQueryKeys.providerCapabilities,
 		queryFn: loadProviderCapabilities,
-		initialData: DEFAULT_PROVIDER_CAPABILITIES,
+		initialData: enabledProviderCapabilities(),
 		initialDataUpdatedAt: 0,
 		staleTime: 0,
 		gcTime: Number.POSITIVE_INFINITY,

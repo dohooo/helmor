@@ -115,6 +115,33 @@ pub fn capabilities_for_provider(provider: &str) -> ProviderCapabilities {
 /// tests use it to assert there are no holes in the matrix.
 pub const KNOWN_PROVIDERS: &[&str] = &["claude", "codex", "cursor", "opencode"];
 
+/// Agent providers disabled as Helmor agents. Bundled CLIs stay shipped;
+/// edit this list to hide a provider from the composer without removing
+/// its binary from `vendor/`.
+pub const DISABLED_AGENT_PROVIDERS: &[&str] = &[];
+
+/// Whether `provider` is a shipping agent Helmor exposes in the composer.
+pub fn is_agent_provider_enabled(provider: &str) -> bool {
+    KNOWN_PROVIDERS.contains(&provider) && !DISABLED_AGENT_PROVIDERS.contains(&provider)
+}
+
+/// Shipping providers minus [`DISABLED_AGENT_PROVIDERS`]. Drives the
+/// composer catalog and capability table exposed to the frontend.
+pub fn enabled_providers() -> impl Iterator<Item = &'static str> {
+    KNOWN_PROVIDERS
+        .iter()
+        .copied()
+        .filter(|provider| is_agent_provider_enabled(provider))
+}
+
+pub fn ensure_agent_provider_enabled(provider: &str) -> anyhow::Result<()> {
+    if is_agent_provider_enabled(provider) {
+        Ok(())
+    } else {
+        anyhow::bail!("{provider} agent is disabled in this build")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,5 +260,26 @@ mod tests {
         assert!(json.get("requiresApiKey").is_some());
         let raw = serde_json::to_string(&caps).unwrap();
         assert!(!raw.contains('_'), "snake_case field leaked: {raw}");
+    }
+
+    #[test]
+    fn empty_disabled_list_enables_every_known_provider() {
+        assert!(DISABLED_AGENT_PROVIDERS.is_empty());
+        let enabled: Vec<_> = enabled_providers().collect();
+        assert_eq!(enabled, KNOWN_PROVIDERS);
+        for provider in KNOWN_PROVIDERS {
+            assert!(is_agent_provider_enabled(provider));
+        }
+    }
+
+    #[test]
+    fn disabled_provider_is_filtered_from_enabled_list() {
+        let without_opencode: Vec<_> = KNOWN_PROVIDERS
+            .iter()
+            .copied()
+            .filter(|provider| *provider != "opencode")
+            .collect();
+        assert!(!without_opencode.contains(&"opencode"));
+        assert_eq!(without_opencode.len(), KNOWN_PROVIDERS.len() - 1);
     }
 }

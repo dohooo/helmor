@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useOpencodeModelSync } from "@/features/settings/panels/providers/use-opencode-model-sync";
 import { useSettings } from "@/lib/settings";
+import { isAgentProviderEnabled } from "@/shared/agent-providers";
 
 /** On app start, restart `opencode serve` once to re-read ~/.config/opencode,
  *  so config edits made while Helmor was closed land in the composer's model
@@ -13,6 +14,7 @@ export function useOpencodeStartupSync() {
 
 	const usedOpencode = settings.opencodeProvider.cachedModels !== null;
 	useEffect(() => {
+		if (!isAgentProviderEnabled("opencode")) return;
 		if (!isLoaded || ranRef.current || !usedOpencode) return;
 		ranRef.current = true;
 		void sync({ forceReload: true });

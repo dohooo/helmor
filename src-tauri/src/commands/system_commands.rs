@@ -1139,10 +1139,14 @@ pub async fn get_agent_login_status() -> CmdResult<AgentLoginStatus> {
     run_blocking(|| {
         let codex = codex_auth_status();
         Ok(AgentLoginStatus {
-            claude: claude_login_ready(),
-            codex: codex.ready,
-            cursor: cursor_login_ready(),
-            opencode: opencode_login_ready(),
+            claude: agent_login_ready("claude", claude_login_ready),
+            codex: if crate::agents::provider_capabilities::is_agent_provider_enabled("codex") {
+                codex.ready
+            } else {
+                false
+            },
+            cursor: agent_login_ready("cursor", cursor_login_ready),
+            opencode: agent_login_ready("opencode", opencode_login_ready),
             codex_provider: codex.provider,
             codex_auth_method: codex.auth_method.map(str::to_string),
         })
@@ -1366,7 +1370,16 @@ fn env_var_is_present(key: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn agent_login_ready(provider: &str, enabled_check: fn() -> bool) -> bool {
+    if crate::agents::provider_capabilities::is_agent_provider_enabled(provider) {
+        enabled_check()
+    } else {
+        false
+    }
+}
+
 fn agent_login_command(provider: &str) -> anyhow::Result<String> {
+    crate::agents::provider_capabilities::ensure_agent_provider_enabled(provider)?;
     let args = match provider {
         "claude" => "auth login",
         "codex" => "login",

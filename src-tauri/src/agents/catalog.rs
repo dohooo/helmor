@@ -52,15 +52,24 @@ fn model_sections_for_inputs(
     cursor_prefs: Option<CursorPrefs>,
     opencode_prefs: Option<OpencodePrefs>,
 ) -> Vec<AgentModelSection> {
-    let mut claude_section = official_claude_section();
-    claude_section
-        .options
-        .extend(custom_provider_options(custom));
-    let mut sections = vec![claude_section];
-    sections.push(codex_section());
-    sections.push(opencode_section_from_prefs(opencode_prefs));
-    if let Some(cursor) = cursor_section_from_prefs(cursor_prefs) {
-        sections.push(cursor);
+    let mut sections = Vec::new();
+    if super::provider_capabilities::is_agent_provider_enabled("claude") {
+        let mut claude_section = official_claude_section();
+        claude_section
+            .options
+            .extend(custom_provider_options(custom));
+        sections.push(claude_section);
+    }
+    if super::provider_capabilities::is_agent_provider_enabled("codex") {
+        sections.push(codex_section());
+    }
+    if super::provider_capabilities::is_agent_provider_enabled("opencode") {
+        sections.push(opencode_section_from_prefs(opencode_prefs));
+    }
+    if super::provider_capabilities::is_agent_provider_enabled("cursor") {
+        if let Some(cursor) = cursor_section_from_prefs(cursor_prefs) {
+            sections.push(cursor);
+        }
     }
 
     sections

@@ -8,7 +8,7 @@
 import type { AgentProxySettings } from "./agent-proxy.js";
 import type { SidecarEmitter } from "./emitter.js";
 
-export type Provider = "claude" | "codex" | "cursor" | "opencode";
+export type { AgentProvider as Provider } from "./agent-providers.js";
 
 export interface SendMessageParams {
 	readonly sessionId: string;

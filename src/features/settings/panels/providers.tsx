@@ -9,6 +9,7 @@ import {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { getAgentLoginStatus, getAgentVersions } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
+import { isAgentProviderEnabled } from "@/shared/agent-providers";
 import { SettingsGroup } from "../components/settings-row";
 import { AgentProxyPanel, ClaudeCustomProvidersPanel } from "./model-providers";
 import { CursorCardBody } from "./providers/cursor-card-body";
@@ -49,70 +50,78 @@ export function ProvidersPanel() {
 	return (
 		<TooltipProvider>
 			<SettingsGroup>
-				<ProviderRow
-					icon={OpenCodeIcon}
-					name="OpenCode"
-					version={versions?.opencode}
-					ready={Boolean(status?.opencode)}
-					connecting={statusLoading || opencodeSyncing}
-					loginProvider="opencode"
-					onLoginExit={() => {
-						refetchStatus();
-						opencodeModelsRef.current?.refresh();
-					}}
-					collapsible
-				>
-					<ProviderConfigRow
-						label="Models"
-						description="Pick which models appear in the composer's picker."
+				{isAgentProviderEnabled("opencode") ? (
+					<ProviderRow
+						icon={OpenCodeIcon}
+						name="OpenCode"
+						version={versions?.opencode}
+						ready={Boolean(status?.opencode)}
+						connecting={statusLoading || opencodeSyncing}
+						loginProvider="opencode"
+						onLoginExit={() => {
+							refetchStatus();
+							opencodeModelsRef.current?.refresh();
+						}}
+						collapsible
 					>
-						<OpencodeModels ref={opencodeModelsRef} />
-					</ProviderConfigRow>
-					<ProviderConfigRow
-						label="Custom Providers"
-						description="Add a provider by API key or OpenAI-compatible endpoint, saved to ~/.config/opencode."
+						<ProviderConfigRow
+							label="Models"
+							description="Pick which models appear in the composer's picker."
+						>
+							<OpencodeModels ref={opencodeModelsRef} />
+						</ProviderConfigRow>
+						<ProviderConfigRow
+							label="Custom Providers"
+							description="Add a provider by API key or OpenAI-compatible endpoint, saved to ~/.config/opencode."
+						>
+							<OpencodeCustomProvidersPanel
+								onChanged={() => opencodeModelsRef.current?.syncIfIdle()}
+							/>
+						</ProviderConfigRow>
+					</ProviderRow>
+				) : null}
+				{isAgentProviderEnabled("claude") ? (
+					<ProviderRow
+						icon={ClaudeColorIcon}
+						name="Claude Code"
+						version={versions?.claude}
+						ready={Boolean(status?.claude)}
+						connecting={statusLoading}
+						loginProvider="claude"
+						onLoginExit={refetchStatus}
+						collapsible
 					>
-						<OpencodeCustomProvidersPanel
-							onChanged={() => opencodeModelsRef.current?.syncIfIdle()}
-						/>
-					</ProviderConfigRow>
-				</ProviderRow>
-				<ProviderRow
-					icon={ClaudeColorIcon}
-					name="Claude Code"
-					version={versions?.claude}
-					ready={Boolean(status?.claude)}
-					connecting={statusLoading}
-					loginProvider="claude"
-					onLoginExit={refetchStatus}
-					collapsible
-				>
-					<ProviderConfigRow
-						label="Custom Providers"
-						description="Enter API keys here to use third-party models. They run alongside Claude Code's official models."
+						<ProviderConfigRow
+							label="Custom Providers"
+							description="Enter API keys here to use third-party models. They run alongside Claude Code's official models."
+						>
+							<ClaudeCustomProvidersPanel />
+						</ProviderConfigRow>
+					</ProviderRow>
+				) : null}
+				{isAgentProviderEnabled("codex") ? (
+					<ProviderRow
+						icon={OpenAIIcon}
+						name="Codex"
+						version={versions?.codex}
+						ready={Boolean(status?.codex)}
+						connecting={statusLoading}
+						loginProvider="codex"
+						onLoginExit={refetchStatus}
+					/>
+				) : null}
+				{isAgentProviderEnabled("cursor") ? (
+					<ProviderRow
+						icon={CursorIcon}
+						name="Cursor"
+						ready={Boolean(status?.cursor)}
+						loginProvider={null}
 					>
-						<ClaudeCustomProvidersPanel />
-					</ProviderConfigRow>
-				</ProviderRow>
-				<ProviderRow
-					icon={OpenAIIcon}
-					name="Codex"
-					version={versions?.codex}
-					ready={Boolean(status?.codex)}
-					connecting={statusLoading}
-					loginProvider="codex"
-					onLoginExit={refetchStatus}
-				/>
-				<ProviderRow
-					icon={CursorIcon}
-					name="Cursor"
-					ready={Boolean(status?.cursor)}
-					loginProvider={null}
-				>
-					<ProviderConfigRow description="Add your API key, then pick which models appear in the composer's picker.">
-						<CursorCardBody />
-					</ProviderConfigRow>
-				</ProviderRow>
+						<ProviderConfigRow description="Add your API key, then pick which models appear in the composer's picker.">
+							<CursorCardBody />
+						</ProviderConfigRow>
+					</ProviderRow>
+				) : null}
 				<AgentProxyPanel />
 			</SettingsGroup>
 		</TooltipProvider>

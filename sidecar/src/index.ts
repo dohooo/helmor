@@ -11,6 +11,7 @@
 import { createInterface } from "node:readline";
 import type { PermissionUpdate } from "@anthropic-ai/claude-agent-sdk";
 import { isAbortError } from "./abort.js";
+import { isAgentProviderEnabled } from "./agent-providers.js";
 import { applyAgentProxyToProcessEnv } from "./agent-proxy.js";
 import { ClaudeSessionManager } from "./claude-session-manager.js";
 import { CodexAppServerManager } from "./codex-app-server-manager.js";
@@ -49,12 +50,19 @@ const claudeManager = new ClaudeSessionManager();
 const codexManager = new CodexAppServerManager();
 const cursorManager = new CursorSessionManager();
 const opencodeManager = new OpencodeSessionManager();
-const managers: Record<Provider, SessionManager> = {
+const allManagers: Record<Provider, SessionManager> = {
 	claude: claudeManager,
 	codex: codexManager,
 	cursor: cursorManager,
 	opencode: opencodeManager,
 };
+
+function getManager(provider: Provider): SessionManager {
+	if (!isAgentProviderEnabled(provider)) {
+		throw new Error(`${provider} agent is disabled in this build`);
+	}
+	return allManagers[provider];
+}
 
 // `parentGone` flips to true only when stdin EOFs — that's the
 // authoritative "Rust exited" signal. EPIPE on stdout, by contrast, can
@@ -190,9 +198,13 @@ function collectErrorChainCodes(err: Error): string[] {
 }
 
 function buildTitleProviderOrder(provider: Provider | null): Provider[] {
-	if (provider === "codex") return ["codex", "claude", "cursor"];
-	if (provider === "cursor") return ["cursor", "claude", "codex"];
-	return ["claude", "codex", "cursor"];
+	const order: Provider[] =
+		provider === "codex"
+			? ["codex", "claude", "cursor"]
+			: provider === "cursor"
+				? ["cursor", "claude", "codex"]
+				: ["claude", "codex", "cursor"];
+	return order.filter(isAgentProviderEnabled);
 }
 
 logger.info("Sidecar starting", { pid: process.pid });
@@ -221,7 +233,7 @@ async function handleSendMessage(
 			cwd: sendParams.cwd ?? "(none)",
 			resume: sendParams.resume ?? "(none)",
 		});
-		await managers[provider].sendMessage(id, sendParams, emitter);
+		await getManager(provider).sendMessage(id, sendParams, emitter);
 		logger.debug(`[${id}] sendMessage completed`);
 	} catch (err) {
 		if (isAbortError(err)) {
@@ -281,7 +293,7 @@ async function handleGenerateTitle(
 			try {
 				if (titleProvider === "claude") {
 					try {
-						await managers.claude.generateTitle(
+						await getManager("claude").generateTitle(
 							id,
 							userMessage,
 							branchRenamePrompt,
@@ -300,7 +312,7 @@ async function handleGenerateTitle(
 						logger.debug(
 							`[${id}] generateTitle custom claude failed, trying official claude: ${errorMessage(claudeErr)}`,
 						);
-						await managers.claude.generateTitle(
+						await getManager("claude").generateTitle(
 							id,
 							userMessage,
 							branchRenamePrompt,
@@ -313,7 +325,7 @@ async function handleGenerateTitle(
 					return;
 				}
 				if (titleProvider === "codex") {
-					await managers.codex.generateTitle(
+					await getManager("codex").generateTitle(
 						id,
 						userMessage,
 						branchRenamePrompt,
@@ -324,7 +336,7 @@ async function handleGenerateTitle(
 					logger.debug(`[${id}] generateTitle completed (codex)`);
 					return;
 				}
-				await managers.cursor.generateTitle(
+				await getManager("cursor").generateTitle(
 					id,
 					userMessage,
 					branchRenamePrompt,
@@ -371,7 +383,7 @@ async function handleListModels(
 			override: Boolean(apiKey),
 			forceReload,
 		});
-		const models = await managers[provider].listModels(
+		const models = await getManager(provider).listModels(
 			apiKey || forceReload
 				? { ...(apiKey ? { apiKey } : {}), forceReload }
 				: undefined,
@@ -396,7 +408,7 @@ async function handleListSlashCommands(
 			provider,
 			cwd: listParams.cwd ?? "(none)",
 		});
-		const commands = await managers[provider].listSlashCommands(listParams);
+		const commands = await getManager(provider).listSlashCommands(listParams);
 		emitter.slashCommandsListed(id, commands);
 		logger.debug(`[${id}] listSlashCommands → ${commands.length} entries`);
 	} catch (err) {
@@ -414,7 +426,7 @@ async function handleStopSession(
 		const provider = parseProvider(params.provider);
 		const sessionId = requireString(params, "sessionId");
 		logger.debug(`[${id}] stopSession`, { sessionId, provider });
-		await managers[provider].stopSession(sessionId);
+		await getManager(provider).stopSession(sessionId);
 		emitter.stopped(id, sessionId);
 	} catch (err) {
 		const msg = errorMessage(err);
@@ -496,7 +508,7 @@ async function handleSteerSession(
 			fileCount: files.length,
 			imageCount: images.length,
 		});
-		const accepted = await managers[provider].steer(
+		const accepted = await getManager(provider).steer(
 			sessionId,
 			prompt,
 			files,

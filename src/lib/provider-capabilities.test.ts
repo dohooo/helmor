@@ -154,7 +154,7 @@ describe("DEFAULT_PROVIDER_CAPABILITIES (cold-start initialData)", () => {
 		// `toBe` ties the wiring to the constant whose Codex active-goal
 		// flag is pinned by the test above — so the query hands consumers a
 		// table with `supportsActiveGoal === true` before any hydration.
-		expect(providerCapabilitiesQueryOptions().initialData).toBe(
+		expect(providerCapabilitiesQueryOptions().initialData).toEqual(
 			DEFAULT_PROVIDER_CAPABILITIES,
 		);
 	});
