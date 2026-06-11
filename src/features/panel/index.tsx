@@ -191,6 +191,9 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 								agentKind={session.agentType}
 								providerSessionId={session.providerSessionId}
 								isActive={session.id === visibleTerminalId}
+								workspaceReady={Boolean(
+									workspace && workspace.state !== "initializing",
+								)}
 							/>
 						</div>
 					))}

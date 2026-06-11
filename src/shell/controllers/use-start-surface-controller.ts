@@ -11,9 +11,12 @@ import type {
 	ComposerSubmitPayload,
 	PendingCreatedWorkspaceSubmit,
 } from "@/features/conversation";
+import { buildTerminalBootCommand } from "@/features/terminal/terminal-presets";
+import { setPendingBoot } from "@/features/terminal/terminal-session-store";
 import { createWorkspaceFromStartComposer } from "@/features/workspace-start/create-workspace";
 import {
 	type BranchPickerEntry,
+	convertSessionToTerminal,
 	createAndCheckoutBranch,
 	getRepoCurrentBranch,
 	listBranchesForWorkspacePicker,
@@ -562,6 +565,35 @@ export function useStartSurfaceController(
 				requestSidebarReconcile(queryClient);
 
 				if (outcome.shouldStream) {
+					// Terminal-Mode start sends: convert the pipeline's GUI session
+					// into a Terminal session IN PLACE (no throwaway placeholder)
+					// and stage its boot before anything selects it. The panel's
+					// spawn is gated on workspace readiness, so the PTY still
+					// waits for the worktree to finalize.
+					if (payload.terminalMode) {
+						try {
+							await convertSessionToTerminal(sessionId, payload.model.provider);
+							const boot = buildTerminalBootCommand(payload.model.provider, {
+								prompt: payload.prompt,
+								modelId: payload.model.cliModel || null,
+								effortLevel: payload.effortLevel || null,
+								permissionMode: payload.permissionMode || null,
+								addDirs: startPendingLinkedDirectories,
+								fastMode: payload.fastMode,
+							});
+							if (boot) {
+								setPendingBoot(sessionId, {
+									bootCommand: boot,
+									fastMode: payload.fastMode,
+								});
+							}
+						} catch (error) {
+							console.error(
+								"[start] terminal conversion failed; continuing as chat:",
+								error,
+							);
+						}
+					}
 					// Defer the view-switch state burst to the next animation frame
 					// so the browser can paint the current frame (start page)
 					// before reconciling the heavy conversation tree. Without this

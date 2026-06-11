@@ -221,17 +221,13 @@ export function detach(sessionId: string) {
 export function writeStdin(sessionId: string, data: string) {
 	const entry = instances.get(sessionId);
 	if (!entry) return;
-	// A bare ESC keypress is the TUI's interrupt key (arrow keys etc. arrive
-	// as multi-byte CSI sequences, never a lone 0x1b). claude fires NO hook on
-	// a user interrupt (verified on 2.1.170: normal completion → Stop;
-	// ESC-interrupt → nothing), so the busy spinner would hang forever.
-	// Clear optimistically — a false positive (ESC closing a TUI menu while
-	// busy) self-heals on the next hook event re-asserting busy.
-	if (data === "\x1b") {
-		void setTerminalSessionBusy(sessionId, entry.workspaceId, false).catch(
-			() => {},
-		);
-	}
+	// NOTE: no ESC-keypress interrupt heuristic here. claude's ESC is
+	// overloaded (close menu / clear input / press-twice-to-interrupt), so
+	// keystroke sniffing misfires — and each misfire kicked an IPC +
+	// session-list invalidation whose re-render could break an in-flight IME
+	// composition (typing went dead until a session switch). Interrupts are
+	// hook-driven like ORCA: a real interrupt fires Stop (is_interrupt=true),
+	// which terminal-hook already maps to idle.
 	void writeTerminalStdin(entry.repoId, entry.workspaceId, sessionId, data);
 }
 

@@ -48,10 +48,6 @@ export type ShellEvent =
 			fastMode: boolean;
 			/** Explicit target; null = the currently selected workspace. */
 			workspaceId: string | null;
-			/** Empty placeholder session to delete once the terminal session is
-			 *  live (the start-surface create pipeline mints a GUI session the
-			 *  terminal flow doesn't need). */
-			replaceSessionId: string | null;
 	  };
 
 export type ShellEventType = ShellEvent["type"];

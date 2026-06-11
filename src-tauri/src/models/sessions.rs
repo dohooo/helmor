@@ -311,6 +311,22 @@ pub fn workspace_id_for_session(session_id: &str) -> Result<Option<String>> {
     Ok(workspace_id)
 }
 
+/// Convert a freshly-prepared GUI session into a Terminal session in place.
+/// Used by the start-surface terminal flow: the workspace-create pipeline
+/// mints a GUI session, and converting it (before it's ever used) avoids a
+/// throwaway placeholder. Only safe on message-less sessions.
+pub fn convert_session_to_terminal(session_id: &str, agent_type: &str) -> Result<()> {
+    let connection = db::write_conn()?;
+    connection
+        .execute(
+            "UPDATE sessions SET session_kind = 'terminal', agent_type = ?2, title = 'Terminal' \
+             WHERE id = ?1",
+            rusqlite::params![session_id, agent_type],
+        )
+        .with_context(|| format!("Failed to convert session {session_id} to terminal"))?;
+    Ok(())
+}
+
 /// Reset Terminal sessions stuck at 'streaming' (their PTY died with the last
 /// app exit). Called on startup so the sidebar doesn't show a phantom spinner.
 pub fn reset_stale_terminal_statuses() -> Result<()> {

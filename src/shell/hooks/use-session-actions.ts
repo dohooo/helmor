@@ -7,7 +7,6 @@ import { setPendingBoot } from "@/features/terminal/terminal-session-store";
 import {
 	closeMainWindow,
 	createSession,
-	deleteSession,
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
@@ -207,24 +206,7 @@ export function useSessionActions({
 				}
 			},
 			event.workspaceId,
-		).then(async (createdSessionId) => {
-			// Drop the create pipeline's unused GUI placeholder only after the
-			// terminal session is live (on failure it stays as a fallback).
-			if (!createdSessionId || !event.replaceSessionId) return;
-			try {
-				await deleteSession(event.replaceSessionId);
-				if (event.workspaceId) {
-					void queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.workspaceSessions(event.workspaceId),
-					});
-					void queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.workspaceDetail(event.workspaceId),
-					});
-				}
-			} catch (error) {
-				console.error("[terminal] failed to drop placeholder session:", error);
-			}
-		});
+		);
 	});
 
 	useEffect(() => {

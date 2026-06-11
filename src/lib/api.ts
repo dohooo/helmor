@@ -4310,6 +4310,15 @@ export async function deleteSession(sessionId: string): Promise<void> {
 	await invoke("delete_session", { sessionId });
 }
 
+/** Convert a freshly-prepared (message-less) GUI session into a Terminal
+ * session in place — the start-surface terminal flow's no-placeholder path. */
+export async function convertSessionToTerminal(
+	sessionId: string,
+	agentType: string,
+): Promise<void> {
+	await invoke("convert_session_to_terminal", { sessionId, agentType });
+}
+
 export async function loadHiddenSessions(
 	workspaceId: string,
 ): Promise<WorkspaceSessionSummary[]> {

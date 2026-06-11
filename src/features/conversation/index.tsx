@@ -36,7 +36,6 @@ import {
 	getComposerContextKey,
 	parseSessionIdFromContextKey,
 } from "@/lib/workspace-helpers";
-import { publishShellEvent } from "@/shell/event-bus";
 import {
 	type ComposerSubmitPayload,
 	useConversationStreaming,
@@ -534,25 +533,11 @@ export const WorkspaceConversationContainer = memo(
 				pendingCreatedWorkspaceSubmit.id;
 
 			void (async () => {
-				// Terminal-Mode start sends: the workspace + worktree are ready
-				// now, so open the prompt in the agent's TUI instead of
-				// streaming a GUI turn into the prepare-created session.
+				// Terminal-Mode start sends were fully handled at prepare time
+				// (the session was converted in place and its boot staged) —
+				// just consume so no GUI turn is streamed into it.
 				const { payload } = pendingCreatedWorkspaceSubmit;
 				if (payload.terminalMode) {
-					publishShellEvent({
-						type: "create-terminal-session",
-						prompt: payload.prompt,
-						provider: payload.model.provider,
-						modelId: payload.model.cliModel || null,
-						effortLevel: payload.effortLevel || null,
-						permissionMode: payload.permissionMode || null,
-						addDirs: null,
-						fastMode: payload.fastMode,
-						workspaceId: pendingCreatedWorkspaceSubmit.workspaceId,
-						// The create pipeline minted a GUI session this flow never
-						// uses — drop it once the terminal session is live.
-						replaceSessionId: pendingCreatedWorkspaceSubmit.sessionId,
-					});
 					onPendingCreatedWorkspaceSubmitConsumed?.(
 						pendingCreatedWorkspaceSubmit.id,
 					);

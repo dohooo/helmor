@@ -677,6 +677,7 @@ pub fn run() {
             commands::terminal_commands::write_terminal_stdin,
             commands::terminal_commands::resize_terminal,
             commands::terminal_commands::set_terminal_session_busy,
+            commands::terminal_commands::convert_session_to_terminal,
             commands::triage_commands::get_triage_config,
             commands::triage_commands::update_triage_config,
             commands::triage_commands::get_triage_active_status,

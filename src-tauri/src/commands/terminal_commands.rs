@@ -357,6 +357,18 @@ pub async fn resize_terminal(
     Ok(manager.resize(&key, cols, rows)?)
 }
 
+/// Convert a freshly-prepared GUI session into a Terminal session (start-surface
+/// terminal flow). See `models::sessions::convert_session_to_terminal`.
+#[tauri::command]
+pub async fn convert_session_to_terminal(session_id: String, agent_type: String) -> CmdResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::models::sessions::convert_session_to_terminal(&session_id, &agent_type)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e}"))??;
+    Ok(())
+}
+
 /// Mirror a Terminal session's working/idle state into the shared active-stream
 /// registry so the sidebar spinner treats it like a GUI session. Used to clear
 /// busy when the PTY exits; the working state itself comes from the agent hook.
