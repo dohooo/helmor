@@ -691,6 +691,70 @@ describe("splitTextWithFiles", () => {
 			},
 		]);
 	});
+
+	// Parity with the Rust adapter's `user_prompt_with_pasted_range_mid_surrogate`
+	// snapshot: ranges landing inside a surrogate pair drop (their span stays
+	// plain text) instead of producing lone-surrogate chips.
+	it("drops ranges that split a surrogate pair (parity with Rust)", () => {
+		const text = "看 😀😀 ok"; // UTF-16: 看=0, sp=1, 😀=2..4, 😀=4..6, sp=6, o=7, k=8
+		const result = splitTextWithFiles(
+			text,
+			[],
+			"m1",
+			[],
+			[
+				{ start: 2, end: 5 }, // end lands mid-surrogate — dropped
+				{ start: 3, end: 6 }, // start lands mid-surrogate — dropped
+				{ start: 7, end: 9 }, // valid: "ok", ends at end-of-string
+			],
+		);
+		expect(result).toEqual([
+			{ type: "text", id: "m1:txt:0", text: "看 😀😀 " },
+			{ type: "pasted-text", id: "m1:pasted:0", text: "ok" },
+		]);
+	});
+
+	// Parity with Rust's (start, end) tuple sort: equal-start overlap keeps
+	// the smaller end regardless of input order.
+	it("keeps the smaller end when overlapping ranges share a start (parity with Rust)", () => {
+		const text = "before PASTED after";
+		const result = splitTextWithFiles(
+			text,
+			[],
+			"m1",
+			[],
+			[
+				{ start: 7, end: 13 }, // listed first, but the longer span loses
+				{ start: 7, end: 10 },
+			],
+		);
+		expect(result).toEqual([
+			{ type: "text", id: "m1:txt:0", text: "before " },
+			{ type: "pasted-text", id: "m1:pasted:0", text: "PAS" },
+			{ type: "text", id: "m1:txt:1", text: "TED after" },
+		]);
+	});
+
+	// Parity with the Rust adapter's `user_prompt_with_adjacent_pasted_ranges`
+	// snapshot: a shared boundary is not an overlap.
+	it("keeps adjacent ranges as separate chips (parity with Rust)", () => {
+		const text = "see AABBB";
+		const result = splitTextWithFiles(
+			text,
+			[],
+			"m1",
+			[],
+			[
+				{ start: 4, end: 6 },
+				{ start: 6, end: 9 },
+			],
+		);
+		expect(result).toEqual([
+			{ type: "text", id: "m1:txt:0", text: "see " },
+			{ type: "pasted-text", id: "m1:pasted:0", text: "AA" },
+			{ type: "pasted-text", id: "m1:pasted:1", text: "BBB" },
+		]);
+	});
 });
 
 describe("createLiveThreadMessage with image paths", () => {

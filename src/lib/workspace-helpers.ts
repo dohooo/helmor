@@ -920,6 +920,20 @@ export function findModelOption(
  * invalid/overlapping ranges are dropped so that span degrades to plain
  * text rather than corrupting the split.
  */
+/** An offset inside a surrogate pair can never map to a char boundary —
+ *  the Rust adapter drops such ranges, so the TS split must too. */
+function isUtf16CharBoundary(text: string, index: number): boolean {
+	if (index === 0 || index === text.length) {
+		return true;
+	}
+	const code = text.charCodeAt(index);
+	if (code < 0xdc00 || code > 0xdfff) {
+		return true; // not a low surrogate
+	}
+	const prev = text.charCodeAt(index - 1);
+	return prev < 0xd800 || prev > 0xdbff; // mid-pair only after a high surrogate
+}
+
 export function splitTextWithFiles(
 	text: string,
 	files: readonly string[],
@@ -932,6 +946,8 @@ export function splitTextWithFiles(
 	const pastedId = (idx: number): string => `${msgId}:pasted:${idx}`;
 
 	const pasted: { start: number; end: number }[] = [];
+	// Sorting by (start, end) — not just start — mirrors the Rust adapter's
+	// tuple ordering: when two ranges share a start, the smaller end wins.
 	const candidates = pastedTexts
 		.filter(
 			(range) =>
@@ -939,9 +955,11 @@ export function splitTextWithFiles(
 				Number.isInteger(range.end) &&
 				range.start >= 0 &&
 				range.end <= text.length &&
-				range.start < range.end,
+				range.start < range.end &&
+				isUtf16CharBoundary(text, range.start) &&
+				isUtf16CharBoundary(text, range.end),
 		)
-		.sort((a, b) => a.start - b.start);
+		.sort((a, b) => a.start - b.start || a.end - b.end);
 	let lastPastedEnd = 0;
 	for (const range of candidates) {
 		if (range.start >= lastPastedEnd) {
