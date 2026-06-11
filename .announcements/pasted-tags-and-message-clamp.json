@@ -1,0 +1,13 @@
+{
+	"items": [
+		{
+			"text": "⚡ Faster again — switching workspaces is now snappier and smoother."
+		},
+		{
+			"text": "Large pastes now stay as tags after sending — hover one to preview its full content."
+		},
+		{
+			"text": "Long messages now collapse to 20 lines — Show more expands them in place without losing your spot."
+		}
+	]
+}
