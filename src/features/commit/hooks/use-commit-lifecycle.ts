@@ -128,11 +128,24 @@ function getErrorMessage(error: unknown, fallback: string): string {
 }
 
 type CommitLifecycle = {
+	/** Per-instance id so dismiss timers / done-phase side effects target the
+	 *  exact lifecycle that scheduled them, even after the same workspace
+	 *  starts a new action. */
+	id: number;
 	workspaceId: string;
 	trackedSessionId: string | null;
 	mode: WorkspaceCommitButtonMode;
 	phase: "creating" | "streaming" | "verifying" | "done" | "error";
 	changeRequest: ChangeRequestInfo | null;
+};
+
+const EMPTY_LIFECYCLES: ReadonlyMap<string, CommitLifecycle> = new Map();
+
+/** Per-workspace settle tracking for in-flight action sessions. Kept in a ref
+ *  (not state) so updating it never re-renders or re-fires the settle effect. */
+type ActionTracking = {
+	observedSending: boolean;
+	handledSessionId: string | null;
 };
 
 export type PendingPromptForSession = {
@@ -188,8 +201,52 @@ export function useWorkspaceCommitLifecycle({
 }) {
 	const [pendingPromptForSession, setPendingPromptForSession] =
 		useState<PendingPromptForSession | null>(null);
-	const [commitLifecycle, setCommitLifecycle] =
-		useState<CommitLifecycle | null>(null);
+	// One in-flight action per workspace, keyed by workspaceId. A single slot
+	// would let a second Create-PR (on another workspace) clobber the first
+	// before its completion side effects — refresh + auto-close — ever ran.
+	const [commitLifecycles, setCommitLifecycles] =
+		useState<ReadonlyMap<string, CommitLifecycle>>(EMPTY_LIFECYCLES);
+	const lifecycleSeqRef = useRef(0);
+
+	const beginLifecycle = useCallback(
+		(value: Omit<CommitLifecycle, "id">): number => {
+			const id = ++lifecycleSeqRef.current;
+			setCommitLifecycles((prev) => {
+				const next = new Map(prev);
+				next.set(value.workspaceId, { ...value, id });
+				return next;
+			});
+			return id;
+		},
+		[],
+	);
+	const patchLifecycle = useCallback(
+		(
+			workspaceId: string,
+			updater: (prev: CommitLifecycle) => CommitLifecycle | null,
+		) => {
+			setCommitLifecycles((prev) => {
+				const existing = prev.get(workspaceId);
+				if (!existing) return prev;
+				const updated = updater(existing);
+				if (updated === existing) return prev;
+				const next = new Map(prev);
+				if (updated) next.set(workspaceId, updated);
+				else next.delete(workspaceId);
+				return next;
+			});
+		},
+		[],
+	);
+	const clearLifecycle = useCallback((workspaceId: string) => {
+		setCommitLifecycles((prev) => {
+			if (!prev.has(workspaceId)) return prev;
+			const next = new Map(prev);
+			next.delete(workspaceId);
+			return next;
+		});
+	}, []);
+
 	const { requestMergeConfirmation, mergeConfirmDialogNode } =
 		useMergeConfirmation();
 	const currentChangeRequest = changeRequest ?? null;
@@ -243,7 +300,10 @@ export function useWorkspaceCommitLifecycle({
 				return;
 			}
 
-			completedSessionHandledRef.current = null;
+			actionTrackingRef.current.set(workspaceId, {
+				observedSending: false,
+				handledSessionId: null,
+			});
 			console.log("[commitButton] begin", { mode, workspaceId });
 
 			const isMergeAction =
@@ -334,7 +394,7 @@ export function useWorkspaceCommitLifecycle({
 								isMerged: isMergeAction,
 							}
 						: null;
-				setCommitLifecycle({
+				beginLifecycle({
 					workspaceId,
 					trackedSessionId: null,
 					mode: isMergeAction ? "merge" : mode,
@@ -387,15 +447,11 @@ export function useWorkspaceCommitLifecycle({
 						void queryClient.invalidateQueries({
 							queryKey: helmorQueryKeys.workspaceForgeActionStatus(workspaceId),
 						});
-						setCommitLifecycle((prev) =>
-							prev
-								? {
-										...prev,
-										phase: "error",
-										changeRequest: cachedChangeRequest ?? null,
-									}
-								: prev,
-						);
+						patchLifecycle(workspaceId, (prev) => ({
+							...prev,
+							phase: "error",
+							changeRequest: cachedChangeRequest ?? null,
+						}));
 					} finally {
 						release();
 					}
@@ -403,7 +459,7 @@ export function useWorkspaceCommitLifecycle({
 				return;
 			}
 
-			setCommitLifecycle({
+			beginLifecycle({
 				workspaceId,
 				trackedSessionId: null,
 				mode,
@@ -414,16 +470,18 @@ export function useWorkspaceCommitLifecycle({
 			if (mode === "push") {
 				try {
 					await pushWorkspaceToRemote(workspaceId);
-					setCommitLifecycle((current) =>
-						current ? { ...current, phase: "done" } : current,
-					);
+					patchLifecycle(workspaceId, (current) => ({
+						...current,
+						phase: "done",
+					}));
 				} catch (error) {
 					console.error("[commitButton] Failed to push branch:", error);
 					const message = getErrorMessage(error, "Unable to push branch.");
 					pushToast?.(message, "Push failed", "destructive");
-					setCommitLifecycle((current) =>
-						current ? { ...current, phase: "error" } : current,
-					);
+					patchLifecycle(workspaceId, (current) => ({
+						...current,
+						phase: "error",
+					}));
 				}
 				return;
 			}
@@ -432,7 +490,7 @@ export function useWorkspaceCommitLifecycle({
 				console.warn(
 					`[commitButton] action ignored: no prompt for mode ${mode}`,
 				);
-				setCommitLifecycle(null);
+				clearLifecycle(workspaceId);
 				return;
 			}
 			try {
@@ -477,8 +535,8 @@ export function useWorkspaceCommitLifecycle({
 					queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
 				});
 
-				setCommitLifecycle((current) =>
-					current && current.phase === "creating"
+				patchLifecycle(workspaceId, (current) =>
+					current.phase === "creating"
 						? { ...current, trackedSessionId: sessionId }
 						: current,
 				);
@@ -506,7 +564,7 @@ export function useWorkspaceCommitLifecycle({
 							predicate: (q) => q.queryKey[0] === "workspaceForgeActionStatus",
 							refetchType: "all",
 						});
-						setCommitLifecycle(null);
+						clearLifecycle(workspaceId);
 					});
 				}
 			} catch (error) {
@@ -516,9 +574,10 @@ export function useWorkspaceCommitLifecycle({
 					getActionFailureTitle(mode, changeRequestName),
 					"destructive",
 				);
-				setCommitLifecycle((current) =>
-					current ? { ...current, phase: "error" } : current,
-				);
+				patchLifecycle(workspaceId, (current) => ({
+					...current,
+					phase: "error",
+				}));
 			}
 		},
 		[
@@ -532,6 +591,9 @@ export function useWorkspaceCommitLifecycle({
 			selectedWorkspaceRemote,
 			getSelectedWorkspaceId,
 			requestMergeConfirmation,
+			beginLifecycle,
+			patchLifecycle,
+			clearLifecycle,
 		],
 	);
 
@@ -608,148 +670,132 @@ export function useWorkspaceCommitLifecycle({
 		],
 	);
 
+	const pendingPromptRef = useRef(pendingPromptForSession);
+	pendingPromptRef.current = pendingPromptForSession;
+
 	const handlePendingPromptConsumed = useCallback(() => {
 		console.log("[commitButton] pending prompt consumed by composer");
+		const consumedSessionId = pendingPromptRef.current?.sessionId ?? null;
 		setPendingPromptForSession(null);
-		setCommitLifecycle((current) =>
-			current && current.phase === "creating"
-				? { ...current, phase: "streaming" }
-				: current,
-		);
+		if (!consumedSessionId) return;
+		// Only flip the lifecycle whose session the composer just picked up —
+		// a sibling workspace mid-dispatch must not be dragged to "streaming".
+		setCommitLifecycles((prev) => {
+			let changed = false;
+			const next = new Map(prev);
+			for (const [workspaceId, lc] of prev) {
+				if (
+					lc.trackedSessionId === consumedSessionId &&
+					lc.phase === "creating"
+				) {
+					next.set(workspaceId, { ...lc, phase: "streaming" });
+					changed = true;
+				}
+			}
+			return changed ? next : prev;
+		});
 	}, []);
 
-	const commitLifecycleRef = useRef(commitLifecycle);
-	commitLifecycleRef.current = commitLifecycle;
-	const hasObservedSendingRef = useRef(false);
-	const completedSessionHandledRef = useRef<string | null>(null);
+	const commitLifecyclesRef = useRef(commitLifecycles);
+	commitLifecyclesRef.current = commitLifecycles;
+	// Per-workspace settle tracking (observed-streaming + handled session),
+	// keyed by workspaceId. Refs, so mutating them never re-renders.
+	const actionTrackingRef = useRef<Map<string, ActionTracking>>(new Map());
 
 	useEffect(() => {
-		const current = commitLifecycleRef.current;
-		console.log("[commitButton] action-session settlement check", {
-			sendingIds: Array.from(busySessionIds),
-			completedIds: Array.from(completedSessionIds),
-			abortedIds: abortedSessionIds ? Array.from(abortedSessionIds) : [],
-			interactionRequiredIds: Array.from(interactionRequiredSessionIds),
-			lifecyclePhase: current?.phase ?? null,
-			trackedSessionId: current?.trackedSessionId ?? null,
-			observedBefore: hasObservedSendingRef.current,
-			handledCompletedSessionId: completedSessionHandledRef.current,
-		});
+		// Settle EVERY in-flight action, not just the selected workspace's —
+		// concurrent Create-PRs each need their own completion side effects.
+		for (const [workspaceId, lc] of commitLifecyclesRef.current) {
+			if (!lc.trackedSessionId) continue;
+			if (lc.phase !== "creating" && lc.phase !== "streaming") continue;
 
-		if (!current?.trackedSessionId) return;
-		if (current.phase !== "creating" && current.phase !== "streaming") return;
+			const trackedSessionId = lc.trackedSessionId;
+			const tracking = actionTrackingRef.current.get(workspaceId) ?? {
+				observedSending: false,
+				handledSessionId: null,
+			};
 
-		const trackedSessionId = current.trackedSessionId;
-
-		// Aborted sessions clear the lifecycle — no PR was created, so the
-		// button returns to idle rather than proceeding to verify.
-		if (abortedSessionIds?.has(trackedSessionId)) {
-			console.log(
-				"[commitButton] tracked session aborted — clearing lifecycle",
-			);
-			hasObservedSendingRef.current = false;
-			completedSessionHandledRef.current = null;
-			setCommitLifecycle(null);
-			return;
-		}
-
-		const isSending = busySessionIds.has(trackedSessionId);
-		if (isSending) {
-			console.log("[commitButton] tracked session is streaming");
-			hasObservedSendingRef.current = true;
-			return;
-		}
-
-		if (!hasObservedSendingRef.current) {
-			console.log(
-				"[commitButton] tracked session not yet observed streaming — waiting",
-			);
-			return;
-		}
-
-		if (!completedSessionIds.has(trackedSessionId)) {
-			console.log("[commitButton] tracked session not yet completed — waiting");
-			return;
-		}
-
-		if (interactionRequiredSessionIds.has(trackedSessionId)) {
-			console.log(
-				"[commitButton] tracked session still requires interaction — waiting",
-			);
-			return;
-		}
-
-		if (completedSessionHandledRef.current === trackedSessionId) {
-			console.log(
-				"[commitButton] tracked session completion already handled — skipping",
-			);
-			return;
-		}
-
-		console.log(
-			"[commitButton] tracked session completed and settled — transitioning to verifying phase",
-		);
-		hasObservedSendingRef.current = false;
-		completedSessionHandledRef.current = trackedSessionId;
-		setCommitLifecycle((prev) =>
-			prev ? { ...prev, phase: "verifying" } : prev,
-		);
-
-		const workspaceId = current.workspaceId;
-		void (async () => {
-			try {
+			// Aborted sessions clear the lifecycle — no PR was created, so the
+			// button returns to idle rather than proceeding to verify.
+			if (abortedSessionIds?.has(trackedSessionId)) {
 				console.log(
-					"[commitButton] calling refreshWorkspaceChangeRequest",
+					"[commitButton] tracked session aborted — clearing lifecycle",
 					workspaceId,
 				);
-				const currentChangeRequest =
-					await refreshWorkspaceChangeRequest(workspaceId);
-				console.log(
-					"[commitButton] refreshWorkspaceChangeRequest result",
-					currentChangeRequest,
-				);
-				// Seed caches directly from the result we just awaited so the
-				// downstream invalidation in `refreshWorkspaceRemoteStatus`
-				// doesn't trigger a duplicate `gh pr view`, and so the sidebar
-				// lane / inspector header reflect the PR state on the same
-				// frame as the lifecycle transition.
-				queryClient.setQueryData(
-					helmorQueryKeys.workspaceChangeRequest(workspaceId),
-					currentChangeRequest ?? null,
-				);
-				const optimisticStatus = deriveStatusFromChangeRequest(
-					currentChangeRequest ?? null,
-				);
-				if (optimisticStatus) {
-					applyOptimisticWorkspaceStatus(
-						queryClient,
+				actionTrackingRef.current.delete(workspaceId);
+				clearLifecycle(workspaceId);
+				continue;
+			}
+
+			if (busySessionIds.has(trackedSessionId)) {
+				tracking.observedSending = true;
+				actionTrackingRef.current.set(workspaceId, tracking);
+				continue;
+			}
+
+			if (!tracking.observedSending) continue;
+			if (!completedSessionIds.has(trackedSessionId)) continue;
+			if (interactionRequiredSessionIds.has(trackedSessionId)) continue;
+			if (tracking.handledSessionId === trackedSessionId) continue;
+
+			console.log(
+				"[commitButton] tracked session completed and settled — verifying",
+				workspaceId,
+			);
+			tracking.observedSending = false;
+			tracking.handledSessionId = trackedSessionId;
+			actionTrackingRef.current.set(workspaceId, tracking);
+			patchLifecycle(workspaceId, (prev) => ({ ...prev, phase: "verifying" }));
+
+			const mode = lc.mode;
+			void (async () => {
+				try {
+					const currentChangeRequest =
+						await refreshWorkspaceChangeRequest(workspaceId);
+					console.log(
+						"[commitButton] refreshWorkspaceChangeRequest result",
 						workspaceId,
-						optimisticStatus,
+						currentChangeRequest,
 					);
-				}
-				setCommitLifecycle((prev) => {
-					if (!prev || prev.workspaceId !== workspaceId) return prev;
-					return {
+					// Seed caches directly from the result we just awaited so the
+					// downstream invalidation in `refreshWorkspaceRemoteStatus`
+					// doesn't trigger a duplicate `gh pr view`, and so the sidebar
+					// lane / inspector header reflect the PR state on the same
+					// frame as the lifecycle transition.
+					queryClient.setQueryData(
+						helmorQueryKeys.workspaceChangeRequest(workspaceId),
+						currentChangeRequest ?? null,
+					);
+					const optimisticStatus = deriveStatusFromChangeRequest(
+						currentChangeRequest ?? null,
+					);
+					if (optimisticStatus) {
+						applyOptimisticWorkspaceStatus(
+							queryClient,
+							workspaceId,
+							optimisticStatus,
+						);
+					}
+					patchLifecycle(workspaceId, (prev) => ({
 						...prev,
 						phase: "done",
 						changeRequest: currentChangeRequest ?? null,
-					};
-				});
-				refreshWorkspaceRemoteStatus(workspaceId);
-			} catch (error) {
-				console.error("[commitButton] PR lookup failed:", error);
-				pushToast?.(
-					getErrorMessage(error, "Unable to verify action result."),
-					getActionFailureTitle(current.mode, changeRequestName),
-					"destructive",
-				);
-				setCommitLifecycle((prev) =>
-					prev && prev.workspaceId === workspaceId
-						? { ...prev, phase: "error" }
-						: prev,
-				);
-			}
-		})();
+					}));
+					refreshWorkspaceRemoteStatus(workspaceId);
+				} catch (error) {
+					console.error("[commitButton] PR lookup failed:", error);
+					pushToast?.(
+						getErrorMessage(error, "Unable to verify action result."),
+						getActionFailureTitle(mode, changeRequestName),
+						"destructive",
+					);
+					patchLifecycle(workspaceId, (prev) => ({
+						...prev,
+						phase: "error",
+					}));
+				}
+			})();
+		}
 	}, [
 		changeRequestName,
 		completedSessionIds,
@@ -759,76 +805,102 @@ export function useWorkspaceCommitLifecycle({
 		queryClient,
 		refreshWorkspaceRemoteStatus,
 		busySessionIds,
+		clearLifecycle,
+		patchLifecycle,
 	]);
 
+	// Done-phase side effects (auto-close) run once per lifecycle instance; the
+	// dismiss timer reschedules if the phase flips (done → error) so the error
+	// state still gets its longer display window. Keyed by lifecycle id so a
+	// later action on the same workspace can't be dismissed by a stale timer.
+	const donePhaseHandledRef = useRef<Set<number>>(new Set());
+	const dismissStateRef = useRef<Map<number, { phase: string; timer: number }>>(
+		new Map(),
+	);
+
 	useEffect(() => {
-		if (!commitLifecycle) return;
-		if (commitLifecycle.phase !== "done" && commitLifecycle.phase !== "error") {
-			return;
-		}
+		for (const [workspaceId, lc] of commitLifecycles) {
+			if (lc.phase !== "done" && lc.phase !== "error") continue;
+			const prevDismiss = dismissStateRef.current.get(lc.id);
+			if (prevDismiss && prevDismiss.phase === lc.phase) continue;
 
-		const { phase, mode, trackedSessionId, workspaceId } = commitLifecycle;
+			const { phase, mode, trackedSessionId, id } = lc;
 
-		if (phase === "done") {
-			if (mode !== "merge" && mode !== "closed") {
-				refreshWorkspaceRemoteStatus(workspaceId);
-			}
-			queryClient.invalidateQueries({
-				queryKey: ["workspaceChanges"],
-			});
-
-			void (async () => {
-				try {
-					if (!trackedSessionId) return;
-					if (mode === "checks-running" || mode === "merge-blocked") return;
-					const optedIn = await loadAutoCloseActionKinds();
-					if (!optedIn.includes(mode)) return;
-					await hideSession(trackedSessionId);
-					await Promise.all([
-						queryClient.invalidateQueries({
-							queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
-						}),
-						queryClient.invalidateQueries({
-							queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
-						}),
-					]);
-					// Never hijack selection when the user has navigated to another
-					// workspace — the cached detail there is stale anyway (inactive
-					// queries don't refetch, so activeSessionId may still point at
-					// the session we just hid).
-					if (getSelectedWorkspaceIdRef.current() !== workspaceId) return;
-					const detail = queryClient.getQueryData<WorkspaceDetail | null>(
-						helmorQueryKeys.workspaceDetail(workspaceId),
-					);
-					onSelectSession(detail?.activeSessionId ?? null);
-				} catch (error) {
-					console.error(
-						"[commitButton] done-phase side effects failed:",
-						error,
-					);
+			if (phase === "done" && !donePhaseHandledRef.current.has(id)) {
+				donePhaseHandledRef.current.add(id);
+				if (mode !== "merge" && mode !== "closed") {
+					refreshWorkspaceRemoteStatus(workspaceId);
 				}
-			})();
-		}
+				queryClient.invalidateQueries({ queryKey: ["workspaceChanges"] });
 
-		const timeoutId = window.setTimeout(
-			() => {
-				setCommitLifecycle(null);
-			},
-			phase === "done" ? 1200 : 1600,
-		);
-		return () => window.clearTimeout(timeoutId);
+				void (async () => {
+					try {
+						if (!trackedSessionId) return;
+						if (mode === "checks-running" || mode === "merge-blocked") return;
+						const optedIn = await loadAutoCloseActionKinds();
+						if (!optedIn.includes(mode)) return;
+						await hideSession(trackedSessionId);
+						await Promise.all([
+							queryClient.invalidateQueries({
+								queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
+							}),
+							queryClient.invalidateQueries({
+								queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
+							}),
+						]);
+						// Never hijack selection when the user has navigated to another
+						// workspace — the cached detail there is stale anyway (inactive
+						// queries don't refetch, so activeSessionId may still point at
+						// the session we just hid).
+						if (getSelectedWorkspaceIdRef.current() !== workspaceId) return;
+						const detail = queryClient.getQueryData<WorkspaceDetail | null>(
+							helmorQueryKeys.workspaceDetail(workspaceId),
+						);
+						onSelectSession(detail?.activeSessionId ?? null);
+					} catch (error) {
+						console.error(
+							"[commitButton] done-phase side effects failed:",
+							error,
+						);
+					}
+				})();
+			}
+
+			if (prevDismiss) window.clearTimeout(prevDismiss.timer);
+			const timer = window.setTimeout(
+				() => {
+					dismissStateRef.current.delete(id);
+					donePhaseHandledRef.current.delete(id);
+					actionTrackingRef.current.delete(workspaceId);
+					patchLifecycle(workspaceId, (prev) => (prev.id === id ? null : prev));
+				},
+				phase === "done" ? 1200 : 1600,
+			);
+			dismissStateRef.current.set(id, { phase, timer });
+		}
 	}, [
-		commitLifecycle,
+		commitLifecycles,
 		onSelectSession,
 		queryClient,
 		refreshWorkspaceRemoteStatus,
+		patchLifecycle,
 	]);
 
-	// Only honour the lifecycle if it belongs to the currently-selected workspace.
+	// Clear any in-flight dismiss timers on unmount.
+	useEffect(() => {
+		const timers = dismissStateRef.current;
+		return () => {
+			for (const { timer } of timers.values()) window.clearTimeout(timer);
+			timers.clear();
+		};
+	}, []);
+
+	// The button only ever reflects the selected workspace's in-flight action;
+	// sibling lifecycles still settle (refresh + auto-close) in the effects above.
 	const activeLifecycle =
-		commitLifecycle && commitLifecycle.workspaceId === selectedWorkspaceId
-			? commitLifecycle
-			: null;
+		(selectedWorkspaceId
+			? commitLifecycles.get(selectedWorkspaceId)
+			: undefined) ?? null;
 
 	const commitButtonMode = useMemo<WorkspaceCommitButtonMode>(
 		() =>

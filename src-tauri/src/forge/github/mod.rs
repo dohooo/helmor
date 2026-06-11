@@ -48,12 +48,12 @@ use self::pull_request::{
 ///     caller can surface a distinct "something went wrong" state).
 pub fn lookup_workspace_pr(workspace_id: &str) -> Result<Option<ChangeRequestInfo>> {
     let context = match load_github_context(workspace_id)? {
-        GithubResolution::Ready(ctx) if ctx.has_remote_tracking => ctx,
+        GithubResolution::Ready(ctx) if ctx.published => ctx,
         // Anything else short-circuits to "no PR linked":
-        //   - Initializing / unavailable / unauthenticated / no
-        //     remote-tracking → caller sees `None` and renders the
-        //     empty-PR state. Auth is not surfaced here because the
-        //     primary auth surface is the action-status path.
+        //   - Initializing / unavailable / unauthenticated / unpublished
+        //     branch → caller sees `None` and renders the empty-PR state.
+        //     Auth is not surfaced here because the primary auth surface
+        //     is the action-status path.
         _ => return Ok(None),
     };
 
@@ -93,7 +93,7 @@ pub fn lookup_workspace_pr_action_status(workspace_id: &str) -> Result<ForgeActi
         ));
     }
 
-    if !context.has_remote_tracking {
+    if !context.published {
         return Ok(ForgeActionStatus::no_change_request());
     }
 
@@ -134,7 +134,7 @@ pub fn lookup_workspace_pr_action_status(workspace_id: &str) -> Result<ForgeActi
 pub fn lookup_workspace_pr_check_insert_text(workspace_id: &str, item_id: &str) -> Result<String> {
     let resolution = load_github_context(workspace_id)?;
     let context = match resolution {
-        GithubResolution::Ready(ctx) if ctx.has_remote_tracking => ctx,
+        GithubResolution::Ready(ctx) if ctx.published => ctx,
         GithubResolution::Ready(_) | GithubResolution::Initializing => {
             bail!("Workspace branch is not published");
         }
@@ -219,7 +219,7 @@ pub fn close_workspace_pr(workspace_id: &str) -> Result<Option<ChangeRequestInfo
 /// just worked.
 fn mutation_context(workspace_id: &str) -> Result<Option<GithubContext>> {
     match load_github_context(workspace_id)? {
-        GithubResolution::Ready(ctx) if ctx.has_remote_tracking => Ok(Some(ctx)),
+        GithubResolution::Ready(ctx) if ctx.published => Ok(Some(ctx)),
         _ => Ok(None),
     }
 }
