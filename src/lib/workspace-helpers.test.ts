@@ -633,6 +633,64 @@ describe("splitTextWithFiles", () => {
 			{ type: "file-mention", id: "m1:mention:1", path: image },
 		]);
 	});
+
+	it("carves pasted ranges into pasted-text parts", () => {
+		const text = "帮我看看这个\nconst a = 1;\nconst b = 2;\n谢谢";
+		const start = 7; // after the 6 CJK chars + newline
+		const end = start + "const a = 1;\nconst b = 2;".length;
+		const result = splitTextWithFiles(text, [], "m1", [], [{ start, end }]);
+		expect(result).toEqual([
+			{ type: "text", id: "m1:txt:0", text: "帮我看看这个\n" },
+			{
+				type: "pasted-text",
+				id: "m1:pasted:0",
+				text: "const a = 1;\nconst b = 2;",
+			},
+			{ type: "text", id: "m1:txt:1", text: "\n谢谢" },
+		]);
+	});
+
+	it("drops invalid and overlapping pasted ranges", () => {
+		const text = "before PASTED after";
+		const result = splitTextWithFiles(
+			text,
+			[],
+			"m1",
+			[],
+			[
+				{ start: 7, end: 13 }, // valid: "PASTED"
+				{ start: 10, end: 16 }, // overlaps the first — dropped
+				{ start: 5, end: 5 }, // empty — dropped
+				{ start: 40, end: 500 }, // out of bounds — dropped
+			],
+		);
+		expect(result).toEqual([
+			{ type: "text", id: "m1:txt:0", text: "before " },
+			{ type: "pasted-text", id: "m1:pasted:0", text: "PASTED" },
+			{ type: "text", id: "m1:txt:1", text: " after" },
+		]);
+	});
+
+	it("ignores @path needles inside a pasted span", () => {
+		const text = "see @a.ts then PASTE WITH @a.ts INSIDE";
+		const result = splitTextWithFiles(
+			text,
+			["a.ts"],
+			"m1",
+			[],
+			[{ start: 15, end: 38 }],
+		);
+		expect(result).toEqual([
+			{ type: "text", id: "m1:txt:0", text: "see " },
+			{ type: "file-mention", id: "m1:mention:0", path: "a.ts" },
+			{ type: "text", id: "m1:txt:1", text: " then " },
+			{
+				type: "pasted-text",
+				id: "m1:pasted:0",
+				text: "PASTE WITH @a.ts INSIDE",
+			},
+		]);
+	});
 });
 
 describe("createLiveThreadMessage with image paths", () => {

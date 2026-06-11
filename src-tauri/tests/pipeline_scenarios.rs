@@ -141,6 +141,43 @@ fn user_prompt_with_file_mention_at_start() {
 }
 
 #[test]
+fn user_prompt_with_pasted_text() {
+    // Composer pasted-text tag: the prompt carries the full paste inline and
+    // `pastedTexts` marks its UTF-16 span. The instruction is non-ASCII on
+    // purpose — it shifts UTF-16 and byte offsets apart, exercising the
+    // adapter's offset conversion. Expect Text("帮我看看这个\n") +
+    // PastedText(code) + Text("\n谢谢").
+    let text = "帮我看看这个\nconst a = 1;\nconst b = 2;\n谢谢";
+    let paste_start = 7u64; // after 6 CJK chars + newline (1 UTF-16 unit each)
+    let paste_end = paste_start + ("const a = 1;\nconst b = 2;".len() as u64);
+    let msgs = vec![user_prompt_with_pasted_texts(
+        "u1",
+        text,
+        &[(paste_start, paste_end)],
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn user_prompt_with_invalid_pasted_ranges() {
+    // Defensive degradation: out-of-bounds, empty, and overlapping ranges are
+    // dropped rather than corrupting the split. Only the first valid range
+    // becomes a PastedText part; the rest of the prompt stays plain text.
+    let text = "before PASTED after";
+    let msgs = vec![user_prompt_with_pasted_texts(
+        "u1",
+        text,
+        &[
+            (7, 13),   // valid: "PASTED"
+            (10, 16),  // overlaps the first — dropped
+            (5, 5),    // empty — dropped
+            (40, 500), // out of bounds — dropped
+        ],
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
 fn user_prompt_with_dotfile_mention() {
     // Dotfile (no `/`) — the picker can produce these from workspace root.
     let msgs = vec![user_prompt_with_files(

@@ -99,6 +99,10 @@ pub enum NormPart {
     FileMention {
         path: String,
     },
+    PastedText {
+        text_length: usize,
+        text_preview: String,
+    },
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -266,6 +270,10 @@ fn normalize_basic(part: &MessagePart) -> NormPart {
                 .collect(),
         },
         MessagePart::FileMention { path, .. } => NormPart::FileMention { path: path.clone() },
+        MessagePart::PastedText { text, .. } => NormPart::PastedText {
+            text_length: utf16_len(text),
+            text_preview: truncate(text),
+        },
     }
 }
 

@@ -162,51 +162,48 @@ describe("estimateThreadRowHeights", () => {
 		expect(height).toBeLessThan(300);
 	});
 
-	// A user message over the composer badge threshold (500 trimmed chars — the
-	// same gate that turns a large paste into a tag in the composer) renders
-	// collapsed as a fixed-height chip row, so its estimate is a constant. This
-	// is what keeps giant pasted messages out of both the pretext layout AND the
-	// mounted DOM on a session switch.
-	it("estimates over-threshold user messages at a fixed collapsed height", () => {
-		const [medium] = estimateThreadRowHeights(
-			[makeUserMessage("x".repeat(600))],
+	// A pasted-text tag renders as a one-line chip (hover previews the
+	// content), so the estimator prices it as a single line — the paste's
+	// text never reaches the pretext layout. This is what keeps a giant
+	// paste out of both the layout estimation AND the mounted DOM.
+	it("estimates pasted-text parts as one line regardless of content size", () => {
+		const makePastedMessage = (pasteText: string): ThreadMessageLike => ({
+			id: "user-pasted",
+			role: "user",
+			content: [
+				{ type: "text", id: "t0", text: "请看这段:\n" },
+				{ type: "pasted-text", id: "p0", text: pasteText },
+			],
+		});
+
+		const [small] = estimateThreadRowHeights(
+			[makePastedMessage("x".repeat(600))],
 			{ fontSize: 14, paneWidth: 822 },
 		);
 		const [giant] = estimateThreadRowHeights(
+			[makePastedMessage(buildGiantUserMessageText())],
+			{ fontSize: 14, paneWidth: 822 },
+		);
+		const [inlined] = estimateThreadRowHeights(
 			[makeUserMessage(buildGiantUserMessageText())],
 			{ fontSize: 14, paneWidth: 822 },
 		);
 
-		// Size-invariant: a 600-char and a ~67k-char message price identically.
-		expect(giant).toBe(medium);
-		expect(giant).toBeLessThan(120);
-	});
-
-	it("keeps sub-threshold user messages on the measured path", () => {
-		const [short] = estimateThreadRowHeights(
-			[makeUserMessage("short prompt")],
-			{
-				fontSize: 14,
-				paneWidth: 822,
-			},
-		);
-		const [wrapped] = estimateThreadRowHeights(
-			[makeUserMessage("x".repeat(480))],
-			{ fontSize: 14, paneWidth: 822 },
-		);
-
-		// Under the threshold the height still tracks the text (a 480-char
-		// unbroken token wraps to several lines; a short prompt is one line).
-		expect(wrapped).toBeGreaterThan(short);
+		// Chip pricing is size-invariant…
+		expect(giant).toBe(small);
+		// …and tiny next to the same content inlined as plain text.
+		expect(giant).toBeLessThan(200);
+		expect(inlined).toBeGreaterThan(10_000);
 	});
 });
 
-// The pre-wrap text-measurement gates. These used to run through a giant USER
-// message row, but over-threshold user messages now estimate to the collapsed
-// constant — the measurement path they lock (break-word counting + tab-size-4
-// normalization) is still live for assistant markdown, reasoning bodies, plan
-// reviews, and sub-threshold user text, so the gates target measureTextHeight
-// directly with the user-bubble geometry they were calibrated against.
+// The pre-wrap text-measurement gates. The giant fixture used to flow through
+// a user message row; pasted tags now carve such content out into one-line
+// chip parts, but the measurement path these gates lock (break-word counting
+// + tab-size-4 normalization) is still live for assistant markdown, reasoning
+// bodies, plan reviews, and any user text NOT marked as a pasted tag (typed
+// bulk, historical messages) — so they target measureTextHeight directly with
+// the user-bubble geometry they were calibrated against.
 describe("measureTextHeight (pre-wrap accuracy gates)", () => {
 	// Geometry mirrors the live app exactly: fontSize 14, paneWidth 822 →
 	// contentWidth 782 → bubbleWidth floor(782*0.75)-24 = 562; user-bubble

@@ -1,0 +1,17 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: user
+  id: msg-1
+  content_length: 3
+  content:
+    - type: text
+      text: "帮我看看这个\n"
+    - type: pasted-text
+      text_length: 25
+      text_preview: "const a = 1;\nconst b = 2;"
+    - type: text
+      text: "\n谢谢"
+  status: ~
+  streaming: ~

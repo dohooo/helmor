@@ -8,7 +8,6 @@ import type {
 	ThreadMessageLike,
 	ToolCallPart,
 } from "./api";
-import { exceedsComposerPreviewBadgeThreshold } from "./composer-insert";
 import { measureSync } from "./perf-marks";
 import { reasoningLifecycle } from "./reasoning-lifecycle";
 
@@ -33,13 +32,6 @@ const COLLAPSED_GROUP_HEIGHT = 24;
 const USER_BUBBLE_VERTICAL_PADDING = 16;
 const USER_BUBBLE_HORIZONTAL_PADDING = 24;
 const USER_BUBBLE_WIDTH_RATIO = 0.75;
-// A user message over the composer badge threshold renders collapsed — a
-// single chip row in the bubble (see ChatUserMessage) — so its height is a
-// constant, not a text measurement. Expanding is a click on a mounted row,
-// at which point the real measurement takes over; the estimator never needs
-// to know about expansion state. 70 = the live collapsed row's offsetHeight
-// (28px chip line + 16px bubble padding + 20px wrapper padding + 6px shell).
-const COLLAPSED_USER_MESSAGE_HEIGHT = 70;
 const MIN_TEXT_WIDTH = 64;
 const MARKDOWN_BLOCK_GAP = 12;
 const MARKDOWN_HEADING_MARGIN_TOP = 10;
@@ -446,22 +438,33 @@ function estimateUserMessageHeight(
 		)
 		.map((part) => part.text)
 		.join("\n");
-	if (exceedsComposerPreviewBadgeThreshold(text)) {
-		return COLLAPSED_USER_MESSAGE_HEIGHT;
-	}
+	// A pasted-text tag renders as a one-line chip (see PastedTextBadge), not
+	// its content — count it as a single line. This is what keeps a giant
+	// paste out of both the pretext layout and the mounted DOM: its text
+	// never reaches measureTextHeight.
+	const pastedChipHeight =
+		parts.filter((part) => part.type === "pasted-text").length *
+		USER_LINE_HEIGHT;
 	const bubbleWidth = Math.max(
 		MIN_TEXT_WIDTH,
 		Math.floor(options.contentWidth * USER_BUBBLE_WIDTH_RATIO) -
 			USER_BUBBLE_HORIZONTAL_PADDING,
 	);
-	const textHeight = measureTextHeight(text, {
-		fontSize: options.fontSize,
-		lineHeight: USER_LINE_HEIGHT,
-		maxWidth: bubbleWidth,
-		whiteSpace: "pre-wrap",
-	});
+	const textHeight =
+		text.trim().length > 0
+			? measureTextHeight(text, {
+					fontSize: options.fontSize,
+					lineHeight: USER_LINE_HEIGHT,
+					maxWidth: bubbleWidth,
+					whiteSpace: "pre-wrap",
+				})
+			: 0;
 
-	return textHeight + USER_BUBBLE_VERTICAL_PADDING + ROW_SHELL_BOTTOM_PADDING;
+	return (
+		Math.max(USER_LINE_HEIGHT, textHeight + pastedChipHeight) +
+		USER_BUBBLE_VERTICAL_PADDING +
+		ROW_SHELL_BOTTOM_PADDING
+	);
 }
 
 function estimateSystemMessageHeight(
