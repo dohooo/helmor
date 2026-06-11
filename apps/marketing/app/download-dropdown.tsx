@@ -16,8 +16,6 @@ type Props = {
 		| "armDmgSize"
 		| "intelDmgUrl"
 		| "intelDmgSize"
-		| "windowsSetupUrl"
-		| "windowsSetupSize"
 		| "signedAndNotarized"
 	>;
 };
@@ -102,21 +100,6 @@ export function DownloadDropdown({ data }: Props) {
 			<div className="dl-panel" role="menu">
 				<a
 					className="dl-item"
-					href={data.armDmgUrl}
-					role="menuitem"
-					onClick={closeNow}
-				>
-					<span className="dl-chip">ARM</span>
-					<span className="dl-text">
-						<span className="dl-title">Apple Silicon</span>
-						<span className="dl-sub">M series</span>
-					</span>
-					<span className="dl-size">
-						·dmg {formatMegabytes(data.armDmgSize)}
-					</span>
-				</a>
-				<a
-					className="dl-item"
 					href={data.intelDmgUrl}
 					role="menuitem"
 					onClick={closeNow}
@@ -128,23 +111,6 @@ export function DownloadDropdown({ data }: Props) {
 					</span>
 					<span className="dl-size">
 						·dmg {formatMegabytes(data.intelDmgSize)}
-					</span>
-				</a>
-				<a
-					className="dl-item"
-					href={data.windowsSetupUrl}
-					role="menuitem"
-					onClick={closeNow}
-				>
-					<span className="dl-chip">Win</span>
-					<span className="dl-text">
-						<span className="dl-title">Windows x64</span>
-						<span className="dl-sub">NSIS installer</span>
-					</span>
-					<span className="dl-size">
-						{data.windowsSetupSize > 0
-							? `.exe ${formatMegabytes(data.windowsSetupSize)}`
-							: ".exe"}
 					</span>
 				</a>
 				<div className="dl-foot">
