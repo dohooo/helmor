@@ -198,9 +198,15 @@ export const CodeBlock = ({
 			: hasFloatingActions
 				? "[&>pre]:px-3.5 [&>pre]:py-3.5 [&>pre]:pr-11"
 				: "[&>pre]:p-3.5";
+	// `overflow-x-scroll` (not `auto`): a classic (non-overlay) horizontal
+	// scrollbar takes layout height when it appears, so an `auto` container
+	// grows by ~13px the moment content overflows — the row height jumps and
+	// everything below shifts. A permanent scroll container reserves that
+	// space from the first frame; the global scrollbar styling keeps the
+	// track transparent, so a non-overflowing block just shows nothing there.
 	const wrapClasses = wrapLines
 		? "overflow-x-hidden overflow-y-hidden [&>pre]:whitespace-pre-wrap [&>pre]:break-words [&_code]:whitespace-pre-wrap [&_code]:break-words"
-		: "overflow-x-auto overflow-y-hidden [&>pre]:min-w-full";
+		: "overflow-x-scroll overflow-y-hidden [&>pre]:min-w-full";
 	const codeBase =
 		"[&>pre]:m-0 [&>pre]:bg-transparent! [&>pre]:text-small [&>pre]:leading-5 [&>pre]:text-foreground! [&_code]:font-mono [&_code]:text-small";
 
