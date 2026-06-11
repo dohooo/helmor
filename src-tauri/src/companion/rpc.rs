@@ -251,6 +251,18 @@ async fn dispatch(
             crate::commands::session_commands::set_session_draft(arg_string(&args, "sessionId")?, arg_opt_string(&args, "draftState")).await?;
             Ok(Value::Null)
         }
+        "set_terminal_session_busy" => {
+            crate::commands::terminal_commands::set_terminal_session_busy(
+                app.clone(),
+                app.state::<crate::agents::ActiveStreams>(),
+                arg_string(&args, "sessionId")?,
+                arg_string(&args, "workspaceId")?,
+                arg_opt_string(&args, "provider"),
+                arg_bool(&args, "busy")?,
+            )
+            .await?;
+            Ok(Value::Null)
+        }
         "set_workspace_active_run_action" => {
             crate::commands::script_commands::set_workspace_active_run_action(arg_string(&args, "workspaceId")?, arg_opt_string(&args, "actionId")).await?;
             Ok(Value::Null)
