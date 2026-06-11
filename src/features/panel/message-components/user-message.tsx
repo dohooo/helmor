@@ -1,4 +1,4 @@
-import { Tag } from "lucide-react";
+import { ChevronDown, Tag } from "lucide-react";
 import { FileMentionBadge } from "@/components/file-mention-badge";
 import { InlineBadge } from "@/components/inline-badge";
 import type { MessagePart } from "@/lib/api";
@@ -7,10 +7,13 @@ import {
 	type ComposerPreviewPayload,
 	inferComposerPreviewLanguage,
 } from "@/lib/composer-insert";
+import { USER_MESSAGE_CLAMP_LINES } from "@/lib/message-layout-estimator";
 import { useSettings } from "@/lib/settings";
+import { cn } from "@/lib/utils";
 import { CopyMessageButton } from "./copy-message";
 import type { RenderedMessage } from "./shared";
 import { isFileMentionPart, isPastedTextPart, isTextPart } from "./shared";
+import { useUserMessageExpansion } from "./user-message-expansion";
 
 // Attachments arrive as structured `file-mention` parts and pasted tags as
 // `pasted-text` parts (see `splitTextWithFiles`); the file badge picks file
@@ -47,6 +50,21 @@ export function ChatUserMessage({ message }: { message: RenderedMessage }) {
 	const parts = message.content as MessagePart[];
 	const { settings } = useSettings();
 
+	// Long typed messages clamp to the first N visual lines with a
+	// "Show more" control. The gate counts SOURCE lines of the text parts
+	// (the same rule the estimator caps heights with) — pasted tags are
+	// already one-line chips and don't count. Expansion state lives in the
+	// session-scoped provider so it survives a row unmount and resets on
+	// session switch.
+	const sourceLineCount = parts
+		.filter(isTextPart)
+		.map((part) => part.text)
+		.join("\n")
+		.split("\n").length;
+	const clampable = sourceLineCount > USER_MESSAGE_CLAMP_LINES;
+	const { expanded, toggle } = useUserMessageExpansion(message.id);
+	const clamped = clampable && !expanded;
+
 	return (
 		<div
 			data-message-id={message.id}
@@ -58,7 +76,19 @@ export function ChatUserMessage({ message }: { message: RenderedMessage }) {
 					className="conversation-body-text w-full overflow-hidden rounded-md bg-accent/55 px-3 py-2 leading-7"
 					style={{ fontSize: `${settings.chatFontSize}px` }}
 				>
-					<p className="whitespace-pre-wrap break-words">
+					<p
+						className="whitespace-pre-wrap break-words"
+						style={
+							clamped
+								? {
+										display: "-webkit-box",
+										WebkitBoxOrient: "vertical",
+										WebkitLineClamp: USER_MESSAGE_CLAMP_LINES,
+										overflow: "hidden",
+									}
+								: undefined
+						}
+					>
 						{parts.map((part, index) => {
 							if (isTextPart(part)) {
 								return <span key={index}>{part.text}</span>;
@@ -72,6 +102,20 @@ export function ChatUserMessage({ message }: { message: RenderedMessage }) {
 							return null;
 						})}
 					</p>
+					{clampable && (
+						<button
+							type="button"
+							onClick={toggle}
+							aria-expanded={expanded}
+							className="mt-1 flex cursor-pointer items-center gap-1 text-muted-foreground transition-colors hover:text-foreground"
+						>
+							{expanded ? "Show less" : "Show more"}
+							<ChevronDown
+								className={cn("size-3.5 shrink-0", expanded && "rotate-180")}
+								strokeWidth={1.8}
+							/>
+						</button>
+					)}
 				</div>
 				<div className="pointer-events-none absolute right-1 bottom-0 flex items-center justify-end opacity-0 group-hover/user:pointer-events-auto group-hover/user:opacity-100 group-focus-within/user:pointer-events-auto group-focus-within/user:opacity-100">
 					<CopyMessageButton

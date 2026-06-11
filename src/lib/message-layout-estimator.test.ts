@@ -191,9 +191,40 @@ describe("estimateThreadRowHeights", () => {
 
 		// Chip pricing is size-invariant…
 		expect(giant).toBe(small);
-		// …and tiny next to the same content inlined as plain text.
+		// …and tiny next to the same content inlined as plain text (which
+		// itself is line-clamped, so it prices at the 20-line cap).
 		expect(giant).toBeLessThan(200);
-		expect(inlined).toBeGreaterThan(10_000);
+		expect(inlined).toBeGreaterThan(giant);
+	});
+
+	// Typed messages over the source-line gate render line-clamped with a
+	// Show-more control (see ChatUserMessage), so the estimator prices them
+	// at the clamped height — invariant to how far past the gate they go.
+	it("caps over-the-line-gate user messages at the clamped height", () => {
+		const lines = (n: number) =>
+			Array.from({ length: n }, (_, i) => `line ${i}`).join("\n");
+
+		const [at30] = estimateThreadRowHeights([makeUserMessage(lines(30))], {
+			fontSize: 14,
+			paneWidth: 822,
+		});
+		const [at300] = estimateThreadRowHeights([makeUserMessage(lines(300))], {
+			fontSize: 14,
+			paneWidth: 822,
+		});
+		const [at20] = estimateThreadRowHeights([makeUserMessage(lines(20))], {
+			fontSize: 14,
+			paneWidth: 822,
+		});
+		const [at10] = estimateThreadRowHeights([makeUserMessage(lines(10))], {
+			fontSize: 14,
+			paneWidth: 822,
+		});
+
+		expect(at300).toBe(at30);
+		// Under the gate the height still tracks the content.
+		expect(at20).toBeGreaterThan(at10);
+		expect(at30).toBeGreaterThan(at20);
 	});
 });
 

@@ -6,3 +6,4 @@ export {
 	agentChildrenBlockPropsEqual,
 	assistantToolCallPropsEqual,
 } from "./tool-call";
+export { UserMessageExpansionProvider } from "./user-message-expansion";

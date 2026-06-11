@@ -22,8 +22,12 @@ vi.mock("@/components/streamdown-components", () => ({
 // Deterministic row heights for the tail-window tests: every message
 // estimates to exactly 100px so the window math is integer-exact in jsdom.
 // (The content-visibility test below doesn't assert heights.)
+// USER_MESSAGE_CLAMP_LINES is re-exported because ChatUserMessage reads the
+// shared clamp gate from this module; the fixture's one-line messages never
+// reach it.
 vi.mock("@/lib/message-layout-estimator", () => ({
 	estimateThreadRowHeights: (data: unknown[]) => data.map(() => 100),
+	USER_MESSAGE_CLAMP_LINES: 20,
 }));
 
 function message(id: string, streaming = false): ThreadMessageLike {

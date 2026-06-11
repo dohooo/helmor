@@ -25,7 +25,11 @@ import { useSessionThreadPagination } from "@/lib/session-thread-pagination";
 import { useSettings } from "@/lib/settings";
 import type { WorkspaceScriptType } from "@/lib/workspace-script-actions";
 import { isShellResizing, onShellResize } from "@/shell/hooks/use-panels";
-import { EmptyState, MemoConversationMessage } from "./message-components";
+import {
+	EmptyState,
+	MemoConversationMessage,
+	UserMessageExpansionProvider,
+} from "./message-components";
 import { useEscapeBottomLock } from "./thread-viewport/use-escape-bottom-lock";
 import { useStreamingIndicatorSync } from "./thread-viewport/use-streaming-indicator-sync";
 
@@ -394,37 +398,39 @@ function ChatThread({
 
 	return (
 		<HelmorProfiler id="ChatThread">
-			<ConversationViewport
-				contentRef={contentRef}
-				data={threadMessages}
-				fontSize={settings.chatFontSize}
-				hasSession={hasSession}
-				itemContent={itemContent}
-				missingScriptTypes={missingScriptTypes}
-				onInitializeScript={onInitializeScript}
-				paneWidth={paneWidth}
-				pinTailRows={pinTailRows}
-				prologueSlot={loadEarlierBanner}
-				scrollRef={handleScrollRef}
-				sessionId={sessionId}
-				sending={sending}
-				sendingStartTime={sendingStartTime}
-				stopScroll={stopScroll}
-				usePlainThread={usePlainThread}
-			>
-				<Button
-					type="button"
-					variant="ghost"
-					size="icon-sm"
-					onClick={() => {
-						scrollToBottom("instant");
-					}}
-					className={`conversation-scroll-button ${isAtBottom || sendingJustStarted ? "conversation-scroll-button-hidden" : ""}`}
-					aria-label="Scroll to latest message"
+			<UserMessageExpansionProvider sessionId={sessionId}>
+				<ConversationViewport
+					contentRef={contentRef}
+					data={threadMessages}
+					fontSize={settings.chatFontSize}
+					hasSession={hasSession}
+					itemContent={itemContent}
+					missingScriptTypes={missingScriptTypes}
+					onInitializeScript={onInitializeScript}
+					paneWidth={paneWidth}
+					pinTailRows={pinTailRows}
+					prologueSlot={loadEarlierBanner}
+					scrollRef={handleScrollRef}
+					sessionId={sessionId}
+					sending={sending}
+					sendingStartTime={sendingStartTime}
+					stopScroll={stopScroll}
+					usePlainThread={usePlainThread}
 				>
-					<ArrowDown className="size-4" strokeWidth={2} />
-				</Button>
-			</ConversationViewport>
+					<Button
+						type="button"
+						variant="ghost"
+						size="icon-sm"
+						onClick={() => {
+							scrollToBottom("instant");
+						}}
+						className={`conversation-scroll-button ${isAtBottom || sendingJustStarted ? "conversation-scroll-button-hidden" : ""}`}
+						aria-label="Scroll to latest message"
+					>
+						<ArrowDown className="size-4" strokeWidth={2} />
+					</Button>
+				</ConversationViewport>
+			</UserMessageExpansionProvider>
 		</HelmorProfiler>
 	);
 }

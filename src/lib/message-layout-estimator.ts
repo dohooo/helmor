@@ -32,6 +32,14 @@ const COLLAPSED_GROUP_HEIGHT = 24;
 const USER_BUBBLE_VERTICAL_PADDING = 16;
 const USER_BUBBLE_HORIZONTAL_PADDING = 24;
 const USER_BUBBLE_WIDTH_RATIO = 0.75;
+// A user message with more than this many SOURCE lines of typed text renders
+// line-clamped with a "Show more" control (see ChatUserMessage). Exported so
+// the renderer and the estimator share one gate: the estimator prices such a
+// row at the clamped height — expanding happens on a mounted row, where the
+// real measurement takes over, so expansion state never reaches the estimator.
+export const USER_MESSAGE_CLAMP_LINES = 20;
+// The "Show more" control row under the clamped text.
+const USER_CLAMP_CONTROL_HEIGHT = 28;
 const MIN_TEXT_WIDTH = 64;
 const MARKDOWN_BLOCK_GAP = 12;
 const MARKDOWN_HEADING_MARGIN_TOP = 10;
@@ -460,10 +468,17 @@ function estimateUserMessageHeight(
 				})
 			: 0;
 
+	let contentHeight = Math.max(USER_LINE_HEIGHT, textHeight + pastedChipHeight);
+	// Same gate as the renderer: over the source-line limit the bubble
+	// renders clamped to N visual lines plus the Show-more control row.
+	if (text.split("\n").length > USER_MESSAGE_CLAMP_LINES) {
+		contentHeight =
+			Math.min(contentHeight, USER_MESSAGE_CLAMP_LINES * USER_LINE_HEIGHT) +
+			USER_CLAMP_CONTROL_HEIGHT;
+	}
+
 	return (
-		Math.max(USER_LINE_HEIGHT, textHeight + pastedChipHeight) +
-		USER_BUBBLE_VERTICAL_PADDING +
-		ROW_SHELL_BOTTOM_PADDING
+		contentHeight + USER_BUBBLE_VERTICAL_PADDING + ROW_SHELL_BOTTOM_PADDING
 	);
 }
 
