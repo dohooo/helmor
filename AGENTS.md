@@ -55,10 +55,12 @@ Feature-based layout. Each feature folder follows: `index.tsx` (main) + `contain
 | `features/inspector/` | Right-side inspector (actions, changes sections). |
 | `features/navigation/` | Sidebar workspace groups. |
 | `features/commit/` | Commit button + lifecycle hook. |
+| `features/terminal/` | Terminal Mode session panel, presets (boot command builders), session store with PTY lifecycle. |
 | `features/settings/` | Settings dialog + panels (CLI install, repo settings, Conductor import). |
 | `shell/` | Top-level layout, GitHub identity gate, panel resize hooks. State orchestration in `hooks/`: `use-app-shell-state.tsx` (central hub), `use-selection-controllers.ts` (selection/context/start TDZ ring), `use-editor-edit-mode.ts`, `use-global-shortcut-handlers.ts`, and `use-app-bootstrap.ts` (app initialization). All <300 lines/file. |
 | `components/ai/` | AI-specific components (code block, file tree, reasoning). |
 | `components/ui/` | shadcn/ui primitives (base-nova). |
+| `components/terminal-output-scheduler.ts` | PTY output coalescing (8ms flush window, 16KB threshold) to reduce IPC cost. |
 | `lib/api.ts` | IPC bridge -- every Tauri `invoke()` call wrapped as a typed function. |
 | `lib/query-client.ts` | React Query keys + query options factories. |
 | `lib/settings.ts` | App settings context with Tauri storage. |
@@ -68,13 +70,14 @@ Feature-based layout. Each feature folder follows: `index.tsx` (main) + `contain
 | Module | Role |
 | --- | --- |
 | `lib.rs` | Tauri app builder. Registers commands, runs setup hook. |
-| `commands/` | Tauri command handlers split by domain (session, repository, workspace, editor, github, conductor, settings, system). |
+| `commands/` | Tauri command handlers split by domain (session, repository, workspace, editor, github, conductor, settings, system). `terminal_commands.rs` includes `set_terminal_session_busy` and `create_session` (now accepts `session_kind` and `agent_type` parameters). |
 | `agents/` | Agent streaming + persistence (catalog, persistence, queries, streaming, support). |
+| `cli/` | CLI entry point + subcommands. `terminal_hook.rs` provides the hidden `terminal-hook` command used by agent CLIs to communicate PTY lifecycle events (session id, busy/idle, prompt capture). |
 | `pipeline/` | Message pipeline: `accumulator/` -> `adapter/` + `collapse` -> `ThreadMessageLike[]`. Includes `event_filter.rs`, `classify.rs`, `types.rs`. |
-| `workspace/` | Workspace operations (branching, lifecycle, helpers) + `files/` sub-module (editor, changes, types). |
+| `workspace/` | Workspace operations (branching, lifecycle, helpers) + `files/` sub-module (editor, changes, types). `scripts.rs` includes PTY output coalescing (8ms flush window, 16KB threshold, UTF-8 safe flush). |
 | `git/` | Git operations (ops, watcher). |
 | `github/` | GitHub integration (auth, CLI, GraphQL). |
-| `models/` | Persistence layer (db, repos, sessions, settings, workspaces). |
+| `models/` | Persistence layer (db, repos, sessions, settings, workspaces). Sessions table now has `session_kind` (distinguishes terminal vs GUI sessions) and `agent_type` (tracks which agent is being used). |
 | `service.rs` | Service layer. |
 | `sidecar.rs` | Sidecar process manager (spawn, stdio, graceful SIGTERM). |
 | `schema.rs` | DB schema + idempotent migrations. |
@@ -141,7 +144,7 @@ When a snapshot drifts: look at the diff first. Only accept after confirming the
 - **macOS chrome**: Overlay title bar, traffic lights at (16, 24). Drag via `data-tauri-drag-region`.
 - **Serde**: `#[serde(rename_all = "camelCase")]` -- JSON fields match TypeScript directly.
 - **Persisting React Query data**: Every query is **in-memory only by default**. To persist a query across app restarts, set `meta: PERSIST_META` (alias for `{ persist: true }`) on its `queryOptions` / `useQuery` call. Only do this for data the user must see *immediately on cold start* (sidebar lists, identity chips). Never opt in large or fast-refetching queries — the persisted blob is read synchronously on boot. See `src/lib/query-client.ts` for the wiring; the `react-query.d.ts` augmentation closes `meta`'s shape so typos like `presist` fail at compile time.
-- **Backend → frontend notifications**: Always go through `UiMutationEvent` (`src-tauri/src/ui_sync/events.rs`). Add a typed variant, broadcast with `crate::ui_sync::publish(&app, ...)`, mirror the variant in `UiMutationEvent` in `src/lib/api.ts`, and handle it in `src/shell/hooks/use-ui-sync-bridge.ts` to invalidate the right React Query keys. Do NOT add ad-hoc `app.emit("custom-event", ...)` channels with their own component-level `listen(...)` -- they fragment cache invalidation, skip the global bridge, and are easy to leak.
+- **Backend → frontend notifications**: Always go through `UiMutationEvent` (`src-tauri/src/ui_sync/events.rs`). Add a typed variant, broadcast with `crate::ui_sync::publish(&app, ...)`, mirror the variant in `UiMutationEvent` in `src/lib/api.ts`, and handle it in `src/shell/hooks/use-ui-sync-bridge.ts` to invalidate the right React Query keys. Do NOT add ad-hoc `app.emit("custom-event", ...)` channels with their own component-level `listen(...)` -- they fragment cache invalidation, skip the global bridge, and are easy to leak. Terminal session lifecycle uses `TerminalActivityChanged` (busy/idle transitions), `TerminalSessionIdle` (completion notification), and `TerminalPromptCaptured` (title and branch-rename generation).
 - **Adding a Triage provider**: A provider lives in `sidecar/src/triage/providers/<id>.ts` implementing `TriageProvider` from `providers/types.ts` (`preflight()` → `buildTools(ctx)` → `promptHint(ctx)`), registered in `providers/registry.ts`, and mirrored by a `PROVIDER_SPECS` row in `src/features/settings/panels/triage.tsx` so the toggle shows up in Settings → Experimental → Local LLM → Auto-triage. Provider tools must write fetched data as Markdown into the per-tick `ScratchSession`; the agent then uses the built-in `scratch_grep` / `scratch_read` to fish out slices instead of stuffing raw API JSON into the context window.
 - **Clippy**: Must pass `cargo clippy --all-targets -- -D warnings` with zero warnings.
 - **Perf**: `VITE_HELMOR_PERF_HUD=1` enables HUD + react-scan + long-frame tracker.
@@ -166,6 +169,23 @@ When a snapshot drifts: look at the diff first. Only accept after confirming the
 3. **Frontend: feature folders.** New features go into `src/features/<name>/` with `index.tsx`, optional `container.tsx`, `hooks/`, and tests. Shared components go into `src/components/`. Do NOT put feature-specific logic in `src/lib/` or `App.tsx`.
 4. **Backend: commands vs. domain logic.** Tauri `#[command]` handlers go in `commands/`. Business logic and domain operations go in their own modules (`workspace/`, `agents/`, `git/`, etc.). Do not mix IPC glue with domain logic.
 5. **When in doubt, split.** It is always easier to merge two small files than to untangle a 1000-line monolith.
+
+## Terminal Mode
+
+Terminal Mode is a composer toggle (settings opt-in) that sends prompts directly to Claude Code or Codex CLI in a live PTY terminal session, bypassing the SDK streaming pipeline. Terminal sessions render in the main panel alongside GUI chat sessions.
+
+**Key features:**
+
+- WebGL context management: only visible terminals hold GPU contexts, staying within Chromium/WebKit budget limits.
+- Coalesced PTY output: 8ms flush window, 16KB threshold to reduce per-event IPC cost on high-throughput output.
+- Lifecycle hooks: idle detection, title generation, and completion notifications matching GUI behavior. Hooks inject `helmor terminal-hook` as a callback command into the agent's session lifecycle events (SessionStart, UserPromptSubmit, Stop).
+- Resume support: the agent's real session id is persisted via hooks, enabling `--resume` on relaunch.
+
+**Structure:**
+
+- Frontend: `src/features/terminal/` (session panel, presets, boot command builder, session store with PTY lifecycle).
+- Backend: `src-tauri/src/cli/terminal_hook.rs` (hook callback command), `src-tauri/src/commands/terminal_commands.rs` (spawn, resize, busy-state commands), `src-tauri/src/workspace/scripts.rs` (PTY output coalescing).
+- Components: `src/components/terminal-output-scheduler.ts` (output coalescing).
 
 ## Debugging (Tauri MCP only)
 
