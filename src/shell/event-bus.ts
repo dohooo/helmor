@@ -50,6 +50,9 @@ export type ShellEvent =
 			fastMode: boolean;
 			/** Explicit target; null = the currently selected workspace. */
 			workspaceId: string | null;
+			/** The composer's current session — converted in place when it has no
+			 *  messages yet, instead of creating a new terminal session. */
+			sessionId: string | null;
 	  };
 
 export type ShellEventType = ShellEvent["type"];

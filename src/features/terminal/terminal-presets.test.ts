@@ -90,6 +90,24 @@ describe("terminal agent specs", () => {
 		expect(cmd).toBe("claude 'it'\\''s; $(rm -rf /)'\n");
 	});
 
+	it("ANSI-C quotes multi-line prompts so the boot stays one physical line", () => {
+		const cmd = buildTerminalBootCommand("claude", {
+			prompt: "line one\nline two\twith tab\nit's fine",
+		});
+		// $'...' keeps the command on a single physical line — the only newline
+		// is the trailing submit; \n/\t/' are escaped, so none reach the
+		// interactive shell's line editor early.
+		expect(cmd).toBe(
+			"claude $'line one\\nline two\\twith tab\\nit\\'s fine'\n",
+		);
+	});
+
+	it("keeps plain single-line prompts on the portable single-quote path", () => {
+		const cmd = buildTerminalBootCommand("codex", { prompt: "fix the bug" });
+		expect(cmd).toContain("'fix the bug'");
+		expect(cmd).not.toContain("$'");
+	});
+
 	it("resume quotes the session id and is null for unknown agents", () => {
 		expect(resumeBootCommand("claude", "abc-123")).toBe(
 			"claude --resume 'abc-123' --dangerously-skip-permissions\n",

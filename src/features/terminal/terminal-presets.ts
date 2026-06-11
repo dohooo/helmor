@@ -45,6 +45,25 @@ function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+/** Quote the user prompt for the boot command. A multi-line prompt single-
+ * quoted with literal newlines makes the boot command span multiple physical
+ * lines; the interactive shell's line editor then submits at the first newline
+ * (dangling quote → `quote>`, the CLI never launches) and a literal tab fires
+ * completion. When the prompt has those control chars, use `$'...'` ANSI-C
+ * quoting so the command stays one physical line and the shell rebuilds the
+ * real newlines/tabs in the CLI's argv. zsh/bash both support it (the boot
+ * prefix already requires one via `export VAR=...;`). */
+function shellQuotePrompt(value: string): string {
+	if (!/[\n\r\t]/.test(value)) return shellQuote(value);
+	const escaped = value
+		.replaceAll("\\", "\\\\")
+		.replaceAll("'", "\\'")
+		.replaceAll("\n", "\\n")
+		.replaceAll("\r", "\\r")
+		.replaceAll("\t", "\\t");
+	return `$'${escaped}'`;
+}
+
 /** Helmor's catalog uses the literal id "default" for "follow the CLI's own
  * default model" — that placeholder must never reach a real --model flag. */
 function cliModelOrNull(modelId?: string | null): string | null {
@@ -73,7 +92,7 @@ const CLAUDE_SPEC: TerminalAgentSpec = {
 		if (effort) parts.push("--effort", shellQuote(effort));
 		if (permission) parts.push("--permission-mode", shellQuote(permission));
 		parts.push(...claudeAddDirFlags(opts.addDirs));
-		parts.push(shellQuote(opts.prompt));
+		parts.push(shellQuotePrompt(opts.prompt));
 		return parts.join(" ");
 	},
 	resume(id, opts) {
@@ -116,7 +135,7 @@ const CODEX_SPEC: TerminalAgentSpec = {
 				"danger-full-access",
 			);
 		}
-		parts.push(shellQuote(opts.prompt));
+		parts.push(shellQuotePrompt(opts.prompt));
 		return parts.join(" ");
 	},
 	resume(id) {

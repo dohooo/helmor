@@ -10,6 +10,7 @@ import { buildTerminalBootCommand } from "@/features/terminal/terminal-presets";
 import { setPendingBoot } from "@/features/terminal/terminal-session-store";
 import {
 	closeMainWindow,
+	convertSessionToTerminal,
 	createSession,
 	renameSession,
 	type WorkspaceDetail,
@@ -199,33 +200,100 @@ export function useSessionActions({
 	// TUI with the prompt + composer state as the initial invocation.
 	useShellEvent("create-terminal-session", (event) => {
 		const boot = buildTerminalBootCommand(event.provider, event);
-		void handleCreateSession(
-			"terminal",
-			event.provider,
-			(sessionId) => {
-				if (boot) {
-					setPendingBoot(sessionId, {
-						bootCommand: boot,
-						fastMode: event.fastMode,
-					});
-				}
-				// Layer 1 of the two-layer title (same as GUI): provisional title
-				// from the prompt now; the agent hook drives the AI rename later.
-				if (event.prompt) {
-					const titleSeed = buildTitleSeed(event.prompt);
-					seedSessionTitle(
-						queryClient,
-						sessionId,
-						event.workspaceId,
-						titleSeed,
-					);
-					void renameSession(sessionId, titleSeed).catch((error) => {
-						console.warn("[terminal] failed to seed title:", error);
-					});
-				}
-			},
-			event.workspaceId,
-		);
+
+		// Layer 1 of the two-layer title (same as GUI): provisional title from
+		// the prompt now; the agent hook drives the AI rename later.
+		const seedTitle = (sessionId: string) => {
+			if (!event.prompt) return;
+			const titleSeed = buildTitleSeed(event.prompt);
+			seedSessionTitle(queryClient, sessionId, event.workspaceId, titleSeed);
+			void renameSession(sessionId, titleSeed).catch((error) => {
+				console.warn("[terminal] failed to seed title:", error);
+			});
+		};
+
+		const createNew = () => {
+			void handleCreateSession(
+				"terminal",
+				event.provider,
+				(sessionId) => {
+					if (boot) {
+						setPendingBoot(sessionId, {
+							bootCommand: boot,
+							fastMode: event.fastMode,
+						});
+					}
+					seedTitle(sessionId);
+				},
+				event.workspaceId,
+			);
+		};
+
+		// A brand-new (message-less) current session converts in place — no point
+		// stranding an empty Untitled session next to the terminal. Anything with
+		// history gets a fresh terminal session alongside it.
+		const sessions =
+			event.sessionId && event.workspaceId
+				? (queryClient.getQueryData<WorkspaceSessionSummary[]>(
+						helmorQueryKeys.workspaceSessions(event.workspaceId),
+					) ?? [])
+				: [];
+		const currentSession =
+			sessions.find((session) => session.id === event.sessionId) ?? null;
+
+		if (
+			!event.sessionId ||
+			!event.workspaceId ||
+			!isNewSession(currentSession)
+		) {
+			createNew();
+			return;
+		}
+
+		const sessionId = event.sessionId;
+		const workspaceId = event.workspaceId;
+		void (async () => {
+			try {
+				await convertSessionToTerminal(sessionId, event.provider);
+			} catch (error) {
+				// Lost the message-less race / convert refused — fall back to new.
+				console.warn(
+					"[terminal] in-place convert failed; creating new:",
+					error,
+				);
+				createNew();
+				return;
+			}
+			if (boot) {
+				setPendingBoot(sessionId, {
+					bootCommand: boot,
+					fastMode: event.fastMode,
+				});
+			}
+			seedTitle(sessionId);
+			// Flip the cached row to terminal so the panel renders the TUI now,
+			// before the backend round-trip reconciles.
+			queryClient.setQueryData<WorkspaceSessionSummary[]>(
+				helmorQueryKeys.workspaceSessions(workspaceId),
+				(current) =>
+					(current ?? []).map((session) =>
+						session.id === sessionId
+							? {
+									...session,
+									sessionKind: "terminal",
+									agentType: event.provider,
+								}
+							: session,
+					),
+			);
+			requestSidebarReconcile(queryClient);
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
+			});
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
+			});
+		})();
 	});
 
 	useEffect(() => {

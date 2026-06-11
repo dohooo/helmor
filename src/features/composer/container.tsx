@@ -877,6 +877,7 @@ export const WorkspaceComposerContainer = memo(
 						addDirs: linkedDirectories.length > 0 ? linkedDirectories : null,
 						fastMode: supportsFastMode ? fastMode : false,
 						workspaceId: displayedWorkspaceId,
+						sessionId: displayedSessionId,
 					});
 					return;
 				}
@@ -922,6 +923,7 @@ export const WorkspaceComposerContainer = memo(
 				showTerminalToggle,
 				linkedDirectories,
 				displayedWorkspaceId,
+				displayedSessionId,
 				focusScope,
 			],
 		);
