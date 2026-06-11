@@ -159,7 +159,7 @@ export type DataInfo = {
 	archiveRoot: string;
 };
 
-export type AgentProvider = "claude" | "codex" | "cursor" | "opencode";
+export type AgentProvider = "claude" | "codex" | "cursor" | "opencode" | "kimi";
 
 export type LocalLlmStatus = {
 	enabled: boolean;
@@ -910,13 +910,19 @@ export async function toggleMiniWindowMode(): Promise<boolean> {
 	return await invoke("toggle_mini_window_mode");
 }
 
-export type AgentLoginProvider = "claude" | "codex" | "cursor" | "opencode";
+export type AgentLoginProvider =
+	| "claude"
+	| "codex"
+	| "cursor"
+	| "opencode"
+	| "kimi";
 
 export type AgentLoginStatusResult = {
 	claude: boolean;
 	codex: boolean;
 	cursor: boolean;
 	opencode: boolean;
+	kimi: boolean;
 	codexProvider?: string | null;
 	codexAuthMethod?: "login" | "apiKey" | string | null;
 };
@@ -930,6 +936,7 @@ export type AgentVersionsResult = {
 	claude: string | null;
 	codex: string | null;
 	opencode: string | null;
+	kimi: string | null;
 };
 
 export async function getAgentVersions(): Promise<AgentVersionsResult> {
@@ -1158,6 +1165,16 @@ export const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities[] = [
 		supportsSlashCommands: true,
 		requiresApiKey: false,
 	},
+	{
+		provider: "kimi",
+		displayName: "Kimi",
+		supportsPlanMode: false,
+		supportsActiveGoal: false,
+		supportsContextUsage: false,
+		supportsSteer: false,
+		supportsSlashCommands: true,
+		requiresApiKey: false,
+	},
 ];
 
 /** Look up a single provider's capabilities from a previously-fetched
@@ -1281,6 +1298,96 @@ export async function deleteOpencodeCustomProvider(id: string): Promise<void> {
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to delete opencode provider."),
+		);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Kimi custom providers — manage `~/.kimi-code` via the `kimi provider` CLI.
+// ---------------------------------------------------------------------------
+
+export type KimiProviderInfo = {
+	id: string;
+	label: string;
+	modelCount: number;
+};
+/** `id` is the Kimi model alias (what the model picker / `session/set_model` use). */
+export type KimiModelInfo = { id: string; label: string; providerId: string };
+export type KimiProviderConfig = {
+	providers: KimiProviderInfo[];
+	models: KimiModelInfo[];
+};
+
+/** `kimi provider list --json` → configured providers + models. */
+export async function getKimiProviderConfig(): Promise<KimiProviderConfig> {
+	try {
+		return await invoke<KimiProviderConfig>("get_kimi_provider_config");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to read Kimi providers."),
+		);
+	}
+}
+
+export type KimiCustomModelInput = {
+	id: string;
+	/** Kimi requires a positive context window per model; backend defaults it. */
+	maxContextSize?: number;
+};
+export type KimiCustomProviderInput = {
+	id: string;
+	baseUrl: string;
+	apiKey: string;
+	/** `"openai"` (default) or `"anthropic"`. */
+	wireType: string;
+	models: KimiCustomModelInput[];
+};
+
+/** Add a raw OpenAI/Anthropic-compatible endpoint (base URL + key + model) —
+ *  written straight into `~/.kimi-code/config.toml`. */
+export async function addKimiCustomProvider(
+	input: KimiCustomProviderInput,
+): Promise<void> {
+	try {
+		await invoke("add_kimi_custom_provider", { input });
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to add Kimi provider."));
+	}
+}
+
+/** Import a models.dev catalog provider by id (`kimi provider catalog add`). */
+export async function addKimiCatalogProvider(
+	providerId: string,
+	apiKey: string,
+): Promise<void> {
+	try {
+		await invoke("add_kimi_catalog_provider", { providerId, apiKey });
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to add Kimi provider."));
+	}
+}
+
+/** Import a custom registry (`api.json` URL) via `kimi provider add <url>`.
+ *  The key is required — the CLI hard-fails without one. */
+export async function addKimiRegistry(
+	url: string,
+	apiKey: string,
+): Promise<void> {
+	try {
+		await invoke("add_kimi_registry", { url, apiKey });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to import Kimi registry."),
+		);
+	}
+}
+
+export async function removeKimiProvider(providerId: string): Promise<void> {
+	try {
+		await invoke("remove_kimi_provider", { providerId });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to remove Kimi provider."),
 		);
 	}
 }

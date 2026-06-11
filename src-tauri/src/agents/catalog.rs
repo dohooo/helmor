@@ -42,6 +42,7 @@ pub fn static_model_sections() -> Vec<AgentModelSection> {
         super::custom_providers::configured_models(),
         load_cursor_prefs(),
         load_opencode_prefs(),
+        load_kimi_prefs(),
     )
 }
 
@@ -51,6 +52,7 @@ fn model_sections_for_inputs(
     custom: Vec<super::custom_providers::ClaudeProviderModel>,
     cursor_prefs: Option<CursorPrefs>,
     opencode_prefs: Option<OpencodePrefs>,
+    kimi_prefs: Option<KimiPrefs>,
 ) -> Vec<AgentModelSection> {
     let mut claude_section = official_claude_section();
     claude_section
@@ -59,6 +61,7 @@ fn model_sections_for_inputs(
     let mut sections = vec![claude_section];
     sections.push(codex_section());
     sections.push(opencode_section_from_prefs(opencode_prefs));
+    sections.push(kimi_section_from_prefs(kimi_prefs));
     if let Some(cursor) = cursor_section_from_prefs(cursor_prefs) {
         sections.push(cursor);
     }
@@ -116,6 +119,78 @@ fn codex_section() -> AgentModelSection {
             codex_model("gpt-5.4-mini", "GPT-5.4-Mini"),
             codex_model("gpt-5.3-codex-spark", "GPT-5.3-Codex-Spark"),
         ],
+    }
+}
+
+#[derive(Debug, Clone)]
+struct KimiPrefs {
+    /// `(alias, label)` of models discovered via `kimi provider list`, cached
+    /// by the Settings panel into `app.kimi_provider`.
+    cached_models: Vec<(String, String)>,
+    /// `null` ⟺ show all cached; explicit list ⟺ that subset; absent in JSON → null.
+    enabled_ids: Option<Vec<String>>,
+}
+
+fn load_kimi_prefs() -> Option<KimiPrefs> {
+    let raw = crate::models::settings::load_setting_value("app.kimi_provider")
+        .ok()
+        .flatten()?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let cached_models = match parsed.get("cachedModels") {
+        Some(serde_json::Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|item| {
+                let id = item.get("id").and_then(serde_json::Value::as_str)?;
+                let label = item
+                    .get("label")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(id);
+                Some((id.to_string(), label.to_string()))
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    let enabled_ids = match parsed.get("enabledModelIds") {
+        Some(serde_json::Value::Array(arr)) => Some(
+            arr.iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect(),
+        ),
+        _ => None,
+    };
+    Some(KimiPrefs {
+        cached_models,
+        enabled_ids,
+    })
+}
+
+// Kimi Code resolves models from the user's `~/.kimi-code` config (managed via
+// the Settings "Custom Providers" panel → `kimi provider`). The managed
+// `kimi-code/kimi-for-coding` alias is the always-available built-in default
+// and leads the list; the user's configured/enabled models follow. The selected
+// model is applied per session via ACP `session/set_model`.
+fn kimi_section_from_prefs(prefs: Option<KimiPrefs>) -> AgentModelSection {
+    // Always offer the built-in coding default first. The alias is the managed
+    // model key (`kimi-code/<modelId>`) — bare `kimi-for-coding` is NOT a valid
+    // `session/set_model` target, and the synced list dedupes against this key.
+    let mut options = vec![kimi_model("kimi-code/kimi-for-coding", "Kimi for Coding")];
+    let mut seen = std::collections::HashSet::from(["kimi-code/kimi-for-coding".to_string()]);
+    if let Some(prefs) = prefs {
+        let show = |alias: &str| match &prefs.enabled_ids {
+            Some(ids) => ids.iter().any(|id| id == alias),
+            None => true, // null → show all cached models
+        };
+        for (alias, label) in &prefs.cached_models {
+            if show(alias) && seen.insert(alias.clone()) {
+                options.push(kimi_model(alias, label));
+            }
+        }
+    }
+    AgentModelSection {
+        id: "kimi".to_string(),
+        label: "Kimi".to_string(),
+        status: AgentModelSectionStatus::Ready,
+        options,
     }
 }
 
@@ -463,6 +538,24 @@ fn codex_model(id: &str, label: &str) -> AgentModelOption {
     }
 }
 
+// `alias` is the bare Kimi model alias (what `session/set_model` accepts). The
+// Helmor picker `id` is namespaced `kimi:<alias>` so it can't collide with a
+// claude/codex/cursor id (a custom provider's alias may be e.g. `gpt-4o`);
+// `cli_model` keeps the bare alias for the send round-trip. No effort tiers /
+// fast mode / context ring in v1 (see `provider_capabilities`).
+fn kimi_model(alias: &str, label: &str) -> AgentModelOption {
+    AgentModelOption {
+        id: format!("kimi:{alias}"),
+        provider: "kimi".to_string(),
+        label: label.to_string(),
+        cli_model: alias.to_string(),
+        provider_key: None,
+        effort_levels: Vec::new(),
+        supports_fast_mode: false,
+        supports_context_usage: false,
+    }
+}
+
 // `id`/`cli_model` are both the `provider/model` slug; `effort_levels` map to opencode `variants`.
 fn opencode_model(slug: &str, label: &str, effort_levels: Vec<String>) -> AgentModelOption {
     AgentModelOption {
@@ -551,18 +644,30 @@ pub fn resolve_model(model_id: &str, provider_hint: Option<&str>) -> ResolvedMod
         Some("codex") => "codex",
         Some("claude") => "claude",
         Some("opencode") => "opencode",
+        Some("kimi") => "kimi",
+        // Namespaced kimi picker id — checked before the `/` opencode rule so a
+        // custom-provider alias containing `/` still routes to kimi without a hint.
+        _ if model_id.starts_with("kimi:") => "kimi",
         _ if model_id.starts_with("cursor-") => "cursor",
         _ if model_id.starts_with("composer-") => "cursor",
         // `/` is unique to opencode slugs (claude uses `|`, codex/cursor have none).
         _ if model_id.contains('/') => "opencode",
         _ if model_id.starts_with("gpt-") => "codex",
+        // Bare kimi aliases (`kimi-for-coding`, `kimi-k2`).
+        _ if model_id.starts_with("kimi") => "kimi",
         _ => "claude",
     };
 
-    // Strip `cursor-` for SDK; `composer-*` had no prefix.
+    // Strip the picker namespace so the bare alias reaches the SDK/CLI:
+    // `cursor-<wire>` for Cursor, `kimi:<alias>` for Kimi.
     let cli_model = if provider == "cursor" {
         model_id
             .strip_prefix("cursor-")
+            .unwrap_or(model_id)
+            .to_string()
+    } else if provider == "kimi" {
+        model_id
+            .strip_prefix("kimi:")
             .unwrap_or(model_id)
             .to_string()
     } else {
@@ -586,9 +691,9 @@ mod tests {
     #[test]
     fn static_model_sections_returns_hardcoded_catalog() {
         // `None` cursor_prefs (no API key) → cursor section omitted entirely.
-        let sections = model_sections_for_inputs(Vec::new(), None, None);
+        let sections = model_sections_for_inputs(Vec::new(), None, None, None);
 
-        assert_eq!(sections.len(), 3);
+        assert_eq!(sections.len(), 4);
         assert_eq!(sections[0].id, "claude");
         assert_eq!(sections[0].status, AgentModelSectionStatus::Ready);
         assert_eq!(
@@ -630,6 +735,18 @@ mod tests {
         assert_eq!(sections[2].status, AgentModelSectionStatus::Unavailable);
         assert!(sections[2].options.is_empty());
 
+        // Kimi is a static one-entry section (the managed built-in default).
+        assert_eq!(sections[3].id, "kimi");
+        assert_eq!(sections[3].status, AgentModelSectionStatus::Ready);
+        assert_eq!(
+            sections[3]
+                .options
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["kimi:kimi-code/kimi-for-coding"]
+        );
+
         // No `app.cursor_provider` row → no API key → no Cursor section.
         assert!(sections.iter().all(|s| s.id != "cursor"));
     }
@@ -647,9 +764,10 @@ mod tests {
             }],
             None,
             None,
+            None,
         );
 
-        assert_eq!(sections.len(), 3);
+        assert_eq!(sections.len(), 4);
         assert_eq!(sections[0].id, "claude");
         assert_eq!(sections[0].label, "Claude Code");
         assert_eq!(
@@ -733,6 +851,90 @@ mod tests {
         assert_eq!(m.cli_model, "openai/gpt-5-codex");
     }
 
+    #[test]
+    fn resolve_kimi_model_routes_to_kimi() {
+        // Explicit hint, bare alias (no namespace) → cli_model unchanged.
+        let m = resolve_model("kimi-for-coding", Some("kimi"));
+        assert_eq!(m.provider, "kimi");
+        assert_eq!(m.cli_model, "kimi-for-coding");
+        assert_eq!(m.id, "kimi-for-coding");
+        // Prefix inference without a hint.
+        let m = resolve_model("kimi-k2-turbo", None);
+        assert_eq!(m.provider, "kimi");
+        assert_eq!(m.cli_model, "kimi-k2-turbo");
+        // Namespaced picker id → kimi, with the `kimi:` prefix stripped for the CLI.
+        let m = resolve_model("kimi:claude-opus-4-8", Some("kimi"));
+        assert_eq!(m.provider, "kimi");
+        assert_eq!(m.cli_model, "claude-opus-4-8");
+        // Namespaced alias that contains `/` must still route to kimi (not opencode)
+        // even without a hint, since the `kimi:` rule precedes the `/` rule.
+        let m = resolve_model("kimi:vendor/model", None);
+        assert_eq!(m.provider, "kimi");
+        assert_eq!(m.cli_model, "vendor/model");
+        // The built-in default seed is the managed `kimi-code/<modelId>` key —
+        // `/`-containing, so it depends on the same precedence to reach kimi.
+        let m = resolve_model("kimi:kimi-code/kimi-for-coding", None);
+        assert_eq!(m.provider, "kimi");
+        assert_eq!(m.cli_model, "kimi-code/kimi-for-coding");
+    }
+
+    #[test]
+    fn kimi_section_leads_with_default_then_enabled_models() {
+        // No prefs → just the built-in default.
+        let none = kimi_section_from_prefs(None);
+        assert_eq!(none.id, "kimi");
+        assert_eq!(none.status, AgentModelSectionStatus::Ready);
+        assert_eq!(
+            none.options
+                .iter()
+                .map(|o| o.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["kimi:kimi-code/kimi-for-coding"]
+        );
+
+        // enabled_ids = null → all cached models follow the default (deduped).
+        let all = kimi_section_from_prefs(Some(KimiPrefs {
+            cached_models: vec![
+                (
+                    "kimi-code/kimi-for-coding".to_string(),
+                    "Kimi for Coding".to_string(),
+                ),
+                ("claude-opus-4-8".to_string(), "Claude Opus 4.8".to_string()),
+            ],
+            enabled_ids: None,
+        }));
+        // The synced managed alias dedupes against the lead default — no
+        // duplicate "Kimi for Coding" in the picker.
+        assert_eq!(
+            all.options
+                .iter()
+                .map(|o| o.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["kimi:kimi-code/kimi-for-coding", "kimi:claude-opus-4-8"]
+        );
+        let opus = &all.options[1];
+        assert_eq!(opus.provider, "kimi");
+        assert_eq!(opus.cli_model, "claude-opus-4-8");
+        assert_eq!(opus.label, "Claude Opus 4.8");
+
+        // Explicit subset → only the picked alias (plus the always-on default).
+        let subset = kimi_section_from_prefs(Some(KimiPrefs {
+            cached_models: vec![
+                ("a".to_string(), "A".to_string()),
+                ("b".to_string(), "B".to_string()),
+            ],
+            enabled_ids: Some(vec!["b".to_string()]),
+        }));
+        assert_eq!(
+            subset
+                .options
+                .iter()
+                .map(|o| o.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["kimi:kimi-code/kimi-for-coding", "kimi:b"]
+        );
+    }
+
     fn opencode_cache(slug: &str, label: &str) -> OpencodeCachedModelEntry {
         OpencodeCachedModelEntry {
             slug: slug.to_string(),
@@ -763,7 +965,7 @@ mod tests {
                 opencode_cache("hundun/deepseek-v4-pro", "Hundun · DeepSeek V4 Pro"),
             ]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs));
+        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs), None);
         let opencode = sections.iter().find(|s| s.id == "opencode").unwrap();
         assert_eq!(opencode.status, AgentModelSectionStatus::Ready);
         assert_eq!(
@@ -797,7 +999,7 @@ mod tests {
                 ),
             ]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs));
+        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs), None);
         let opencode = sections.iter().find(|s| s.id == "opencode").unwrap();
         let zen = opencode
             .options
@@ -826,7 +1028,7 @@ mod tests {
                 opencode_cache("hundun/deepseek-v4-pro", "Hundun · DeepSeek V4 Pro"),
             ]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs));
+        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs), None);
         let opencode = sections.iter().find(|s| s.id == "opencode").unwrap();
         assert_eq!(opencode.status, AgentModelSectionStatus::Ready);
         assert_eq!(opencode.options.len(), 1);
@@ -844,7 +1046,7 @@ mod tests {
                 "OpenCode Zen · Big Pickle",
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs));
+        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs), None);
         let opencode = sections.iter().find(|s| s.id == "opencode").unwrap();
         assert_eq!(opencode.status, AgentModelSectionStatus::Ready);
         assert!(opencode.options.is_empty());
@@ -860,7 +1062,7 @@ mod tests {
                 "OpenCode Zen · Big Pickle",
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs));
+        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs), None);
         let opencode = sections.iter().find(|s| s.id == "opencode").unwrap();
         assert_eq!(opencode.status, AgentModelSectionStatus::Unavailable);
         assert!(opencode.options.is_empty());
@@ -873,7 +1075,7 @@ mod tests {
             enabled_ids: Some(vec!["mystery/model".to_string()]),
             cached_models: Some(Vec::new()),
         };
-        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs));
+        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs), None);
         let opencode = sections.iter().find(|s| s.id == "opencode").unwrap();
         assert_eq!(opencode.options.len(), 1);
         assert_eq!(opencode.options[0].id, "mystery/model");
@@ -915,7 +1117,7 @@ mod tests {
 
     #[test]
     fn official_claude_section_surfaces_opus_4_8_default_above_4_7_and_4_6() {
-        let sections = model_sections_for_inputs(Vec::new(), None, None);
+        let sections = model_sections_for_inputs(Vec::new(), None, None, None);
         let claude = sections.iter().find(|s| s.id == "claude").unwrap();
         let ids: Vec<&str> = claude.options.iter().map(|o| o.id.as_str()).collect();
         // User-facing ordering: 4.8 (default) on top, then 4.7, then 4.6.
@@ -997,7 +1199,7 @@ mod tests {
             enabled_ids: Some(vec!["gpt-5.3-codex".to_string()]),
             cached_models: Some(vec![cursor_cache("gpt-5.3-codex", "Codex 5.3", None)]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
         assert!(sections.iter().all(|s| s.id != "cursor"));
     }
 
@@ -1010,7 +1212,7 @@ mod tests {
             enabled_ids: Some(Vec::new()),
             cached_models: Some(vec![cursor_cache("gpt-5.3-codex", "Codex 5.3", None)]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
         assert!(sections.iter().all(|s| s.id != "cursor"));
     }
 
@@ -1028,7 +1230,7 @@ mod tests {
                 Some(vec![cursor_param("reasoning", &["low", "medium", "high"])]),
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
         let cursor = sections.iter().find(|s| s.id == "cursor").unwrap();
         assert_eq!(cursor.options.len(), 1);
         let opt = &cursor.options[0];
@@ -1051,7 +1253,7 @@ mod tests {
                 Some(vec![cursor_param("fast", &["true", "false"])]),
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
         let cursor = sections.iter().find(|s| s.id == "cursor").unwrap();
         let opt = &cursor.options[0];
         assert!(opt.effort_levels.is_empty());
@@ -1073,7 +1275,7 @@ mod tests {
                 Some(vec![cursor_param("thinking", &["false", "true"])]),
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
         let opt = &sections.iter().find(|s| s.id == "cursor").unwrap().options[0];
         assert!(opt.effort_levels.is_empty());
         assert!(!opt.supports_fast_mode);
@@ -1097,7 +1299,7 @@ mod tests {
                 ]),
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
         let opt = &sections.iter().find(|s| s.id == "cursor").unwrap().options[0];
         assert_eq!(opt.effort_levels, vec!["low", "medium", "high", "max"]);
         assert!(opt.supports_fast_mode);
@@ -1119,7 +1321,7 @@ mod tests {
                 ]),
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
         let opt = &sections.iter().find(|s| s.id == "cursor").unwrap().options[0];
         assert_eq!(opt.effort_levels, vec!["max"]);
     }
@@ -1138,7 +1340,7 @@ mod tests {
                 ]),
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
         let opt = &sections.iter().find(|s| s.id == "cursor").unwrap().options[0];
         assert_eq!(opt.effort_levels, vec!["low", "medium", "high"]);
         assert!(opt.supports_fast_mode);
@@ -1155,7 +1357,7 @@ mod tests {
             enabled_ids: Some(vec!["legacy".to_string()]),
             cached_models: Some(vec![cursor_cache("legacy", "Legacy Cached", None)]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
         let opt = &sections.iter().find(|s| s.id == "cursor").unwrap().options[0];
         assert!(opt.effort_levels.is_empty());
         assert!(!opt.supports_fast_mode);
@@ -1171,7 +1373,7 @@ mod tests {
             enabled_ids: Some(vec!["mystery-model".to_string()]),
             cached_models: Some(Vec::new()),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
         let opt = &sections.iter().find(|s| s.id == "cursor").unwrap().options[0];
         assert_eq!(opt.cli_model, "mystery-model");
         assert_eq!(opt.label, "mystery-model");
@@ -1215,7 +1417,7 @@ mod tests {
             enabled_ids: Some(pick.iter().map(|s| s.to_string()).collect()),
             cached_models: Some(cached_models),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
         let cursor = sections.iter().find(|s| s.id == "cursor").unwrap();
         let by_wire: std::collections::HashMap<String, &AgentModelOption> = cursor
             .options

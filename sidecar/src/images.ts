@@ -46,3 +46,20 @@ export function parseImageRefs(
 	text = text.replace(/ {2,}/g, " ").trim();
 	return { text, imagePaths: dedup };
 }
+
+const IMAGE_MIME_BY_EXT: Record<string, string> = {
+	png: "image/png",
+	jpg: "image/jpeg",
+	jpeg: "image/jpeg",
+	gif: "image/gif",
+	webp: "image/webp",
+	bmp: "image/bmp",
+	svg: "image/svg+xml",
+	heic: "image/heic",
+};
+
+/** Best-effort MIME from a file extension; image/png when unknown. */
+export function imageMime(path: string): string {
+	const ext = path.split(".").pop()?.toLowerCase() ?? "";
+	return IMAGE_MIME_BY_EXT[ext] ?? "image/png";
+}

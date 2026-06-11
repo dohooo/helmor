@@ -89,6 +89,25 @@ export const OPENCODE_SHA256: Readonly<
 	},
 };
 
+// Kimi Code CLI ships per-platform native binaries (Node SEA) as zip release
+// assets on GitHub — NOT npm sub-packages — so it's staged like gh/glab from a
+// release URL rather than from node_modules. Bumping: pull each platform's
+// SHA256 from the release's `*.zip.sha256` sidecar (or the GitHub asset
+// `digest`) and wipe sidecar/.bundle-cache. Keyed `version → platformSlug`.
+export const KIMI_VERSION = "0.14.0";
+export const KIMI_SHA256: Readonly<Record<string, Record<string, string>>> = {
+	"0.14.0": {
+		"darwin-arm64":
+			"fbba44fec75cd6825fd3ba7f9f0450729b15239f06b0b124f7d76b668a26ae42",
+		"darwin-x64":
+			"5613cfcbe49756e79ef8f05ae58ec4c19ae70fe4d388d22958edbeb3f2ae8563",
+		"win32-arm64":
+			"bcfbf56a3c013ba49734da2f6875fa33ac26f16b8f98a59c1316bf098aee04e1",
+		"win32-x64":
+			"5a627b764a06810f331fbd68c0e53b975e9779d99677fd378b6fdd3f5c308d16",
+	},
+};
+
 export const LLAMA_VERSION = "b9496";
 export const LLAMA_SHA256: Readonly<{ arm64: string; x64: string }> = {
 	arm64: "f1eff7bb49590d80706b84e82e973a21f0bedb49560fbabfea2654756aa59dca",
@@ -344,6 +363,41 @@ export function opencodeArchivePlan(
 		archiveName: `${slug}.tgz`,
 		url: `https://registry.npmjs.org/${target.opencodePkg}/-/opencode-${target.opencodeNpmSuffix}-${version}.tgz`,
 		sha256: shaTable[target.arch],
+	};
+}
+
+/** Platform slug in Kimi's release asset names: `darwin-arm64`, `win32-x64`, … */
+export function kimiPlatformSlug(target: TargetInfo): string {
+	const os = target.os === "windows" ? "win32" : "darwin";
+	return `${os}-${target.arch}`;
+}
+
+export function kimiArchivePlan(
+	target: TargetInfo,
+	version: string,
+): ArchivePlan {
+	const shaTable = KIMI_SHA256[version];
+	if (!shaTable) {
+		throw new Error(
+			`[stage-vendor] no pinned SHA256 for kimi ${version} — add it to KIMI_SHA256 in vendor-platform.ts`,
+		);
+	}
+	const platform = kimiPlatformSlug(target);
+	const sha256 = shaTable[platform];
+	if (!sha256) {
+		throw new Error(
+			`[stage-vendor] no pinned SHA256 for kimi ${version} ${platform}`,
+		);
+	}
+	// GitHub release tag is the scoped npm tag `@moonshot-ai/kimi-code@<ver>`,
+	// url-encoded in the download path (`@`→`%40`).
+	const tag = `%40moonshot-ai/kimi-code%40${version}`;
+	const slug = `kimi-code-${platform}-${version}`;
+	return {
+		slug,
+		archiveName: `${slug}.zip`,
+		url: `https://github.com/MoonshotAI/kimi-code/releases/download/${tag}/kimi-code-${platform}.zip`,
+		sha256,
 	};
 }
 

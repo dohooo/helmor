@@ -33,6 +33,7 @@ export function ModelIcon({
 	if (model?.provider === "cursor") return <CursorIcon className={className} />;
 	if (model?.provider === "codex")
 		return <OpenAIColorIcon className={className} />;
+	if (model?.provider === "kimi") return <KimiIcon className={className} />;
 	if (model?.provider === "opencode") {
 		const providerId = model.cliModel.split("/")[0] ?? "";
 		if (providerId === "anthropic")

@@ -94,6 +94,10 @@ notify-debouncer-full = "0.4"
 # terminal and interactive run-action scripts. See `workspace/scripts.rs`.
 portable-pty = "0.8"
 toml = "0.8"
+# CST editing of the user's `~/.kimi-code/config.toml` (preserve comments /
+# formatting on write). Already in the tree as a transitive dep — no new weight.
+# See agents/kimi_config.rs.
+toml_edit = "0.25"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = [
     "json",

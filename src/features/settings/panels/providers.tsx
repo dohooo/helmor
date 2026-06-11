@@ -3,6 +3,7 @@ import { useRef } from "react";
 import {
 	ClaudeColorIcon,
 	CursorIcon,
+	KimiIcon,
 	OpenAIIcon,
 	OpenCodeIcon,
 } from "@/components/icons";
@@ -12,12 +13,15 @@ import { helmorQueryKeys } from "@/lib/query-client";
 import { SettingsGroup } from "../components/settings-row";
 import { AgentProxyPanel, ClaudeCustomProvidersPanel } from "./model-providers";
 import { CursorCardBody } from "./providers/cursor-card-body";
+import { KimiCustomProvidersPanel } from "./providers/kimi-custom-providers";
+import { KimiModels } from "./providers/kimi-models";
 import { OpencodeCustomProvidersPanel } from "./providers/opencode-custom-providers";
 import {
 	OpencodeModels,
 	type OpencodeModelsHandle,
 } from "./providers/opencode-models";
 import { ProviderConfigRow, ProviderRow } from "./providers/provider-row";
+import { useKimiModelSync } from "./providers/use-kimi-model-sync";
 
 // SettingsDialog renders outside AppShell's TooltipProvider, so wrap our own.
 export function ProvidersPanel() {
@@ -41,6 +45,10 @@ export function ProvidersPanel() {
 	const statusLoading = statusQuery.isLoading;
 	const opencodeSyncing =
 		useIsMutating({ mutationKey: ["opencodeModelSync"] }) > 0;
+	// Kimi's isSyncing is already global (useIsMutating inside the hook), so a
+	// sync from any panel spins this row too; sync after login so the models
+	// panel isn't empty until a manual Sync.
+	const { sync: syncKimiModels, isSyncing: kimiSyncing } = useKimiModelSync();
 
 	const refetchStatus = () => {
 		void statusQuery.refetch();
@@ -103,6 +111,32 @@ export function ProvidersPanel() {
 					loginProvider="codex"
 					onLoginExit={refetchStatus}
 				/>
+				<ProviderRow
+					icon={KimiIcon}
+					name="Kimi"
+					version={versions?.kimi}
+					ready={Boolean(status?.kimi)}
+					connecting={statusLoading || kimiSyncing}
+					loginProvider="kimi"
+					onLoginExit={() => {
+						refetchStatus();
+						void syncKimiModels().catch(() => {});
+					}}
+					collapsible
+				>
+					<ProviderConfigRow
+						label="Models"
+						description="Pick which Kimi models appear in the composer's picker."
+					>
+						<KimiModels />
+					</ProviderConfigRow>
+					<ProviderConfigRow
+						label="Custom Providers"
+						description="Add a models.dev provider by API key, or a custom api.json registry. Saved to ~/.kimi-code/config.toml."
+					>
+						<KimiCustomProvidersPanel />
+					</ProviderConfigRow>
+				</ProviderRow>
 				<ProviderRow
 					icon={CursorIcon}
 					name="Cursor"

@@ -81,6 +81,7 @@ pub struct AgentLoginStatus {
     pub codex: bool,
     pub cursor: bool,
     pub opencode: bool,
+    pub kimi: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codex_provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -94,6 +95,7 @@ pub struct AgentVersions {
     pub claude: Option<String>,
     pub codex: Option<String>,
     pub opencode: Option<String>,
+    pub kimi: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -438,6 +440,8 @@ fn helmor_skills_status() -> anyhow::Result<HelmorSkillsStatus> {
             cursor: cursor_login_ready(),
             // opencode readiness comes from the login-status path, not here.
             opencode: false,
+            // kimi has no Helmor-skills install path; irrelevant here.
+            kimi: false,
             codex_provider: None,
             codex_auth_method: None,
         },
@@ -579,6 +583,7 @@ pub async fn install_helmor_skills() -> CmdResult<HelmorSkillsStatus> {
             cursor: cursor_login_ready(),
             // opencode readiness comes from the login-status path, not here.
             opencode: false,
+            kimi: false,
             codex_provider: None,
             codex_auth_method: None,
         };
@@ -785,6 +790,7 @@ fn run_components_check_inner(force: bool) -> ComponentsUpdateCheck {
         codex: codex_auth_status().ready,
         cursor: cursor_login_ready(),
         opencode: false,
+        kimi: false,
         codex_provider: None,
         codex_auth_method: None,
     };
@@ -1143,6 +1149,7 @@ pub async fn get_agent_login_status() -> CmdResult<AgentLoginStatus> {
             codex: codex.ready,
             cursor: cursor_login_ready(),
             opencode: opencode_login_ready(),
+            kimi: kimi_login_ready(),
             codex_provider: codex.provider,
             codex_auth_method: codex.auth_method.map(str::to_string),
         })
@@ -1157,6 +1164,7 @@ pub async fn get_agent_versions() -> CmdResult<AgentVersions> {
             claude: agent_cli_version("claude"),
             codex: agent_cli_version("codex"),
             opencode: agent_cli_version("opencode"),
+            kimi: agent_cli_version("kimi"),
         })
     })
     .await
@@ -1217,6 +1225,17 @@ fn cursor_login_ready() -> bool {
         .unwrap_or(false)
 }
 
+/// Kimi "ready" = a non-empty credentials store under the kimi-code home
+/// (`$KIMI_CODE_HOME`, else `~/.kimi-code`), which `kimi login` populates.
+fn kimi_login_ready() -> bool {
+    let Some(home) = agents::kimi_config::kimi_code_home() else {
+        return false;
+    };
+    std::fs::read_dir(home.join("credentials"))
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false)
+}
+
 /// Resolve the binary to spawn for an agent CLI subcommand.
 ///
 /// Prefers the bundled binary under `Helmor.app/Contents/Resources/vendor/`
@@ -1229,6 +1248,7 @@ fn resolve_agent_binary(provider: &str) -> PathBuf {
         "claude" => bundled.claude_bin,
         "codex" => bundled.codex_bin,
         "opencode" => bundled.opencode_bin,
+        "kimi" => bundled.kimi_bin,
         _ => None,
     };
     bundled_path.unwrap_or_else(|| crate::platform::executable::resolve_for_spawn(provider))
@@ -1371,6 +1391,8 @@ fn agent_login_command(provider: &str) -> anyhow::Result<String> {
         "claude" => "auth login",
         "codex" => "login",
         "opencode" => "auth login",
+        // `kimi login` runs the device-code OAuth flow in the PTY.
+        "kimi" => "login",
         _ => anyhow::bail!("Unknown agent provider: {provider}"),
     };
     // Quote the resolved binary path so spaces in `Helmor.app` survive

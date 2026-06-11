@@ -81,6 +81,8 @@ pub struct BundledAgentPaths {
     pub claude_bin: Option<PathBuf>,
     pub codex_bin: Option<PathBuf>,
     pub opencode_bin: Option<PathBuf>,
+    /// Kimi Code CLI binary, spawned by the sidecar as `kimi acp`.
+    pub kimi_bin: Option<PathBuf>,
     /// Node runtime that runs the cursor worker (Cursor's `@cursor/sdk` can't
     /// run on Bun — its HTTP/2 hits `NGHTTP2_FRAME_SIZE_ERROR` in git repos).
     pub node_bin: Option<PathBuf>,
@@ -136,6 +138,7 @@ fn resolve_bundled_agent_paths_for_exe(exe: &std::path::Path) -> Option<BundledA
     } else {
         "opencode"
     };
+    let kimi_bin_name = if cfg!(windows) { "kimi.exe" } else { "kimi" };
     let node_bin_name = if cfg!(windows) { "node.exe" } else { "node" };
 
     let find = |relative: String| {
@@ -149,6 +152,7 @@ fn resolve_bundled_agent_paths_for_exe(exe: &std::path::Path) -> Option<BundledA
         claude_bin: find(format!("vendor/claude-code/{claude_bin_name}")),
         codex_bin: find(format!("vendor/codex/{codex_bin_name}")),
         opencode_bin: find(format!("vendor/opencode/{opencode_bin_name}")),
+        kimi_bin: find(format!("vendor/kimi/{kimi_bin_name}")),
         node_bin: find(format!("vendor/node/{node_bin_name}")),
         cursor_worker: find("vendor/cursor-worker/cursor-worker.mjs".to_string()),
     })
@@ -206,6 +210,7 @@ impl SidecarProcess {
                 claude_bin = ?bundled_paths.claude_bin,
                 codex_bin = ?bundled_paths.codex_bin,
                 opencode_bin = ?bundled_paths.opencode_bin,
+                kimi_bin = ?bundled_paths.kimi_bin,
                 node_bin = ?bundled_paths.node_bin,
                 cursor_worker = ?bundled_paths.cursor_worker,
                 "Resolved bundled agent paths"
@@ -218,6 +223,9 @@ impl SidecarProcess {
             }
             if let Some(path) = bundled_paths.opencode_bin {
                 cmd.env("HELMOR_OPENCODE_BIN_PATH", &path);
+            }
+            if let Some(path) = bundled_paths.kimi_bin {
+                cmd.env("HELMOR_KIMI_BIN_PATH", &path);
             }
             // Cursor runs in a Node child process spawned by the sidecar; point
             // it at the bundled Node + worker entry. Dev resolves both itself

@@ -109,6 +109,7 @@ describe("DEFAULT_PROVIDER_CAPABILITIES (cold-start initialData)", () => {
 			"codex",
 			"cursor",
 			"opencode",
+			"kimi",
 		]);
 	});
 
@@ -148,6 +149,17 @@ describe("DEFAULT_PROVIDER_CAPABILITIES (cold-start initialData)", () => {
 		expect(opencode?.supportsContextUsage).toBe(true);
 		expect(opencode?.supportsActiveGoal).toBe(false);
 		expect(opencode?.requiresApiKey).toBe(false);
+		// Kimi (ACP) must resolve to itself, not fall back to "Claude".
+		const kimi = findProviderCapabilities(
+			DEFAULT_PROVIDER_CAPABILITIES,
+			"kimi",
+		);
+		expect(kimi?.displayName).toBe("Kimi");
+		expect(kimi?.requiresApiKey).toBe(false);
+		expect(kimi?.supportsSlashCommands).toBe(true);
+		expect(kimi?.supportsPlanMode).toBe(false);
+		expect(kimi?.supportsContextUsage).toBe(false);
+		expect(kimi?.supportsSteer).toBe(false);
 	});
 
 	it("is wired as the query's initialData so the cold-start window is closed", () => {
