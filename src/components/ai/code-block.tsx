@@ -61,6 +61,38 @@ function plainHtml(code: string) {
 	return `<pre><code>${escapeHtml(code)}</code></pre>`;
 }
 
+// Highlighted-HTML LRU keyed by (language, lineNumbers, code). shiki's
+// codeToHtml is async, so a freshly mounted block paints plain for a beat and
+// then swaps to colors — visible as a white flash every time a row remounts
+// (session switch, scroll-back). The cache makes the swap a one-time cost per
+// distinct block: on remount the lazy useState initializer below starts from
+// the highlighted HTML, so the first frame is already colored. Map insertion
+// order gives us LRU eviction.
+const HIGHLIGHT_CACHE_LIMIT = 32;
+const highlightCache = new Map<string, { light: string; dark: string }>();
+
+function readHighlightCache(key: string) {
+	const hit = highlightCache.get(key);
+	if (hit) {
+		highlightCache.delete(key);
+		highlightCache.set(key, hit);
+	}
+	return hit;
+}
+
+function storeHighlightCache(
+	key: string,
+	value: { light: string; dark: string },
+) {
+	highlightCache.set(key, value);
+	if (highlightCache.size > HIGHLIGHT_CACHE_LIMIT) {
+		const oldest = highlightCache.keys().next().value;
+		if (oldest !== undefined) {
+			highlightCache.delete(oldest);
+		}
+	}
+}
+
 export const CodeBlock = ({
 	code,
 	language,
@@ -71,15 +103,30 @@ export const CodeBlock = ({
 	children,
 	...props
 }: CodeBlockProps) => {
-	const [lightHtml, setLightHtml] = useState(() => plainHtml(code));
-	const [darkHtml, setDarkHtml] = useState(() => plainHtml(code));
 	const resolvedLanguage = useMemo(() => resolveLanguage(language), [language]);
+	const highlightCacheKey = `${resolvedLanguage ?? ""}\u0000${showLineNumbers}\u0000${code}`;
+	const [lightHtml, setLightHtml] = useState(
+		() => readHighlightCache(highlightCacheKey)?.light ?? plainHtml(code),
+	);
+	const [darkHtml, setDarkHtml] = useState(
+		() => readHighlightCache(highlightCacheKey)?.dark ?? plainHtml(code),
+	);
 	const isPlain = variant === "plain";
 	const hasHeaderActions = !isPlain && Boolean(language);
 	const hasFloatingActions = !isPlain && !language && Boolean(children);
 
 	useEffect(() => {
 		let cancelled = false;
+
+		// Cache hit: swap in the highlighted HTML synchronously — no plain
+		// frame, no flash. (The lazy useState initializer already handles the
+		// mount case; this covers `code`/`language` changing on a live block.)
+		const cached = readHighlightCache(highlightCacheKey);
+		if (cached) {
+			setLightHtml(cached.light);
+			setDarkHtml(cached.dark);
+			return;
+		}
 
 		const render = async () => {
 			if (!resolvedLanguage) {
@@ -130,6 +177,7 @@ export const CodeBlock = ({
 				}),
 			]);
 
+			storeHighlightCache(highlightCacheKey, { light, dark });
 			if (!cancelled) {
 				setLightHtml(light);
 				setDarkHtml(dark);
