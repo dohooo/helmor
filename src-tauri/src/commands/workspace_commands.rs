@@ -111,6 +111,16 @@ pub async fn finalize_workspace_from_repo(
         let workspace_id = workspace_id.clone();
         run_blocking(move || workspaces::finalize_workspace_from_repo_impl(&workspace_id)).await?
     };
+    // Finalize flips the DB row initializing → ready / setup_pending. Broadcast
+    // it so every consumer's `workspaceDetail` refreshes off the stale
+    // `initializing` (the Terminal panel gates its PTY spawn on this; chat reads
+    // the pending-submit payload instead and never noticed the gap).
+    crate::ui_sync::publish(
+        &app,
+        crate::ui_sync::UiMutationEvent::WorkspaceChanged {
+            workspace_id: workspace_id.clone(),
+        },
+    );
     notify_workspace_changed_in_background(app);
     Ok(result)
 }
