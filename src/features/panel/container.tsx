@@ -342,7 +342,13 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		);
 	}, [modelSelections, queryClient, sessions, settings.defaultModelId]);
 
-	const preferredPaneSessionId = selectedSessionId ?? threadSessionId;
+	// The router's session intent only applies once the workspace selection
+	// has converged onto the paint track. During a deferred flip / cold hold
+	// the router already points at the incoming workspace, whose session
+	// intent must not blank the still-displayed pane of the old one.
+	const sessionIntentId =
+		selectedWorkspaceId === displayedWorkspaceId ? selectedSessionId : null;
+	const preferredPaneSessionId = sessionIntentId ?? threadSessionId;
 	const sessionPanes = useMemo(() => {
 		if (!preferredPaneSessionId) {
 			return [];
@@ -540,7 +546,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	const handleWorkspaceChanged = useCallback(() => {
 		void invalidateWorkspaceQueries();
 	}, [invalidateWorkspaceQueries]);
-	const selectedSessionIdForPanel = selectedSessionId ?? threadSessionId;
+	const selectedSessionIdForPanel = sessionIntentId ?? threadSessionId;
 	const selectedSession =
 		sessions.find((session) => session.id === selectedSessionIdForPanel) ??
 		null;

@@ -834,6 +834,26 @@ describe("App global navigation shortcuts", () => {
 		});
 	});
 
+	it("moves the sidebar highlight inside the keydown task while the displayed pane flips one frame later", async () => {
+		await renderAppReady();
+
+		pressGlobalShortcut("l");
+
+		// Highlight is synchronous: the keyboard path applies the imperative
+		// `workspace-row-selected` class (and the router commit re-renders the
+		// sidebar) inside the keydown task…
+		expectSelectedWorkspace("Review workspace");
+		// …while the displayed paint track still shows the previous workspace's
+		// tab strip for one frame (the flip is deferred via scheduleDisplayFlip):
+		// the old tab is still mounted, the new workspace's isn't yet.
+		getSessionTab("Done session 1");
+		expect(screen.queryByText("Review session 1")).toBeNull();
+
+		await waitFor(() => {
+			expectSelectedSession("Review session 1");
+		});
+	});
+
 	it("does not wrap workspace navigation on Option+Command+Up from the first workspace", async () => {
 		await renderAppReady();
 

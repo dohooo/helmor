@@ -7,8 +7,13 @@ import { FileMentionBadge } from "@/components/file-mention-badge";
 import { Button } from "@/components/ui/button";
 import {
 	isFileMentionPart,
+	isPastedTextPart,
 	isTextPart,
 } from "@/features/panel/message-components/shared";
+import {
+	buildComposerPreviewLabel,
+	locatePastedTextRanges,
+} from "@/lib/composer-insert";
 import type { QueuedSubmit } from "@/lib/use-submit-queue";
 import { cn } from "@/lib/utils";
 import { splitTextWithFiles } from "@/lib/workspace-helpers";
@@ -64,13 +69,19 @@ function QueueRow({
 	onEdit?: () => void;
 	disabled?: boolean;
 }) {
-	const { prompt, imagePaths, filePaths } = item.payload;
+	const { prompt, imagePaths, filePaths, customTags } = item.payload;
 	// Reuse the chat-bubble splitter so attachment chips render the
-	// same way here as in the sent message.
-	const parts = useMemo(
-		() => splitTextWithFiles(prompt.trim(), filePaths, item.id, imagePaths),
-		[prompt, filePaths, imagePaths, item.id],
-	);
+	// same way here as in the sent message — pasted tags included.
+	const parts = useMemo(() => {
+		const trimmed = prompt.trim();
+		return splitTextWithFiles(
+			trimmed,
+			filePaths,
+			item.id,
+			imagePaths,
+			locatePastedTextRanges(trimmed, customTags),
+		);
+	}, [prompt, filePaths, imagePaths, customTags, item.id]);
 
 	return (
 		<ActionRow
@@ -102,6 +113,16 @@ function QueueRow({
 										compact
 										className="shrink-0"
 									/>
+								);
+							}
+							if (isPastedTextPart(part)) {
+								return (
+									<span
+										key={part.id ?? idx}
+										className="shrink-0 text-muted-foreground"
+									>
+										{buildComposerPreviewLabel(part.text, "text")}
+									</span>
 								);
 							}
 							return null;

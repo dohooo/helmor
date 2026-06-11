@@ -1,5 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
+import { buildTitleSeed } from "@/features/conversation/hooks/seed-session-title";
+import { useStreamingStore } from "@/features/conversation/state/streaming-store";
 import {
 	generateSessionTitle,
 	subscribeUiMutations,
@@ -89,6 +91,31 @@ function handleUiMutation(
 				queryKey: helmorQueryKeys.sessionMessages(event.sessionId),
 			});
 			return;
+		case "sessionTurnPersisted": {
+			// A turn's terminal rows landed in the DB. While THIS client has a
+			// live stream (or an in-flight send) for the session, the local
+			// dispatcher owns the cache snapshot — its streamed message IDs
+			// differ from the DB IDs, so a refetch would clobber it and
+			// flicker (the exact thing the dispatcher's done-path refuses to
+			// do). Deliberately NOT checked against `liveSessionsByContext`:
+			// that is a never-cleared resume-id map, not liveness.
+			const contextKey = `session:${event.sessionId}`;
+			const streaming = useStreamingStore.getState();
+			if (
+				streaming.activeSessionByContext[contextKey] !== undefined ||
+				streaming.sendingContextKeys.has(contextKey)
+			) {
+				return;
+			}
+			// Mark stale without an active refetch: background sessions have
+			// no observers anyway, and a late event for the on-screen session
+			// must not flash it. The next mount refetches.
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.sessionMessages(event.sessionId),
+				refetchType: "none",
+			});
+			return;
+		}
 		case "workspaceFilesChanged":
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceGitActionStatus(event.workspaceId),
@@ -294,17 +321,22 @@ function handleUiMutation(
 			// Run the same title + branch generator GUI sessions use; it's
 			// gated server-side so only the first turn actually renames.
 			const { sessionId, workspaceId, prompt } = event;
-			void generateSessionTitle(sessionId, prompt).then((result) => {
-				if (result?.title || result?.branchRenamed) {
-					requestSidebarReconcile(queryClient);
-					void queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
-					});
-					void queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
-					});
-				}
-			});
+			// Pass the same seed layer 1 wrote (buildTitleSeed is deterministic on
+			// the prompt) so `can_replace_session_title` lets the AI rename replace
+			// it — without the seed it would only overwrite a literal "Untitled".
+			void generateSessionTitle(sessionId, prompt, buildTitleSeed(prompt)).then(
+				(result) => {
+					if (result?.title || result?.branchRenamed) {
+						requestSidebarReconcile(queryClient);
+						void queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
+						});
+						void queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
+						});
+					}
+				},
+			);
 			return;
 		}
 		case "workspaceRevealRequested":

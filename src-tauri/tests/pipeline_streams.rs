@@ -147,6 +147,7 @@ fn part_type(part: &helmor_lib::pipeline::types::ExtendedMessagePart) -> &'stati
         ExtendedMessagePart::Basic(MessagePart::Image { .. }) => "image",
         ExtendedMessagePart::Basic(MessagePart::PromptSuggestion { .. }) => "prompt-suggestion",
         ExtendedMessagePart::Basic(MessagePart::FileMention { .. }) => "file-mention",
+        ExtendedMessagePart::Basic(MessagePart::PastedText { .. }) => "pasted-text",
         ExtendedMessagePart::Basic(MessagePart::PlanReview { .. }) => "plan-review",
         ExtendedMessagePart::CollapsedGroup(_) => "collapsed-group",
     }

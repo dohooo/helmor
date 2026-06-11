@@ -251,8 +251,13 @@ export const WorkspaceConversationContainer = memo(
 			getComposerContextKey(displayedWorkspaceId, displayedSessionId);
 		const displayedSelectedModelId =
 			composerModelSelections[composerContextKey] ?? null;
+		// Pending ONLY for a session-level hold within the same workspace
+		// (selectSession's hold-until-ready). A workspace-level divergence (the
+		// one-frame display-flip window) keeps the composer bound to the
+		// still-displayed old session and usable — submissions land in the
+		// session that's actually on screen.
 		const selectionPending =
-			selectedWorkspaceId !== displayedWorkspaceId ||
+			selectedWorkspaceId === displayedWorkspaceId &&
 			selectedSessionId !== displayedSessionId;
 
 		// Submit queue is a module-level Zustand singleton — survives this

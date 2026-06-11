@@ -168,6 +168,7 @@ function seedCacheForWorkspace(
 function defaultDeps(
 	queryClient: QueryClient,
 	overrides: Partial<{
+		displayedWorkspaceId: string | null;
 		displayedSessionId: string | null;
 		reselectTick: number;
 		selectedWorkspaceId: string | null;
@@ -178,6 +179,7 @@ function defaultDeps(
 		queryClient,
 		notify: vi.fn(),
 		pushToast: vi.fn(),
+		displayedWorkspaceId: overrides.displayedWorkspaceId ?? "ws-1",
 		displayedSessionId: overrides.displayedSessionId ?? "session-A",
 		reselectTick: overrides.reselectTick ?? 0,
 		getSelectedWorkspaceId: () => overrides.selectedWorkspaceId ?? "ws-1",
@@ -352,6 +354,115 @@ describe("useReadStateController mark-read effect", () => {
 		await waitFor(() =>
 			expect(apiMocks.markSessionRead).toHaveBeenCalledTimes(2),
 		);
+	});
+
+	// Stage A mismatch guard: during the workspace display-flip / hold
+	// divergence window the displayed session still belongs to the OLD
+	// workspace while the router already points at the new one — the
+	// optimistic clear + IPC would zero the wrong badge.
+	it("skips the optimistic clear and IPC while displayed diverges from the selected workspace, then fires on convergence", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		// Selected (router) workspace is ws-1; the displayed track still shows
+		// ws-OLD with its own session.
+		seedCacheForWorkspace(queryClient, "ws-1", [
+			makeSession("session-A", { unreadCount: 2 }),
+		]);
+
+		const { rerender } = renderHook(
+			(props: {
+				displayedWorkspaceId: string | null;
+				displayedSessionId: string | null;
+			}) =>
+				useReadStateController({
+					...defaultDeps(queryClient),
+					displayedWorkspaceId: props.displayedWorkspaceId,
+					displayedSessionId: props.displayedSessionId,
+				}),
+			{
+				wrapper: wrapper(queryClient),
+				initialProps: {
+					displayedWorkspaceId: "ws-OLD" as string | null,
+					displayedSessionId: "session-OLD" as string | null,
+				},
+			},
+		);
+
+		await new Promise((r) => setTimeout(r, 20));
+		expect(apiMocks.markSessionRead).not.toHaveBeenCalled();
+		// No optimistic patch landed on the selected workspace's caches.
+		const sessions = queryClient.getQueryData<WorkspaceSessionSummary[]>(
+			helmorQueryKeys.workspaceSessions("ws-1"),
+		);
+		expect(sessions?.find((s) => s.id === "session-A")?.unreadCount).toBe(2);
+
+		// Convergence: the flip lands, displayed now matches the selection.
+		rerender({
+			displayedWorkspaceId: "ws-1",
+			displayedSessionId: "session-A",
+		});
+
+		await waitFor(() =>
+			expect(apiMocks.markSessionRead).toHaveBeenCalledWith("session-A"),
+		);
+		const patched = queryClient.getQueryData<WorkspaceSessionSummary[]>(
+			helmorQueryKeys.workspaceSessions("ws-1"),
+		);
+		expect(patched?.find((s) => s.id === "session-A")?.unreadCount).toBe(0);
+	});
+
+	it("ignores a reselect-tick bump while displayed diverges from the selected workspace", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		seedCacheForWorkspace(queryClient, "ws-1", [
+			makeSession("session-A", { unreadCount: 1 }),
+		]);
+
+		const { rerender } = renderHook(
+			(props: {
+				displayedWorkspaceId: string | null;
+				displayedSessionId: string | null;
+				reselectTick: number;
+			}) =>
+				useReadStateController({
+					...defaultDeps(queryClient),
+					displayedWorkspaceId: props.displayedWorkspaceId,
+					displayedSessionId: props.displayedSessionId,
+					reselectTick: props.reselectTick,
+				}),
+			{
+				wrapper: wrapper(queryClient),
+				initialProps: {
+					displayedWorkspaceId: "ws-OLD" as string | null,
+					displayedSessionId: "session-OLD" as string | null,
+					reselectTick: 0,
+				},
+			},
+		);
+
+		// Re-clicking the selected workspace during the divergence window bumps
+		// the tick — the guard must still skip (the displayed session belongs to
+		// another workspace).
+		rerender({
+			displayedWorkspaceId: "ws-OLD",
+			displayedSessionId: "session-OLD",
+			reselectTick: 1,
+		});
+		await new Promise((r) => setTimeout(r, 20));
+		expect(apiMocks.markSessionRead).not.toHaveBeenCalled();
+
+		// After the flip lands the effect re-runs and marks the real session.
+		rerender({
+			displayedWorkspaceId: "ws-1",
+			displayedSessionId: "session-A",
+			reselectTick: 1,
+		});
+		await waitFor(() =>
+			expect(apiMocks.markSessionRead).toHaveBeenCalledWith("session-A"),
+		);
+		expect(apiMocks.markSessionRead).toHaveBeenCalledTimes(1);
 	});
 
 	it("preserves workspaceUnread when another session still has unread messages", async () => {

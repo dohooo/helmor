@@ -58,7 +58,7 @@ import {
 	isNewSession,
 	resolveSessionSelectedModelId,
 } from "@/lib/workspace-helpers";
-import { publishShellEvent } from "@/shell/event-bus";
+import { publishShellEvent, useShellEvent } from "@/shell/event-bus";
 import { CodexGoalBanner } from "../panel/codex-goal-banner";
 import {
 	type ComposerQuickAction,
@@ -831,6 +831,11 @@ export const WorkspaceComposerContainer = memo(
 			settings.enableTerminalMode &&
 			findTerminalAgent(effectiveModel?.provider) !== null;
 
+		// App-scoped ⌘⇧T (global shortcut → shell event).
+		useShellEvent("toggle-terminal-mode", () => {
+			if (showTerminalToggle) setTerminalMode((value) => !value);
+		});
+
 		const handleComposerSubmitInner = useCallback(
 			(
 				prompt: string,
@@ -872,6 +877,7 @@ export const WorkspaceComposerContainer = memo(
 						addDirs: linkedDirectories.length > 0 ? linkedDirectories : null,
 						fastMode: supportsFastMode ? fastMode : false,
 						workspaceId: displayedWorkspaceId,
+						sessionId: displayedSessionId,
 					});
 					return;
 				}
@@ -917,6 +923,7 @@ export const WorkspaceComposerContainer = memo(
 				showTerminalToggle,
 				linkedDirectories,
 				displayedWorkspaceId,
+				displayedSessionId,
 				focusScope,
 			],
 		);

@@ -50,12 +50,14 @@ import {
 // mobile browser companion too (not just the Tauri webview).
 import { invoke } from "./ipc";
 import { parsePrUrl } from "./pr-url";
+// Lazy-cycle-safe: session-thread-cache imports `helmorQueryKeys` from this
+// module, but both sides only dereference inside function bodies.
+import { shareMessages } from "./session-thread-cache";
 import {
 	getSessionThreadPaginationState,
 	setSessionThreadPaginationState,
 } from "./session-thread-pagination";
 
-const SESSION_STALE_TIME = 10 * 60_000;
 const CHANGES_STALE_TIME = 3_000;
 const CHANGES_REFETCH_INTERVAL = 10_000;
 const WORKSPACE_FORGE_REFETCH_INTERVAL = 60_000;
@@ -684,7 +686,26 @@ export function sessionThreadMessagesQueryOptions(sessionId: string) {
 		// working unchanged.
 		queryFn: () => loadSessionThreadMessages(sessionId),
 		gcTime: SESSION_GC_TIME,
-		staleTime: SESSION_STALE_TIME,
+		// Threads never go stale by clock — every write path broadcasts a
+		// `sessionTurnPersisted` / `sessionMessagesAppended` UiMutationEvent
+		// that marks this key stale explicitly. Keeps warm revisits and
+		// window-focus refetches at zero IPC.
+		staleTime: Number.POSITIVE_INFINITY,
+		// Reuse per-message references on refetch via the same helper the
+		// streaming writes use, so per-message memos bail out. First fetch
+		// passes `oldData === undefined` and must flow straight through —
+		// `shareMessages` iterates prev unconditionally. Note: a key whose
+		// first write comes from `setQueryData` before any observer mounts
+		// is built with default options (default structural sharing for
+		// that one write) — known and fine; this fn applies once an
+		// observer mounts with these options.
+		structuralSharing: (oldData, newData) =>
+			oldData == null
+				? newData
+				: shareMessages(
+						oldData as ThreadMessageLike[],
+						newData as ThreadMessageLike[],
+					),
 	});
 }
 

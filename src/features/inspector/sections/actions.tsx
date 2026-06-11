@@ -3,6 +3,7 @@ import {
 	ArrowUpRightIcon,
 	CheckIcon,
 	ChevronDown,
+	CircleSlashIcon,
 	EyeIcon,
 	LoaderCircleIcon,
 	TriangleIcon,
@@ -545,6 +546,16 @@ function StatusIcon({ status }: { status: ActionStatusKind }) {
 		);
 	}
 
+	if (status === "skipped") {
+		return (
+			<CircleSlashIcon
+				aria-label="Skipped"
+				className="size-3 shrink-0 text-muted-foreground"
+				strokeWidth={2}
+			/>
+		);
+	}
+
 	const label =
 		status === "running"
 			? "Running"
@@ -745,10 +756,16 @@ function ActionStatusRow({
 				>
 					{item.name}
 				</span>
-				{item.duration && (
+				{item.status === "skipped" ? (
 					<span className="shrink-0 text-micro text-muted-foreground">
-						{item.duration}
+						skipped
 					</span>
+				) : (
+					item.duration && (
+						<span className="shrink-0 text-micro text-muted-foreground">
+							{item.duration}
+						</span>
+					)
 				)}
 			</div>
 			<div className="flex shrink-0 items-center justify-end gap-0">
@@ -837,5 +854,7 @@ function actionPriority(status: ActionStatusKind): number {
 			return 2;
 		case "success":
 			return 3;
+		case "skipped":
+			return 4;
 	}
 }

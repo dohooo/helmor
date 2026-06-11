@@ -440,7 +440,17 @@ fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, Wo
             };
             let files = extract_strs("files");
             let images = extract_strs("images");
-            let parts = grouping::split_user_text_with_files(&text, &files, &images, &msg.id);
+            let pasted_texts: Vec<crate::pipeline::types::PastedTextRange> = parsed
+                .and_then(|p| p.get("pastedTexts"))
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            let parts = grouping::split_user_text_with_files(
+                &text,
+                &files,
+                &images,
+                &msg.id,
+                &pasted_texts,
+            );
             result.push(ThreadMessageLike {
                 role: MessageRole::User,
                 id: Some(msg.id.clone()),

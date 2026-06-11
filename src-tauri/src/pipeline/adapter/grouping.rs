@@ -14,7 +14,8 @@ use serde_json::Value;
 
 use super::labels::extract_fallback;
 use crate::pipeline::types::{
-    ExtendedMessagePart, IntermediateMessage, MessagePart, MessageRole, ThreadMessageLike,
+    ExtendedMessagePart, IntermediateMessage, MessagePart, MessageRole, PastedTextRange,
+    ThreadMessageLike,
 };
 
 fn is_cumulative_same_id_snapshot(prev: &ThreadMessageLike, next: &ThreadMessageLike) -> bool {
@@ -80,25 +81,86 @@ pub(super) fn convert_user_message(
     }
 }
 
-/// Split `text` on `@<path>` substrings (longer paths win on overlap),
-/// returning interleaved Text and FileMention parts.
+/// Resolve composer-computed UTF-16 ranges to byte ranges in `text`.
+/// Invalid ranges (out of bounds, landing mid-surrogate, empty, or
+/// overlapping an earlier one) are dropped — that span degrades to plain
+/// text rather than corrupting the split.
+fn resolve_pasted_byte_ranges(text: &str, ranges: &[PastedTextRange]) -> Vec<(usize, usize)> {
+    if ranges.is_empty() {
+        return Vec::new();
+    }
+    let mut wanted: Vec<u64> = ranges.iter().flat_map(|r| [r.start, r.end]).collect();
+    wanted.sort_unstable();
+    wanted.dedup();
+
+    let mut offset_map: HashMap<u64, usize> = HashMap::new();
+    let mut pending = wanted.iter().copied().peekable();
+    let mut utf16_offset = 0u64;
+    let mut byte_offset = 0usize;
+    for ch in text.chars() {
+        while pending.peek() == Some(&utf16_offset) {
+            offset_map.insert(utf16_offset, byte_offset);
+            pending.next();
+        }
+        let next_utf16 = utf16_offset + ch.len_utf16() as u64;
+        // Offsets inside a surrogate pair can never map to a byte boundary.
+        while pending.peek().is_some_and(|w| *w < next_utf16) {
+            pending.next();
+        }
+        utf16_offset = next_utf16;
+        byte_offset += ch.len_utf8();
+    }
+    while pending.peek() == Some(&utf16_offset) {
+        offset_map.insert(utf16_offset, byte_offset);
+        pending.next();
+    }
+
+    let mut resolved: Vec<(usize, usize)> = ranges
+        .iter()
+        .filter_map(|r| {
+            let start = *offset_map.get(&r.start)?;
+            let end = *offset_map.get(&r.end)?;
+            (start < end).then_some((start, end))
+        })
+        .collect();
+    resolved.sort_unstable();
+    let mut last_end = 0usize;
+    resolved.retain(|&(start, end)| {
+        if start >= last_end {
+            last_end = end;
+            true
+        } else {
+            false
+        }
+    });
+    resolved
+}
+
+/// Split `text` on pasted-tag spans and `@<path>` substrings (longer paths
+/// win on overlap), returning interleaved Text, FileMention, and PastedText
+/// parts.
 ///
 /// `files` and `images` are merged into a single needle pool — the
 /// renderer routes by extension. Both must be passed in: paths
 /// containing whitespace can only round-trip when matched against a
-/// structured needle, never via regex. Mirrors the TypeScript
-/// `splitTextWithFiles(text, files, msgId, images)` so optimistic and
-/// persisted renders stay byte-identical.
+/// structured needle, never via regex. Pasted spans are opaque: a needle
+/// match inside one is ignored. Mirrors the TypeScript
+/// `splitTextWithFiles(text, files, msgId, images, pastedTexts)` so
+/// optimistic and persisted renders stay byte-identical.
 pub(crate) fn split_user_text_with_files(
     text: &str,
     files: &[String],
     images: &[String],
     msg_id: &str,
+    pasted_texts: &[PastedTextRange],
 ) -> Vec<MessagePart> {
     let text_id = |idx: usize| format!("{msg_id}:txt:{idx}");
     let mention_id = |idx: usize| format!("{msg_id}:mention:{idx}");
+    let pasted_id = |idx: usize| format!("{msg_id}:pasted:{idx}");
 
-    if (files.is_empty() && images.is_empty()) || text.is_empty() {
+    let pasted = resolve_pasted_byte_ranges(text, pasted_texts);
+
+    if text.is_empty() || (files.is_empty() && images.is_empty() && pasted.is_empty()) {
         return vec![MessagePart::Text {
             id: text_id(0),
             text: text.to_string(),
@@ -108,7 +170,8 @@ pub(crate) fn split_user_text_with_files(
     let mut needles: Vec<&String> = files.iter().chain(images.iter()).collect();
     needles.sort_by_key(|f| std::cmp::Reverse(f.len()));
 
-    // (start_byte, end_byte, path) — kept non-overlapping by construction.
+    // (start_byte, end_byte, path) — kept non-overlapping by construction,
+    // and never inside a pasted span.
     let mut matches: Vec<(usize, usize, String)> = Vec::new();
     for needle_str in &needles {
         if needle_str.is_empty() {
@@ -121,7 +184,10 @@ pub(crate) fn split_user_text_with_files(
             let abs_end = abs_start + needle.len();
             let overlaps = matches
                 .iter()
-                .any(|(s, e, _)| !(abs_end <= *s || abs_start >= *e));
+                .any(|(s, e, _)| !(abs_end <= *s || abs_start >= *e))
+                || pasted
+                    .iter()
+                    .any(|(s, e)| !(abs_end <= *s || abs_start >= *e));
             if !overlaps {
                 matches.push((abs_start, abs_end, (*needle_str).clone()));
             }
@@ -129,19 +195,34 @@ pub(crate) fn split_user_text_with_files(
         }
     }
 
-    if matches.is_empty() {
+    if matches.is_empty() && pasted.is_empty() {
         return vec![MessagePart::Text {
             id: text_id(0),
             text: text.to_string(),
         }];
     }
 
-    matches.sort_by_key(|(s, _, _)| *s);
+    enum Segment {
+        Mention(String),
+        Pasted,
+    }
+    let mut segments: Vec<(usize, usize, Segment)> = matches
+        .into_iter()
+        .map(|(start, end, path)| (start, end, Segment::Mention(path)))
+        .collect();
+    segments.extend(
+        pasted
+            .iter()
+            .map(|&(start, end)| (start, end, Segment::Pasted)),
+    );
+    segments.sort_by_key(|(start, _, _)| *start);
 
     let mut parts: Vec<MessagePart> = Vec::new();
     let mut cursor = 0usize;
     let mut text_seq = 0usize;
-    for (mention_seq, (start, end, path)) in matches.into_iter().enumerate() {
+    let mut mention_seq = 0usize;
+    let mut pasted_seq = 0usize;
+    for (start, end, segment) in segments {
         if cursor < start {
             let chunk = &text[cursor..start];
             if !chunk.is_empty() {
@@ -152,10 +233,22 @@ pub(crate) fn split_user_text_with_files(
                 text_seq += 1;
             }
         }
-        parts.push(MessagePart::FileMention {
-            id: mention_id(mention_seq),
-            path,
-        });
+        match segment {
+            Segment::Mention(path) => {
+                parts.push(MessagePart::FileMention {
+                    id: mention_id(mention_seq),
+                    path,
+                });
+                mention_seq += 1;
+            }
+            Segment::Pasted => {
+                parts.push(MessagePart::PastedText {
+                    id: pasted_id(pasted_seq),
+                    text: text[start..end].to_string(),
+                });
+                pasted_seq += 1;
+            }
+        }
         cursor = end;
     }
     if cursor < text.len() {

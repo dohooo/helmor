@@ -359,6 +359,42 @@ describe("WorkspacePanelContainer loading semantics", () => {
 		).toEqual(createMessages("session-2"));
 	});
 
+	it("keeps the displayed pane mounted while the selection diverges to another workspace", () => {
+		// Deferred-flip / cold-hold window: the router already points at the
+		// incoming workspace (with its own session guess) while the paint
+		// track still shows the old one. The old pane must stay mounted —
+		// the incoming session intent belongs to a different workspace.
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail("workspace-1"),
+			createWorkspaceDetail("workspace-1"),
+		);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			createWorkspaceSessions("workspace-1"),
+		);
+		queryClient.setQueryData(
+			[...helmorQueryKeys.sessionMessages("session-1"), "thread"],
+			createMessages("session-1"),
+		);
+
+		renderWithProviders(
+			<WorkspacePanelContainer
+				selectedWorkspaceId="workspace-2"
+				displayedWorkspaceId="workspace-1"
+				selectedSessionId="session-9"
+				displayedSessionId="session-1"
+				sending={false}
+				onSelectSession={vi.fn()}
+				onResolveDisplayedSession={vi.fn()}
+			/>,
+			{ queryClient },
+		);
+
+		expect(getLatestPanelProps().loadingSession).toBe(false);
+		expect(getSessionPaneIds()).toEqual(["session-1"]);
+	});
+
 	it("derives the new-session tab provider from the default model setting", () => {
 		const queryClient = createHelmorQueryClient();
 		queryClient.setQueryData(helmorQueryKeys.agentModelSections, [
@@ -465,6 +501,12 @@ describe("WorkspacePanelContainer loading semantics", () => {
 		});
 	});
 
+	// Props-driven loader contract: when the container is HANDED a displayed
+	// session whose thread cache is gone, it must drop the stale pane and show
+	// the loader. In production this state is shielded by the selection
+	// controller's cold hold (displayed* only advances once the prime
+	// resolves), but the container-level contract stays load-bearing for
+	// races/direct writes.
 	it("falls back to loading when revisiting a session after query cache eviction", async () => {
 		const queryClient = createHelmorQueryClient();
 		const workspace1Sessions = createWorkspaceSessions("workspace-1", [
@@ -979,9 +1021,9 @@ describe("WorkspacePanelContainer loading semantics", () => {
 	it("renders a pre-seeded initializing workspace without re-fetching thread messages", async () => {
 		// When use-controller's prepare/paint/finalize flow seeds the detail
 		// + sessions + empty thread cache, the panel paints from cache alone.
-		// The thread messages query's SESSION_STALE_TIME keeps the seeded
-		// empty array fresh, so no backend fetch fires while Phase 2 is
-		// still materializing the worktree.
+		// The thread messages query's staleTime: Infinity (event-driven
+		// invalidation) keeps the seeded empty array fresh, so no backend
+		// fetch fires while Phase 2 is still materializing the worktree.
 		const queryClient = createHelmorQueryClient();
 		const workspaceId = crypto.randomUUID();
 		const sessionId = crypto.randomUUID();

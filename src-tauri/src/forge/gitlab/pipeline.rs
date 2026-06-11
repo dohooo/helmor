@@ -48,6 +48,7 @@ pub(super) fn load_job_trace(context: &GitlabContext, job_id: i64) -> Result<Opt
 /// Render a pipeline (parent of jobs) as a single check row — used as a
 /// fallback when job enumeration fails or the pipeline has no jobs yet.
 pub(super) fn pipeline_item(pipeline: &GitlabPipeline) -> ForgeActionItem {
+    let status = normalize_gitlab_status(pipeline.status.as_deref());
     ForgeActionItem {
         id: pipeline
             .id
@@ -58,8 +59,13 @@ pub(super) fn pipeline_item(pipeline: &GitlabPipeline) -> ForgeActionItem {
             .map(|id| format!("Pipeline #{id}"))
             .unwrap_or_else(|| "Pipeline".to_string()),
         provider: ActionProvider::Gitlab,
-        status: normalize_gitlab_status(pipeline.status.as_deref()),
-        duration: pipeline.duration.and_then(format_seconds_duration),
+        status,
+        // Skipped pipelines never ran, so a "0s" duration is misleading.
+        duration: if status == ActionStatusKind::Skipped {
+            None
+        } else {
+            pipeline.duration.and_then(format_seconds_duration)
+        },
         url: pipeline.web_url.clone(),
     }
 }
@@ -95,15 +101,20 @@ pub(super) fn build_gitlab_check_insert_text(
 }
 
 fn job_item(job: GitlabJob) -> ForgeActionItem {
+    let status = normalize_gitlab_status(Some(&job.status));
     ForgeActionItem {
         id: format!("gitlab-job-{}", job.id),
         name: job.name,
         provider: ActionProvider::Gitlab,
-        status: normalize_gitlab_status(Some(&job.status)),
-        duration: job
-            .duration
-            .and_then(format_seconds_duration)
-            .or_else(|| format_duration(job.started_at.as_deref(), job.finished_at.as_deref())),
+        status,
+        // Skipped jobs never ran, so a "0s" duration is misleading.
+        duration: if status == ActionStatusKind::Skipped {
+            None
+        } else {
+            job.duration
+                .and_then(format_seconds_duration)
+                .or_else(|| format_duration(job.started_at.as_deref(), job.finished_at.as_deref()))
+        },
         url: job.web_url,
     }
 }
@@ -131,7 +142,8 @@ fn normalize_gitlab_status(status: Option<&str>) -> ActionStatusKind {
     // GitLab only gives us per-job status, so we lean toward the
     // pipeline-level reading.
     match status.unwrap_or_default() {
-        "success" | "skipped" => ActionStatusKind::Success,
+        "skipped" => ActionStatusKind::Skipped,
+        "success" => ActionStatusKind::Success,
         "failed" | "canceled" => ActionStatusKind::Failure,
         "running" | "preparing" | "waiting_for_resource" | "pending" | "created" => {
             ActionStatusKind::Running
@@ -171,6 +183,7 @@ fn parse_gitlab_datetime(value: &str) -> Option<DateTime<Utc>> {
 fn action_status_label(status: ActionStatusKind) -> &'static str {
     match status {
         ActionStatusKind::Success => "success",
+        ActionStatusKind::Skipped => "skipped",
         ActionStatusKind::Pending => "pending",
         ActionStatusKind::Running => "running",
         ActionStatusKind::Failure => "failure",
@@ -223,7 +236,7 @@ mod tests {
         );
         assert_eq!(
             normalize_gitlab_status(Some("skipped")),
-            ActionStatusKind::Success
+            ActionStatusKind::Skipped
         );
         assert_eq!(
             normalize_gitlab_status(Some("canceled")),

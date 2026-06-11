@@ -234,6 +234,13 @@ pub enum MessagePart {
     /// Inline file reference from the composer's @-mention picker.
     #[serde(rename = "file-mention", rename_all = "camelCase")]
     FileMention { id: String, path: String },
+
+    /// A span of the user's prompt that entered the composer as a pasted-text
+    /// tag badge. The text is still part of the prompt sent to the agent; the
+    /// renderer shows it as the same tag chip (hover previews the content)
+    /// instead of inlining the full paste.
+    #[serde(rename = "pasted-text", rename_all = "camelCase")]
+    PastedText { id: String, text: String },
 }
 
 impl MessagePart {
@@ -249,11 +256,23 @@ impl MessagePart {
             | Self::Workflow { id, .. }
             | Self::Image { id, .. }
             | Self::PromptSuggestion { id, .. }
-            | Self::FileMention { id, .. } => id,
+            | Self::FileMention { id, .. }
+            | Self::PastedText { id, .. } => id,
             Self::ToolCall { tool_call_id, .. } => tool_call_id,
             Self::PlanReview { tool_use_id, .. } => tool_use_id,
         }
     }
+}
+
+/// UTF-16 code-unit range of one pasted-text tag inside a user prompt, as
+/// computed by the composer (JS string offsets). Persisted on the
+/// `user_prompt` payload as `pastedTexts`; the adapter converts to byte
+/// offsets when splitting the prompt into parts.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PastedTextRange {
+    pub start: u64,
+    pub end: u64,
 }
 
 /// Image payload variants. `Base64` carries the raw blob (no `data:` URI
