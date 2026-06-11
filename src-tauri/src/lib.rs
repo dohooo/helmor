@@ -276,6 +276,11 @@ pub fn run() {
                 tracing::warn!("Failed to reset stale terminal statuses: {e:#}");
             }
 
+            // Keep the managed `helmor` launcher pointing at THIS app after
+            // updates / moves (release-only; never elevates, never adopts a
+            // non-Helmor file). Without this the CLI silently lags the app.
+            commands::system_commands::ensure_cli_install_current();
+
             // Repair `.agent-contexts/` provisioning for existing worktree
             // workspaces. This is best-effort because a missing scratch dir
             // should never block the app from starting.

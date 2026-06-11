@@ -29,6 +29,31 @@ describe("terminal agent specs", () => {
 		);
 	});
 
+	it("claude carries linked directories via --add-dir on boot and resume", () => {
+		const boot = buildTerminalBootCommand("claude", {
+			prompt: "hi",
+			addDirs: ["/repo/a", "/with space/b"],
+		});
+		expect(boot).toBe(
+			"claude --add-dir '/repo/a' --add-dir '/with space/b' 'hi'\n",
+		);
+		const resume = resumeBootCommand("claude", "id-1", {
+			addDirs: ["/repo/a"],
+		});
+		expect(resume).toBe(
+			"claude --resume 'id-1' --dangerously-skip-permissions --add-dir '/repo/a'\n",
+		);
+	});
+
+	it("codex ignores addDirs (full-access sandbox reaches them anyway)", () => {
+		const cmd = buildTerminalBootCommand("codex", {
+			prompt: "hi",
+			addDirs: ["/repo/a"],
+		});
+		expect(cmd).not.toContain("--add-dir");
+		expect(cmd).not.toContain("/repo/a");
+	});
+
 	it("codex maps bypassPermissions to approval/sandbox flags", () => {
 		const cmd = buildTerminalBootCommand("codex", {
 			prompt: "hi",

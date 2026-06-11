@@ -859,6 +859,8 @@ export const WorkspaceComposerContainer = memo(
 							options?.permissionModeOverride ??
 							effectivePermissionMode ??
 							null,
+						addDirs: linkedDirectories.length > 0 ? linkedDirectories : null,
+						fastMode: supportsFastMode ? fastMode : false,
 					});
 					return;
 				}
@@ -898,6 +900,7 @@ export const WorkspaceComposerContainer = memo(
 				settings.followUpBehavior,
 				terminalMode,
 				showTerminalToggle,
+				linkedDirectories,
 			],
 		);
 

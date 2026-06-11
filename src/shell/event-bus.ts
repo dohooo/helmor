@@ -44,6 +44,8 @@ export type ShellEvent =
 			modelId: string | null;
 			effortLevel: string | null;
 			permissionMode: string | null;
+			addDirs: readonly string[] | null;
+			fastMode: boolean;
 	  };
 
 export type ShellEventType = ShellEvent["type"];

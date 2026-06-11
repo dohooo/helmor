@@ -25,6 +25,7 @@ fn make_script_type(instance_id: &str) -> String {
 /// or the frontend invokes `stop_terminal`. Nothing is persisted to disk —
 /// closing the app discards the session entirely.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri IPC command — args mirror the frontend call.
 pub async fn spawn_terminal(
     manager: State<'_, ScriptProcessManager>,
     repo_id: String,
@@ -32,6 +33,7 @@ pub async fn spawn_terminal(
     instance_id: String,
     agent_kind: Option<String>,
     boot_command: Option<String>,
+    fast_mode: Option<bool>,
     channel: Channel<ScriptEvent>,
 ) -> CmdResult<()> {
     let (repo, workspace) = tauri::async_runtime::spawn_blocking({
@@ -94,8 +96,12 @@ pub async fn spawn_terminal(
         // Wrap the preset command: export the hook env (so the agent hook can
         // report its real session id via `helmor terminal-hook`) and, for
         // Claude, inject a `--settings` file carrying the hook.
-        let boot_input =
-            build_terminal_boot(&instance_id, agent_kind.as_deref(), boot_command.as_deref());
+        let boot_input = build_terminal_boot(
+            &instance_id,
+            agent_kind.as_deref(),
+            boot_command.as_deref(),
+            fast_mode.unwrap_or(false),
+        );
         if let Err(e) = crate::workspace::scripts::run_terminal_session(
             &mgr,
             &repo_id,
@@ -131,14 +137,22 @@ fn inject_settings_flag(cmd: &str, hooks_path: &str) -> String {
     }
 }
 
-/// Write (idempotently) the hooks file Claude loads via `--settings`.
-/// Registers a SessionStart hook → `helmor terminal-hook` so we capture the
-/// agent's real session id for resume. Content is static per agent; the
-/// session association rides the HELMOR_TERMINAL_SESSION_ID env, not the file.
-fn ensure_agent_hooks_file(cli_path: &str, agent: &str) -> anyhow::Result<std::path::PathBuf> {
-    let path = crate::data_dir::run_dir()?.join(format!("terminal-hooks-{agent}.json"));
+/// Write (idempotently) the settings file Claude loads via `--settings`.
+/// Registers the `helmor terminal-hook` lifecycle hooks (real session id for
+/// resume, busy state, prompt capture) and, when the composer requested it,
+/// `fastMode` — Claude has no fast-mode flag, only this settings key, and a
+/// second `--settings` would risk clobbering the first, so both ride one
+/// file. Content is static per (agent, fastMode) pair; the session
+/// association rides the HELMOR_TERMINAL_SESSION_ID env, not the file.
+fn ensure_agent_hooks_file(
+    cli_path: &str,
+    agent: &str,
+    fast_mode: bool,
+) -> anyhow::Result<std::path::PathBuf> {
+    let suffix = if fast_mode { "-fast" } else { "" };
+    let path = crate::data_dir::run_dir()?.join(format!("terminal-hooks-{agent}{suffix}.json"));
     let command = format!("{} terminal-hook --agent {}", sh_quote(cli_path), agent);
-    let json = serde_json::json!({
+    let mut json = serde_json::json!({
         "hooks": {
             "SessionStart": [{ "hooks": [{ "type": "command", "command": command }] }],
             "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": command }] }],
@@ -146,6 +160,9 @@ fn ensure_agent_hooks_file(cli_path: &str, agent: &str) -> anyhow::Result<std::p
             "Stop": [{ "hooks": [{ "type": "command", "command": command }] }]
         }
     });
+    if fast_mode {
+        json["fastMode"] = serde_json::Value::Bool(true);
+    }
     std::fs::write(&path, serde_json::to_vec_pretty(&json)?)?;
     Ok(path)
 }
@@ -238,16 +255,38 @@ fn build_terminal_boot(
     instance_id: &str,
     agent_kind: Option<&str>,
     boot_command: Option<&str>,
+    fast_mode: bool,
 ) -> Option<String> {
     let cmd = boot_command?;
     let cli_path = crate::cli::agent_invocation_path();
+    // Prefer the bundled agent CLIs (pinned + checksum-verified) over
+    // whatever the user has on PATH. Empty in dev — resolve_bundled_agent_paths
+    // intentionally returns none there, so dev keeps using the local install.
+    let bundled = crate::sidecar::resolve_bundled_agent_paths();
+    let mut bundled_dirs: Vec<String> = Vec::new();
+    for bin in [&bundled.claude_bin, &bundled.codex_bin] {
+        if let Some(dir) = bin.as_deref().and_then(|p| p.parent()) {
+            let dir = dir.display().to_string();
+            if !bundled_dirs.contains(&dir) {
+                bundled_dirs.push(dir);
+            }
+        }
+    }
+    let path_prefix = if bundled_dirs.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "export PATH={}\":$PATH\"; ",
+            sh_quote(&bundled_dirs.join(":"))
+        )
+    };
     let prefix = format!(
-        "export HELMOR_TERMINAL_SESSION_ID={}; export HELMOR_CLI_PATH={}; ",
+        "{path_prefix}export HELMOR_TERMINAL_SESSION_ID={}; export HELMOR_CLI_PATH={}; ",
         sh_quote(instance_id),
         sh_quote(&cli_path),
     );
     let final_cmd = match agent_kind {
-        Some(kind @ "claude") => match ensure_agent_hooks_file(&cli_path, kind) {
+        Some(kind @ "claude") => match ensure_agent_hooks_file(&cli_path, kind, fast_mode) {
             Ok(hooks_path) => inject_settings_flag(cmd, &hooks_path.display().to_string()),
             Err(error) => {
                 tracing::warn!(%error, "terminal: hooks file write failed; spawning without resume hook");

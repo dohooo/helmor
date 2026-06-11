@@ -189,7 +189,12 @@ export function useSessionActions({
 	useShellEvent("create-terminal-session", (event) => {
 		const boot = buildTerminalBootCommand(event.provider, event);
 		void handleCreateSession("terminal", event.provider, (sessionId) => {
-			if (boot) setPendingBoot(sessionId, boot);
+			if (boot) {
+				setPendingBoot(sessionId, {
+					bootCommand: boot,
+					fastMode: event.fastMode,
+				});
+			}
 		});
 	});
 

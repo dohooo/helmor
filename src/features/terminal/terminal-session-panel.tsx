@@ -1,8 +1,10 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef } from "react";
 import {
 	type TerminalHandle,
 	TerminalOutput,
 } from "@/components/terminal-output";
+import { helmorQueryKeys } from "@/lib/query-client";
 import { presetBootCommand, resumeBootCommand } from "./terminal-presets";
 import {
 	attach,
@@ -39,25 +41,42 @@ export function TerminalSessionPanel({
 	providerSessionId = null,
 	isActive = true,
 }: TerminalSessionPanelProps) {
+	const queryClient = useQueryClient();
 	const termRef = useRef<TerminalHandle | null>(null);
 	// Resume the agent's prior session when we have its id at mount time;
 	// otherwise run the fresh preset command. (M4) Pinned in a ref: the boot
 	// only matters on the spawning mount, and `providerSessionId` appearing
 	// after the first turn must NOT re-run the effect — its clear()+replay
 	// would corrupt the live TUI's screen.
-	const bootCommandRef = useRef(
-		(providerSessionId
-			? resumeBootCommand(agentKind, providerSessionId)
-			: null) ?? presetBootCommand(agentKind),
-	);
+	const bootCommandRef = useRef<string | null | undefined>(undefined);
+	if (bootCommandRef.current === undefined) {
+		// Linked directories ride along on resume (claude's --add-dir is a
+		// process-level grant). Cache read only — a cold cache just resumes
+		// without them, same as before the feature existed.
+		const addDirs = queryClient.getQueryData<readonly string[]>(
+			helmorQueryKeys.workspaceLinkedDirectories(workspaceId),
+		);
+		bootCommandRef.current =
+			(providerSessionId
+				? resumeBootCommand(agentKind, providerSessionId, { addDirs })
+				: null) ?? presetBootCommand(agentKind);
+	}
 
 	useEffect(() => {
 		if (!repoId) return;
-		// A composer-initiated terminal carries its own boot command (prompt +
-		// composer state); ensureTerminal is idempotent so the consumed value
-		// only matters on the spawning mount.
-		const boot = takePendingBoot(sessionId) ?? bootCommandRef.current;
-		ensureTerminal(repoId, workspaceId, sessionId, boot, agentKind);
+		// A composer-initiated terminal carries its own boot (prompt + composer
+		// state, incl. fast mode); ensureTerminal is idempotent so the consumed
+		// value only matters on the spawning mount.
+		const pending = takePendingBoot(sessionId);
+		const boot = pending?.bootCommand ?? bootCommandRef.current ?? null;
+		ensureTerminal(
+			repoId,
+			workspaceId,
+			sessionId,
+			boot,
+			agentKind,
+			pending?.fastMode ?? false,
+		);
 		const existing = attach(sessionId, {
 			onChunk: (data) => termRef.current?.write(data),
 			onStatusChange: () => {},

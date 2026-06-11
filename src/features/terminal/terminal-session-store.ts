@@ -46,15 +46,21 @@ export const TRUNCATION_NOTICE =
 const instances = new Map<string, Instance>();
 /** sessionId → live listener (the mounted xterm) */
 const listeners = new Map<string, Listener>();
-/** sessionId → one-shot boot command for a composer-initiated terminal
- * (set before the panel mounts; consumed on first spawn). */
-const pendingBoots = new Map<string, string>();
+export type PendingBoot = {
+	bootCommand: string;
+	/** claude only: rides the injected --settings file (no CLI flag). */
+	fastMode: boolean;
+};
 
-export function setPendingBoot(sessionId: string, bootCommand: string) {
-	pendingBoots.set(sessionId, bootCommand);
+/** sessionId → one-shot boot for a composer-initiated terminal
+ * (set before the panel mounts; consumed on first spawn). */
+const pendingBoots = new Map<string, PendingBoot>();
+
+export function setPendingBoot(sessionId: string, boot: PendingBoot) {
+	pendingBoots.set(sessionId, boot);
 }
 
-export function takePendingBoot(sessionId: string): string | null {
+export function takePendingBoot(sessionId: string): PendingBoot | null {
 	const boot = pendingBoots.get(sessionId) ?? null;
 	pendingBoots.delete(sessionId);
 	return boot;
@@ -102,6 +108,7 @@ export function ensureTerminal(
 	sessionId: string,
 	bootCommand: string | null,
 	agentKind: string | null,
+	fastMode = false,
 ) {
 	if (instances.has(sessionId)) return;
 	const entry: Instance = {
@@ -184,6 +191,7 @@ export function ensureTerminal(
 		},
 		bootCommand,
 		agentKind,
+		fastMode,
 	).catch((err) => {
 		const current = instances.get(sessionId);
 		if (!current) return;

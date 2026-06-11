@@ -205,6 +205,63 @@ fn cli_status_for_paths(
     }
 }
 
+/// Startup self-heal for the managed CLI launcher. If `/usr/local/bin/helmor`
+/// exists but resolves to a DIFFERENT Helmor install (pre-update app path,
+/// moved bundle), re-link it to this app's CLI so the launcher always matches
+/// the running app version. Conservative on purpose:
+/// - `Missing` is left alone — the user never opted into the CLI.
+/// - A stale entry is only adopted when it already points at a Helmor CLI
+///   binary; a user's own same-named tool is never clobbered.
+/// - Never elevates: a permission failure logs and leaves Settings → CLI
+///   install as the explicit (elevating) repair path.
+/// - No-op in dev builds, which must not steal the production link.
+pub fn ensure_cli_install_current() {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    let Ok(app_exe) = std::env::current_exe() else {
+        return;
+    };
+    let Ok(bundled_cli) = bundled_cli_binary(&app_exe) else {
+        return;
+    };
+    if !bundled_cli.is_file() {
+        return;
+    }
+    let install_path = cli_install_target();
+    use crate::platform::cli_install::ManagedCliStatus;
+    if crate::platform::cli_install::classify(&install_path, &bundled_cli)
+        != ManagedCliStatus::Stale
+    {
+        return;
+    }
+    let points_at_helmor_cli = std::fs::read_link(&install_path)
+        .map(|target| {
+            target
+                .file_name()
+                .map(|name| name == std::ffi::OsStr::new(cli_source_binary_name()))
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+    if !points_at_helmor_cli {
+        return;
+    }
+    match try_install_symlink_unprivileged(&bundled_cli, &install_path) {
+        Ok(()) => {
+            tracing::info!(
+                install_path = %install_path.display(),
+                "CLI launcher pointed at an old install; re-linked to this app"
+            );
+        }
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "CLI launcher is stale but auto-repair failed; reinstall from Settings"
+            );
+        }
+    }
+}
+
 fn install_cli_symlink(
     bundled_cli: &std::path::Path,
     install_path: &std::path::Path,

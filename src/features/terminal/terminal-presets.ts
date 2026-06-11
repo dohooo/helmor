@@ -12,6 +12,10 @@ export type TerminalBootOptions = {
 	modelId?: string | null;
 	effortLevel?: string | null;
 	permissionMode?: string | null;
+	/** Workspace linked directories (composer /add-dir). claude maps them to
+	 *  `--add-dir`; codex ignores them (danger-full-access reaches them
+	 *  anyway). Snapshot at launch — TUIs can't take new dirs mid-run. */
+	addDirs?: readonly string[] | null;
 };
 
 export type TerminalAgentSpec = {
@@ -26,13 +30,25 @@ export type TerminalAgentSpec = {
 	boot(opts: TerminalBootOptions): string;
 	/** Resume a prior conversation by the agent's own session id;
 	 *  null = the CLI has no resume. */
-	resume(providerSessionId: string): string | null;
+	resume(
+		providerSessionId: string,
+		opts?: { addDirs?: readonly string[] | null },
+	): string | null;
 };
 
 /** POSIX single-quote a value so untrusted text (session ids, prompts) can't
  * inject shell syntax when spliced into the interactive boot command. */
 function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function claudeAddDirFlags(addDirs?: readonly string[] | null): string[] {
+	const parts: string[] = [];
+	for (const dir of addDirs ?? []) {
+		const trimmed = dir.trim();
+		if (trimmed) parts.push("--add-dir", shellQuote(trimmed));
+	}
+	return parts;
 }
 
 const CLAUDE_SPEC: TerminalAgentSpec = {
@@ -46,11 +62,21 @@ const CLAUDE_SPEC: TerminalAgentSpec = {
 		if (model) parts.push("--model", shellQuote(model));
 		if (effort) parts.push("--effort", shellQuote(effort));
 		if (permission) parts.push("--permission-mode", shellQuote(permission));
+		parts.push(...claudeAddDirFlags(opts.addDirs));
 		parts.push(shellQuote(opts.prompt));
 		return parts.join(" ");
 	},
-	resume(id) {
-		return `claude --resume ${shellQuote(id)} --dangerously-skip-permissions`;
+	resume(id, opts) {
+		// --add-dir is a process-level grant, so a resumed session needs the
+		// workspace's linked directories re-passed too.
+		const parts = [
+			"claude",
+			"--resume",
+			shellQuote(id),
+			"--dangerously-skip-permissions",
+			...claudeAddDirFlags(opts?.addDirs),
+		];
+		return parts.join(" ");
 	},
 };
 
@@ -119,7 +145,8 @@ export function buildTerminalBootCommand(
 export function resumeBootCommand(
 	key: string | null | undefined,
 	sessionId: string,
+	opts?: { addDirs?: readonly string[] | null },
 ): string | null {
-	const invocation = findTerminalAgent(key)?.resume(sessionId);
+	const invocation = findTerminalAgent(key)?.resume(sessionId, opts);
 	return invocation ? `${invocation}\n` : null;
 }
