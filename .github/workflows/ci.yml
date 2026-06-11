@@ -72,23 +72,33 @@ jobs:
             sidecar: &sidecar
               - *global
               - 'sidecar/**'
-            rust: &rust
+            # Agent SDK bumps land in sidecar/package.json + sidecar/bun.lock;
+            # the SDK event shape is the contract the Rust accumulator depends
+            # on, so those two files must re-run the pipeline snapshot tests
+            # (see AGENTS.md "Bundled agent CLIs").
+            rust:
               - *global
               - 'src-tauri/**'
+              - 'sidecar/package.json'
+              - 'sidecar/bun.lock'
             e2e:
               - *global
               - 'src/**'
               - 'e2e/**'
               - 'playwright.config.ts'
               - 'vite.e2e.config.ts'
+            # Root tsc also checks playwright.config.ts via tsconfig.node.json
+            # references (vite configs are already in `frontend`).
             typecheck:
               - *frontend
               - *sidecar
+              - 'playwright.config.ts'
+            # Biome lints the whole repo (biome.json includes: ["**"]), so gate
+            # on every extension Biome can parse, anywhere — this mirrors
+            # `biome check .` instead of trying to enumerate directories.
             biome:
-              - *frontend
-              - *sidecar
-              - *rust
-              - 'apps/marketing/**'
+              - *global
+              - '**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts,json,jsonc,css,html,vue,svelte,astro,graphql}'
 
   # ---------- Quality ----------
 
