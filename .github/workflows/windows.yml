@@ -5,8 +5,9 @@ name: Windows
 # quality.yml and run on macos-latest; this workflow mirrors the
 # platform-sensitive parts on windows-latest so the Windows adapter code
 # (process/fs/paths/executable boundaries, the `.cmd` CLI shim, bundled-binary
-# resolution, and the win32 vendor staging) keeps building, testing, and
-# bundling on every change.
+# resolution, and the win32 vendor staging) keeps typechecking and testing on
+# every change. The NSIS installer build is NOT run here — it's expensive and
+# already covered at release time by publish.yml (build-and-publish-windows).
 
 on:
   pull_request:
@@ -121,54 +122,3 @@ jobs:
       - name: Run Rust doctests
         shell: bash
         run: cd src-tauri && cargo test --doc
-
-  windows-build:
-    name: Windows Build
-    runs-on: windows-latest
-    timeout-minutes: 60
-    env:
-      # See windows-rust-test above.
-      RUSTC_WRAPPER: ""
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup JS toolchain
-        uses: ./.github/actions/setup-js
-        with:
-          # sccache is unused by the Windows jobs and its installer is flaky
-          # on Windows runners; skip it.
-          install-sccache: "false"
-
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Setup NASM
-        uses: ilammy/setup-nasm@v1
-
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-          shared-key: windows-tauri-v1
-          workspaces: src-tauri -> target
-
-      - name: Cache bundle archives
-        uses: ./.github/actions/cache-bundle-archives
-        with:
-          target-triple: x86_64-pc-windows-msvc
-
-      # `tauri build`'s beforeBuildCommand runs prepare-sidecar.mjs, which stages
-      # the win32 vendor tree, builds the bun sidecar + helmor-cli, then bundles.
-      # NSIS only — WiX/MSI is not part of what this fork ships.
-      - name: Build Windows installer (NSIS)
-        shell: bash
-        run: bun x tauri build --bundles nsis
-
-      - name: Upload NSIS installer
-        uses: actions/upload-artifact@v4
-        with:
-          name: helmor-windows-x64-setup
-          path: src-tauri/target/release/bundle/nsis/*-setup.exe
-          if-no-files-found: error
-          retention-days: 14
