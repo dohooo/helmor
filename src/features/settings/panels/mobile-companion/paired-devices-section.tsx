@@ -49,14 +49,15 @@ export function PairedDevicesSection({
 							{devices.map((device) => (
 								<div
 									key={device.id}
-									className="flex min-h-10 items-center justify-between border-b border-border/40 py-2 last:border-b-0"
+									className="flex min-h-12 items-center justify-between gap-3 border-b border-border/40 py-2.5 last:border-b-0"
 								>
-									<div className="min-w-0 flex-1 truncate text-small">
-										<span className="text-foreground">{device.label}</span>
-										<span className="text-muted-foreground">
-											{" - "}
+									<div className="min-w-0 flex-1">
+										<p className="truncate text-small font-medium text-foreground">
+											{device.label}
+										</p>
+										<p className="mt-0.5 truncate text-nano leading-none text-muted-foreground/75">
 											{formatLastSeen(device.lastSeenAt)}
-										</span>
+										</p>
 									</div>
 									<Tooltip>
 										<TooltipTrigger asChild>

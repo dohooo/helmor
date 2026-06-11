@@ -8,20 +8,17 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { MobileCompanionQuickAccessPopover } from "@/features/mobile-companion/quick-access-popover";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import { AppUpdateButton } from "@/features/updater/app-update-button";
 import type { AppUpdateStatus } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { MiniModeToggleButton } from "./mini-mode-toggle-button";
 
 type Props = {
 	appUpdateStatus: AppUpdateStatus | null;
 	leftSidebarToggleShortcut: string | null;
-	miniModePending: boolean;
-	miniModeToggleShortcut: string | null;
 	showOnDesktop: boolean;
 	mobileSidebarOpen: boolean;
-	onToggleMiniMode: () => void;
 	onExpandSidebar: () => void;
 	onToggleMobileSidebar: () => void;
 };
@@ -29,11 +26,8 @@ type Props = {
 export function WorkspaceHeaderLeading({
 	appUpdateStatus,
 	leftSidebarToggleShortcut,
-	miniModePending,
-	miniModeToggleShortcut,
 	showOnDesktop,
 	mobileSidebarOpen,
-	onToggleMiniMode,
 	onExpandSidebar,
 	onToggleMobileSidebar,
 }: Props) {
@@ -75,11 +69,7 @@ export function WorkspaceHeaderLeading({
 					</TooltipContent>
 				</Tooltip>
 				<AppUpdateButton status={showOnDesktop ? appUpdateStatus : null} />
-				<MiniModeToggleButton
-					pending={miniModePending}
-					shortcut={miniModeToggleShortcut}
-					onToggle={onToggleMiniMode}
-				/>
+				<MobileCompanionQuickAccessPopover />
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<Button

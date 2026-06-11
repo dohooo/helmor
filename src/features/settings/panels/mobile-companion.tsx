@@ -24,6 +24,7 @@ import { PairedDevicesSection } from "./mobile-companion/paired-devices-section"
 
 const COMPANION_STATUS_KEY = ["companionStatus"] as const;
 const COMPANION_PAIRING_KEY = ["companionPairingCode"] as const;
+const LAN_COMPANION_ENABLED = import.meta.env.DEV;
 
 function deviceLabel(): string {
 	const date = new Date().toLocaleDateString(undefined, {
@@ -49,11 +50,11 @@ function pairingMatchesBaseUrl(
 	}
 }
 
-/// Settings → Mobile panel for the mobile browser companion. The access switch
-/// starts/stops the LAN companion server; the Cloudflare switch upgrades that
-/// local connection to a public tunnel. The advanced "Keep the same link"
-/// section upgrades the ephemeral quick tunnel to a stable remote-*.helmor.ai
-/// address; pairing mints a per-device token shown as a QR.
+/// Settings → Mobile panel for the mobile browser companion. Debug builds keep
+/// the LAN-only switch for development pairing; release builds expose Cloudflare
+/// tunnel pairing only. The advanced "Keep the same link" section upgrades the
+/// ephemeral quick tunnel to a stable remote-*.helmor.ai address; pairing mints
+/// a per-device token shown as a QR.
 export function MobileCompanionPanel() {
 	const queryClient = useQueryClient();
 	const [copied, setCopied] = useState(false);
@@ -82,7 +83,7 @@ export function MobileCompanionPanel() {
 	const hasFixedLink = stableHost !== null;
 	const devices = devicesQuery.data ?? [];
 	const pairing = pairingQuery.data ?? null;
-	const connectionUrl = publicUrl ?? lanUrl;
+	const connectionUrl = publicUrl ?? (LAN_COMPANION_ENABLED ? lanUrl : null);
 	const pairingIsCurrent = pairingMatchesBaseUrl(pairing, connectionUrl);
 	const replacePendingDeviceId = pairing?.deviceId;
 	const accessEnabled = statusQuery.data?.running ?? false;
@@ -189,7 +190,19 @@ export function MobileCompanionPanel() {
 		statusQuery.isPending ||
 		enableLanMutation.isPending ||
 		enableTunnelMutation.isPending;
-	const stopping = disableMutation.isPending;
+	const stopping = disableMutation.isPending || disableTunnelMutation.isPending;
+	useEffect(() => {
+		if (!LAN_COMPANION_ENABLED) return;
+		if (statusQuery.isPending || statusQuery.data?.running) return;
+		if (enableLanMutation.isPending || disableMutation.isPending) return;
+		enableLanMutation.mutate();
+	}, [
+		disableMutation.isPending,
+		enableLanMutation.isPending,
+		enableLanMutation.mutate,
+		statusQuery.data?.running,
+		statusQuery.isPending,
+	]);
 	useEffect(() => {
 		if (!connectionUrl || starting || pairingCodeMutation.isPending) return;
 		if (pairingIsCurrent) return;
@@ -216,9 +229,13 @@ export function MobileCompanionPanel() {
 					: pairingCodeMutation.isError
 						? "Could not create a pairing code."
 						: !accessEnabled
-							? "Turn on mobile access to create a LAN pairing link."
+							? LAN_COMPANION_ENABLED
+								? "Turn on mobile access to create a LAN pairing link."
+								: "Turn on Cloudflare tunnel to create a mobile pairing link."
 							: !connectionUrl
-								? "Could not find a local network address. Check Wi-Fi or network permissions."
+								? LAN_COMPANION_ENABLED
+									? "Could not find a local network address. Check Wi-Fi or network permissions."
+									: "Cloudflare tunnel is starting. Pairing will be ready once the public link is available."
 								: !pairing
 									? "Preparing a private link for your device."
 									: cloudflareEnabled && hasFixedLink
@@ -248,27 +265,29 @@ export function MobileCompanionPanel() {
 
 	return (
 		<SettingsGroup>
-			<div className="flex flex-col items-start justify-between gap-3 py-5 sm:flex-row">
-				<div className="min-w-0 flex-1">
-					<p className="text-ui font-medium text-foreground">Mobile access</p>
-					<p className="mt-1 text-small leading-snug text-muted-foreground">
-						{accessEnabled
-							? "LAN pairing is available. Cloudflare stays off unless you enable the tunnel below."
-							: "Starts LAN pairing for devices on the same Wi-Fi or local network."}
-					</p>
+			{LAN_COMPANION_ENABLED ? (
+				<div className="flex flex-col items-start justify-between gap-3 py-5 sm:flex-row">
+					<div className="min-w-0 flex-1">
+						<p className="text-ui font-medium text-foreground">Mobile access</p>
+						<p className="mt-1 text-small leading-snug text-muted-foreground">
+							{accessEnabled
+								? "LAN pairing is available. Cloudflare stays off unless you enable the tunnel below."
+								: "Starts LAN pairing for devices on the same Wi-Fi or local network."}
+						</p>
+					</div>
+					<Switch
+						checked={accessEnabled}
+						disabled={statusQuery.isPending || starting || stopping}
+						onCheckedChange={(checked) => {
+							if (checked) {
+								enableLanMutation.mutate();
+							} else {
+								disableMutation.mutate();
+							}
+						}}
+					/>
 				</div>
-				<Switch
-					checked={accessEnabled}
-					disabled={statusQuery.isPending || starting || stopping}
-					onCheckedChange={(checked) => {
-						if (checked) {
-							enableLanMutation.mutate();
-						} else {
-							disableMutation.mutate();
-						}
-					}}
-				/>
-			</div>
+			) : null}
 
 			<div className="flex flex-col items-start justify-between gap-3 py-5 sm:flex-row">
 				<div className="min-w-0 flex-1">
@@ -276,24 +295,31 @@ export function MobileCompanionPanel() {
 						Cloudflare tunnel
 					</p>
 					<p className="mt-1 text-small leading-snug text-muted-foreground">
-						{cloudflareEnabled
-							? "Remote access is using Cloudflare. Turn it off to fall back to LAN pairing."
-							: "Optional remote access for devices outside your local network."}
+						{LAN_COMPANION_ENABLED
+							? cloudflareEnabled
+								? "Remote access is using Cloudflare. Turn it off to fall back to LAN pairing."
+								: "Optional remote access for devices outside your local network."
+							: cloudflareEnabled
+								? "Remote mobile access is using Cloudflare."
+								: "Creates the mobile pairing link through Cloudflare tunnel."}
 					</p>
 				</div>
 				<Switch
 					checked={cloudflareEnabled}
 					disabled={
-						!accessEnabled ||
+						(LAN_COMPANION_ENABLED && !accessEnabled) ||
 						statusQuery.isPending ||
 						enableTunnelMutation.isPending ||
-						disableTunnelMutation.isPending
+						disableTunnelMutation.isPending ||
+						disableMutation.isPending
 					}
 					onCheckedChange={(checked) => {
 						if (checked) {
 							enableTunnelMutation.mutate();
-						} else {
+						} else if (LAN_COMPANION_ENABLED) {
 							disableTunnelMutation.mutate();
+						} else {
+							disableMutation.mutate();
 						}
 					}}
 				/>
@@ -305,7 +331,8 @@ export function MobileCompanionPanel() {
 				copied={copied}
 				isMobileAccessEnabled={accessEnabled}
 				isMobileAccessError={
-					enableLanMutation.isError || enableTunnelMutation.isError
+					(LAN_COMPANION_ENABLED && enableLanMutation.isError) ||
+					enableTunnelMutation.isError
 				}
 				isPreparing={starting}
 				isRefreshing={pairingCodeMutation.isPending}
@@ -329,7 +356,11 @@ export function MobileCompanionPanel() {
 						replaceDeviceId: replacePendingDeviceId,
 					})
 				}
-				onRetryMobileAccess={() => enableLanMutation.mutate()}
+				onRetryMobileAccess={() =>
+					LAN_COMPANION_ENABLED
+						? enableLanMutation.mutate()
+						: enableTunnelMutation.mutate()
+				}
 			/>
 
 			<FixedLinkSetup

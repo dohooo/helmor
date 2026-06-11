@@ -62,11 +62,8 @@ export function AppShell({
 			<WorkspaceHeaderLeading
 				appUpdateStatus={s.appUpdateStatus}
 				leftSidebarToggleShortcut={chrome.leftSidebarToggleShortcut}
-				miniModePending={chrome.miniModePending}
-				miniModeToggleShortcut={chrome.miniModeToggleShortcut}
 				showOnDesktop={panels.sidebarCollapsed}
 				mobileSidebarOpen={mobileSidebarOpen}
-				onToggleMiniMode={chrome.handleToggleMiniMode}
 				onExpandSidebar={() => panels.setSidebarCollapsed(false)}
 				onToggleMobileSidebar={handleToggleMobileSidebar}
 			/>
@@ -76,9 +73,6 @@ export function AppShell({
 			mobileSidebarOpen,
 			s.appUpdateStatus,
 			chrome.leftSidebarToggleShortcut,
-			chrome.miniModePending,
-			chrome.miniModeToggleShortcut,
-			chrome.handleToggleMiniMode,
 			panels.setSidebarCollapsed,
 			handleToggleMobileSidebar,
 		],
@@ -149,14 +143,11 @@ export function AppShell({
 					leftSidebarToggleShortcut: chrome.leftSidebarToggleShortcut,
 					appUpdateStatus: s.appUpdateStatus,
 					appSettings: s.appSettings,
-					miniModePending: chrome.miniModePending,
-					miniModeToggleShortcut: chrome.miniModeToggleShortcut,
 					onSelectWorkspace: handleSelectWorkspaceFromSidebar,
 					onOpenNewWorkspace: s.handleOpenWorkspaceStart,
 					onAddRepositoryNeedsStart:
 						sel.startSurfaceActions.addRepositoryNeedsStart,
 					onMoveLocalToWorktree: sel.startSurfaceActions.moveLocalToWorktree,
-					onToggleMiniMode: chrome.handleToggleMiniMode,
 					onCollapseSidebar: () => panels.setSidebarCollapsed(true),
 					onOpenFeedback: () => s.setFeedbackOpen(true),
 					onOpenSettings: data.handleOpenSettings,

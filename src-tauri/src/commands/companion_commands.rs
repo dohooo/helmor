@@ -2,10 +2,10 @@
 //!
 //! These wire the UI to the companion server (`crate::companion`), the
 //! cloudflared tunnel (quick or named/stable), and the `paired_devices` store.
-//! LAN access starts the local server only; the Cloudflare tunnel is a separate
-//! explicit action. Pairing mints a per-device PAT and returns the QR payload
-//! the phone scans; the stable-URL commands provision a permanent
-//! `remote-*.helmor.ai` hostname.
+//! In debug builds, LAN access can start the local server only for development
+//! testing. Release builds expose Cloudflare tunnel pairing only. Pairing mints
+//! a per-device PAT and returns the QR payload the phone scans; the stable-URL
+//! commands provision a permanent `remote-*.helmor.ai` hostname.
 
 use std::net::{IpAddr, UdpSocket};
 
@@ -73,6 +73,10 @@ fn lan_url_for(info: &companion::CompanionInfo) -> Option<String> {
     local_lan_ip().map(|ip| format!("http://{}:{}", format_host(ip), info.addr.port()))
 }
 
+fn lan_pairing_enabled() -> bool {
+    cfg!(debug_assertions)
+}
+
 fn pairing_deep_link(base_url: &str, token: &str) -> String {
     let mut url = url::Url::parse("helmor://pair").expect("static deep link is valid");
     url.query_pairs_mut()
@@ -96,7 +100,11 @@ async fn build_status(
     Ok(CompanionStatus {
         running: info.is_some(),
         addr: info.as_ref().map(|i| i.addr.to_string()),
-        lan_url: info.as_ref().and_then(lan_url_for),
+        lan_url: if lan_pairing_enabled() {
+            info.as_ref().and_then(lan_url_for)
+        } else {
+            None
+        },
         public_url,
         mode: mode.to_string(),
         stable_host,
@@ -120,6 +128,9 @@ pub async fn companion_enable_lan(
     companion: State<'_, CompanionState>,
     tunnel: State<'_, TunnelState>,
 ) -> CmdResult<CompanionStatus> {
+    if !lan_pairing_enabled() {
+        return Err(anyhow::anyhow!("LAN mobile pairing is only available in development").into());
+    }
     companion::start_local(app, &companion).await?;
     build_status(&companion, &tunnel).await
 }
@@ -159,6 +170,9 @@ pub async fn companion_disable_tunnel(
     tunnel: State<'_, TunnelState>,
 ) -> CmdResult<CompanionStatus> {
     tunnel.shutdown();
+    if !lan_pairing_enabled() {
+        companion.shutdown().await;
+    }
     build_status(&companion, &tunnel).await
 }
 
@@ -258,18 +272,28 @@ pub async fn companion_pair_device(
     companion: State<'_, CompanionState>,
     tunnel: State<'_, TunnelState>,
 ) -> CmdResult<PairingPayload> {
-    // The phone needs a reachable origin. Prefer the public tunnel URL; fall
-    // back to the LAN URL for same-network pairing.
+    // The phone needs a reachable origin. Release builds require the public
+    // tunnel URL; debug builds can fall back to LAN for development pairing.
     let origin = match tunnel.public_url() {
         Some(url) => url,
-        None => match companion.info().await {
-            Some(info) => lan_url_for(&info).ok_or_else(|| {
-                anyhow::anyhow!("could not find a local network address for pairing")
-            })?,
-            None => {
-                return Err(anyhow::anyhow!("enable the companion before pairing a device").into())
+        None => {
+            if !lan_pairing_enabled() {
+                return Err(anyhow::anyhow!(
+                    "enable the Cloudflare tunnel before pairing a device"
+                )
+                .into());
             }
-        },
+            match companion.info().await {
+                Some(info) => lan_url_for(&info).ok_or_else(|| {
+                    anyhow::anyhow!("could not find a local network address for pairing")
+                })?,
+                None => {
+                    return Err(
+                        anyhow::anyhow!("enable the companion before pairing a device").into(),
+                    )
+                }
+            }
+        }
     };
 
     let pairing = run_blocking(move || {

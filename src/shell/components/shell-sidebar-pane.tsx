@@ -11,6 +11,7 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { FeedbackButton } from "@/features/feedback";
+import { MobileCompanionQuickAccessPopover } from "@/features/mobile-companion/quick-access-popover";
 import { WorkspacesSidebarContainer } from "@/features/navigation/container";
 import { SettingsButton } from "@/features/settings";
 import { getShortcut } from "@/features/shortcuts/registry";
@@ -22,7 +23,6 @@ import { cn } from "@/lib/utils";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
 import { useSelectionStore } from "@/shell/controllers/selection-store-context";
 import { useEdgePeek } from "@/shell/hooks/use-edge-peek";
-import { MiniModeToggleButton } from "./mini-mode-toggle-button";
 
 type Props = {
 	collapsed: boolean;
@@ -42,13 +42,10 @@ type Props = {
 	leftSidebarToggleShortcut: string | null;
 	appUpdateStatus: AppUpdateStatus | null;
 	appSettings: AppSettings;
-	miniModePending: boolean;
-	miniModeToggleShortcut: string | null;
 	onSelectWorkspace: (workspaceId: string | null) => void;
 	onOpenNewWorkspace: () => void;
 	onAddRepositoryNeedsStart: (repositoryId: string) => void;
 	onMoveLocalToWorktree: (workspaceId: string) => void;
-	onToggleMiniMode: () => void;
 	onCollapseSidebar: () => void;
 	onOpenFeedback: () => void;
 	onOpenSettings: () => void;
@@ -69,13 +66,10 @@ export function ShellSidebarPane({
 	leftSidebarToggleShortcut,
 	appUpdateStatus,
 	appSettings,
-	miniModePending,
-	miniModeToggleShortcut,
 	onSelectWorkspace,
 	onOpenNewWorkspace,
 	onAddRepositoryNeedsStart,
 	onMoveLocalToWorktree,
-	onToggleMiniMode,
 	onCollapseSidebar,
 	onOpenFeedback,
 	onOpenSettings,
@@ -173,11 +167,7 @@ export function ShellSidebarPane({
 					<div className="absolute right-[12px] top-[6px] z-20 flex items-center gap-[2px]">
 						<AppUpdateButton status={appUpdateStatus} />
 						<div className="flex items-center max-[960px]:hidden">
-							<MiniModeToggleButton
-								pending={miniModePending}
-								shortcut={miniModeToggleShortcut}
-								onToggle={onToggleMiniMode}
-							/>
+							<MobileCompanionQuickAccessPopover />
 						</div>
 						<Tooltip>
 							<TooltipTrigger asChild>
