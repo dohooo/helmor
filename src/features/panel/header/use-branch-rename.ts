@@ -48,10 +48,10 @@ export function useBranchRename({
 				detailKey,
 			);
 			if (previous) {
-				queryClient.setQueryData<WorkspaceDetail | null>(detailKey, {
+				queryClient.setQueryData<WorkspaceDetail | null>(detailKey, () => ({
 					...previous,
 					branch: normalized,
-				});
+				}));
 			}
 			try {
 				await renameWorkspaceBranch(workspace.id, normalized);

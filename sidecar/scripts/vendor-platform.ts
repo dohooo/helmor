@@ -36,22 +36,22 @@ export interface ArchivePlan {
 	sha256: string;
 }
 
-export const GH_VERSION = "2.91.0";
+export const GH_VERSION = "2.94.0";
 export const GH_SHA256 = {
-	arm64: "20446cd714d9fa1b69fbd410deade3731f38fe09a2b980c8488aa388dd320ada",
-	amd64: "8806784f93603fe6d3f95c3583a08df38f175df9ebc123dc8b15f919329980e2",
+	arm64: "4f9bc1a5e77500737290a307b40b4c396a4d23729f55340f2a83f414410165a1",
+	amd64: "733ee8fa49247d27cd94a6c7384455bdecaa82172a3bcfad63ac1ecc2867251d",
 } as const;
 
-export const GLAB_VERSION = "1.93.0";
+export const GLAB_VERSION = "1.102.0";
 export const GLAB_SHA256 = {
-	arm64: "6d6ffa97d430b5e7ff912e64dbac14703acc57967df654be1950ae71858d5b6f",
-	amd64: "79d1a4f933919689c5fb7774feb1dd08f30b9c896dff4283b4a7387689ee0531",
+	arm64: "24638bda18b6f3b1433ea9909f71df3787866ef525f34aaf2c4a25c53f6ff651",
+	amd64: "5744d5fdd19d6cdd8bc35052fbafdc284c8c4c34142e1e1ffa10cc68aa904fae",
 } as const;
 
-export const CLOUDFLARED_VERSION = "2026.5.2";
+export const CLOUDFLARED_VERSION = "2026.6.0";
 export const CLOUDFLARED_SHA256 = {
-	arm64: "ba94054c9fd4297645093d59d51442e5e546d07bb0516120e694a13d5b216d38",
-	amd64: "7240f709506bc2c1eb9da4d89cf2555499c60280ecb854b7d80e8f17d4b7903d",
+	arm64: "88e17987423d3fd49167305f8bda14d83a80ab9f2097ff9c82b317a39e342119",
+	amd64: "f6eaa91260ee327994331ac5ac2f7cec7925c4b6e15296b63fe0916992a06bdc",
 } as const;
 
 export const CODEX_SHA256: Readonly<
@@ -64,6 +64,10 @@ export const CODEX_SHA256: Readonly<
 	"0.134.0": {
 		arm64: "82c8bd152cdfb8175fd03d1d18ac0f8cddce22a7e68164572c107f628b0d8b7c",
 		x64: "fd518e72bb6f77d2183799b0be00e77d8cc1b465c06e7e129f69028218259a64",
+	},
+	"0.139.0": {
+		arm64: "ef8fc3766c3930b52ca95e54ee5486569e24327d71bc10e796fad3ace4920fab",
+		x64: "b70305a6b03113e48e73d37a1653123d30d20d1287ecebd1ecb75993c22ea78c",
 	},
 };
 
@@ -82,6 +86,10 @@ export const CLAUDE_CODE_SHA256: Readonly<
 		arm64: "95d699dd2f03827e95286fe854999d42e3d0bfeec37af88c5bf49908ee56aa53",
 		x64: "f3e63255173dc3a9fcaa4cbe945b87454c8530e5d245affcd5b207b20c3e8bb0",
 	},
+	"2.1.173": {
+		arm64: "f9fbce58073a202963872c78a69ade5dae679ff4318b7b1c0bccea8b42df1953",
+		x64: "cd44b111c2d767c8fc01e2af7a44f5ca54219c115e3533d0e7e2d19397e8cf9a",
+	},
 };
 
 export const OPENCODE_SHA256: Readonly<
@@ -90,6 +98,10 @@ export const OPENCODE_SHA256: Readonly<
 	"1.16.2": {
 		arm64: "2103383d7562c1783cb66d63d31630ff90448d1ade90f8a187778d18c4b9ee5f",
 		x64: "1be1b4ff8874f0f0848e88bf4de3943a4fff3a51c8b2a75c910fb7f710e7cd03",
+	},
+	"1.17.3": {
+		arm64: "773317f1225f8918d819dbaf3d1125a3b3cc585ab1e982b3fdd7881844a212ca",
+		x64: "16a79dc881910fe6769a074b458e2a809ba94547f437506be2daabdcad9e1317",
 	},
 };
 
