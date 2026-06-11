@@ -8,6 +8,7 @@ import type {
 	ThreadMessageLike,
 	ToolCallPart,
 } from "./api";
+import { exceedsComposerPreviewBadgeThreshold } from "./composer-insert";
 import { measureSync } from "./perf-marks";
 import { reasoningLifecycle } from "./reasoning-lifecycle";
 
@@ -32,6 +33,13 @@ const COLLAPSED_GROUP_HEIGHT = 24;
 const USER_BUBBLE_VERTICAL_PADDING = 16;
 const USER_BUBBLE_HORIZONTAL_PADDING = 24;
 const USER_BUBBLE_WIDTH_RATIO = 0.75;
+// A user message over the composer badge threshold renders collapsed — a
+// single chip row in the bubble (see ChatUserMessage) — so its height is a
+// constant, not a text measurement. Expanding is a click on a mounted row,
+// at which point the real measurement takes over; the estimator never needs
+// to know about expansion state. 70 = the live collapsed row's offsetHeight
+// (28px chip line + 16px bubble padding + 20px wrapper padding + 6px shell).
+const COLLAPSED_USER_MESSAGE_HEIGHT = 70;
 const MIN_TEXT_WIDTH = 64;
 const MARKDOWN_BLOCK_GAP = 12;
 const MARKDOWN_HEADING_MARGIN_TOP = 10;
@@ -438,6 +446,9 @@ function estimateUserMessageHeight(
 		)
 		.map((part) => part.text)
 		.join("\n");
+	if (exceedsComposerPreviewBadgeThreshold(text)) {
+		return COLLAPSED_USER_MESSAGE_HEIGHT;
+	}
 	const bubbleWidth = Math.max(
 		MIN_TEXT_WIDTH,
 		Math.floor(options.contentWidth * USER_BUBBLE_WIDTH_RATIO) -
@@ -563,7 +574,10 @@ function expandTabsToFourColumnStops(text: string): string {
 	return lines.join("\n");
 }
 
-function measureTextHeight(
+// Exported for the accuracy tests: long user messages now estimate to a
+// collapsed constant, so the pre-wrap measurement gates (break-word counting,
+// tab-size-4 normalization) lock this function directly.
+export function measureTextHeight(
 	text: string,
 	options: {
 		fontSize: number;

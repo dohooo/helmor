@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { ReasoningPart, ThreadMessageLike, ToolCallPart } from "./api";
-import { estimateThreadRowHeights } from "./message-layout-estimator";
+import {
+	estimateThreadRowHeights,
+	measureTextHeight,
+} from "./message-layout-estimator";
 
 function makeTool(index: number): ToolCallPart {
 	return {
@@ -159,46 +162,92 @@ describe("estimateThreadRowHeights", () => {
 		expect(height).toBeLessThan(300);
 	});
 
-	// Load-bearing accuracy gate for the heavy-switch bottom anchor. The 560-line
-	// pre-wrap user bubble is the single tallest off-screen row; if its estimate
-	// is wrong, the math-anchored bottom lands in the wrong place on frame one.
+	// A user message over the composer badge threshold (500 trimmed chars — the
+	// same gate that turns a large paste into a tag in the composer) renders
+	// collapsed as a fixed-height chip row, so its estimate is a constant. This
+	// is what keeps giant pasted messages out of both the pretext layout AND the
+	// mounted DOM on a session switch.
+	it("estimates over-threshold user messages at a fixed collapsed height", () => {
+		const [medium] = estimateThreadRowHeights(
+			[makeUserMessage("x".repeat(600))],
+			{ fontSize: 14, paneWidth: 822 },
+		);
+		const [giant] = estimateThreadRowHeights(
+			[makeUserMessage(buildGiantUserMessageText())],
+			{ fontSize: 14, paneWidth: 822 },
+		);
+
+		// Size-invariant: a 600-char and a ~67k-char message price identically.
+		expect(giant).toBe(medium);
+		expect(giant).toBeLessThan(120);
+	});
+
+	it("keeps sub-threshold user messages on the measured path", () => {
+		const [short] = estimateThreadRowHeights(
+			[makeUserMessage("short prompt")],
+			{
+				fontSize: 14,
+				paneWidth: 822,
+			},
+		);
+		const [wrapped] = estimateThreadRowHeights(
+			[makeUserMessage("x".repeat(480))],
+			{ fontSize: 14, paneWidth: 822 },
+		);
+
+		// Under the threshold the height still tracks the text (a 480-char
+		// unbroken token wraps to several lines; a short prompt is one line).
+		expect(wrapped).toBeGreaterThan(short);
+	});
+});
+
+// The pre-wrap text-measurement gates. These used to run through a giant USER
+// message row, but over-threshold user messages now estimate to the collapsed
+// constant — the measurement path they lock (break-word counting + tab-size-4
+// normalization) is still live for assistant markdown, reasoning bodies, plan
+// reviews, and sub-threshold user text, so the gates target measureTextHeight
+// directly with the user-bubble geometry they were calibrated against.
+describe("measureTextHeight (pre-wrap accuracy gates)", () => {
 	// Geometry mirrors the live app exactly: fontSize 14, paneWidth 822 →
-	// contentWidth 782 → bubbleWidth floor(782*0.75)-24 = 562.
-	//
+	// contentWidth 782 → bubbleWidth floor(782*0.75)-24 = 562; user-bubble
+	// line-height 28.
+	const userBubbleGeometry = {
+		fontSize: 14,
+		lineHeight: 28,
+		maxWidth: 562,
+		whiteSpace: "pre-wrap",
+	} as const;
+
 	// Target: the EMPIRICALLY-MEASURED real-Geist DOM height of this exact text
 	// rendered in the live user-bubble layer (`<p class="whitespace-pre-wrap
-	// break-words">`, tab-size 4) — 32452px, captured via the Tauri MCP bridge in
-	// the running debug app.
+	// break-words">`, tab-size 4) — a 32452px row, captured via the Tauri MCP
+	// bridge in the running debug app, minus the row's fixed chrome (16px bubble
+	// vertical padding + 6px row shell bottom padding) = 32430px of text.
 	//
 	// The ±2% bound is a genuine red→green gate for the tab-size-4 normalization:
-	// WITH it the estimate is 32530px (+0.24% vs DOM, green); WITHOUT it pretext's
-	// default tab-size-8 over-counts the 40 tab-indented lines to 33650px (+3.69%,
+	// WITH it the text measures 32508px (+0.24% vs DOM, green); WITHOUT it
+	// pretext's default tab-size-8 over-counts the 40 tab-indented lines (+3.7%,
 	// red). The pretext 0.0.4→0.0.7 bump does NOT move this number — for this
 	// content shape both versions agree, in vitest (8px/char canvas stub) and
-	// in-app (real Geist: both estimate the full text at 32536px and the lone
-	// 2961-char token at 44 wrapped lines). The accuracy here comes from the tab
-	// fix; the bump is carried per the design's Decision (1) but is inert on this
-	// fixture's height path.
-	it("estimates the giant pre-wrap user message within 2% of measured DOM", () => {
-		const text = buildGiantUserMessageText();
-		const [estimate] = estimateThreadRowHeights([makeUserMessage(text)], {
-			fontSize: 14,
-			paneWidth: 822,
-		});
+	// in-app (real Geist: the lone 2961-char token wraps to 44 lines in both).
+	it("measures the giant pre-wrap text within 2% of measured DOM", () => {
+		const measured = measureTextHeight(
+			buildGiantUserMessageText(),
+			userBubbleGeometry,
+		);
 
-		// Real-Geist DOM ground truth for this fixture (see comment above).
-		const measuredDomHeightPx = 32452;
+		const measuredDomTextHeightPx = 32430;
 		const relativeError =
-			Math.abs(estimate - measuredDomHeightPx) / measuredDomHeightPx;
+			Math.abs(measured - measuredDomTextHeightPx) / measuredDomTextHeightPx;
 		expect(relativeError).toBeLessThanOrEqual(0.02);
 	});
 
 	// Tab faithfulness: pretext defaults to tab-size 8, the live pre-wrap bubble
 	// renders tab-size 4. The estimator expands leading tabs to 4-column stops
-	// before measuring, so a tab-indented message must estimate the SAME height
-	// as the equivalent 4-space-indented message. Without the normalization the
-	// tab variant would over-count (pretext treating each tab as 8 columns).
-	it("estimates leading-tab text equal to 4-space-indented text", () => {
+	// before measuring, so tab-indented text must measure the SAME height as the
+	// equivalent 4-space-indented text. Without the normalization the tab
+	// variant would over-count (pretext treating each tab as 8 columns).
+	it("measures leading-tab text equal to 4-space-indented text", () => {
 		const body = Array.from(
 			{ length: 60 },
 			(_, index) =>
@@ -207,14 +256,8 @@ describe("estimateThreadRowHeights", () => {
 		const tabbed = body.map((line) => `\t${line}`).join("\n");
 		const spaced = body.map((line) => `    ${line}`).join("\n");
 
-		const [tabbedHeight] = estimateThreadRowHeights([makeUserMessage(tabbed)], {
-			fontSize: 14,
-			paneWidth: 822,
-		});
-		const [spacedHeight] = estimateThreadRowHeights([makeUserMessage(spaced)], {
-			fontSize: 14,
-			paneWidth: 822,
-		});
+		const tabbedHeight = measureTextHeight(tabbed, userBubbleGeometry);
+		const spacedHeight = measureTextHeight(spaced, userBubbleGeometry);
 
 		expect(Math.abs(tabbedHeight - spacedHeight)).toBeLessThanOrEqual(1);
 	});

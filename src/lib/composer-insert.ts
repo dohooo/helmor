@@ -24,6 +24,17 @@ export type ComposerPreviewPayload =
 export const COMPOSER_PREVIEW_BADGE_THRESHOLD = 500;
 const COMPOSER_PREVIEW_LABEL_MAX_CHARS = 40;
 
+/**
+ * The single size gate for "this content is bulk, not prose". The composer
+ * uses it to turn a large paste into a tag badge, and the chat thread reuses
+ * it to render the sent message collapsed (see `ChatUserMessage` and
+ * `estimateUserMessageHeight`) — one threshold, so everything that pastes as
+ * a tag also displays as one after sending.
+ */
+export function exceedsComposerPreviewBadgeThreshold(content: string): boolean {
+	return content.trim().length >= COMPOSER_PREVIEW_BADGE_THRESHOLD;
+}
+
 export type ComposerCustomTag = {
 	id: string;
 	label: string;
@@ -126,7 +137,7 @@ export function buildComposerPreviewPayload({
 	content: string;
 	preferredKind?: "auto" | "text" | "code";
 }): ComposerPreviewPayload | null {
-	if (content.trim().length < COMPOSER_PREVIEW_BADGE_THRESHOLD) {
+	if (!exceedsComposerPreviewBadgeThreshold(content)) {
 		return null;
 	}
 
