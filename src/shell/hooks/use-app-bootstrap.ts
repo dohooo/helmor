@@ -11,6 +11,7 @@ import {
 	loadSettings,
 	saveSettings,
 } from "@/lib/settings";
+import { isQuickPanelWindow } from "@/lib/window-role";
 import {
 	SPLASH_FADE_MS,
 	SPLASH_MIN_DURATION_MS,
@@ -129,6 +130,11 @@ export function useAppBootstrap(): AppBootstrap {
 
 	useEffect(() => {
 		if (appSettings?.onboardingCompleted !== true) {
+			return;
+		}
+		// The command restores the INVOKING window's size constraints — from
+		// the quick panel it would blow the small card up to main-window size.
+		if (isQuickPanelWindow) {
 			return;
 		}
 

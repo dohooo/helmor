@@ -14,6 +14,9 @@ export type ReleaseAnnouncementAction =
 	  }
 	| {
 			type: "openStartPage";
+	  }
+	| {
+			type: "toggleQuickPanel";
 	  };
 
 export type ReleaseAnnouncementItem = {

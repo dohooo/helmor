@@ -5,8 +5,9 @@ import {
 	type ShortcutHandler,
 	useAppShortcuts,
 } from "@/features/shortcuts/use-app-shortcuts";
-import { closeMainWindow } from "@/lib/api";
+import { closeMainWindow, hideQuickPanel } from "@/lib/api";
 import type { AppSettings } from "@/lib/settings";
+import { isQuickPanelWindow } from "@/lib/window-role";
 import type { ContextPanelActions } from "@/shell/controllers/use-context-panel-controller";
 import { publishShellEvent } from "@/shell/event-bus";
 import { clampZoom, ZOOM_STEP } from "@/shell/use-zoom";
@@ -138,10 +139,14 @@ export function useGlobalShortcutHandlers({
 			{
 				id: "workspace.quickSwitchNext" as const,
 				callback: () => quickSwitch.open("next"),
+				// The quick-switch overlay lives in AppOverlays, which the quick
+				// panel doesn't mount — opening it there would set invisible state.
+				enabled: !isQuickPanelWindow,
 			},
 			{
 				id: "workspace.quickSwitchPrevious" as const,
 				callback: () => quickSwitch.open("previous"),
+				enabled: !isQuickPanelWindow,
 			},
 			{
 				id: "session.previous" as const,
@@ -181,7 +186,10 @@ export function useGlobalShortcutHandlers({
 			},
 			{
 				id: "window.close" as const,
-				callback: () => void closeMainWindow(),
+				// In the quick panel "close window" dismisses the panel itself —
+				// it must never close the (possibly hidden) main window.
+				callback: () =>
+					void (isQuickPanelWindow ? hideQuickPanel() : closeMainWindow()),
 			},
 			{
 				id: "script.run" as const,
@@ -194,6 +202,8 @@ export function useGlobalShortcutHandlers({
 			{
 				id: "window.miniMode.toggle" as const,
 				callback: handleToggleMiniMode,
+				// Mini mode resizes the INVOKING window; meaningless for the panel.
+				enabled: !isQuickPanelWindow,
 			},
 			{
 				id: "sidebar.left.toggle" as const,
