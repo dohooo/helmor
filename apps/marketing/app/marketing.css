@@ -71,6 +71,29 @@ html.dark .brand-mark-light {
 	background: var(--muted);
 }
 
+/* Top-right GitHub entry — sits just left of the theme toggle. Icon-only to
+ * stay compact in the right cluster; aria-label carries the accessible name. */
+.rail-github {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	border-radius: var(--radius-sm);
+	color: var(--muted-foreground);
+	transition:
+		color var(--motion-fast),
+		background var(--motion-fast);
+}
+.rail-github:hover {
+	color: var(--foreground);
+	background: var(--muted);
+}
+.rail-github svg {
+	width: 15px;
+	height: 15px;
+}
+
 .theme-toggle {
 	display: inline-flex;
 	gap: 2px;
