@@ -134,10 +134,14 @@ export function computeModelParameterValues(
 		out.push({ id: "thinking", value: "true" });
 	}
 
-	if (fastMode === true) {
-		const param = parameters.find((p) => p.id === "fast");
-		if (param?.values.some((v) => v.value === "true")) {
-			out.push({ id: "fast", value: "true" });
+	// Always forward an explicit fast value when the model exposes it.
+	// Omitting it lets Cursor fall back to a model-specific server default
+	// (Composer 2.5 defaults to fast), so OFF must be sent as fast=false.
+	const fastParam = parameters.find((p) => p.id === "fast");
+	if (fastParam) {
+		const desired = fastMode === true ? "true" : "false";
+		if (fastParam.values.some((v) => v.value === desired)) {
+			out.push({ id: "fast", value: desired });
 		}
 	}
 
