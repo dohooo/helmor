@@ -4,20 +4,23 @@ import {
 	CameraView,
 	useCameraPermissions,
 } from "expo-camera";
-import {
-	GlassView,
-	isGlassEffectAPIAvailable,
-	isLiquidGlassAvailable,
-} from "expo-glass-effect";
 import * as Haptics from "expo-haptics";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import {
+	type ComponentType,
+	type ReactNode,
+	useEffect,
+	useMemo,
+	useState,
+} from "react";
 import {
 	ActivityIndicator,
 	Pressable,
+	type StyleProp,
 	StyleSheet,
 	Text,
 	useWindowDimensions,
 	View,
+	type ViewStyle,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -46,13 +49,7 @@ export function ScanSheet({
 	const { height } = useWindowDimensions();
 	const [permission, requestPermission] = useCameraPermissions();
 	const [locked, setLocked] = useState(false);
-	const liquidGlassAvailable = useMemo(() => {
-		try {
-			return isGlassEffectAPIAvailable() && isLiquidGlassAvailable();
-		} catch {
-			return false;
-		}
-	}, []);
+	const GlassViewComponent = useMemo(resolveGlassViewComponent, []);
 
 	useEffect(() => {
 		if (visible) setLocked(false);
@@ -74,7 +71,7 @@ export function ScanSheet({
 			enablePanDownToClose
 			index={visible ? 0 : -1}
 			onClose={onClose}
-			snapPoints={["full"]}
+			snapPoints={["100%"]}
 		>
 			<BottomSheetView
 				style={[
@@ -85,7 +82,7 @@ export function ScanSheet({
 					},
 				]}
 			>
-				<GlassSurface enabled={liquidGlassAvailable}>
+				<GlassSurface GlassViewComponent={GlassViewComponent}>
 					<View style={styles.cameraFrame}>
 						{permission?.granted ? (
 							<CameraView
@@ -151,26 +148,55 @@ export function ScanSheet({
 
 function GlassSurface({
 	children,
-	enabled,
+	GlassViewComponent,
 }: {
 	children: ReactNode;
-	enabled: boolean;
+	GlassViewComponent: GlassViewComponent | null;
 }) {
 	const theme = useHelmorTheme();
 	const styles = useThemedStyles(createStyles);
-	if (!enabled) {
+	if (!GlassViewComponent) {
 		return <View style={styles.fallbackSurface}>{children}</View>;
 	}
 
 	return (
-		<GlassView
+		<GlassViewComponent
 			colorScheme={theme.mode}
 			glassEffectStyle="regular"
 			style={styles.glassSurface}
 		>
 			{children}
-		</GlassView>
+		</GlassViewComponent>
 	);
+}
+
+type GlassViewComponent = ComponentType<{
+	children?: ReactNode;
+	colorScheme?: "light" | "dark";
+	glassEffectStyle?: "regular" | "clear";
+	style?: StyleProp<ViewStyle>;
+}>;
+
+type GlassEffectModule = {
+	GlassView?: GlassViewComponent;
+	isGlassEffectAPIAvailable?: () => boolean;
+	isLiquidGlassAvailable?: () => boolean;
+};
+
+function resolveGlassViewComponent(): GlassViewComponent | null {
+	try {
+		const glassEffect = require("expo-glass-effect") as GlassEffectModule;
+		if (
+			!glassEffect.GlassView ||
+			!glassEffect.isGlassEffectAPIAvailable?.() ||
+			!glassEffect.isLiquidGlassAvailable?.()
+		) {
+			return null;
+		}
+		return glassEffect.GlassView;
+	} catch {
+		return null;
+	}
 }
 
 function createStyles(theme: HelmorTheme) {
