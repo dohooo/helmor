@@ -82,7 +82,7 @@ export function ScanSheet({
 								onBarcodeScanned={
 									busy || locked ? undefined : handleBarcodeScanned
 								}
-								style={StyleSheet.absoluteFill}
+								style={styles.cameraPreview}
 							/>
 						) : (
 							<View style={styles.permission}>
@@ -110,9 +110,19 @@ export function ScanSheet({
 							<Text style={styles.close}>×</Text>
 						</Pressable>
 
-						<View pointerEvents="none" style={styles.statusPill}>
-							<Text style={styles.statusTitle}>Scan pairing code</Text>
-							<Text style={styles.statusText}>Looking for a Helmor QR</Text>
+						<View
+							pointerEvents="none"
+							style={[styles.statusPanel, error && styles.errorPanel]}
+						>
+							<Text style={[styles.statusTitle, error && styles.errorTitle]}>
+								{error ? "Scan failed" : "Scan pairing code"}
+							</Text>
+							<Text
+								numberOfLines={error ? 3 : 1}
+								style={[styles.statusText, error && styles.errorMessage]}
+							>
+								{error ?? "Looking for a Helmor QR"}
+							</Text>
 						</View>
 
 						{busy ? (
@@ -122,15 +132,6 @@ export function ScanSheet({
 							</View>
 						) : null}
 					</View>
-
-					{error ? (
-						<View style={styles.errorCard}>
-							<Text selectable style={styles.error}>
-								{error}
-							</Text>
-						</View>
-					) : null}
-					<View pointerEvents="none" style={styles.bottomSafeAreaCover} />
 				</GlassSurface>
 			</BottomSheetView>
 		</BottomSheet>
@@ -231,15 +232,14 @@ function createStyles(theme: HelmorTheme) {
 		cameraFrame: {
 			backgroundColor: theme.colors.cameraBackground,
 			flex: 1,
-			overflow: "hidden",
+			overflow: "visible",
 		},
-		bottomSafeAreaCover: {
-			backgroundColor: theme.colors.cameraBackground,
-			bottom: -48,
-			height: 48,
+		cameraPreview: {
+			bottom: -64,
 			left: 0,
 			position: "absolute",
 			right: 0,
+			top: 0,
 		},
 		permission: {
 			alignItems: "center",
@@ -262,7 +262,7 @@ function createStyles(theme: HelmorTheme) {
 			marginBottom: theme.spacing.lg,
 			textAlign: "center",
 		},
-		statusPill: {
+		statusPanel: {
 			alignSelf: "stretch",
 			backgroundColor: "rgba(0, 0, 0, 0.56)",
 			borderColor: "rgba(255, 255, 255, 0.18)",
@@ -274,6 +274,13 @@ function createStyles(theme: HelmorTheme) {
 			paddingVertical: theme.spacing.sm,
 			position: "absolute",
 			right: theme.spacing.md,
+		},
+		errorPanel: {
+			backgroundColor:
+				theme.mode === "light"
+					? "rgba(28, 12, 14, 0.78)"
+					: "rgba(28, 12, 14, 0.82)",
+			borderColor: "rgba(251, 113, 133, 0.42)",
 		},
 		statusTitle: {
 			color: "#ffffff",
@@ -289,6 +296,13 @@ function createStyles(theme: HelmorTheme) {
 			letterSpacing: 0,
 			marginTop: 2,
 			textAlign: "center",
+		},
+		errorTitle: {
+			color: "#fecdd3",
+		},
+		errorMessage: {
+			color: "#fda4af",
+			lineHeight: 18,
 		},
 		busyOverlay: {
 			alignItems: "center",
@@ -306,29 +320,6 @@ function createStyles(theme: HelmorTheme) {
 			fontSize: theme.text.body,
 			fontWeight: "700",
 			letterSpacing: 0,
-		},
-		errorCard: {
-			backgroundColor:
-				theme.mode === "light"
-					? "rgba(220, 38, 38, 0.08)"
-					: "rgba(251, 113, 133, 0.12)",
-			borderColor:
-				theme.mode === "light"
-					? "rgba(220, 38, 38, 0.22)"
-					: "rgba(251, 113, 133, 0.24)",
-			borderRadius: theme.radii.md,
-			borderWidth: 1,
-			bottom: theme.spacing.md,
-			left: theme.spacing.md,
-			padding: theme.spacing.sm,
-			position: "absolute",
-			right: theme.spacing.md,
-		},
-		error: {
-			color: theme.colors.danger,
-			fontSize: theme.text.ui,
-			lineHeight: 18,
-			textAlign: "center",
 		},
 	});
 }

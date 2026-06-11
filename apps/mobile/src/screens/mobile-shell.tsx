@@ -5,7 +5,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { CompanionWebView } from "../components/companion-web-view";
 import { ScanSheet } from "../components/scan-sheet";
+import { ConnectionGuide } from "../features/connection-guide";
 import { MobileOnboarding } from "../features/onboarding";
+import { clearOnboardingCompleted } from "../features/onboarding/onboarding-store";
 import { useMobileBootState } from "../hooks/use-mobile-boot-state";
 import { usePairingController } from "../hooks/use-pairing-controller";
 import type { NativePairing } from "../lib/pairing";
@@ -20,8 +22,16 @@ export function MobileShell() {
 	const styles = useThemedStyles(createStyles);
 	const insets = useSafeAreaInsets();
 	const [scannerOpen, setScannerOpen] = useState(false);
-	const { booting, completeOnboarding, pairing, setBootError, setPairing } =
-		useMobileBootState();
+	const {
+		bootError,
+		booting,
+		completeOnboarding,
+		onboardingCompleted,
+		pairing,
+		setBootError,
+		setOnboardingCompleted,
+		setPairing,
+	} = useMobileBootState();
 	const handlePaired = useCallback(
 		(nextPairing: NativePairing) => {
 			setPairing(nextPairing);
@@ -79,16 +89,28 @@ export function MobileShell() {
 		setPairing(null);
 		setBootError(null);
 		resetPairingError();
-		setScannerOpen(true);
+		setScannerOpen(false);
 	}, [resetPairingError, setBootError, setPairing]);
 
-	const handleOnboardingOpenScanner = useCallback(() => {
+	const handleOpenScanner = useCallback(() => {
 		resetPairingError();
 		setScannerOpen(true);
 	}, [resetPairingError]);
 
+	const handleOnboardingComplete = useCallback(() => {
+		void completeOnboarding();
+	}, [completeOnboarding]);
+
+	const handleReviewIntro = useCallback(() => {
+		void clearOnboardingCompleted();
+		setOnboardingCompleted(false);
+		setScannerOpen(false);
+		resetPairingError();
+	}, [resetPairingError, setOnboardingCompleted]);
+
 	const route = resolveMobileShellRoute({
 		booting,
+		onboardingCompleted,
 		pairing,
 	});
 
@@ -112,7 +134,20 @@ export function MobileShell() {
 	if (route === "onboarding") {
 		return (
 			<View style={styles.container}>
-				<MobileOnboarding onOpenScanner={handleOnboardingOpenScanner} />
+				<MobileOnboarding onComplete={handleOnboardingComplete} />
+			</View>
+		);
+	}
+
+	if (route === "connectionGuide") {
+		return (
+			<View style={styles.container}>
+				<ConnectionGuide
+					busy={pairingBusy}
+					error={!scannerOpen ? (pairingError ?? bootError) : null}
+					onOpenScanner={handleOpenScanner}
+					onReviewIntro={handleReviewIntro}
+				/>
 				<ScanSheet
 					busy={pairingBusy}
 					error={scannerOpen ? pairingError : null}

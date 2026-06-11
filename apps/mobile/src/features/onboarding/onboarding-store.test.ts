@@ -4,6 +4,10 @@ const store = new Map<string, string>();
 let shouldThrow = false;
 
 mock.module("expo-secure-store", () => ({
+	deleteItemAsync: async (key: string) => {
+		if (shouldThrow) throw new Error("secure store unavailable");
+		store.delete(key);
+	},
 	getItemAsync: async (key: string) => {
 		if (shouldThrow) throw new Error("secure store unavailable");
 		return store.get(key) ?? null;
@@ -14,9 +18,11 @@ mock.module("expo-secure-store", () => ({
 	},
 }));
 
-const { loadOnboardingCompleted, saveOnboardingCompleted } = await import(
-	"./onboarding-store"
-);
+const {
+	clearOnboardingCompleted,
+	loadOnboardingCompleted,
+	saveOnboardingCompleted,
+} = await import("./onboarding-store");
 
 describe("onboarding-store", () => {
 	beforeEach(() => {
@@ -32,6 +38,13 @@ describe("onboarding-store", () => {
 		await saveOnboardingCompleted();
 
 		expect(await loadOnboardingCompleted()).toBe(true);
+	});
+
+	it("clears completion", async () => {
+		await saveOnboardingCompleted();
+		await clearOnboardingCompleted();
+
+		expect(await loadOnboardingCompleted()).toBe(false);
 	});
 
 	it("falls back to incomplete when storage cannot be read", async () => {

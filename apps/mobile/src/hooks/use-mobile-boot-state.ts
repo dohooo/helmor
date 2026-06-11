@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { saveOnboardingCompleted } from "../features/onboarding/onboarding-store";
+import {
+	loadOnboardingCompleted,
+	saveOnboardingCompleted,
+} from "../features/onboarding/onboarding-store";
 import type { NativePairing } from "../lib/pairing";
 import { validatePairing } from "../lib/pairing";
 import { clearPairing, loadPairing } from "../lib/pairing-store";
@@ -9,14 +12,16 @@ const LOG_PREFIX = "[helmor-mobile:pairing]";
 
 export function useMobileBootState() {
 	const [booting, setBooting] = useState(true);
+	const [onboardingCompleted, setOnboardingCompleted] = useState(false);
 	const [pairing, setPairing] = useState<NativePairing | null>(null);
 	const [bootError, setBootError] = useState<string | null>(null);
 
 	useEffect(() => {
 		let alive = true;
 
-		loadPairing()
-			.then(async (saved) => {
+		Promise.all([loadPairing(), loadOnboardingCompleted()])
+			.then(async ([saved, completed]) => {
+				if (alive) setOnboardingCompleted(completed);
 				logPairing("stored-pairing-loaded", {
 					hasPairing: !!saved,
 					baseUrl: saved?.baseUrl ?? null,
@@ -45,7 +50,7 @@ export function useMobileBootState() {
 					void clearPairing();
 					if (alive) {
 						setBootError(
-							"Saved Helmor link is no longer reachable. Paste a fresh pairing link from the desktop app.",
+							"Saved Helmor link is no longer reachable. Create a fresh pairing link from Helmor on your computer.",
 						);
 					}
 				}
@@ -73,15 +78,21 @@ export function useMobileBootState() {
 	}, []);
 
 	const completeOnboarding = useCallback(async () => {
-		await saveOnboardingCompleted();
+		try {
+			await saveOnboardingCompleted();
+		} finally {
+			setOnboardingCompleted(true);
+		}
 	}, []);
 
 	return {
 		bootError,
 		booting,
 		completeOnboarding,
+		onboardingCompleted,
 		pairing,
 		setBootError,
+		setOnboardingCompleted,
 		setPairing,
 	};
 }

@@ -100,7 +100,7 @@ export async function validatePairing(
 	} catch (error) {
 		if (error instanceof Error && error.name === "AbortError") {
 			throw new Error(
-				"Helmor did not respond. Keep the desktop app open and try again.",
+				"Helmor did not respond. Keep Helmor open on your computer and try again.",
 			);
 		}
 		if (error instanceof Error) throw error;

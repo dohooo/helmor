@@ -16,10 +16,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { PrimaryButton } from "../../components/primary-button";
 import { useThemedStyles } from "../../lib/use-themed-styles";
 import { type HelmorTheme, useHelmorTheme } from "../../theme";
-import { saveOnboardingCompleted } from "./onboarding-store";
 
 type MobileOnboardingProps = {
-	onOpenScanner: () => void;
+	onComplete: () => void;
 };
 
 type Slide = {
@@ -35,21 +34,21 @@ const SLIDES: Slide[] = [
 	{
 		label: "Stay close to the work",
 		title: "Follow Helmor from your phone",
-		body: "Check active workspaces and conversations while your desktop keeps running the agents.",
+		body: "Keep an eye on workspaces, conversations, and agent progress while Helmor keeps running on your computer.",
 	},
 	{
-		label: "Your desktop stays in charge",
-		title: "Local agents stay local",
-		body: "Your repos, tools, and agent sessions stay on your computer. Your phone is the companion view.",
+		label: "Your computer stays in charge",
+		title: "Local work stays local",
+		body: "Your repos, tools, and agent sessions stay on your computer. Your phone connects as a companion view.",
 	},
 	{
-		label: "Pair in seconds",
-		title: "Scan the pairing code",
-		body: "Open Helmor on your desktop, go to Settings > Mobile companion, then scan the QR code.",
+		label: "Connect nearby or away",
+		title: "Use LAN or Cloudflare tunnel",
+		body: "Pair on the same network, or enable Cloudflare tunnel in Helmor when you need remote access.",
 	},
 ];
 
-export function MobileOnboarding({ onOpenScanner }: MobileOnboardingProps) {
+export function MobileOnboarding({ onComplete }: MobileOnboardingProps) {
 	const theme = useHelmorTheme();
 	const styles = useThemedStyles(createStyles);
 	const insets = useSafeAreaInsets();
@@ -59,14 +58,6 @@ export function MobileOnboarding({ onOpenScanner }: MobileOnboardingProps) {
 	const carouselRef = useRef<ScrollView>(null);
 	const scrollX = useRef(new Animated.Value(0)).current;
 	const isFinalSlide = activeIndex === SLIDES.length - 1;
-
-	const completeThen = useCallback(async (next: () => void) => {
-		try {
-			await saveOnboardingCompleted();
-		} finally {
-			next();
-		}
-	}, []);
 
 	const scrollToSlide = useCallback(
 		(nextIndex: number) => {
@@ -97,8 +88,8 @@ export function MobileOnboarding({ onOpenScanner }: MobileOnboardingProps) {
 			scrollToSlide(activeIndex + 1);
 			return;
 		}
-		void completeThen(onOpenScanner);
-	}, [activeIndex, completeThen, isFinalSlide, onOpenScanner, scrollToSlide]);
+		onComplete();
+	}, [activeIndex, isFinalSlide, onComplete, scrollToSlide]);
 
 	const copyMotionStyle = useCallback(
 		(index: number) => {
@@ -217,7 +208,7 @@ export function MobileOnboarding({ onOpenScanner }: MobileOnboardingProps) {
 
 				<View style={styles.footer}>
 					<PrimaryButton
-						label={isFinalSlide ? "Scan pairing code" : "Next"}
+						label={isFinalSlide ? "Continue" : "Next"}
 						onPress={handlePrimary}
 					/>
 				</View>

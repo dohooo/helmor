@@ -15,3 +15,7 @@ export async function loadOnboardingCompleted(): Promise<boolean> {
 export async function saveOnboardingCompleted(): Promise<void> {
 	await SecureStore.setItemAsync(ONBOARDING_COMPLETED_KEY, "true");
 }
+
+export async function clearOnboardingCompleted(): Promise<void> {
+	await SecureStore.deleteItemAsync(ONBOARDING_COMPLETED_KEY);
+}
