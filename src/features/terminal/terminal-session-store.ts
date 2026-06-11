@@ -82,15 +82,19 @@ function deliver(entry: Instance, data: string) {
 	listeners.get(entry.sessionId)?.onChunk(data);
 }
 
-// claude/codex TUIs enter the alternate screen on startup; everything before
-// that (shell prompt, boot-command echo) is noise we never render.
-// biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI alt-screen sequences are ESC-framed.
-const ALT_SCREEN_ENTER_RE = /\x1b\[\?(?:1049|1047|47)h/;
+// TUI startup markers — everything before the first one (shell prompt,
+// boot-command echo) is noise we never render. Verified by capturing both
+// CLIs' boot bytes: claude enters the alternate screen (1049h); codex is an
+// inline ratatui TUI that never does, but it enables focus-event reporting
+// (1004h) and synchronized output (2026h) on startup. A shell's echo phase
+// emits none of these (zsh only toggles bracketed paste, 2004h).
+// biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI sequences are ESC-framed.
+const TUI_START_RE = /\x1b\[\?(?:1049|1047|47|2026|1004)h/;
 /** Agent CLIs can take a moment to reach the TUI; past this, show everything
  * (a non-TUI command would otherwise render nothing at all). */
 const BOOT_GATE_TIMEOUT_MS = 3000;
 
-/** Stop gating: emit from `fromIndex` (the alt-screen sequence itself must
+/** Stop gating: emit from `fromIndex` (the TUI start sequence itself must
  * reach xterm) — or everything on a timeout/exit fallback (fromIndex 0). */
 function releaseGate(entry: Instance, fromIndex: number) {
 	const gate = entry.gate;
@@ -148,7 +152,7 @@ export function ensureTerminal(
 				case "stderr": {
 					if (current.gate) {
 						current.gate.buf += event.data;
-						const match = ALT_SCREEN_ENTER_RE.exec(current.gate.buf);
+						const match = TUI_START_RE.exec(current.gate.buf);
 						if (match) releaseGate(current, match.index);
 						break;
 					}
@@ -217,6 +221,17 @@ export function detach(sessionId: string) {
 export function writeStdin(sessionId: string, data: string) {
 	const entry = instances.get(sessionId);
 	if (!entry) return;
+	// A bare ESC keypress is the TUI's interrupt key (arrow keys etc. arrive
+	// as multi-byte CSI sequences, never a lone 0x1b). claude fires NO hook on
+	// a user interrupt (verified on 2.1.170: normal completion → Stop;
+	// ESC-interrupt → nothing), so the busy spinner would hang forever.
+	// Clear optimistically — a false positive (ESC closing a TUI menu while
+	// busy) self-heals on the next hook event re-asserting busy.
+	if (data === "\x1b") {
+		void setTerminalSessionBusy(sessionId, entry.workspaceId, false).catch(
+			() => {},
+		);
+	}
 	void writeTerminalStdin(entry.repoId, entry.workspaceId, sessionId, data);
 }
 

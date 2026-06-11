@@ -16,6 +16,9 @@ export type TerminalBootOptions = {
 	 *  `--add-dir`; codex ignores them (danger-full-access reaches them
 	 *  anyway). Snapshot at launch — TUIs can't take new dirs mid-run. */
 	addDirs?: readonly string[] | null;
+	/** codex maps this to `-c service_tier="fast"`; claude's equivalent rides
+	 *  the backend-injected --settings file instead (no CLI flag). */
+	fastMode?: boolean;
 };
 
 export type TerminalAgentSpec = {
@@ -42,6 +45,13 @@ function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+/** Helmor's catalog uses the literal id "default" for "follow the CLI's own
+ * default model" — that placeholder must never reach a real --model flag. */
+function cliModelOrNull(modelId?: string | null): string | null {
+	const model = modelId?.trim();
+	return model && model !== "default" ? model : null;
+}
+
 function claudeAddDirFlags(addDirs?: readonly string[] | null): string[] {
 	const parts: string[] = [];
 	for (const dir of addDirs ?? []) {
@@ -56,7 +66,7 @@ const CLAUDE_SPEC: TerminalAgentSpec = {
 	presetCommand: "claude --dangerously-skip-permissions",
 	boot(opts) {
 		const parts = ["claude"];
-		const model = opts.modelId?.trim();
+		const model = cliModelOrNull(opts.modelId);
 		const effort = opts.effortLevel?.trim();
 		const permission = opts.permissionMode?.trim();
 		if (model) parts.push("--model", shellQuote(model));
@@ -86,11 +96,17 @@ const CODEX_SPEC: TerminalAgentSpec = {
 		'codex -c model_reasoning_effort="high" --ask-for-approval never --sandbox danger-full-access',
 	boot(opts) {
 		const parts = ["codex"];
-		const model = opts.modelId?.trim();
+		const model = cliModelOrNull(opts.modelId);
 		const effort = opts.effortLevel?.trim();
 		if (model) parts.push("-m", shellQuote(model));
 		if (effort) {
 			parts.push("-c", shellQuote(`model_reasoning_effort="${effort}"`));
+		}
+		if (opts.fastMode) {
+			// Best-effort: the SDK requests fast via the app-server turn param
+			// `serviceTier: "fast"`; the TUI has no documented flag, so pass
+			// the matching config key and verify on-device.
+			parts.push("-c", shellQuote('service_tier="fast"'));
 		}
 		if (opts.permissionMode?.trim() === "bypassPermissions") {
 			parts.push(

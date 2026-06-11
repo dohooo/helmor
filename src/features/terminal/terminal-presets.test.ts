@@ -63,6 +63,26 @@ describe("terminal agent specs", () => {
 		expect(cmd).toContain("--sandbox danger-full-access");
 	});
 
+	it("codex maps fast mode to the service_tier config", () => {
+		const fast = buildTerminalBootCommand("codex", {
+			prompt: "hi",
+			fastMode: true,
+		});
+		expect(fast).toContain(`-c 'service_tier="fast"'`);
+		const slow = buildTerminalBootCommand("codex", { prompt: "hi" });
+		expect(slow).not.toContain("service_tier");
+	});
+
+	it("never passes the 'default' placeholder as a real model", () => {
+		for (const provider of ["claude", "codex"]) {
+			const cmd = buildTerminalBootCommand(provider, {
+				prompt: "hi",
+				modelId: "default",
+			});
+			expect(cmd, provider).not.toContain("default");
+		}
+	});
+
 	it("shell-quotes prompts so metacharacters can't escape", () => {
 		const cmd = buildTerminalBootCommand("claude", {
 			prompt: "it's; $(rm -rf /)",

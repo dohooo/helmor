@@ -123,6 +123,9 @@ type SubmitPayload = {
 	 *  `prepareChatWorkspace` / `prepareWorkspaceFromRepo` as
 	 *  `seedSessionId`; other paths ignore it. */
 	provisionalSessionId?: string;
+	/** Start composer only: once the created workspace finalizes, open the
+	 *  prompt in the agent's TUI instead of streaming a GUI turn. */
+	terminalMode?: boolean;
 };
 
 export type ComposerSubmitPayload = SubmitPayload;

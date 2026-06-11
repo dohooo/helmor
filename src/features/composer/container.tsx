@@ -210,6 +210,9 @@ type WorkspaceComposerContainerProps = {
 		editorStateSnapshot?: SerializedEditorState;
 		/** Mount-time provisional session id (see `ComposerSubmitPayload`). */
 		provisionalSessionId?: string;
+		/** Start composer only: open the prompt in the agent's TUI once the
+		 *  created workspace finalizes, instead of streaming a GUI turn. */
+		terminalMode?: boolean;
 	}) => void;
 	/** Prompt queued by an external caller to auto-submit once the displayed
 	 *  session matches `sessionId`. Per-session config (model / effort /
@@ -845,10 +848,17 @@ export const WorkspaceComposerContainer = memo(
 				if (!effectiveModel) {
 					return;
 				}
-				if (terminalMode && showTerminalToggle) {
+				if (
+					terminalMode &&
+					showTerminalToggle &&
+					focusScope === "workspace-composer"
+				) {
 					// Terminal-Mode send: open the prompt in the provider's TUI
 					// instead of streaming a GUI turn. The shell listener creates
 					// the terminal session and boots it with the composer state.
+					// (The start composer takes the other branch below — its
+					// workspace doesn't exist yet, so the terminal intent rides
+					// the payload through the create/finalize pipeline instead.)
 					publishShellEvent({
 						type: "create-terminal-session",
 						prompt,
@@ -861,6 +871,8 @@ export const WorkspaceComposerContainer = memo(
 							null,
 						addDirs: linkedDirectories.length > 0 ? linkedDirectories : null,
 						fastMode: supportsFastMode ? fastMode : false,
+						workspaceId: displayedWorkspaceId,
+						replaceSessionId: null,
 					});
 					return;
 				}
@@ -887,6 +899,10 @@ export const WorkspaceComposerContainer = memo(
 					startSubmitMode: options?.startSubmitMode,
 					editorStateSnapshot: options?.editorStateSnapshot,
 					provisionalSessionId: options?.provisionalSessionId,
+					// Start composer only: the workspace doesn't exist yet, so the
+					// terminal intent rides the payload through create/finalize and
+					// is honored by the pending-submit consumer.
+					terminalMode: terminalMode && showTerminalToggle,
 				});
 			},
 			[

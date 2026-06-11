@@ -59,7 +59,7 @@ export function useGlobalShortcutHandlers({
 	getCloseableCurrentSession: () => unknown;
 	handleCloseSelectedSession: () => Promise<void>;
 	handleCopyWorkspacePath: () => void;
-	handleCreateSession: () => Promise<void>;
+	handleCreateSession: () => Promise<string | null | undefined>;
 	handleCommitAction: (mode: WorkspaceCommitButtonMode) => Promise<void>;
 	handleInspectorCommitAction: (
 		mode: WorkspaceCommitButtonMode,

@@ -262,13 +262,27 @@ fn build_terminal_boot(
     // Prefer the bundled agent CLIs (pinned + checksum-verified) over
     // whatever the user has on PATH. Empty in dev — resolve_bundled_agent_paths
     // intentionally returns none there, so dev keeps using the local install.
-    let bundled = crate::sidecar::resolve_bundled_agent_paths();
     let mut bundled_dirs: Vec<String> = Vec::new();
-    for bin in [&bundled.claude_bin, &bundled.codex_bin] {
-        if let Some(dir) = bin.as_deref().and_then(|p| p.parent()) {
-            let dir = dir.display().to_string();
-            if !bundled_dirs.contains(&dir) {
-                bundled_dirs.push(dir);
+    if cfg!(debug_assertions) {
+        // Dev: use ONLY the sidecar's npm-pinned CLIs. Never the
+        // target/debug/vendor staging leftovers — those copies can be stale
+        // or broken (a resident one was SIGKILLed on launch), and
+        // resolve_bundled_agent_paths happily finds them next to the dev exe.
+        if let Some(bin_dir) = std::env::current_exe().ok().and_then(|exe| {
+            exe.ancestors()
+                .map(|root| root.join("sidecar").join("node_modules").join(".bin"))
+                .find(|path| path.join("claude").is_file())
+        }) {
+            bundled_dirs.push(bin_dir.display().to_string());
+        }
+    } else {
+        let bundled = crate::sidecar::resolve_bundled_agent_paths();
+        for bin in [&bundled.claude_bin, &bundled.codex_bin] {
+            if let Some(dir) = bin.as_deref().and_then(|p| p.parent()) {
+                let dir = dir.display().to_string();
+                if !bundled_dirs.contains(&dir) {
+                    bundled_dirs.push(dir);
+                }
             }
         }
     }
@@ -357,7 +371,7 @@ pub async fn set_terminal_session_busy(
 ) -> CmdResult<()> {
     active_streams.set_session_active(
         &session_id,
-        Some(workspace_id),
+        Some(workspace_id.clone()),
         provider.as_deref().unwrap_or("terminal"),
         busy,
     );
@@ -371,6 +385,13 @@ pub async fn set_terminal_session_busy(
     .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e}"))??;
 
     crate::ui_sync::publish(&app, crate::ui_sync::UiMutationEvent::ActiveStreamsChanged);
+    // The session tab's spinner also reads sessions.status — refetch it now
+    // (interrupt/exit paths come through here, not through the hook's
+    // TerminalSessionIdle, so without this the tab lags the sidebar).
+    crate::ui_sync::publish(
+        &app,
+        crate::ui_sync::UiMutationEvent::SessionListChanged { workspace_id },
+    );
     Ok(())
 }
 
