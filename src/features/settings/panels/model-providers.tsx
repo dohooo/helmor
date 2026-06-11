@@ -80,9 +80,9 @@ export function AgentProxyPanel() {
 			title="Proxy"
 			description="For Claude Code and Codex."
 			align="start"
-			className="gap-8"
+			className="sm:gap-8"
 		>
-			<div className="flex w-[360px] flex-col gap-2">
+			<div className="flex w-full flex-col gap-2 sm:w-[360px]">
 				<DropdownMenu>
 					<DropdownMenuTrigger
 						className={cn(
@@ -202,9 +202,9 @@ export function ClaudeCustomProvidersPanel() {
 			title="Claude Code custom providers"
 			description="Enter API keys here to use third-party models. They can be used alongside Claude Code's official models."
 			align="start"
-			className="gap-8"
+			className="sm:gap-8"
 		>
-			<div className="flex w-[360px] flex-col gap-3">
+			<div className="flex w-full flex-col gap-3 sm:w-[360px]">
 				<div className="grid gap-2">
 					<ProviderPicker
 						kind={kind}
@@ -213,7 +213,7 @@ export function ClaudeCustomProvidersPanel() {
 					/>
 
 					{builtinProvider ? (
-						<div className="flex items-center gap-2">
+						<div className="flex flex-col gap-2 sm:flex-row sm:items-center">
 							<Input
 								type="password"
 								value={draft.apiKey}
@@ -325,7 +325,10 @@ function ProviderPicker({
 				</span>
 				<ChevronDown className="size-3 shrink-0 opacity-40" />
 			</DropdownMenuTrigger>
-			<DropdownMenuContent align="end" className="w-[360px]">
+			<DropdownMenuContent
+				align="end"
+				className="w-[var(--radix-dropdown-menu-trigger-width)] min-w-[min(22rem,calc(100vw-2rem))] max-w-[calc(100vw-2rem)] sm:w-[360px]"
+			>
 				{BUILTIN_CLAUDE_PROVIDERS.map((provider) => (
 					<DropdownMenuItem
 						key={provider.key}

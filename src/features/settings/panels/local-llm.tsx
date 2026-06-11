@@ -805,7 +805,7 @@ function ModelsSection({
 						align="start"
 						side="bottom"
 						sideOffset={4}
-						className="min-w-[440px]"
+						className="min-w-[min(27.5rem,calc(100vw-2rem))] max-w-[calc(100vw-2rem)]"
 					>
 						<DropdownMenuItem
 							onClick={() => onSelect(CUSTOM_SLOT_ID)}
@@ -1002,7 +1002,7 @@ function ContextSelector({
 	// readout (col 4) stays at its natural `auto` width and never gets
 	// truncated.
 	return (
-		<div className="grid grid-cols-[auto_144px_44px_auto_1fr_auto] items-center gap-3 text-[12px]">
+		<div className="grid grid-cols-[auto_1fr_auto] items-center gap-3 text-[12px] sm:grid-cols-[auto_144px_44px_auto_1fr_auto]">
 			<div className="flex shrink-0 items-center gap-1">
 				<Label className="text-[12px] text-muted-foreground">Context</Label>
 				{/* SettingsDialog renders outside AppShell's TooltipProvider. */}

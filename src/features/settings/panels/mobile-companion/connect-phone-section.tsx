@@ -69,8 +69,8 @@ export function ConnectPhoneSection({
 	onRetryMobileAccess: () => void;
 }) {
 	return (
-		<div className="flex items-start justify-between gap-6 py-5">
-			<div className="flex h-[216px] min-w-0 flex-1 flex-col">
+		<div className="flex flex-col items-stretch justify-between gap-6 py-5 sm:flex-row sm:items-start">
+			<div className="flex min-h-[216px] min-w-0 flex-1 flex-col">
 				<div>
 					<p className="text-ui font-medium text-foreground">
 						Connect a device
@@ -96,7 +96,7 @@ export function ConnectPhoneSection({
 			</div>
 
 			<TooltipProvider delayDuration={150}>
-				<div className="flex h-[216px] w-[176px] shrink-0 flex-col gap-2">
+				<div className="flex w-full shrink-0 flex-col gap-2 sm:h-[216px] sm:w-[176px]">
 					<div className="flex size-[176px] items-center justify-center rounded-lg bg-white p-3">
 						{pairing ? (
 							<QRCodeSVG value={pairing.url} size={148} />
@@ -106,7 +106,7 @@ export function ConnectPhoneSection({
 							</span>
 						)}
 					</div>
-					<div className="flex h-8 min-w-0 items-center gap-1 rounded-md border border-border/40 bg-muted/25 px-2">
+					<div className="flex h-8 min-w-0 items-center gap-1 rounded-md border border-border/40 bg-muted/25 px-2 sm:w-[176px]">
 						<span className="min-w-0 flex-1 truncate font-mono text-nano text-muted-foreground">
 							{pairing?.baseUrl ??
 								(isMobileAccessEnabled ? "Preparing link…" : "Not running")}

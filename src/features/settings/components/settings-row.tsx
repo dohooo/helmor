@@ -30,6 +30,7 @@ export function SettingsRow({
 	description,
 	children,
 	className,
+	controlClassName,
 	align = "center",
 }: {
 	title: ReactNode;
@@ -37,13 +38,14 @@ export function SettingsRow({
 	description?: ReactNode;
 	children?: ReactNode;
 	className?: string;
+	controlClassName?: string;
 	align?: "center" | "start";
 }) {
 	return (
 		<div
 			className={cn(
-				"flex justify-between gap-4 py-5",
-				align === "start" ? "items-start" : "items-center",
+				"flex flex-col gap-3 py-5 sm:flex-row sm:justify-between sm:gap-4",
+				align === "start" ? "sm:items-start" : "sm:items-center",
 				className,
 			)}
 		>
@@ -61,7 +63,11 @@ export function SettingsRow({
 					</div>
 				) : null}
 			</div>
-			{children ? <div className="shrink-0">{children}</div> : null}
+			{children ? (
+				<div className={cn("min-w-0 sm:shrink-0", controlClassName)}>
+					{children}
+				</div>
+			) : null}
 		</div>
 	);
 }

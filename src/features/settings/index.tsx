@@ -5,15 +5,24 @@ import {
 	HelpCircle,
 	Settings,
 	Volume2,
+	X,
 } from "lucide-react";
 import { memo, useEffect, useState } from "react";
 import { ModelIcon } from "@/components/model-icon";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import {
+	Dialog,
+	DialogClose,
+	DialogContent,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
+	DropdownMenuGroup,
 	DropdownMenuItem,
+	DropdownMenuLabel,
+	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -209,13 +218,23 @@ export const SettingsDialog = memo(function SettingsDialog({
 	const activeRepo = activeRepoId
 		? repositories.find((r) => r.id === activeRepoId)
 		: null;
+	const activeSectionLabel = activeRepo
+		? activeRepo.name
+		: titleSectionLabel(activeSection, repositories);
 
 	return (
 		<Dialog open={open} onOpenChange={onClose}>
-			<DialogContent className="h-[min(80vh,640px)] w-[min(80vw,860px)] max-w-[860px] overflow-hidden rounded-2xl border-border/60 bg-settings-content p-0 shadow-2xl sm:max-w-[860px]">
+			<DialogContent
+				aria-describedby={undefined}
+				className="!top-[2.75rem] h-[calc(100dvh-3.25rem)] w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] !translate-y-0 overflow-hidden rounded-2xl border-border/60 bg-settings-content p-0 shadow-2xl sm:!top-1/2 sm:h-[min(80vh,640px)] sm:w-[min(80vw,860px)] sm:max-w-[860px] sm:!-translate-y-1/2"
+				showCloseButton={false}
+			>
 				<SidebarProvider className="flex h-full min-h-0 w-full min-w-0 gap-0 overflow-hidden">
 					{/* Nav sidebar */}
-					<nav className="scrollbar-stable flex w-[200px] shrink-0 flex-col overflow-x-hidden overflow-y-auto border-r border-sidebar-border bg-settings-nav py-6">
+					<nav
+						aria-label="Settings navigation"
+						className="scrollbar-stable hidden w-[200px] shrink-0 flex-col overflow-x-hidden overflow-y-auto border-r border-sidebar-border bg-settings-nav py-6 sm:flex"
+					>
 						<SidebarGroup>
 							<SidebarGroupContent>
 								<SidebarMenu>
@@ -283,21 +302,115 @@ export const SettingsDialog = memo(function SettingsDialog({
 					{/* Main content */}
 					<div className="flex min-w-0 flex-1 flex-col overflow-hidden">
 						{/* Header */}
-						<div className="flex items-baseline gap-3 border-b border-border/40 px-8 py-4">
-							<DialogTitle className="text-title font-semibold text-foreground">
-								{activeRepo
-									? activeRepo.name
-									: titleSectionLabel(activeSection, repositories)}
+						<div className="flex items-center gap-3 border-b border-border/40 px-4 py-3 sm:px-8 sm:py-4">
+							<DialogTitle className="hidden text-title font-semibold text-foreground sm:block">
+								{activeSectionLabel}
 							</DialogTitle>
+							<DropdownMenu>
+								<DropdownMenuTrigger
+									aria-label="Settings section"
+									className="flex h-9 min-w-0 flex-1 cursor-interactive items-center justify-between gap-2 rounded-lg border border-border/50 bg-muted/25 px-3 text-left text-title font-semibold text-foreground sm:hidden"
+								>
+									<span className="min-w-0 truncate">{activeSectionLabel}</span>
+									<ChevronDown
+										className="size-4 shrink-0 text-muted-foreground"
+										strokeWidth={1.8}
+									/>
+								</DropdownMenuTrigger>
+								<DropdownMenuContent
+									align="start"
+									sideOffset={6}
+									className="max-h-[min(70dvh,420px)] w-[min(calc(100vw-2rem),22rem)] overflow-y-auto"
+								>
+									<DropdownMenuGroup>
+										{fixedSections.map((section) => {
+											const releaseMarker =
+												sidebarSectionReleaseMarker(section);
+											return (
+												<DropdownMenuItem
+													key={section}
+													onClick={() => setActiveSection(section)}
+													className="justify-between gap-2"
+												>
+													<span className="min-w-0 truncate">
+														{sidebarSectionLabel(section, repositories)}
+													</span>
+													<SettingsReleaseBadge
+														marker={releaseMarker}
+														className="h-4 shrink-0 px-1.5 text-micro"
+													/>
+												</DropdownMenuItem>
+											);
+										})}
+									</DropdownMenuGroup>
+									{repositories.length > 0 ? (
+										<>
+											<DropdownMenuSeparator />
+											<DropdownMenuLabel>Repositories</DropdownMenuLabel>
+											<DropdownMenuGroup>
+												{repositories.map((repo) => {
+													const key: SettingsSection = `repo:${repo.id}`;
+													return (
+														<DropdownMenuItem
+															key={key}
+															onClick={() => setActiveSection(key)}
+															className="gap-2"
+														>
+															{repo.repoIconSrc ? (
+																<img
+																	src={repo.repoIconSrc}
+																	alt=""
+																	className="size-4 shrink-0 rounded"
+																/>
+															) : (
+																<span className="flex size-4 shrink-0 items-center justify-center rounded bg-muted text-nano font-semibold uppercase text-muted-foreground">
+																	{repo.repoInitials?.slice(0, 2)}
+																</span>
+															)}
+															<span className="min-w-0 truncate">
+																{repo.name}
+															</span>
+														</DropdownMenuItem>
+													);
+												})}
+											</DropdownMenuGroup>
+										</>
+									) : null}
+								</DropdownMenuContent>
+							</DropdownMenu>
 							{!activeRepo && SECTION_TITLE_CAPTIONS[activeSection] ? (
-								<span className="truncate text-small text-muted-foreground/70">
+								<span className="hidden truncate text-small text-muted-foreground/70 sm:block">
 									{SECTION_TITLE_CAPTIONS[activeSection]}
 								</span>
 							) : null}
+							<DialogClose asChild>
+								<Button
+									type="button"
+									variant="ghost"
+									size="icon-sm"
+									aria-label="Close settings"
+									className="ml-auto flex items-center justify-center p-0 sm:hidden"
+								>
+									<X className="size-4" />
+									<span className="sr-only">Close</span>
+								</Button>
+							</DialogClose>
 						</div>
+						<DialogClose asChild>
+							<Button
+								type="button"
+								variant="ghost"
+								size="icon-sm"
+								aria-label="Close settings"
+								className="absolute top-2 right-2 hidden items-center justify-center p-0 sm:flex"
+							>
+								<X className="size-4" />
+								<span className="sr-only">Close</span>
+							</Button>
+						</DialogClose>
 
 						{/* Content area */}
-						<div className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-8 pt-1 pb-6">
+						<div className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-4 pt-1 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:px-8 sm:pb-6">
 							{activeSection === "general" && (
 								<SettingsGroup>
 									<SettingsRow
@@ -315,7 +428,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 										title="Notification sound"
 										description="Play a sound when a desktop notification fires"
 									>
-										<div className="flex items-center gap-1.5">
+										<div className="flex w-full items-center gap-1.5">
 											<SettingsSelect<NotificationSound>
 												value={settings.notificationSound}
 												options={NOTIFICATION_SOUND_OPTIONS}
@@ -741,7 +854,7 @@ function ModelSettingRow({
 
 	return (
 		<SettingsRow title={title} description={description}>
-			<div className="flex w-[360px] items-center gap-2">
+			<div className="flex w-full flex-col gap-2 sm:w-[360px] sm:flex-row sm:items-center">
 				<DropdownMenu>
 					<DropdownMenuTrigger
 						className={cn(
@@ -760,7 +873,7 @@ function ModelSettingRow({
 					<DropdownMenuContent
 						align="end"
 						sideOffset={4}
-						className="min-w-[10rem]"
+						className="min-w-[10rem] max-w-[calc(100vw-2rem)]"
 					>
 						{models.map((m) => (
 							<DropdownMenuItem
@@ -799,7 +912,7 @@ function ModelSettingRow({
 					<DropdownMenuContent
 						align="end"
 						sideOffset={4}
-						className="min-w-[8rem]"
+						className="min-w-[8rem] max-w-[calc(100vw-2rem)]"
 					>
 						{effortLevels.map((l) => (
 							<DropdownMenuItem key={l} onClick={() => onChange({ effort: l })}>
@@ -810,8 +923,8 @@ function ModelSettingRow({
 				</DropdownMenu>
 				<div
 					className={cn(
-						"flex h-8 cursor-interactive items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-ui text-foreground hover:bg-muted/50",
-						"shrink-0 gap-2",
+						"flex h-8 cursor-interactive items-center justify-between rounded-lg border border-border/50 bg-muted/30 px-3 text-ui text-foreground hover:bg-muted/50",
+						"gap-2 sm:shrink-0",
 					)}
 				>
 					<span

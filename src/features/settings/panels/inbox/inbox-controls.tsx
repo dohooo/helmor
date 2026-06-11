@@ -81,7 +81,7 @@ export function ScopeMultiSelect<T extends string>({
 					role="button"
 					tabIndex={0}
 					className={cn(
-						"flex min-h-9 w-[280px] cursor-interactive items-center justify-between gap-2 rounded-lg border border-input bg-muted/20 px-2 py-1 text-left transition-colors",
+						"flex min-h-9 w-full cursor-interactive items-center justify-between gap-2 rounded-lg border border-input bg-muted/20 px-2 py-1 text-left transition-colors sm:w-[280px]",
 						"hover:bg-muted/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
 					)}
 				>
@@ -115,7 +115,10 @@ export function ScopeMultiSelect<T extends string>({
 					/>
 				</div>
 			</PopoverTrigger>
-			<PopoverContent align="end" className="w-[280px] p-1.5">
+			<PopoverContent
+				align="end"
+				className="w-[var(--radix-popover-trigger-width)] max-w-[calc(100vw-2rem)] p-1.5 sm:w-[280px]"
+			>
 				<Command>
 					<CommandInput placeholder="Search scopes" />
 					<CommandList>
@@ -177,7 +180,7 @@ export function LabelMultiSelect({
 					role="button"
 					tabIndex={0}
 					className={cn(
-						"flex min-h-9 w-[280px] cursor-interactive items-center justify-between gap-2 rounded-lg border border-input bg-muted/20 px-2 py-1 text-left transition-colors",
+						"flex min-h-9 w-full cursor-interactive items-center justify-between gap-2 rounded-lg border border-input bg-muted/20 px-2 py-1 text-left transition-colors sm:w-[280px]",
 						"hover:bg-muted/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
 					)}
 				>
@@ -218,7 +221,10 @@ export function LabelMultiSelect({
 					/>
 				</div>
 			</PopoverTrigger>
-			<PopoverContent align="end" className="w-[280px] p-1.5">
+			<PopoverContent
+				align="end"
+				className="w-[var(--radix-popover-trigger-width)] max-w-[calc(100vw-2rem)] p-1.5 sm:w-[280px]"
+			>
 				<Command>
 					<CommandInput placeholder="Search labels" />
 					<CommandList>
@@ -275,7 +281,7 @@ export function SettingsSelect<T extends string>({
 				<Button
 					type="button"
 					variant="outline"
-					className="h-9 w-[180px] cursor-interactive justify-between gap-2 px-3 text-ui"
+					className="h-9 w-full cursor-interactive justify-between gap-2 px-3 text-ui sm:w-[180px]"
 				>
 					<span className="truncate">{selected.label}</span>
 					<ChevronDown
@@ -323,7 +329,7 @@ export function RepoPicker({
 					type="button"
 					variant="outline"
 					disabled={repositories.length === 0}
-					className="h-10 w-[280px] cursor-interactive justify-between gap-2 px-3 text-ui"
+					className="h-10 w-full cursor-interactive justify-between gap-2 px-3 text-ui sm:w-[280px]"
 				>
 					<span className="flex min-w-0 items-center gap-2">
 						{selected ? (

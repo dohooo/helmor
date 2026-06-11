@@ -53,7 +53,7 @@ export function SettingsSelect<V extends string>({
 					disabled={disabled}
 					aria-label={ariaLabel}
 					className={cn(
-						"h-8 w-[180px] justify-between gap-2 px-2 text-ui font-normal",
+						"h-8 w-full justify-between gap-2 px-2 text-ui font-normal sm:w-[180px]",
 						triggerClassName,
 					)}
 				>
@@ -67,7 +67,10 @@ export function SettingsSelect<V extends string>({
 			<PopoverContent
 				align="end"
 				sideOffset={4}
-				className={cn("w-[220px] p-1", contentClassName)}
+				className={cn(
+					"w-[var(--radix-popover-trigger-width)] max-w-[calc(100vw-2rem)] p-1 sm:w-[220px]",
+					contentClassName,
+				)}
 			>
 				<div
 					role="listbox"

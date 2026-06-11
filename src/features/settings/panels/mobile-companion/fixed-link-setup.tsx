@@ -38,7 +38,7 @@ export function FixedLinkSetup({
 		<div className="flex flex-col gap-3 py-5">
 			<p className="text-ui font-medium text-foreground">Keep the same link</p>
 
-			<div className="flex items-center justify-between gap-3">
+			<div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
 				{state.kind === "fixed" ? (
 					<p className="min-w-0 truncate text-small text-muted-foreground">
 						Fixed link:{" "}

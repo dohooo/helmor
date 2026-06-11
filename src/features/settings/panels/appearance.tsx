@@ -149,7 +149,7 @@ function ColorThemePicker({
 				<Button
 					type="button"
 					variant="outline"
-					className="h-8 w-[180px] justify-between gap-2 px-2 text-ui font-normal"
+					className="h-8 w-full justify-between gap-2 px-2 text-ui font-normal sm:w-[180px]"
 				>
 					<span className="flex min-w-0 items-center gap-2">
 						<ThemeSwatch option={current} isLight={isLight} size={16} />
@@ -161,7 +161,11 @@ function ColorThemePicker({
 					/>
 				</Button>
 			</PopoverTrigger>
-			<PopoverContent align="end" sideOffset={4} className="w-[220px] p-1">
+			<PopoverContent
+				align="end"
+				sideOffset={4}
+				className="w-[var(--radix-popover-trigger-width)] max-w-[calc(100vw-2rem)] p-1 sm:w-[220px]"
+			>
 				<div role="listbox" className="flex flex-col">
 					{COLOR_THEME_OPTIONS.map((opt) => {
 						const selected = opt.id === value;

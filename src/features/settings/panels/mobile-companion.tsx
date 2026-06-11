@@ -248,7 +248,7 @@ export function MobileCompanionPanel() {
 
 	return (
 		<SettingsGroup>
-			<div className="flex items-start justify-between gap-3 py-5">
+			<div className="flex flex-col items-start justify-between gap-3 py-5 sm:flex-row">
 				<div className="min-w-0 flex-1">
 					<p className="text-ui font-medium text-foreground">Mobile access</p>
 					<p className="mt-1 text-small leading-snug text-muted-foreground">
@@ -270,7 +270,7 @@ export function MobileCompanionPanel() {
 				/>
 			</div>
 
-			<div className="flex items-start justify-between gap-3 py-5">
+			<div className="flex flex-col items-start justify-between gap-3 py-5 sm:flex-row">
 				<div className="min-w-0 flex-1">
 					<p className="text-ui font-medium text-foreground">
 						Cloudflare tunnel

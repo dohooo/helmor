@@ -167,7 +167,10 @@ export function RepositorySettingsPanel({
 								strokeWidth={2}
 							/>
 						</PopoverTrigger>
-						<PopoverContent align="start" className="w-[220px] p-0">
+						<PopoverContent
+							align="start"
+							className="w-[220px] max-w-[calc(100vw-2rem)] p-0"
+						>
 							<Command className="rounded-lg! p-0.5">
 								<CommandList className="max-h-52">
 									<CommandEmpty>No remotes found</CommandEmpty>

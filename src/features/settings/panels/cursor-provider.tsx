@@ -140,9 +140,9 @@ export function CursorProviderPanel() {
 				title="Cursor"
 				description="Add a Cursor API key to use Cursor models in Helmor."
 				align="start"
-				className="gap-8"
+				className="sm:gap-8"
 			>
-				<div className="flex w-[360px] items-center gap-2">
+				<div className="flex w-full flex-col gap-2 sm:w-[360px] sm:flex-row sm:items-center">
 					<Input
 						type="password"
 						value={keyDraft}
@@ -175,9 +175,9 @@ export function CursorProviderPanel() {
 							: "Pick which appear in the composer's model picker. Refresh to fetch new ones."
 					}
 					align="start"
-					className="gap-8"
+					className="sm:gap-8"
 				>
-					<div className="flex w-[360px] flex-col gap-2">
+					<div className="flex w-full flex-col gap-2 sm:w-[360px]">
 						<div className="flex items-center gap-2">
 							<ModelMultiSelect
 								enabledIds={enabledIds}
@@ -241,7 +241,7 @@ function ModelMultiSelect({
 					role="button"
 					tabIndex={0}
 					className={cn(
-						"flex min-h-9 w-[280px] cursor-interactive items-center justify-between gap-2 rounded-lg border border-input bg-muted/20 px-2 py-1 text-left transition-colors",
+						"flex min-h-9 w-full cursor-interactive items-center justify-between gap-2 rounded-lg border border-input bg-muted/20 px-2 py-1 text-left transition-colors sm:w-[280px]",
 						"hover:bg-muted/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
 					)}
 				>
@@ -281,7 +281,10 @@ function ModelMultiSelect({
 					/>
 				</div>
 			</PopoverTrigger>
-			<PopoverContent align="end" className="w-[280px] p-1.5">
+			<PopoverContent
+				align="end"
+				className="w-[var(--radix-popover-trigger-width)] max-w-[calc(100vw-2rem)] p-1.5 sm:w-[280px]"
+			>
 				<Command>
 					<CommandInput placeholder="Search models" />
 					<CommandList>
