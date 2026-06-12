@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.35.0
+
+### Minor Changes
+
+- [#784](https://github.com/dohooo/helmor/pull/784) [`8089596`](https://github.com/dohooo/helmor/commit/808959655a504f05c9495b0d741923365ae4dfbe) Thanks [@natllian](https://github.com/natllian)! - Add Terminal Mode — run your prompt in the agent's own terminal UI:
+
+  - Flip the composer toggle (⌘⇧T) to open your prompt in the Claude or Codex TUI, keeping your model, effort, and permission settings. Enable it in Settings → General.
+
+- [#795](https://github.com/dohooo/helmor/pull/795) [`0ec0cc0`](https://github.com/dohooo/helmor/commit/0ec0cc08129e2d75196f664793969307ca1e3dc0) Thanks [@dohooo](https://github.com/dohooo)! - Make workspace switching fast and flicker-free, and tame long content in the chat:
+
+  - ⚡ Faster again — switching between workspaces is now much snappier and flicker-free even for heavy sessions, and code blocks no longer flash or shift.
+  - Large pastes sent from the composer now stay as tags in the conversation — hover the chip to preview the full content.
+  - Long messages collapse to 20 lines with a Show more control that expands upward, so your reading position never moves.
+
+- [#791](https://github.com/dohooo/helmor/pull/791) [`1e29a79`](https://github.com/dohooo/helmor/commit/1e29a79fc804cca4d9d844d6bd00d7468a658cdc) Thanks [@dohooo](https://github.com/dohooo)! - Add the quick panel: press ⇧⌥Space (configurable) anywhere to summon a small always-on-top floating window that creates a workspace and chats with an agent without opening the app.
+
+### Patch Changes
+
+- [#803](https://github.com/dohooo/helmor/pull/803) [`589b90b`](https://github.com/dohooo/helmor/commit/589b90b86ab200434c78393d7804e79b3cb426b0) Thanks [@natllian](https://github.com/natllian)! - Show skipped CI checks in the sidebar with a dedicated skip icon instead of a green checkmark, and drop their misleading 0s duration. Works for both GitHub and GitLab checks.
+
+- [#786](https://github.com/dohooo/helmor/pull/786) [`3b8ac9f`](https://github.com/dohooo/helmor/commit/3b8ac9f367cf95cbb918f97345d935e62c8a84c6) Thanks [@natllian](https://github.com/natllian)! - Fix the top-right Create PR / MR button getting stuck on "Create" after the pull request is already open:
+
+  - Creating PRs across several workspaces around the same time now reliably syncs each one's PR and CI status and auto-closes its action session, instead of only the last workspace you triggered.
+  - A workspace whose branch is already pushed to the remote now detects its open PR even when the local clone is missing the remote-tracking ref.
+
+- [#782](https://github.com/dohooo/helmor/pull/782) [`abc7f41`](https://github.com/dohooo/helmor/commit/abc7f41790b989020f701bcba9dfee4a0655c648) Thanks [@natllian](https://github.com/natllian)! - Fix composer input-history recall stealing arrow keys in multi-line drafts.
+
+  - Arrowing back down through history to a multi-line in-progress draft no longer loses the cursor.
+  - ArrowUp on a blank Shift+Enter line now moves the caret up instead of recalling history.
+
+- [#800](https://github.com/dohooo/helmor/pull/800) [`a22b78e`](https://github.com/dohooo/helmor/commit/a22b78ee0a25546f4d9108bfc07f9f65c46d7675) Thanks [@natllian](https://github.com/natllian)! - Fix the Cursor Fast toggle being ignored so turning it off now runs Composer models (including Composer 2.5) in normal mode instead of fast mode.
+
+- [#783](https://github.com/dohooo/helmor/pull/783) [`3c46f0b`](https://github.com/dohooo/helmor/commit/3c46f0b424f66c289b4d6415bcf434e878d6ebc9) Thanks [@natllian](https://github.com/natllian)! - Share the bundled-binary download cache across git worktrees and CI jobs so dev and CI builds reuse already-fetched archives instead of re-downloading them.
+
+- [#801](https://github.com/dohooo/helmor/pull/801) [`f6d9db1`](https://github.com/dohooo/helmor/commit/f6d9db1f952a347ee3950ee756d177895c5a870d) Thanks [@natllian](https://github.com/natllian)! - Polish Terminal Mode rendering and the start-page flow:
+  - The agent TUI now boots at the panel's real size, so its bottom rows no longer render garbled.
+  - Opening a terminal from the start page no longer gets stuck on a loading screen until you switch tabs.
+  - New terminal sessions get a generated title from your prompt instead of staying named "Terminal".
+  - The composer's terminal-mode icon no longer flashes white for a frame while toggling.
+  - The terminal cursor stays aligned with the TUI input instead of stranding at the top.
+
 ## 0.34.1
 
 ### Patch Changes
