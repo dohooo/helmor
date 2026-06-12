@@ -43,6 +43,7 @@ import {
 	isConductorAvailable,
 	type RepositoryCreateOption,
 } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import {
 	NOTIFICATION_SOUND_LABELS,
 	playNotificationSound,
@@ -108,21 +109,23 @@ const SECTION_TITLE_CAPTIONS: Partial<Record<SettingsSection, string>> = {
 function sidebarSectionLabel(
 	section: SettingsSection,
 	repos: RepositoryCreateOption[],
+	t: (source: string) => string,
 ): string {
 	if (section.startsWith("repo:")) {
 		const repoId = section.slice(5);
-		return repos.find((r) => r.id === repoId)?.name ?? "Repository";
+		return repos.find((r) => r.id === repoId)?.name ?? t("Repository");
 	}
 	const override = SECTION_LABEL_OVERRIDES[section];
-	if (override) return override;
-	return section.charAt(0).toUpperCase() + section.slice(1);
+	if (override) return t(override);
+	return t(section.charAt(0).toUpperCase() + section.slice(1));
 }
 
 function titleSectionLabel(
 	section: SettingsSection,
 	repos: RepositoryCreateOption[],
+	t: (source: string) => string,
 ): string {
-	return sidebarSectionLabel(section, repos);
+	return sidebarSectionLabel(section, repos, t);
 }
 
 export const SettingsDialog = memo(function SettingsDialog({
@@ -141,6 +144,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 	onClose: () => void;
 }) {
 	const { settings, updateSettings } = useSettings();
+	const { t } = useI18n();
 	const queryClient = useQueryClient();
 	const [activeSection, setActiveSection] =
 		useState<SettingsSection>("general");
@@ -218,7 +222,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 												isActive={activeSection === section}
 												onClick={() => setActiveSection(section)}
 											>
-												{sidebarSectionLabel(section, repositories)}
+												{sidebarSectionLabel(section, repositories, t)}
 											</SidebarMenuButton>
 										</SidebarMenuItem>
 									))}
@@ -271,11 +275,11 @@ export const SettingsDialog = memo(function SettingsDialog({
 							<DialogTitle className="text-title font-semibold text-foreground">
 								{activeRepo
 									? activeRepo.name
-									: titleSectionLabel(activeSection, repositories)}
+									: titleSectionLabel(activeSection, repositories, t)}
 							</DialogTitle>
 							{!activeRepo && SECTION_TITLE_CAPTIONS[activeSection] ? (
 								<span className="truncate text-small text-muted-foreground/70">
-									{SECTION_TITLE_CAPTIONS[activeSection]}
+									{t(SECTION_TITLE_CAPTIONS[activeSection])}
 								</span>
 							) : null}
 						</div>
@@ -709,6 +713,7 @@ function ModelSettingRow({
 	ariaPrefix: string;
 	onChange: (patch: ModelRowChange) => void;
 }) {
+	const { t } = useI18n();
 	const selected = findModelOption(modelSections, modelId);
 	// Key off real model metadata — Haiku reports `effortLevels: []`, and
 	// the wire format may also drop the field entirely when empty. Either
@@ -720,7 +725,7 @@ function ModelSettingRow({
 		: FALLBACK_EFFORT_LEVELS;
 	const supportsFastMode = selected?.supportsFastMode === true;
 	const label =
-		selected?.label ?? (isLoadingModels ? "Loading…" : "Select model");
+		selected?.label ?? (isLoadingModels ? t("Loading…") : t("Select model"));
 	const displayEffort = effort ?? "high";
 
 	// Auto-clamp effort when model changes — but only after model metadata
@@ -735,7 +740,7 @@ function ModelSettingRow({
 	}, [selected, effort, effortLevels, onChange]);
 
 	return (
-		<SettingsRow title={title} description={description}>
+		<SettingsRow title={t(title)} description={t(description)}>
 			<div className="flex w-[360px] items-center gap-2">
 				<DropdownMenu>
 					<DropdownMenuTrigger

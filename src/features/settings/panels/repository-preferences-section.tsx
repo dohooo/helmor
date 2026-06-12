@@ -15,6 +15,7 @@ import {
 	type RepoPreferences,
 	updateRepoPreferences,
 } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import { helmorQueryKeys } from "@/lib/query-client";
 import {
 	REPO_PREFERENCE_DESCRIPTIONS,
@@ -60,10 +61,14 @@ export function RepositoryPreferencesSection({ repoId }: { repoId: string }) {
 		<>
 			<div className="py-5">
 				<div className="text-ui font-medium leading-snug text-foreground">
-					Preferences
+					<I18nText source={"Preferences"} />
 				</div>
 				<div className="mt-1 text-small leading-snug text-muted-foreground">
-					Repo-level built-in prompts used by Helmor actions and new chats.
+					<I18nText
+						source={
+							"Repo-level built-in prompts used by Helmor actions and new chats."
+						}
+					/>
 				</div>
 				<div className="mt-4 divide-y divide-app-border/20">
 					{PREFERENCE_KEYS.map((key) => {
@@ -120,7 +125,9 @@ export function RepositoryPreferencesSection({ repoId }: { repoId: string }) {
 												onClick={() => setPreviewKey(key)}
 											>
 												<Eye className="size-3.5" strokeWidth={1.8} />
-												<span>Preview</span>
+												<span>
+													<I18nText source={"Preview"} />
+												</span>
 											</button>
 											<Button
 												size="sm"

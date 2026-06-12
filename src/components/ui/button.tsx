@@ -2,6 +2,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { Slot } from "radix-ui";
 import type * as React from "react";
 
+import { useI18n, useLocalizedNode } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
@@ -45,21 +46,30 @@ function Button({
 	variant = "default",
 	size = "default",
 	asChild = false,
+	children,
+	"aria-label": ariaLabel,
+	title,
 	...props
 }: React.ComponentProps<"button"> &
 	VariantProps<typeof buttonVariants> & {
 		asChild?: boolean;
 	}) {
 	const Comp = asChild ? Slot.Root : "button";
+	const { t } = useI18n();
+	const localizedChildren = useLocalizedNode(children);
 
 	return (
 		<Comp
 			data-slot="button"
 			data-variant={variant}
 			data-size={size}
+			aria-label={typeof ariaLabel === "string" ? t(ariaLabel) : ariaLabel}
+			title={typeof title === "string" ? t(title) : title}
 			className={cn(buttonVariants({ variant, size, className }))}
 			{...props}
-		/>
+		>
+			{localizedChildren}
+		</Comp>
 	);
 }
 

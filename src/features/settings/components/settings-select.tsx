@@ -6,6 +6,7 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "@/components/ui/popover";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 /// Shared "value picker" used by settings rows. Mirrors the visual
@@ -42,7 +43,9 @@ export function SettingsSelect<V extends string>({
 	ariaLabel?: string;
 }) {
 	const [open, setOpen] = useState(false);
+	const { t } = useI18n();
 	const current = options.find((o) => o.value === value) ?? options[0];
+	const currentLabel = current ? t(current.label) : "";
 
 	return (
 		<Popover open={open} onOpenChange={setOpen}>
@@ -51,13 +54,13 @@ export function SettingsSelect<V extends string>({
 					type="button"
 					variant="outline"
 					disabled={disabled}
-					aria-label={ariaLabel}
+					aria-label={ariaLabel ? t(ariaLabel) : undefined}
 					className={cn(
 						"h-8 w-[180px] justify-between gap-2 px-2 text-ui font-normal",
 						triggerClassName,
 					)}
 				>
-					<span className="truncate">{current?.label}</span>
+					<span className="truncate">{currentLabel}</span>
 					<ChevronDown
 						className="size-3.5 shrink-0 text-muted-foreground"
 						strokeWidth={1.8}
@@ -90,7 +93,7 @@ export function SettingsSelect<V extends string>({
 									selected && "bg-accent/60",
 								)}
 							>
-								<span className="truncate">{opt.label}</span>
+								<span className="truncate">{t(opt.label)}</span>
 								{selected ? (
 									<Check
 										className="size-3.5 shrink-0 text-muted-foreground"

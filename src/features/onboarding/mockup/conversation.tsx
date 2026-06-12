@@ -7,6 +7,7 @@ import {
 	Zap,
 } from "lucide-react";
 import { ClaudeIcon, OpenAIIcon } from "@/components/icons";
+import { I18nText } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { type MockMessage, type MockSession, mockConversation } from "./data";
 import { AssistantTextUI } from "./ui/assistant-text.ui";
@@ -65,7 +66,8 @@ function MockTodoList({
 			<div className="mb-0.5 flex items-center gap-1.5 text-mini text-muted-foreground">
 				<ClipboardList className="size-3" strokeWidth={1.8} />
 				<span>
-					Plan - {completed}/{items.length} done
+					<I18nText source={"Plan -"} /> {completed}/{items.length}{" "}
+					<I18nText source={"done"} />
 				</span>
 			</div>
 			{items.map((todo, index) => (

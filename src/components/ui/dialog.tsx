@@ -2,6 +2,7 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { XIcon } from "lucide-react";
 import type * as React from "react";
 import { Button } from "@/components/ui/button";
+import { useLocalizedNode } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 function Dialog({
@@ -120,8 +121,10 @@ function DialogFooter({
 
 function DialogTitle({
 	className,
+	children,
 	...props
 }: React.ComponentProps<typeof DialogPrimitive.Title>) {
+	const localizedChildren = useLocalizedNode(children);
 	return (
 		<DialogPrimitive.Title
 			data-slot="dialog-title"
@@ -130,14 +133,18 @@ function DialogTitle({
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{localizedChildren}
+		</DialogPrimitive.Title>
 	);
 }
 
 function DialogDescription({
 	className,
+	children,
 	...props
 }: React.ComponentProps<typeof DialogPrimitive.Description>) {
+	const localizedChildren = useLocalizedNode(children);
 	return (
 		<DialogPrimitive.Description
 			data-slot="dialog-description"
@@ -146,7 +153,9 @@ function DialogDescription({
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{localizedChildren}
+		</DialogPrimitive.Description>
 	);
 }
 

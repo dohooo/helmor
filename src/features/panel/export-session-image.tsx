@@ -20,6 +20,7 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { loadSessionThreadMessages, type ThreadMessageLike } from "@/lib/api";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 import { MemoConversationMessage } from "./message-components";
@@ -78,6 +79,7 @@ export const ExportSessionImageButton = memo(function ExportSessionImageButton({
 });
 
 function ExportSessionImageDialogContent({ sessionId }: { sessionId: string }) {
+	const { t } = useI18n();
 	const pushToast = useWorkspaceToast();
 	// The main thread query is paginated (tail-only) for big-session
 	// switching speed, but the image export needs the entire history.
@@ -240,17 +242,19 @@ function ExportSessionImageDialogContent({ sessionId }: { sessionId: string }) {
 					{isLoading ? (
 						<div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-2 text-small text-muted-foreground">
 							<Loader2 className="size-4 animate-spin" strokeWidth={1.8} />
-							<span>Rendering snapshot…</span>
+							<span>
+								<I18nText source={"Rendering snapshot…"} />
+							</span>
 						</div>
 					) : status === "ready" && imageUrl ? (
 						<img
 							src={imageUrl}
-							alt="Session snapshot"
+							alt={t("Session snapshot")}
 							className="block h-auto w-full rounded-md"
 						/>
 					) : status === "error" ? (
 						<div className="flex h-full min-h-[200px] items-center justify-center text-small text-muted-foreground">
-							Failed to render snapshot.
+							<I18nText source={"Failed to render snapshot."} />
 						</div>
 					) : null}
 				</div>

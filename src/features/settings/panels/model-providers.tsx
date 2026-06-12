@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { I18nText } from "@/lib/i18n";
 import { isMac } from "@/lib/platform";
 import { openUrl } from "@/lib/platform-bridge";
 import { helmorQueryKeys } from "@/lib/query-client";
@@ -353,7 +354,7 @@ function ConfiguredProvidersList({
 	if (items.length === 0) {
 		return (
 			<div className="pt-1 text-small text-muted-foreground">
-				No third-party providers configured.
+				<I18nText source={"No third-party providers configured."} />
 			</div>
 		);
 	}

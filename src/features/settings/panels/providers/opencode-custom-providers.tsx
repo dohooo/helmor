@@ -27,6 +27,7 @@ import {
 	type OpencodeCustomProvider,
 	upsertOpencodeCustomProvider,
 } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
@@ -455,7 +456,9 @@ function ApiStyleSelect({
 			<DropdownMenu>
 				<DropdownMenuTrigger className="flex h-8 cursor-interactive items-center justify-between rounded-lg border border-border/50 bg-muted/20 px-3 text-ui text-foreground hover:bg-muted/40">
 					<span className="flex min-w-0 items-center gap-2">
-						<span className="text-muted-foreground">API style</span>
+						<span className="text-muted-foreground">
+							<I18nText source={"API style"} />
+						</span>
 						<span className="truncate">{current.label}</span>
 					</span>
 					<ChevronDown className="size-3 shrink-0 opacity-40" />
@@ -498,11 +501,13 @@ function ModelsEditor({
 	return (
 		<div className="flex flex-col gap-2 rounded-lg border border-border/40 p-2">
 			<div className="px-1 text-mini font-medium text-muted-foreground">
-				Models
+				<I18nText source={"Models"} />
 			</div>
 			{models.length === 0 ? (
 				<div className="px-1 pb-1 text-small text-muted-foreground">
-					No models yet — add the model ids your endpoint serves.
+					<I18nText
+						source={"No models yet — add the model ids your endpoint serves."}
+					/>
 				</div>
 			) : null}
 			{models.map((model, index) => (
@@ -586,7 +591,7 @@ function ConfiguredList({
 	if (providers.length === 0) {
 		return (
 			<div className="text-small text-muted-foreground">
-				No custom providers configured.
+				<I18nText source={"No custom providers configured."} />
 			</div>
 		);
 	}

@@ -49,6 +49,7 @@ import {
 	CommandList,
 } from "@/components/ui/command";
 import type { SlashCommandEntry } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 class SlashCommandOption extends MenuOption {
@@ -238,7 +239,9 @@ export function SlashCommandPlugin({
 						stateRow = (
 							<div className="flex items-center gap-2 px-3 py-2 text-ui text-muted-foreground">
 								<Loader2 className="size-3.5 shrink-0 animate-spin" />
-								<span>Loading commands…</span>
+								<span>
+									<I18nText source={"Loading commands…"} />
+								</span>
 							</div>
 						);
 					} else if (isError) {

@@ -7,6 +7,7 @@ import {
 	DialogDescription,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { useI18n, useLocalizedNode } from "@/lib/i18n";
 
 export function ConfirmDialog({
 	open,
@@ -27,15 +28,17 @@ export function ConfirmDialog({
 	onConfirm: () => void;
 	loading?: boolean;
 }) {
+	const { t } = useI18n();
+	const localizedDescription = useLocalizedNode(description);
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent
 				className="max-w-[320px] gap-0 p-4"
 				showCloseButton={false}
 			>
-				<DialogTitle className="text-ui font-semibold">{title}</DialogTitle>
+				<DialogTitle className="text-ui font-semibold">{t(title)}</DialogTitle>
 				<DialogDescription className="mt-1.5 text-small leading-relaxed text-muted-foreground">
-					{description}
+					{localizedDescription}
 				</DialogDescription>
 				<div className="mt-3 flex justify-end gap-2">
 					<Button
@@ -44,7 +47,7 @@ export function ConfirmDialog({
 						onClick={() => onOpenChange(false)}
 						disabled={loading}
 					>
-						{cancelLabel}
+						{t(cancelLabel)}
 					</Button>
 					<Button
 						variant="destructive"
@@ -53,7 +56,7 @@ export function ConfirmDialog({
 						disabled={loading}
 					>
 						{loading ? <Loader2 className="size-3.5 animate-spin" /> : null}
-						{confirmLabel}
+						{t(confirmLabel)}
 					</Button>
 				</div>
 			</DialogContent>

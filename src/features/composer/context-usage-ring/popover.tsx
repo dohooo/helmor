@@ -1,4 +1,5 @@
 import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator";
+import { I18nText } from "@/lib/i18n";
 import type { DisplayResolution } from "./parse";
 import {
 	AutoCompactNote,
@@ -56,7 +57,9 @@ export function ContextUsagePopoverContent({
 			{richLoading && !showCategories ? (
 				<div className="flex items-center gap-2 text-mini text-muted-foreground">
 					<HelmorThinkingIndicator size={12} />
-					<span>Loading context details…</span>
+					<span>
+						<I18nText source={"Loading context details…"} />
+					</span>
 				</div>
 			) : null}
 		</div>

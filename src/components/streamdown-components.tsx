@@ -49,6 +49,7 @@ import {
 import { useFileLinkContext } from "@/features/panel/message-components/file-link-context";
 import { saveTextFileAs } from "@/lib/api";
 import { isPathWithinRoot } from "@/lib/editor-session";
+import { useI18n } from "@/lib/i18n";
 import { convertFileSrc } from "@/lib/ipc";
 import { parseLocalFileLink } from "@/lib/local-file-link";
 import { openUrl } from "@/lib/platform-bridge";
@@ -73,6 +74,7 @@ import { cn } from "@/lib/utils";
  * Tauri command.
  */
 function TableDownloadMenu() {
+	const { t } = useI18n();
 	const triggerRef = useRef<HTMLButtonElement>(null);
 
 	const downloadAs = async (format: "csv" | "markdown") => {
@@ -125,7 +127,7 @@ function TableDownloadMenu() {
 					ref={triggerRef}
 					type="button"
 					className="cursor-interactive p-1 text-muted-foreground transition-all hover:text-foreground"
-					title="Download table"
+					title={t("Download table")}
 				>
 					<DownloadIcon size={14} />
 				</button>

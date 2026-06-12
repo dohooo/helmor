@@ -1,5 +1,6 @@
 import { Pickaxe } from "lucide-react";
 import { SourceIcon } from "@/features/inbox/source-icon";
+import { I18nText } from "@/lib/i18n";
 import type { SourceDetailProps } from "./common";
 
 export function UnsupportedSourceView({ card }: SourceDetailProps) {
@@ -10,10 +11,14 @@ export function UnsupportedSourceView({ card }: SourceDetailProps) {
 			</div>
 			<div className="flex items-center gap-2 text-ui font-medium text-foreground">
 				<Pickaxe className="size-3.5 text-muted-foreground" strokeWidth={2} />
-				Coming Soon
+				<I18nText source={"Coming Soon"} />
 			</div>
 			<p className="max-w-sm text-small leading-5 text-muted-foreground">
-				This provider is not enabled in the first GitHub-focused inbox release.
+				<I18nText
+					source={
+						"This provider is not enabled in the first GitHub-focused inbox release."
+					}
+				/>
 			</p>
 		</div>
 	);

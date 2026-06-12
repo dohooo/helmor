@@ -1,4 +1,5 @@
 import { HelmorLogoAnimated } from "@/components/helmor-logo-animated";
+import { I18nText } from "@/lib/i18n";
 
 /**
  * Shown in the companion browser when this client has no valid pairing token
@@ -14,24 +15,32 @@ export function CompanionPairingScreen() {
 				<HelmorLogoAnimated size={56} className="opacity-90" />
 				<div className="flex flex-col gap-2">
 					<h1 className="font-semibold text-foreground text-heading">
-						Pair this browser
+						<I18nText source={"Pair this browser"} />
 					</h1>
 					<p className="text-muted-foreground text-body">
-						This browser isn’t connected to your Helmor desktop yet.
+						<I18nText
+							source={
+								"This browser isn’t connected to your Helmor desktop yet."
+							}
+						/>
 					</p>
 				</div>
 				<ol className="flex w-full flex-col gap-3 text-left text-muted-foreground text-body">
 					<li>
-						<span className="font-medium text-foreground">1.</span> On the
-						computer running Helmor, open{" "}
+						<span className="font-medium text-foreground">1.</span>{" "}
+						<I18nText source={"On the computer running Helmor, open"} />{" "}
 						<span className="font-medium text-foreground">
-							Settings → Mobile companion
+							<I18nText source={"Settings → Mobile companion"} />
 						</span>
 						.
 					</li>
 					<li>
-						<span className="font-medium text-foreground">2.</span> Scan the QR
-						code with this device, or open the pairing link in this browser.
+						<span className="font-medium text-foreground">2.</span>{" "}
+						<I18nText
+							source={
+								"Scan the QR code with this device, or open the pairing link in this browser."
+							}
+						/>
 					</li>
 				</ol>
 			</div>

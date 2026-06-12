@@ -16,9 +16,11 @@ import {
 	listConductorWorkspaces,
 	loadAddRepositoryDefaults,
 } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import { describeUnknownError } from "@/lib/workspace-helpers";
 import { buildAgentLoginItems } from "./agent-login-state";
 import { IntroPreview } from "./components/intro-preview";
+import { OnboardingLanguageMenu } from "./components/language-menu";
 import { AgentLoginStep } from "./steps/agent-login-step";
 import { RepoImportStep } from "./steps/repo-import-step";
 import { RepositoryCliStep } from "./steps/repository-cli-step";
@@ -39,6 +41,7 @@ function queueWindowMode(run: () => Promise<unknown>): Promise<unknown> {
 }
 
 export function AppOnboarding({ onComplete }: AppOnboardingProps) {
+	const { t } = useI18n();
 	const [step, setStep] = useState<OnboardingStep>("intro");
 	const [loginItems, setLoginItems] = useState(() => buildAgentLoginItems());
 	const [isRoutingImport, setIsRoutingImport] = useState(false);
@@ -274,15 +277,18 @@ export function AppOnboarding({ onComplete }: AppOnboardingProps) {
 
 	return (
 		<main
-			aria-label="Helmor onboarding"
+			aria-label={t("Helmor onboarding")}
 			className="relative h-dvh overflow-hidden bg-background font-sans text-foreground antialiased"
 		>
 			<div
-				aria-label="Helmor onboarding drag region"
+				aria-label={t("Helmor onboarding drag region")}
 				className="absolute inset-x-0 top-0 z-20 flex h-11 items-center"
 			>
 				<TrafficLightSpacer side="left" width={94} />
 				<div data-tauri-drag-region className="h-full flex-1" />
+				<div className="flex h-full items-center pr-3">
+					<OnboardingLanguageMenu />
+				</div>
 				<TrafficLightSpacer side="right" width={140} />
 			</div>
 

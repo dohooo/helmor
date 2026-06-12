@@ -1,4 +1,6 @@
 import { CheckIcon } from "lucide-react";
+import type { ReactNode } from "react";
+import { useI18n, useLocalizedNode } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { ActionStatusKind } from "./shared";
 
@@ -12,10 +14,11 @@ export function InspectorStatusIconUI({
 }: {
 	status: ActionStatusKind;
 }) {
+	const { t } = useI18n();
 	if (status === "success") {
 		return (
 			<CheckIcon
-				aria-label="Passed"
+				aria-label={t("Passed")}
 				className="size-3 shrink-0 text-chart-2"
 				strokeWidth={2.2}
 			/>
@@ -23,10 +26,10 @@ export function InspectorStatusIconUI({
 	}
 	const label =
 		status === "running"
-			? "Running"
+			? t("Running")
 			: status === "failure"
-				? "Failed"
-				: "Pending";
+				? t("Failed")
+				: t("Pending");
 	const color =
 		status === "running"
 			? "rgb(245, 158, 11)"
@@ -65,17 +68,18 @@ export function InspectorActionRowUI({
 	actionLabel?: string;
 	onActionClick?: () => void;
 }) {
+	const { t } = useI18n();
 	return (
 		<div className="flex items-center gap-1.5 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
 			<InspectorStatusIconUI status={status} />
-			<span className="truncate">{label}</span>
+			<span className="truncate">{t(label)}</span>
 			{actionLabel ? (
 				<button
 					type="button"
 					onClick={onActionClick}
 					className="ml-auto shrink-0 cursor-interactive text-micro text-primary transition-colors hover:text-primary/80"
 				>
-					{actionLabel}
+					{t(actionLabel)}
 				</button>
 			) : null}
 		</div>
@@ -86,12 +90,13 @@ export function InspectorActionRowUI({
 export function InspectorActionGroupTitleUI({
 	children,
 }: {
-	children: string;
+	children: ReactNode;
 }) {
+	const localizedChildren = useLocalizedNode(children);
 	return (
 		<div className="px-2.5 pb-1 pt-2.5">
 			<span className="text-micro font-medium tracking-wide text-muted-foreground">
-				{children}
+				{localizedChildren}
 			</span>
 		</div>
 	);

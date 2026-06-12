@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { cleanupArchivedWorkspaces } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import { archivedWorkspacesQueryOptions } from "@/lib/query-client";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import { SettingsRow } from "../components/settings-row";
@@ -19,10 +20,13 @@ import { SettingsRow } from "../components/settings-row";
  * the outcome (including partial failures) lands as a toast.
  */
 export function ArchiveCleanupPanel() {
+	const { f, t } = useI18n();
 	const queryClient = useQueryClient();
 	const [confirmOpen, setConfirmOpen] = useState(false);
-	const archivedQuery = useQuery(archivedWorkspacesQueryOptions());
-	const archivedCount = archivedQuery.data?.length ?? 0;
+	const { data: archivedWorkspaces = [] } = useQuery(
+		archivedWorkspacesQueryOptions(),
+	);
+	const archivedCount = archivedWorkspaces.length;
 
 	const cleanup = useMutation({
 		mutationFn: cleanupArchivedWorkspaces,
@@ -30,17 +34,25 @@ export function ArchiveCleanupPanel() {
 			if (result.failures.length === 0) {
 				toast.success(
 					result.deletedCount === 0
-						? "No archived workspaces to clean up"
-						: `Cleaned up ${result.deletedCount} archived workspace${
-								result.deletedCount === 1 ? "" : "s"
-							}`,
+						? t("No archived workspaces to clean up")
+						: f("Cleaned up {count} archived {workspaceLabel}", {
+								count: result.deletedCount,
+								workspaceLabel:
+									result.deletedCount === 1 ? "workspace" : "workspaces",
+							}),
 				);
 				return;
 			}
 			toast.error(
-				`Cleaned up ${result.deletedCount}, but ${result.failures.length} workspace${
-					result.failures.length === 1 ? "" : "s"
-				} could not be deleted`,
+				f(
+					"Cleaned up {deletedCount}, but {failureCount} {workspaceLabel} could not be deleted",
+					{
+						deletedCount: result.deletedCount,
+						failureCount: result.failures.length,
+						workspaceLabel:
+							result.failures.length === 1 ? "workspace" : "workspaces",
+					},
+				),
 				{
 					description: result.failures
 						.map((failure) =>
@@ -53,7 +65,7 @@ export function ArchiveCleanupPanel() {
 			);
 		},
 		onError: (error) => {
-			toast.error("Archive cleanup failed", {
+			toast.error(t("Archive cleanup failed"), {
 				description: error instanceof Error ? error.message : String(error),
 			});
 		},
@@ -69,9 +81,14 @@ export function ArchiveCleanupPanel() {
 			description={
 				archivedCount === 0
 					? "No archived workspaces."
-					: `Permanently delete all ${archivedCount} archived workspace${
-							archivedCount === 1 ? "" : "s"
-						}, including their sessions and chat history.`
+					: f(
+							"Permanently delete all {count} archived {workspaceLabel}, including their sessions and chat history.",
+							{
+								count: archivedCount,
+								workspaceLabel:
+									archivedCount === 1 ? "workspace" : "workspaces",
+							},
+						)
 			}
 		>
 			<Button
@@ -97,9 +114,13 @@ export function ArchiveCleanupPanel() {
 					}
 				}}
 				title="Clean up archived workspaces?"
-				description={`This will permanently delete all ${archivedCount} archived workspace${
-					archivedCount === 1 ? "" : "s"
-				}, including their sessions and chat history. This cannot be undone.`}
+				description={f(
+					"This will permanently delete all {count} archived {workspaceLabel}, including their sessions and chat history. This cannot be undone.",
+					{
+						count: archivedCount,
+						workspaceLabel: archivedCount === 1 ? "workspace" : "workspaces",
+					},
+				)}
 				confirmLabel="Delete All"
 				onConfirm={() => cleanup.mutate()}
 				loading={cleanup.isPending}

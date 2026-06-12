@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { PendingUserInput } from "@/features/conversation/pending-user-input";
+import { I18nText } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
 import { cn } from "@/lib/utils";
 import type {
@@ -679,15 +680,18 @@ function UrlElicitationPanel({
 			<div className="grid gap-2 px-1 pb-2">
 				<div className="rounded-lg bg-accent/35 px-3 py-2">
 					<p className="text-mini uppercase tracking-[0.08em] text-muted-foreground">
-						Target URL
+						<I18nText source={"Target URL"} />
 					</p>
 					<p className="mt-1 break-all text-small leading-5 text-foreground">
 						{viewModel.url}
 					</p>
 				</div>
 				<div className="rounded-lg border border-border/40 bg-background/60 px-3 py-2 text-small leading-5 text-muted-foreground">
-					Only continue if you trust this MCP server and understand why it needs
-					an external URL.
+					<I18nText
+						source={
+							"Only continue if you trust this MCP server and understand why it needs an external URL."
+						}
+					/>
 				</div>
 			</div>
 

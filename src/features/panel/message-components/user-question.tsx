@@ -7,6 +7,7 @@ import {
 	X,
 } from "lucide-react";
 import type { UserQuestionItem, UserQuestionPart } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const STATUS_META: Record<
@@ -135,7 +136,9 @@ export function UserQuestionCard({ part }: { part: UserQuestionPart }) {
 		<div className="my-1 flex flex-col gap-2 rounded-xl border-[1.5px] border-border/70 bg-background/60 px-3.5 py-3">
 			<div className="flex items-center gap-1.5 text-mini font-medium uppercase tracking-[0.06em] text-muted-foreground">
 				<MessageSquareMore className="size-3.5" strokeWidth={1.8} />
-				<span>Question</span>
+				<span>
+					<I18nText source={"Question"} />
+				</span>
 				{part.source ? (
 					<span className="rounded-full bg-muted px-1.5 py-px font-medium normal-case tracking-normal text-muted-foreground">
 						{part.source}

@@ -1,6 +1,7 @@
 import { Play, Sparkles, X } from "lucide-react";
 
 import { ActionRow, ActionRowButton } from "@/components/action-row";
+import { I18nText } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 type TriageQuickActionsProps = {
@@ -29,7 +30,9 @@ export function TriageQuickActions({
 						aria-hidden="true"
 					/>
 					<span className="truncate text-small font-medium tracking-[0.01em] text-muted-foreground">
-						AI proposed this task — start to engage or dismiss.
+						<I18nText
+							source={"AI proposed this task — start to engage or dismiss."}
+						/>
 					</span>
 				</>
 			}

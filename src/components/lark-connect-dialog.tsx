@@ -22,6 +22,7 @@ import {
 	type TriageSourceHealth,
 	writeLarkCliAuthTerminalStdin,
 } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const POST_CLOSE_POLL_TIMEOUT_MS = 8000;
@@ -182,7 +183,9 @@ export function LarkConnectDialog({
 				<header className="flex h-10 items-center gap-2 border-b border-border/55 px-3">
 					<div className="flex items-center gap-1.5 text-small font-medium text-foreground">
 						<LarkBrandIcon size={12} />
-						<span>Connect Lark</span>
+						<span>
+							<I18nText source={"Connect Lark"} />
+						</span>
 						<span className="ml-1 text-muted-foreground/80">
 							· {titleSuffix}
 						</span>

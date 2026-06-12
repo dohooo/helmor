@@ -34,6 +34,7 @@ import {
 	parseForgeRepoFilter,
 	parseForgeRepoHost,
 } from "@/lib/forge-repo-filter";
+import { I18nText, useI18n } from "@/lib/i18n";
 import {
 	forgeLabelsQueryOptions,
 	inboxKindLabelsQueryOptions,
@@ -227,6 +228,7 @@ export function InboxSettingsPanel({
 }) {
 	const accountsQuery = useForgeAccountsAll();
 	const { settings, updateSettings } = useSettings();
+	const { f } = useI18n();
 	const [activeProvider, setActiveProvider] = useState<ContextProviderTab>(
 		initialProvider ?? "github",
 	);
@@ -420,11 +422,13 @@ export function InboxSettingsPanel({
 						)}
 					</div>
 					<div className="text-ui font-medium text-foreground">
-						Connect a {activeForgeLabels?.providerName} account
+						<I18nText source={"Connect a"} /> {activeForgeLabels?.providerName}{" "}
+						<I18nText source={"account"} />
 					</div>
 					<div className="max-w-[360px] text-small leading-5 text-muted-foreground">
-						You need at least one {activeForgeLabels?.providerName} account
-						before Contexts can pull{" "}
+						<I18nText source={"You need at least one"} />{" "}
+						{activeForgeLabels?.providerName}{" "}
+						<I18nText source={"account before Contexts can pull"} />{" "}
 						{joinSingularsAsList(
 							kindLabels.map((entry) => `${entry.singular}s`),
 						)}
@@ -458,13 +462,22 @@ export function InboxSettingsPanel({
 								<ContextKindSection
 									title={issueLabels.plural}
 									icon={<CircleDot className="size-3" strokeWidth={2} />}
-									description={`Surface ${issueLabels.plural.toLowerCase()} you're assigned to or have opened.`}
+									description={f(
+										"Surface {kind} you're assigned to or have opened.",
+										{ kind: issueLabels.plural.toLowerCase() },
+									)}
 									enabled={currentRepoConfig.issues}
 									onEnabledChange={(next) => setToggle("issues", next)}
 								>
 									<ContextConfigRow
 										title="Scope"
-										description={`Which ${issueLabels.singular} relationship ${activeForgeLabels?.providerName} should use by default.`}
+										description={f(
+											"Which {kind} relationship {provider} should use by default.",
+											{
+												kind: issueLabels.singular,
+												provider: activeForgeLabels?.providerName ?? "",
+											},
+										)}
 									>
 										<ScopeMultiSelect
 											value={currentRepoConfig.issueScopes}
@@ -488,7 +501,10 @@ export function InboxSettingsPanel({
 									</ContextConfigRow>
 									<ContextConfigRow
 										title="Labels"
-										description={`Only include ${issueLabels.plural.toLowerCase()} with selected repository labels.`}
+										description={f(
+											"Only include {kind} with selected repository labels.",
+											{ kind: issueLabels.plural.toLowerCase() },
+										)}
 									>
 										<LabelMultiSelect
 											value={splitLabels(currentRepoConfig.issueLabels)}
@@ -505,13 +521,22 @@ export function InboxSettingsPanel({
 								<ContextKindSection
 									title={prLabels.plural}
 									icon={<GitPullRequest className="size-3" strokeWidth={2} />}
-									description={`Surface ${prLabels.plural.toLowerCase()} you opened or are assigned to.`}
+									description={f(
+										"Surface {kind} you opened or are assigned to.",
+										{ kind: prLabels.plural.toLowerCase() },
+									)}
 									enabled={currentRepoConfig.prs}
 									onEnabledChange={(next) => setToggle("prs", next)}
 								>
 									<ContextConfigRow
 										title="Scope"
-										description={`Which ${prLabels.singular} relationship ${activeForgeLabels?.providerName} should use by default.`}
+										description={f(
+											"Which {kind} relationship {provider} should use by default.",
+											{
+												kind: prLabels.singular,
+												provider: activeForgeLabels?.providerName ?? "",
+											},
+										)}
 									>
 										<ScopeMultiSelect
 											value={currentRepoConfig.prScopes}
@@ -525,7 +550,9 @@ export function InboxSettingsPanel({
 									</ContextConfigRow>
 									<ContextConfigRow
 										title="Drafts"
-										description={`Whether draft ${prLabels.plural.toLowerCase()} appear in the feed.`}
+										description={f("Whether draft {kind} appear in the feed.", {
+											kind: prLabels.plural.toLowerCase(),
+										})}
 									>
 										<SettingsSelect
 											value={currentRepoConfig.draftPrs}
@@ -545,7 +572,10 @@ export function InboxSettingsPanel({
 									</ContextConfigRow>
 									<ContextConfigRow
 										title="Labels"
-										description={`Only include ${prLabels.plural.toLowerCase()} with selected repository labels.`}
+										description={f(
+											"Only include {kind} with selected repository labels.",
+											{ kind: prLabels.plural.toLowerCase() },
+										)}
 									>
 										<LabelMultiSelect
 											value={splitLabels(currentRepoConfig.prLabels)}
@@ -562,7 +592,10 @@ export function InboxSettingsPanel({
 								<ContextKindSection
 									title={discussionLabels.plural}
 									icon={<MessagesSquare className="size-3" strokeWidth={2} />}
-									description={`Surface ${discussionLabels.plural.toLowerCase()} in repos you have access to.`}
+									description={f(
+										"Surface {kind} in repos you have access to.",
+										{ kind: discussionLabels.plural.toLowerCase() },
+									)}
 									enabled={currentRepoConfig.discussions}
 									onEnabledChange={(next) => setToggle("discussions", next)}
 								>
@@ -581,8 +614,9 @@ export function InboxSettingsPanel({
 						</div>
 					) : (
 						<div className="py-8 text-center text-small text-muted-foreground">
-							Add or connect a {activeForgeLabels?.providerName} repository
-							before configuring Contexts.
+							<I18nText source={"Add or connect a"} />{" "}
+							{activeForgeLabels?.providerName}{" "}
+							<I18nText source={"repository before configuring Contexts."} />
 						</div>
 					)}
 				</SettingsGroup>
@@ -629,7 +663,9 @@ function ProviderComingSoon({ provider }: { provider: ComingSoonProvider }) {
 						className="inbox-coming-soon-pickaxe size-3.5 shrink-0"
 						strokeWidth={2}
 					/>
-					<span className="text-ui font-medium">Coming Soon</span>
+					<span className="text-ui font-medium">
+						<I18nText source={"Coming Soon"} />
+					</span>
 				</div>
 				<div className="my-7 flex items-center gap-2 px-2">
 					<div className="h-px flex-1 bg-border" />
@@ -654,6 +690,7 @@ function ProviderComingSoon({ provider }: { provider: ComingSoonProvider }) {
  *  success otherwise. Reuses `<SlackConnectState>` so the import
  *  affordance is identical on both surfaces. */
 function SlackSettingsPanel() {
+	const { f } = useI18n();
 	const workspacesQuery = useSlackWorkspaces();
 	const connectedCount = workspacesQuery.data?.length ?? 0;
 	if (connectedCount === 0) {
@@ -666,8 +703,14 @@ function SlackSettingsPanel() {
 		<div className="flex min-h-[360px] w-full items-center justify-center px-6 text-center">
 			<p className="text-small text-muted-foreground/65">
 				{connectedCount === 1
-					? "Slack is connected. Open the Context sidebar to browse your feed."
-					: `${connectedCount} Slack workspaces connected. Open the Context sidebar to browse your feed.`}
+					? f(
+							"{count} Slack workspace connected. Open the Context sidebar to browse your feed.",
+							{ count: connectedCount },
+						)
+					: f(
+							"{count} Slack workspaces connected. Open the Context sidebar to browse your feed.",
+							{ count: connectedCount },
+						)}
 			</p>
 		</div>
 	);

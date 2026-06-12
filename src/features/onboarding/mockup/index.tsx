@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
+import { useI18n } from "@/lib/i18n";
 import { MockConversation } from "./conversation";
 import { MockInspector } from "./inspector";
 import { MockSidebar } from "./sidebar";
@@ -33,6 +34,7 @@ export function HelmorOnboardingMockup({
 	gitHeaderSpotlight?: boolean;
 	cliSplitSpotlight?: boolean;
 } = {}) {
+	const { t } = useI18n();
 	const spotlightActive =
 		providerSpotlight || gitHeaderSpotlight || cliSplitSpotlight;
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -54,7 +56,7 @@ export function HelmorOnboardingMockup({
 	return (
 		<div
 			ref={containerRef}
-			aria-label="Helmor workspace preview"
+			aria-label={t("Helmor workspace preview")}
 			className={`aspect-[1300/900] w-full overflow-hidden text-foreground transition-colors duration-1000 ${
 				spotlightActive ? "bg-black/42" : "bg-background"
 			}`}

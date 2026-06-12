@@ -1,9 +1,9 @@
 import { Send } from "lucide-react";
 import { useEffect, useMemo } from "react";
-
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import type { ExistingHelmorRepo } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 
 import { buildPromptTemplate } from "./helpers";
 
@@ -39,8 +39,15 @@ export function StepPrompt({
 	return (
 		<div className="flex flex-col gap-3">
 			<p className="text-small leading-snug text-muted-foreground">
-				Tweak this if you want — it's what the agent starts with.
-				{existing ? " Reusing your local helmor repo." : null}
+				<I18nText
+					source={"Tweak this if you want — it's what the agent starts with."}
+				/>
+				{existing ? (
+					<>
+						{" "}
+						<I18nText source={"Reusing your local Helmor repo."} />
+					</>
+				) : null}
 			</p>
 
 			<Textarea

@@ -4,6 +4,7 @@ import {
 	LarkBrandIcon,
 	SlackBrandIcon,
 } from "@/components/brand-icon";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 /** Brand glyph + label for each triage source platform. Keyed by the
@@ -41,6 +42,7 @@ export function TriageSourceBadge({
 	sourceType: string | null | undefined;
 	className?: string;
 }) {
+	const { f } = useI18n();
 	const meta = triageSourceMeta(sourceType);
 	if (!meta) {
 		return null;
@@ -48,7 +50,9 @@ export function TriageSourceBadge({
 	const { label, Icon } = meta;
 	return (
 		<span
-			aria-label={`AI proposal from ${label} — open to review`}
+			aria-label={f("AI proposal from {source} — open to review", {
+				source: label,
+			})}
 			className={cn(
 				"pointer-events-none absolute -right-1 -bottom-1 z-10 grid size-3 place-items-center rounded-full bg-sidebar ring-1 ring-sidebar",
 				className,

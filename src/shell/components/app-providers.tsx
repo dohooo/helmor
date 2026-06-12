@@ -6,6 +6,7 @@ import { SplashScreen } from "@/components/splash-screen";
 import { AppOnboarding } from "@/features/onboarding";
 import type { SettingsSection } from "@/features/settings";
 import { SettingsDialog } from "@/features/settings";
+import { I18nText } from "@/lib/i18n";
 import { getPendingPairingToken } from "@/lib/ipc";
 import { helmorQueryPersister, QUERY_CACHE_BUSTER } from "@/lib/query-client";
 import { SettingsContext } from "@/lib/settings";
@@ -89,7 +90,9 @@ export function AppProviders({
 						// The onboarding flow belongs to the main window; the panel
 						// summoned mid-onboarding just points the user there.
 						<div className="flex h-dvh items-center justify-center bg-background p-6 text-center text-ui text-muted-foreground">
-							Finish setting up Helmor in the main window first.
+							<I18nText
+								source={"Finish setting up Helmor in the main window first."}
+							/>
 						</div>
 					) : (
 						<>

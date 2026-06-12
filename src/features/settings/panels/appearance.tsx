@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { APP_LANGUAGE_OPTIONS, type AppLanguage } from "@/lib/i18n/types";
 import {
 	type AppSettings,
 	type ColorTheme,
@@ -18,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { FontPicker } from "../components/font-picker";
 import { FontSizeStepper } from "../components/font-size-stepper";
 import { SettingsGroup, SettingsRow } from "../components/settings-row";
+import { SettingsSelect } from "../components/settings-select";
 
 type ColorThemeOption = {
 	id: ColorTheme;
@@ -253,6 +255,15 @@ export function AppearancePanel({
 
 	return (
 		<SettingsGroup>
+			<SettingsRow title="Language" description="Choose the interface language">
+				<SettingsSelect<AppLanguage>
+					value={settings.language}
+					options={APP_LANGUAGE_OPTIONS}
+					onChange={(next) => updateSettings({ language: next })}
+					ariaLabel="Language"
+				/>
+			</SettingsRow>
+
 			{/* ── Mode ─────────────────────────────────────────────────────── */}
 			<SettingsRow
 				title="Theme"

@@ -6,6 +6,7 @@ import {
 	TerminalOutput,
 } from "@/components/terminal-output";
 import { Button } from "@/components/ui/button";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
@@ -43,6 +44,7 @@ export function SetupTab({
 	isActive,
 	onOpenSettings,
 }: SetupTabProps) {
+	const { t } = useI18n();
 	const termRef = useRef<TerminalHandle | null>(null);
 	const [status, setStatus] = useState<ScriptStatus>("idle");
 	const [hasRun, setHasRun] = useState(false);
@@ -205,10 +207,14 @@ export function SetupTab({
 			) : !hasScript ? (
 				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
 					<p className="text-ui font-medium text-muted-foreground">
-						No setup script configured
+						<I18nText source={"No setup script configured"} />
 					</p>
 					<p className="text-small text-muted-foreground/70">
-						Add a setup script in repository settings to run it here.
+						<I18nText
+							source={
+								"Add a setup script in repository settings to run it here."
+							}
+						/>
 					</p>
 					<Button
 						variant="outline"
@@ -223,12 +229,12 @@ export function SetupTab({
 			) : setupCompletedAt ? (
 				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
 					<CircleCheck
-						aria-label="Setup completed"
+						aria-label={t("Setup completed")}
 						className="size-8 text-[var(--workspace-pr-open-accent)]"
 						strokeWidth={1.75}
 					/>
 					<p className="text-ui font-medium text-muted-foreground">
-						Setup completed
+						<I18nText source={"Setup completed"} />
 					</p>
 					<Button
 						variant="outline"
@@ -243,10 +249,14 @@ export function SetupTab({
 			) : (
 				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
 					<p className="text-ui text-muted-foreground">
-						No setup script output
+						<I18nText source={"No setup script output"} />
 					</p>
 					<p className="text-small text-muted-foreground/70">
-						Setup script output will appear here after running setup.
+						<I18nText
+							source={
+								"Setup script output will appear here after running setup."
+							}
+						/>
 					</p>
 					<Button
 						variant="outline"

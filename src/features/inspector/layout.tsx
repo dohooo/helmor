@@ -33,6 +33,7 @@ import type { WorkspaceCommitButtonMode } from "@/features/commit/button";
 import { getShortcut } from "@/features/shortcuts/registry";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import type { RunAction } from "@/lib/api";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import type { ScriptIconState } from "./hooks/use-script-status";
@@ -292,6 +293,7 @@ export function InspectorTabsSection({
 	canHoverExpand,
 	children,
 }: InspectorTabsSectionProps) {
+	const { t } = useI18n();
 	const { settings } = useSettings();
 	const newTerminalShortcut = getShortcut(settings.shortcuts, "terminal.new");
 
@@ -432,7 +434,7 @@ export function InspectorTabsSection({
 				}}
 			>
 				<section
-					aria-label="Inspector section Tabs"
+					aria-label={t("Inspector section Tabs")}
 					// Whole scripts-area belongs to terminal scope so Mod+T from
 					// Run output spawns a terminal instead of a chat session.
 					data-focus-scope="terminal"
@@ -487,7 +489,7 @@ export function InspectorTabsSection({
 									onClick={() => handleTabClick("setup")}
 								>
 									<ScriptStatusIcon state={setupScriptState} />
-									Setup
+									<I18nText source={"Setup"} />
 									<span
 										aria-hidden="true"
 										className={cn(
@@ -567,7 +569,7 @@ export function InspectorTabsSection({
 											"shrink-0 disabled:cursor-not-allowed disabled:opacity-50",
 										)}
 									>
-										Terminal
+										<I18nText source={"Terminal"} />
 									</button>
 								) : (
 									terminalInstances.map((instance, index) => {
@@ -680,7 +682,7 @@ export function InspectorTabsSection({
 									<TooltipTrigger asChild>
 										<button
 											type="button"
-											aria-label="New terminal"
+											aria-label={t("New terminal")}
 											onClick={handleNewTerminalClick}
 											disabled={!canSpawnTerminal}
 											className="ml-1 flex h-full w-6 shrink-0 cursor-interactive items-center justify-center self-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
@@ -729,7 +731,7 @@ export function InspectorTabsSection({
 
 						{open && (
 							<div
-								aria-label="Inspector tabs body"
+								aria-label={t("Inspector tabs body")}
 								onMouseEnter={handleBodyMouseEnter}
 								onMouseDown={handleBodyMouseDown}
 								className="relative flex min-h-0 flex-1 flex-col bg-inspector"
@@ -821,6 +823,7 @@ function RunActionsDropdown({
 	 * toggle rather than being auto-closed by Radix mid-toggle. */
 	labelRef: RefObject<HTMLButtonElement | null>;
 }) {
+	const { t } = useI18n();
 	// Resolve which radio value should be checked. Falls back to the first
 	// action when the persisted id is missing or stale (recently deleted).
 	const resolvedActiveId =
@@ -832,7 +835,7 @@ function RunActionsDropdown({
 			<DropdownMenuTrigger asChild>
 				<button
 					type="button"
-					aria-label="Switch run action"
+					aria-label={t("Switch run action")}
 					// Sit visually adjacent to the Run tab without claiming
 					// tab semantics — pure menu trigger. Pull a hair to the
 					// left so it nests against the label.

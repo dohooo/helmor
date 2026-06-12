@@ -34,6 +34,7 @@ import type {
 	ComposerCustomTag,
 	ResolvedComposerInsertRequest,
 } from "@/lib/composer-insert";
+import { I18nText } from "@/lib/i18n";
 import {
 	agentModelSectionsQueryOptions,
 	autoCloseActionKindsQueryOptions,
@@ -1211,7 +1212,7 @@ export const WorkspaceComposerContainer = memo(
 									durationMs={1900}
 									className="truncate text-small font-medium tracking-[0.02em] text-muted-foreground"
 								>
-									Working...
+									<I18nText source={"Working..."} />
 								</ShimmerText>
 							) : (
 								<>

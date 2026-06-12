@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { SlackInboxItem, SlackSearchSort } from "@/lib/api";
 import type { ComposerInsertTarget } from "@/lib/composer-insert";
+import { I18nText } from "@/lib/i18n";
 import { formatSlackTextPlain } from "@/lib/slack-text";
 import type { ContextCard, SlackThreadMeta } from "@/lib/sources/types";
 import { InboxActionMenuButton, InboxSearchField } from "./actions";
@@ -265,7 +266,9 @@ function InboxLoadingState() {
 	return (
 		<div className="mt-8 flex flex-col items-center gap-2 px-6 text-muted-foreground/70">
 			<Loader2 className="size-4 animate-spin" strokeWidth={2} />
-			<div className="text-small leading-5">Loading Slack…</div>
+			<div className="text-small leading-5">
+				<I18nText source={"Loading Slack…"} />
+			</div>
 		</div>
 	);
 }
@@ -281,7 +284,9 @@ function InboxErrorState({
 		error instanceof Error ? error.message : "Couldn't load Slack inbox.";
 	return (
 		<div className="mt-8 flex flex-col items-center gap-2 px-6 text-center">
-			<div className="text-ui font-medium text-foreground">Couldn't load</div>
+			<div className="text-ui font-medium text-foreground">
+				<I18nText source={"Couldn't load"} />
+			</div>
 			<div className="text-small leading-5 text-muted-foreground">
 				{message}
 			</div>

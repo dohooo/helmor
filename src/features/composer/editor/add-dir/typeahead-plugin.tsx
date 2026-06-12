@@ -50,6 +50,7 @@ import {
 import { WorkspaceAvatar } from "@/features/navigation/avatar";
 import { humanizeBranch } from "@/features/navigation/shared";
 import type { CandidateDirectory } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { $isAddDirTriggerNode } from "./trigger-node";
 
@@ -317,7 +318,9 @@ export function AddDirTypeaheadPlugin({
 								</CommandGroup>
 							</CommandList>
 							<div className="border-t border-border/40 px-3 py-1.5 font-mono text-mini text-muted-foreground">
-								<span>↑↓ navigate · ↵ select · esc cancel</span>
+								<span>
+									<I18nText source={"↑↓ navigate · ↵ select · esc cancel"} />
+								</span>
 							</div>
 						</Command>
 					</div>,

@@ -54,6 +54,7 @@ import {
 	stopLocalLlm,
 	subscribeLocalLlmDownloads,
 } from "@/lib/api";
+import { I18nText, useI18n, useLocalizedNode } from "@/lib/i18n";
 import type { AppSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { SettingsReleaseBadge } from "../components/release-marker";
@@ -379,12 +380,17 @@ export function LocalLlmPanel({
 			<div className="flex items-start justify-between gap-3">
 				<div className="min-w-0 flex-1">
 					<div className="flex flex-wrap items-center gap-1.5 text-[13px] font-medium leading-snug text-foreground">
-						<span className="min-w-0">Local LLM</span>
+						<span className="min-w-0">
+							<I18nText source={"Local LLM"} />
+						</span>
 						<SettingsReleaseBadge marker={{ kind: "feature" }} />
 					</div>
 					<p className="mt-1 text-[12px] leading-snug text-muted-foreground">
-						Powers session title / branch name generation and Smart Triage —
-						both run entirely on your device.
+						<I18nText
+							source={
+								"Powers session title / branch name generation and Smart Triage — both run entirely on your device."
+							}
+						/>
 					</p>
 				</div>
 				<Switch
@@ -405,8 +411,11 @@ export function LocalLlmPanel({
 					/>
 					{!hasModel ? (
 						<NoticeBanner tone="warning">
-							No model selected. Pick one from the Models dropdown below to
-							start — including Custom if you already have a GGUF on disk.
+							<I18nText
+								source={
+									"No model selected. Pick one from the Models dropdown below to start — including Custom if you already have a GGUF on disk."
+								}
+							/>
 						</NoticeBanner>
 					) : null}
 
@@ -649,6 +658,7 @@ function NoticeBanner({
 	icon?: React.ReactNode;
 	children: React.ReactNode;
 }) {
+	const localizedChildren = useLocalizedNode(children);
 	const palette =
 		tone === "error"
 			? "border-destructive/30 bg-destructive/5 text-destructive"
@@ -661,7 +671,7 @@ function NoticeBanner({
 			)}
 		>
 			{icon ? <span className="mt-0.5 shrink-0">{icon}</span> : null}
-			<span className="leading-5">{children}</span>
+			<span className="leading-5">{localizedChildren}</span>
 		</div>
 	);
 }
@@ -719,7 +729,7 @@ function ModelsSection({
 				<Label className="text-[12px] text-muted-foreground">Models</Label>
 				<div className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
 					<Loader2 className="size-3 animate-spin" />
-					Loading models…
+					<I18nText source={"Loading models…"} />
 				</div>
 			</div>
 		);
@@ -750,7 +760,7 @@ function ModelsSection({
 								<>
 									<div className="flex min-w-0 items-center gap-1.5">
 										<span className="truncate font-medium text-foreground">
-											Custom
+											<I18nText source={"Custom"} />
 										</span>
 										{customBasename ? (
 											<span className="truncate text-muted-foreground">
@@ -961,6 +971,7 @@ function ContextSelector({
 	defaultTokens: number;
 	onCommit: (entryId: string, tokens: number) => void;
 }) {
+	const { t } = useI18n();
 	const maxTokens = target.modelMaxContextTokens;
 	const [pending, setPending] = useState<number | null>(null);
 
@@ -1012,7 +1023,7 @@ function ContextSelector({
 							<button
 								type="button"
 								className="cursor-help text-muted-foreground hover:text-foreground"
-								aria-label="What is context size?"
+								aria-label={t("What is context size?")}
 							>
 								<CircleHelp className="size-3.5" strokeWidth={1.8} />
 							</button>
@@ -1062,7 +1073,7 @@ function ContextSelector({
 			    cleanly. Color carries the fit state (no extra warn text
 			    so the width doesn't change character by character). */}
 			<span className={cn("whitespace-nowrap tabular-nums", fitColor)}>
-				KV {formatBytes(kvBytes)}
+				<I18nText source={"KV"} /> {formatBytes(kvBytes)}
 				{totalRamGb
 					? ` · ${formatBytes(totalBytes).replace(" GB", "")}/${totalRamGb} GB`
 					: ""}
@@ -1306,7 +1317,7 @@ function DownloadsSection({
 	return (
 		<div className="grid gap-2 rounded-md border border-border/50 bg-muted/20 p-3">
 			<div className="text-[11px] uppercase tracking-wide text-muted-foreground">
-				Downloads
+				<I18nText source={"Downloads"} />
 			</div>
 			<div className="grid gap-3">
 				{rows.map(({ entry, download }) => (
@@ -1395,6 +1406,7 @@ function CustomModelPathSection({
 	 *  and kicks the server. */
 	onCommit: (path: string) => void;
 }) {
+	const { t } = useI18n();
 	// Local draft — avoid round-tripping through settings reload while typing.
 	const [draft, setDraft] = useState(value);
 	const inputRef = useRef<HTMLInputElement>(null);
@@ -1427,7 +1439,7 @@ function CustomModelPathSection({
 							<button
 								type="button"
 								className="cursor-help text-muted-foreground hover:text-foreground"
-								aria-label="About custom model path"
+								aria-label={t("About custom model path")}
 							>
 								<CircleHelp className="size-3.5" strokeWidth={1.8} />
 							</button>
@@ -1482,6 +1494,7 @@ function DownloadProgress({
 	bytesPerSec: number;
 	paused: boolean;
 }) {
+	const { t } = useI18n();
 	const hasTotal = total > 0 && downloaded <= total;
 	const percent = hasTotal
 		? Math.min(100, Math.round((downloaded / total) * 100))
@@ -1513,11 +1526,11 @@ function DownloadProgress({
 				</span>
 				<span>
 					{paused
-						? "Paused"
+						? t("Paused")
 						: bytesPerSec > 0
 							? `${formatBytes(bytesPerSec)}/s${etaLabel ? ` · ${etaLabel} left` : ""}`
 							: downloaded === 0
-								? "Connecting…"
+								? t("Connecting…")
 								: null}
 				</span>
 			</div>

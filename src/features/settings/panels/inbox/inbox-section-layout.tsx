@@ -4,6 +4,7 @@
 // body.
 import type { ReactNode } from "react";
 import { Switch } from "@/components/ui/switch";
+import { useI18n } from "@/lib/i18n";
 
 export function ContextKindSection({
 	title,
@@ -20,6 +21,7 @@ export function ContextKindSection({
 	onEnabledChange: (enabled: boolean) => void;
 	children: ReactNode;
 }) {
+	const { t } = useI18n();
 	return (
 		<div className="py-5">
 			<div className="flex items-center justify-between gap-4">
@@ -28,10 +30,10 @@ export function ContextKindSection({
 						<span className="flex size-3.5 shrink-0 items-center justify-center text-muted-foreground">
 							{icon}
 						</span>
-						{title}
+						{t(title)}
 					</div>
 					<div className="mt-1 text-small leading-snug text-muted-foreground">
-						{description}
+						{t(description)}
 					</div>
 				</div>
 				<Switch checked={enabled} onCheckedChange={onEnabledChange} />
@@ -54,14 +56,15 @@ export function ContextConfigRow({
 	description: string;
 	children: ReactNode;
 }) {
+	const { t } = useI18n();
 	return (
 		<div className="flex items-center justify-between gap-4 py-3">
 			<div className="min-w-0 flex-1">
 				<div className="text-small font-medium leading-snug text-foreground">
-					{title}
+					{t(title)}
 				</div>
 				<div className="mt-1 text-mini leading-snug text-muted-foreground">
-					{description}
+					{t(description)}
 				</div>
 			</div>
 			<div className="shrink-0">{children}</div>

@@ -8,6 +8,7 @@ import type {
 } from "@/lib/composer-insert";
 import { buildComposerPreviewInsertItem } from "@/lib/composer-insert";
 import { useComposerInsert } from "@/lib/composer-insert-context";
+import { useI18n } from "@/lib/i18n";
 import type {
 	ContextCardSource,
 	ContextCardStateTone,
@@ -115,6 +116,7 @@ export function AppendContextButton({
 	className,
 	onInserted,
 }: AppendContextButtonProps) {
+	const { t } = useI18n();
 	const insertIntoComposer = useComposerInsert();
 	const pushToast = useWorkspaceToast();
 	const [isPending, setIsPending] = useState(false);
@@ -153,7 +155,11 @@ export function AppendContextButton({
 			type="button"
 			variant="ghost"
 			size="icon-xs"
-			aria-label={ariaLabel ?? `Append ${subjectLabel} to composer`}
+			aria-label={
+				ariaLabel
+					? t(ariaLabel)
+					: t("Append {subject} to composer").replace("{subject}", subjectLabel)
+			}
 			disabled={disabled || isPending}
 			onClick={(event) => {
 				event.stopPropagation();

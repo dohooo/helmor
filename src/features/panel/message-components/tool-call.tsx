@@ -19,6 +19,7 @@ import {
 	partKey,
 	type ToolCallPart,
 } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import { childrenStructurallyEqual } from "@/lib/structural-equality";
 import { cn } from "@/lib/utils";
 import { TodoList, WorkflowCard } from "./content-parts";
@@ -411,11 +412,13 @@ const ToolCallErrorRow = memo(function ToolCallErrorRow({
 				)}
 			>
 				<AlertCircle className="size-3.5 shrink-0" strokeWidth={1.8} />
-				<span className="shrink-0 font-medium">Error</span>
+				<span className="shrink-0 font-medium">
+					<I18nText source={"Error"} />
+				</span>
 				{exitCode != null ? (
-					<code className="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 font-mono text-mini">
-						Exit code {exitCode}
-					</code>
+					<span className="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 font-mono text-mini">
+						<I18nText source={"Exit code"} /> {exitCode}
+					</span>
 				) : null}
 				{preview ? (
 					<span className="min-w-0 truncate font-mono text-mini text-destructive/80">
@@ -632,7 +635,7 @@ export function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {
 					</svg>
 				</span>
 				<span className="shrink-0 text-mini text-muted-foreground/40">
-					{group.tools.length} tools
+					{group.tools.length} <I18nText source={"tools"} />
 				</span>
 			</summary>
 			{open ? (

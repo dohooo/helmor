@@ -8,6 +8,7 @@
 import type { ComponentProps, KeyboardEvent, PointerEvent } from "react";
 import { FeedbackDialog } from "@/features/feedback";
 import type { WorkspaceDetail } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import type { ShellViewMode } from "@/shell/controllers/use-selection-controller";
 import { AppOverlays } from "./app-overlays";
 import { AppShellProviderStack } from "./app-shell-provider-stack";
@@ -72,6 +73,7 @@ export function AppShellLayout({
 	handleResizeKeyDown,
 	overlays,
 }: Props) {
+	const { t } = useI18n();
 	return (
 		<AppShellProviderStack {...providerStack}>
 			{/* Conditionally mount so closing the dialog tears the tree
@@ -91,7 +93,7 @@ export function AppShellLayout({
 				/>
 			) : null}
 			<main
-				aria-label="Application shell"
+				aria-label={t("Application shell")}
 				className="relative h-dvh overflow-hidden bg-background font-sans text-foreground antialiased"
 			>
 				<div className="relative flex h-full min-h-0 bg-background">

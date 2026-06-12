@@ -7,6 +7,7 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { I18nText } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { validateBranchName } from "./branch-name-validation";
 
@@ -74,7 +75,7 @@ export function CreateBranchDialog({
 						htmlFor="create-branch-name"
 						className="text-small font-medium text-muted-foreground"
 					>
-						Branch name
+						<I18nText source={"Branch name"} />
 					</label>
 					<Input
 						id="create-branch-name"

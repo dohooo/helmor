@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { I18nText } from "@/lib/i18n";
 
 /**
  * Frozen snapshot of the workspace sidebar shell (outer flex column +
@@ -38,7 +39,7 @@ export function WorkspaceSidebarShellUI({
 
 			<div className="flex items-center justify-between px-3">
 				<h2 className="text-body font-medium tracking-[-0.01em] text-muted-foreground">
-					Workspaces
+					<I18nText source={"Workspaces"} />
 				</h2>
 				<div className="flex items-center gap-1 text-muted-foreground">
 					{headerActions}

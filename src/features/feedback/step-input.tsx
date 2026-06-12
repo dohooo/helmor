@@ -6,6 +6,7 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type { ExistingHelmorRepo } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 
 import { HELMOR_UPSTREAM_SLUG } from "./constants";
 
@@ -60,7 +61,7 @@ export function StepInput({
 			<div className="min-h-4 text-small text-muted-foreground">
 				{!githubConnected ? (
 					<>
-						Connect GitHub in{" "}
+						<I18nText source={"Connect GitHub in"} />{" "}
 						<Button
 							variant="link"
 							size="xs"
@@ -69,17 +70,20 @@ export function StepInput({
 						>
 							Settings
 						</Button>{" "}
-						to send feedback.
+						<I18nText source={"to send feedback."} />
 					</>
 				) : existing && !confirming ? (
-					"Will reuse your local helmor repo."
+					<I18nText source={"Will reuse your local Helmor repo."} />
 				) : null}
 			</div>
 			<div className="mt-1 flex items-center justify-between gap-3">
 				<p className="text-small text-muted-foreground">
-					{confirming
-						? `This will open an issue in ${HELMOR_UPSTREAM_SLUG}. Confirm?`
-						: null}
+					{confirming ? (
+						<>
+							<I18nText source={"This will open an issue in"} />{" "}
+							{HELMOR_UPSTREAM_SLUG}. <I18nText source={"Confirm?"} />
+						</>
+					) : null}
 				</p>
 				<div className="flex shrink-0 items-center gap-2">
 					{confirming ? (

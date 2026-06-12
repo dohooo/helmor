@@ -5,6 +5,7 @@ import {
 	GitPullRequestArrow,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { I18nText } from "@/lib/i18n";
 import { mockInspector } from "./data";
 import {
 	InspectorActionGroupTitleUI,
@@ -88,7 +89,9 @@ export function MockInspector({
 				containerClassName="h-[250px]"
 				bodyClassName="bg-muted/18 text-mini"
 			>
-				<InspectorActionGroupTitleUI>Git</InspectorActionGroupTitleUI>
+				<InspectorActionGroupTitleUI>
+					<I18nText source={"Git"} />
+				</InspectorActionGroupTitleUI>
 				{mockInspector.gitActions.map((item) => (
 					<InspectorActionRowUI
 						key={item.label}
@@ -97,7 +100,9 @@ export function MockInspector({
 						actionLabel={item.action}
 					/>
 				))}
-				<InspectorActionGroupTitleUI>Review</InspectorActionGroupTitleUI>
+				<InspectorActionGroupTitleUI>
+					<I18nText source={"Review"} />
+				</InspectorActionGroupTitleUI>
 				{mockInspector.reviewActions.map((item) => (
 					<InspectorActionRowUI
 						key={item.label}

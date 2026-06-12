@@ -2,6 +2,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { useMemo } from "react";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { useLocalizedNode } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 function FieldSet({ className, ...props }: React.ComponentProps<"fieldset">) {
@@ -20,8 +21,10 @@ function FieldSet({ className, ...props }: React.ComponentProps<"fieldset">) {
 function FieldLegend({
 	className,
 	variant = "legend",
+	children,
 	...props
 }: React.ComponentProps<"legend"> & { variant?: "legend" | "label" }) {
+	const localizedChildren = useLocalizedNode(children);
 	return (
 		<legend
 			data-slot="field-legend"
@@ -31,7 +34,9 @@ function FieldLegend({
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{localizedChildren}
+		</legend>
 	);
 }
 
@@ -112,7 +117,12 @@ function FieldLabel({
 	);
 }
 
-function FieldTitle({ className, ...props }: React.ComponentProps<"div">) {
+function FieldTitle({
+	className,
+	children,
+	...props
+}: React.ComponentProps<"div">) {
+	const localizedChildren = useLocalizedNode(children);
 	return (
 		<div
 			data-slot="field-label"
@@ -121,11 +131,18 @@ function FieldTitle({ className, ...props }: React.ComponentProps<"div">) {
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{localizedChildren}
+		</div>
 	);
 }
 
-function FieldDescription({ className, ...props }: React.ComponentProps<"p">) {
+function FieldDescription({
+	className,
+	children,
+	...props
+}: React.ComponentProps<"p">) {
+	const localizedChildren = useLocalizedNode(children);
 	return (
 		<p
 			data-slot="field-description"
@@ -136,7 +153,9 @@ function FieldDescription({ className, ...props }: React.ComponentProps<"p">) {
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{localizedChildren}
+		</p>
 	);
 }
 
@@ -147,6 +166,7 @@ function FieldSeparator({
 }: React.ComponentProps<"div"> & {
 	children?: React.ReactNode;
 }) {
+	const localizedChildren = useLocalizedNode(children);
 	return (
 		<div
 			data-slot="field-separator"
@@ -163,7 +183,7 @@ function FieldSeparator({
 					className="relative mx-auto block w-fit bg-background px-2 text-muted-foreground"
 					data-slot="field-separator-content"
 				>
-					{children}
+					{localizedChildren}
 				</span>
 			)}
 		</div>

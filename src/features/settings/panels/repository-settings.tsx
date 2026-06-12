@@ -26,6 +26,7 @@ import {
 	updateRepositoryDefaultBranch,
 	updateRepositoryRemote,
 } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import { initialsFor } from "@/lib/initials";
 import { useForgeAccountsAll } from "@/lib/use-forge-accounts";
 import { cn } from "@/lib/utils";
@@ -146,10 +147,10 @@ export function RepositorySettingsPanel({
 
 			<div className="py-5">
 				<div className="text-ui font-medium leading-snug text-foreground">
-					Remote origin
+					<I18nText source={"Remote origin"} />
 				</div>
 				<div className="mt-1 text-small leading-snug text-muted-foreground">
-					Where should we push, pull, and create PRs?
+					<I18nText source={"Where should we push, pull, and create PRs?"} />
 				</div>
 				<div className="mt-3">
 					<Popover
@@ -205,10 +206,12 @@ export function RepositorySettingsPanel({
 
 			<div className="py-5">
 				<div className="text-ui font-medium leading-snug text-foreground">
-					Branch new workspaces from
+					<I18nText source={"Branch new workspaces from"} />
 				</div>
 				<div className="mt-1 text-small leading-snug text-muted-foreground">
-					Each workspace is an isolated copy of your codebase.
+					<I18nText
+						source={"Each workspace is an isolated copy of your codebase."}
+					/>
 				</div>
 				<div className="mt-3">
 					<BranchPickerPopover
@@ -316,11 +319,14 @@ function ForgeAccountHeader({
 				<div className="min-w-0 flex-1">
 					<div className="flex items-center gap-1.5 text-ui font-medium text-foreground">
 						{providerIcon}
-						<span>{providerLabel} not connected</span>
+						<span>
+							{providerLabel} <I18nText source={"not connected"} />
+						</span>
 					</div>
 					<div className="mt-0.5 text-small text-muted-foreground">
-						Connect a {providerLabel} account to enable the {providerLabel}{" "}
-						workflow for this repo.
+						<I18nText source={"Connect a"} /> {providerLabel}{" "}
+						<I18nText source={"account to enable the"} /> {providerLabel}{" "}
+						<I18nText source={"workflow for this repo."} />
 					</div>
 				</div>
 				<NotConnectedConnectButton repo={repo} workspaceId={workspaceId} />

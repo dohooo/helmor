@@ -22,6 +22,7 @@ import type {
 	ForgeDetection,
 } from "@/lib/api";
 import type { MergeBlockedReason } from "@/lib/commit-button-logic";
+import { I18nText } from "@/lib/i18n";
 import { useSettings } from "@/lib/settings";
 import { useMinDisplayDuration } from "@/lib/use-min-display-duration";
 import { cn } from "@/lib/utils";
@@ -280,7 +281,9 @@ export function GitSectionHeader({
 				className="flex shrink-0 items-center gap-1.5"
 			>
 				{!showChangeRequest ? (
-					<span className={INSPECTOR_SECTION_TITLE_CLASS}>Git</span>
+					<span className={INSPECTOR_SECTION_TITLE_CLASS}>
+						<I18nText source={"Git"} />
+					</span>
 				) : (
 					(() => {
 						const button = (

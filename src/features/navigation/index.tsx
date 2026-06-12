@@ -40,6 +40,7 @@ import type {
 	WorkspaceRow,
 	WorkspaceStatus,
 } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import type { SidebarGrouping, SidebarSort } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { workspaceStatusFromGroupId } from "@/lib/workspace-helpers";
@@ -326,7 +327,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		if (!activeDragWorkspaceId) return null;
 		for (const group of groups) {
 			const meta = group.stackMeta?.get(activeDragWorkspaceId);
-			if (!meta || meta.role !== "tip") continue;
+			if (meta?.role !== "tip") continue;
 			const members = group.rows
 				.filter((row) => group.stackMeta?.get(row.id)?.tipId === meta.tipId)
 				.sort(
@@ -1152,7 +1153,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 
 			<div className="mt-1 flex items-center justify-between px-3">
 				<h2 className="text-title font-medium text-muted-foreground">
-					Workspaces
+					<I18nText source={"Workspaces"} />
 				</h2>
 
 				<div className="flex items-center gap-1 text-muted-foreground">

@@ -13,6 +13,7 @@ import { buildCardContextPayload } from "@/features/inbox/source-card";
 import { SourceIcon } from "@/features/inbox/source-icon";
 import { useSlackEmojiMap } from "@/features/inbox/use-slack-emoji-map";
 import { slackGetThreadDetail } from "@/lib/api";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
 import { helmorQueryKeys } from "@/lib/query-client";
 import type { SourceDetailProps } from "../common";
@@ -31,6 +32,7 @@ export function SlackThreadView({
 	card,
 	appendContextTarget,
 }: SourceDetailProps) {
+	const { t } = useI18n();
 	const parsed = parseCardId(card.id);
 	const emoji = useSlackEmojiMap(parsed?.teamId ?? null);
 	const detailQuery = useQuery({
@@ -61,7 +63,7 @@ export function SlackThreadView({
 	if (!parsed) {
 		return (
 			<div className="flex h-full items-center justify-center px-6 text-ui text-muted-foreground">
-				Invalid Slack item reference.
+				<I18nText source={"Invalid Slack item reference."} />
 			</div>
 		);
 	}
@@ -121,7 +123,7 @@ export function SlackThreadView({
 						</Tooltip>
 						<Tooltip>
 							<TooltipTrigger asChild>
-								<span className="inline-flex" aria-label="Add to context">
+								<span className="inline-flex" aria-label={t("Add to context")}>
 									<AppendContextButton
 										subjectLabel={card.title}
 										ariaLabel="Add to context"
@@ -146,15 +148,17 @@ export function SlackThreadView({
 					</div>
 				) : detailQuery.error ? (
 					<div className="flex h-full items-center justify-center text-ui text-muted-foreground">
-						{detailQuery.error instanceof Error
-							? detailQuery.error.message
-							: "Couldn't load Slack thread."}
+						{detailQuery.error instanceof Error ? (
+							detailQuery.error.message
+						) : (
+							<I18nText source={"Couldn't load Slack thread."} />
+						)}
 					</div>
 				) : detail ? (
 					<div className="divide-y divide-border/40">
 						{detail.messages.length === 0 ? (
 							<div className="py-8 text-center text-ui text-muted-foreground">
-								No messages to show.
+								<I18nText source={"No messages to show."} />
 							</div>
 						) : (
 							detail.messages.map((m) => (

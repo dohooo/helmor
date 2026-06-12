@@ -21,6 +21,7 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { I18nText } from "@/lib/i18n";
 import type { WorkspaceScriptType } from "@/lib/workspace-script-actions";
 import { formatWorkspaceStarProgress } from "@/lib/workspace-star-collection";
 
@@ -170,8 +171,12 @@ export function EmptyState({
 							strokeWidth={1.5}
 						/>
 						<span>
-							<span className="font-medium text-foreground/80">Tips:</span>{" "}
-							Configuring these scripts upgrades your dev loop.
+							<span className="font-medium text-foreground/80">
+								<I18nText source={"Tips:"} />
+							</span>{" "}
+							<I18nText
+								source={"Configuring these scripts upgrades your dev loop."}
+							/>
 						</span>
 					</p>
 				</EmptyContent>
