@@ -245,6 +245,8 @@ export type StartSurfacePreferences = {
 	branchIntentByRepoId: Record<string, WorkspaceBranchIntent>;
 	/** Top-level "Just chat" toggle. Independent of the selected repo. */
 	chatModeActive: boolean;
+	/** Start-composer Terminal-Mode toggle. */
+	terminalModeActive: boolean;
 };
 
 export type AppSettings = {
@@ -343,6 +345,7 @@ export const DEFAULT_START_SURFACE_PREFERENCES: StartSurfacePreferences = {
 	modeByRepoId: {},
 	branchIntentByRepoId: {},
 	chatModeActive: false,
+	terminalModeActive: false,
 };
 
 /** Fallbacks for repos without a per-repo entry. */
@@ -938,6 +941,10 @@ function parseStartSurfacePreferences(
 			modeByRepoId,
 			branchIntentByRepoId,
 			chatModeActive,
+			terminalModeActive:
+				typeof o.terminalModeActive === "boolean"
+					? o.terminalModeActive
+					: false,
 		};
 	} catch {
 		return DEFAULT_START_SURFACE_PREFERENCES;

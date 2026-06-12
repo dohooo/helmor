@@ -60,6 +60,8 @@ const composerMockState = vi.hoisted(() => ({
 	lastOnSelectEffort: null as ((level: string) => void) | null,
 	lastOnChangePermissionMode: null as ((mode: string) => void) | null,
 	lastOnChangeFastMode: null as ((enabled: boolean) => void) | null,
+	lastTerminalMode: null as boolean | null,
+	lastOnChangeTerminalMode: null as ((enabled: boolean) => void) | null,
 }));
 
 vi.mock("./index", async () => {
@@ -91,6 +93,8 @@ vi.mock("./index", async () => {
 			permissionMode?: string;
 			onChangePermissionMode?: (mode: string) => void;
 			onChangeFastMode?: (enabled: boolean) => void;
+			terminalMode?: boolean;
+			onChangeTerminalMode?: (enabled: boolean) => void;
 		}) => {
 			composerMockState.renders.push(props.contextKey);
 			composerMockState.lastSlashCommands = [...(props.slashCommands ?? [])];
@@ -110,6 +114,9 @@ vi.mock("./index", async () => {
 			composerMockState.lastOnChangePermissionMode =
 				props.onChangePermissionMode ?? null;
 			composerMockState.lastOnChangeFastMode = props.onChangeFastMode ?? null;
+			composerMockState.lastTerminalMode = props.terminalMode ?? null;
+			composerMockState.lastOnChangeTerminalMode =
+				props.onChangeTerminalMode ?? null;
 			React.useEffect(() => {
 				composerMockState.mounts += 1;
 				return () => {
@@ -271,6 +278,8 @@ describe("WorkspaceComposerContainer", () => {
 		composerMockState.lastOnSelectEffort = null;
 		composerMockState.lastOnChangePermissionMode = null;
 		composerMockState.lastOnChangeFastMode = null;
+		composerMockState.lastTerminalMode = null;
+		composerMockState.lastOnChangeTerminalMode = null;
 		apiMockState.listSlashCommands.mockReset();
 		apiMockState.listWorkspaceLinkedDirectories.mockReset();
 		apiMockState.listWorkspaceLinkedDirectories.mockResolvedValue([]);
@@ -576,6 +585,68 @@ describe("WorkspaceComposerContainer", () => {
 			startSurfacePreferences: {
 				...DEFAULT_SETTINGS.startSurfacePreferences,
 				createState: "in-progress",
+			},
+		});
+	});
+
+	it("persists the start composer's terminal toggle in settings", () => {
+		const queryClient = createHelmorQueryClient();
+		const updateSettings = vi.fn();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			MODEL_SECTIONS,
+		);
+
+		const settings = {
+			...DEFAULT_SETTINGS,
+			enableTerminalMode: true,
+			startSurfacePreferences: {
+				...DEFAULT_SETTINGS.startSurfacePreferences,
+				terminalModeActive: true,
+			},
+		};
+
+		render(
+			<SettingsContext.Provider
+				value={{ settings, isLoaded: true, updateSettings }}
+			>
+				<QueryClientProvider client={queryClient}>
+					<WorkspaceComposerContainer
+						displayedWorkspaceId={null}
+						displayedSessionId={null}
+						disabled={false}
+						forceAvailable
+						focusScope="start-composer"
+						contextKeyOverride="start:repo:repo-1"
+						sending={false}
+						sendError={null}
+						restoreDraft={null}
+						restoreImages={[]}
+						restoreFiles={[]}
+						restoreNonce={0}
+						modelSelections={{}}
+						effortLevels={{}}
+						permissionModes={{}}
+						fastModes={{}}
+						onSelectModel={vi.fn()}
+						onSelectEffort={vi.fn()}
+						onChangePermissionMode={vi.fn()}
+						onChangeFastMode={vi.fn()}
+						onSubmit={vi.fn()}
+					/>
+				</QueryClientProvider>
+			</SettingsContext.Provider>,
+		);
+
+		// Persisted preference drives the toggle on mount (not local state).
+		expect(composerMockState.lastTerminalMode).toBe(true);
+
+		composerMockState.lastOnChangeTerminalMode?.(false);
+
+		expect(updateSettings).toHaveBeenCalledWith({
+			startSurfacePreferences: {
+				...settings.startSurfacePreferences,
+				terminalModeActive: false,
 			},
 		});
 	});

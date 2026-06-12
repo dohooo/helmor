@@ -823,17 +823,38 @@ export const WorkspaceComposerContainer = memo(
 		const [goalReplaceConfirm, setGoalReplaceConfirm] =
 			useState<PendingGoalReplace | null>(null);
 
-		// Terminal-Mode toggle: composer-local, off on every mount. Only offered
+		// Terminal-Mode toggle. Workspace composer: local, off on every mount.
+		// Start composer: persisted in `startSurfacePreferences` (same path as
+		// the submit-mode picker) so the choice survives re-entry. Only offered
 		// when the General setting is on and the provider has a terminal agent
 		// spec (cursor has no TUI CLI, so it stays hidden there).
-		const [terminalMode, setTerminalMode] = useState(false);
+		const isStartComposer = focusScope === "start-composer";
+		const [localTerminalMode, setLocalTerminalMode] = useState(false);
+		const terminalMode = isStartComposer
+			? settings.startSurfacePreferences.terminalModeActive
+			: localTerminalMode;
+		const setTerminalMode = useCallback(
+			(enabled: boolean) => {
+				if (isStartComposer) {
+					void updateSettings({
+						startSurfacePreferences: {
+							...settings.startSurfacePreferences,
+							terminalModeActive: enabled,
+						},
+					});
+					return;
+				}
+				setLocalTerminalMode(enabled);
+			},
+			[isStartComposer, settings.startSurfacePreferences, updateSettings],
+		);
 		const showTerminalToggle =
 			settings.enableTerminalMode &&
 			findTerminalAgent(effectiveModel?.provider) !== null;
 
 		// App-scoped ⌘⇧T (global shortcut → shell event).
 		useShellEvent("toggle-terminal-mode", () => {
-			if (showTerminalToggle) setTerminalMode((value) => !value);
+			if (showTerminalToggle) setTerminalMode(!terminalMode);
 		});
 
 		const handleComposerSubmitInner = useCallback(

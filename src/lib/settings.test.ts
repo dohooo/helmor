@@ -62,6 +62,7 @@ describe("settings", () => {
 			modeByRepoId: { "repo-1": "local" },
 			branchIntentByRepoId: { "repo-1": "use_branch" },
 			chatModeActive: false,
+			terminalModeActive: false,
 		});
 	});
 
@@ -161,6 +162,7 @@ describe("settings", () => {
 			modeByRepoId: { "repo-1": "local" },
 			branchIntentByRepoId: { "repo-1": "use_branch" },
 			chatModeActive: false,
+			terminalModeActive: false,
 		});
 
 		const writeCall = invokeMock.mock.calls.find(
