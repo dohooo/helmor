@@ -91,11 +91,13 @@ describe("shortcut registry", () => {
 		// Rebinding terminal.close to Mod+W (its current default) against
 		// session.close (also Mod+W, in chat scope) must NOT report a conflict.
 		expect(findShortcutConflict({}, "terminal.close", "Mod+W")).toBeNull();
-		// Pointing a terminal-scoped shortcut at a chat-only hotkey is fine:
-		// composer.togglePlanMode is "chat", terminal.close is "terminal" — no
-		// overlap. (Mod+L is now app-scoped via composer.focus, so it would
-		// conflict with terminal.close — tested separately below.)
-		expect(findShortcutConflict({}, "terminal.close", "Shift+Tab")).toBeNull();
+		// Pointing a terminal-scoped shortcut at a workspace-composer hotkey is
+		// fine: composer.togglePlanMode and terminal.close do not overlap.
+		// (Mod+L is app-scoped via composer.focus, so it would conflict with
+		// terminal.close — tested separately below.)
+		expect(
+			findShortcutConflict({}, "terminal.close", "Mod+Shift+P"),
+		).toBeNull();
 		// App-scoped shortcuts overlap with every scope, so binding a
 		// terminal-scoped shortcut to an app-scoped hotkey IS a conflict.
 		expect(findShortcutConflict({}, "terminal.close", "Mod+L")?.id).toBe(
@@ -116,18 +118,17 @@ describe("shortcut registry", () => {
 		expect(new Set<ShortcutId>(ids).size).toBe(ids.length);
 	});
 
-	it("lets Shift+Tab dual-bind across start-composer and workspace-composer", () => {
+	it("keeps start and workspace composer shortcuts isolated", () => {
 		// `composer.togglePlanMode` lives on workspace-composer and
-		// `startSurface.cycleRepository` lives on start-composer. They share
-		// Shift+Tab on purpose — sibling leaf scopes mustn't be flagged as
-		// overlapping or both would be auto-disabled at boot.
+		// `startSurface.cycleRepository` lives on start-composer. Sibling leaf
+		// scopes mustn't be flagged as overlapping.
 		const planMode = SHORTCUT_DEFINITIONS.find(
 			(definition) => definition.id === "composer.togglePlanMode",
 		);
 		const cycleRepo = SHORTCUT_DEFINITIONS.find(
 			(definition) => definition.id === "startSurface.cycleRepository",
 		);
-		expect(planMode?.defaultHotkey).toBe("Shift+Tab");
+		expect(planMode?.defaultHotkey).toBe("Mod+Shift+P");
 		expect(cycleRepo?.defaultHotkey).toBe("Shift+Tab");
 		expect(planMode?.scopes).toEqual(["workspace-composer"]);
 		expect(cycleRepo?.scopes).toEqual(["start-composer"]);

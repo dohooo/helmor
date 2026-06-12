@@ -92,7 +92,7 @@ export type TerminalHandle = {
 const URL_PATTERN = /https?:\/\/[^\s<>"'`]+/gi;
 const TRAILING_URL_PUNCTUATION = /[),.;:!?]+$/;
 const DEFAULT_TERMINAL_FONT_FAMILY =
-	"'GeistMono', 'SF Mono', Monaco, Menlo, monospace";
+	"'Geist Mono Variable', 'SF Mono', Monaco, Menlo, monospace";
 
 function sanitizeHttpUrl(value: string): string | null {
 	const trimmed = value.replace(TRAILING_URL_PUNCTUATION, "");

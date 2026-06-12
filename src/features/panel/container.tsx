@@ -30,6 +30,7 @@ import { WorkspacePanel } from "./index";
 import type { SessionCloseRequest } from "./use-confirm-session-close";
 
 const EMPTY_MESSAGES: ThreadMessageLike[] = [];
+const EMPTY_SESSIONS: WorkspaceSessionSummary[] = [];
 
 /** Minimal shape the panel needs to render an optimistic user bubble for a
  *  freshly-created workspace whose first send is still queued behind
@@ -113,7 +114,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	});
 
 	const workspace = detailQuery.data ?? null;
-	const sessions = sessionsQuery.data ?? [];
+	const sessions = sessionsQuery.data ?? EMPTY_SESSIONS;
 	const rememberedSessionId = useMemo(() => {
 		if (sessionSelectionHistory.length === 0 || sessions.length === 0) {
 			return null;

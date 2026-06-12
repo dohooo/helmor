@@ -80,7 +80,7 @@ export function InlineShortcutDisplay({
 						"inline-flex items-center justify-center",
 						part.length === 1 &&
 							!/[⌘⌥⌃⇧]/.test(part) &&
-							"min-w-[0.7em] font-[ui-monospace,SF_Mono,SFMono-Regular,Menlo,Monaco,Consolas,monospace]",
+							"min-w-[0.7em] font-mono",
 					)}
 				>
 					{part}

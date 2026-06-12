@@ -105,11 +105,13 @@ export function shouldCommitMeasurementUrgently(
 
 export function ActiveThreadViewport({
 	hasSession,
+	workspaceName = null,
 	pane,
 	missingScriptTypes = [],
 	onInitializeScript,
 }: {
 	hasSession: boolean;
+	workspaceName?: string | null;
 	pane: PresentedSessionPane;
 	missingScriptTypes?: WorkspaceScriptType[];
 	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
@@ -180,6 +182,7 @@ export function ActiveThreadViewport({
 			<div className="relative z-10 flex min-h-0 min-w-0 flex-1">
 				<ChatThread
 					hasSession={hasSession}
+					workspaceName={workspaceName}
 					messages={pane.messages}
 					missingScriptTypes={missingScriptTypes}
 					onInitializeScript={onInitializeScript}
@@ -195,6 +198,7 @@ export function ActiveThreadViewport({
 function ChatThread({
 	messages,
 	hasSession,
+	workspaceName,
 	missingScriptTypes,
 	onInitializeScript,
 	paneWidth,
@@ -203,6 +207,7 @@ function ChatThread({
 }: {
 	messages: ThreadMessageLike[];
 	hasSession: boolean;
+	workspaceName: string | null;
 	missingScriptTypes: WorkspaceScriptType[];
 	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
 	paneWidth: number;
@@ -406,6 +411,7 @@ function ChatThread({
 					data={threadMessages}
 					fontSize={settings.chatFontSize}
 					hasSession={hasSession}
+					workspaceName={workspaceName}
 					itemContent={itemContent}
 					missingScriptTypes={missingScriptTypes}
 					onInitializeScript={onInitializeScript}
@@ -443,6 +449,7 @@ function ConversationViewport({
 	data,
 	fontSize,
 	hasSession,
+	workspaceName,
 	itemContent,
 	missingScriptTypes,
 	onInitializeScript,
@@ -461,6 +468,7 @@ function ConversationViewport({
 	data: RenderedMessage[];
 	fontSize: number;
 	hasSession: boolean;
+	workspaceName: string | null;
 	itemContent: (index: number, message: RenderedMessage) => ReactNode;
 	missingScriptTypes: WorkspaceScriptType[];
 	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
@@ -494,6 +502,7 @@ function ConversationViewport({
 		<div className="flex min-h-full flex-1 items-center justify-center px-8">
 			<EmptyState
 				hasSession={hasSession}
+				workspaceName={workspaceName}
 				missingScriptTypes={missingScriptTypes}
 				onInitializeScript={onInitializeScript}
 			/>

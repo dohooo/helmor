@@ -55,7 +55,6 @@ import type {
 } from "@/lib/composer-insert";
 import { recordComposerRender } from "@/lib/dev-render-debug";
 import { cn } from "@/lib/utils";
-import { isQuickPanelWindow } from "@/lib/window-role";
 import { clampEffort } from "@/lib/workspace-helpers";
 import { ComposerButton } from "./button";
 import { ContextBar } from "./context-bar";
@@ -504,6 +503,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	}, []);
 	const composerToolbarTriggerClassName =
 		"cursor-interactive rounded-[9px] px-1 py-0.5 text-ui font-medium transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50";
+	const composerToolbarActiveClassName =
+		"text-foreground/80 hover:text-foreground/80";
 	// Shared gate for Send and Steer — the only difference is whether a
 	// stream is currently running. When sending, ⌘Enter / Enter still
 	// fires `handleSubmit`; the use-streaming hook dispatches to the
@@ -715,9 +716,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 
 			// Plan mode is a workspace-only concept — the start composer has
 			// no session to flip yet. Gating on `focusScope` here keeps the
-			// hotkey from double-firing alongside the start surface's
-			// `Shift+Tab` (cycle repository) without forcing the shortcuts
-			// registry to thread surface awareness through every binding.
+			// shortcut surface-specific without forcing the shortcuts registry
+			// to thread surface awareness through every binding.
 			if (
 				togglePlanShortcut &&
 				hotkey === togglePlanShortcut &&
@@ -760,7 +760,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				// Named container: the footer toolbar sheds label text and
 				// re-aligns in narrow surfaces (quick panel, mini mode) via
 				// pure CSS container queries — no JS width checks.
-				"@container/composer relative flex flex-col rounded-2xl border border-border/40 bg-sidebar shadow-[0_-1px_8px_rgba(0,0,0,0.05),0_0_0_1px_rgba(255,255,255,0.02)]",
+				"@container/composer relative flex flex-col rounded-xl border border-border/70 bg-sidebar dark:border-border/40",
 				// Pending-interaction panels fill the shell edge-to-edge and own
 				// their own internal padding; the default composer gets the
 				// legacy px-4 pt-3 pb-3 breathing room.
@@ -962,50 +962,6 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								</ShimmerText>
 							) : (
 								<>
-									{onChangeTerminalMode && (
-										<Tooltip>
-											<TooltipTrigger asChild>
-												<ComposerButton
-													aria-label="Terminal mode"
-													disabled={toolbarDisabled}
-													className={cn(
-														composerToolbarTriggerClassName,
-														terminalMode
-															? "text-emerald-500 hover:bg-emerald-500/10 hover:text-emerald-500"
-															: // Pin the hover text color (like the Plan toggle) so the
-																// toolbar base `hover:text-foreground` can't flash the icon
-																// white for a frame while `transition-colors` runs on toggle.
-																"text-muted-foreground hover:text-muted-foreground",
-														toolbarDisabled
-															? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
-															: null,
-													)}
-													onClick={() => onChangeTerminalMode(!terminalMode)}
-												>
-													<SquareTerminal
-														className={cn(
-															"size-[14px]",
-															terminalMode ? null : "opacity-55",
-														)}
-														strokeWidth={1.8}
-													/>
-												</ComposerButton>
-											</TooltipTrigger>
-											<TooltipContent
-												side="top"
-												sideOffset={4}
-												className="flex items-center gap-2"
-											>
-												<span>Terminal mode</span>
-												{toggleTerminalShortcut ? (
-													<InlineShortcutDisplay
-														hotkey={toggleTerminalShortcut}
-														className="text-background/60"
-													/>
-												) : null}
-											</TooltipContent>
-										</Tooltip>
-									)}
 									<DropdownMenu
 										open={modelPickerOpen}
 										onOpenChange={setModelPickerOpen}
@@ -1013,7 +969,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										<DropdownMenuTrigger
 											disabled={toolbarDisabled}
 											className={cn(
-												`flex items-center gap-1.5 text-muted-foreground ${composerToolbarTriggerClassName}`,
+												`flex items-center gap-1.5 ${composerToolbarTriggerClassName}`,
+												composerToolbarActiveClassName,
 												toolbarDisabled &&
 													"cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground",
 											)}
@@ -1145,19 +1102,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										<DropdownMenu>
 											<DropdownMenuTrigger
 												disabled={toolbarDisabled}
-												// Always-on muted baseline: `effort-max-text`
-												// paints via `-webkit-text-fill-color: transparent`
-												// without setting `color`, so without this
-												// removing the gradient class would briefly expose
-												// `text-foreground` and `transition-colors`
-												// animates the flash. Hover stays muted to avoid
-												// a second flash on dropdown close.
 												className={cn(
 													`flex items-center gap-0.5 ${composerToolbarTriggerClassName}`,
-													"text-muted-foreground hover:text-muted-foreground",
-													(effectiveEffort === "max" ||
-														effectiveEffort === "xhigh") &&
-														"effort-max-text",
+													composerToolbarActiveClassName,
 													toolbarDisabled
 														? "cursor-not-allowed opacity-45 hover:bg-transparent"
 														: null,
@@ -1209,9 +1156,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										<PlanModeButton
 											disabled={toolbarDisabled}
 											className={cn(
-												`gap-1 px-1.5 text-mini ${composerToolbarTriggerClassName}`,
+												`size-7 justify-center px-0 ${composerToolbarTriggerClassName}`,
 												permissionMode === "plan"
-													? "text-plan hover:text-plan"
+													? composerToolbarActiveClassName
 													: "text-muted-foreground/70 hover:text-muted-foreground/70",
 											)}
 											onToggle={() =>
@@ -1223,6 +1170,47 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 											}
 										/>
 									) : null}
+									{onChangeTerminalMode && (
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<ComposerButton
+													aria-label="Terminal mode"
+													disabled={toolbarDisabled}
+													className={cn(
+														`size-7 justify-center px-0 ${composerToolbarTriggerClassName}`,
+														terminalMode
+															? composerToolbarActiveClassName
+															: // Pin the hover text color (like the Plan toggle) so the
+																// toolbar base `hover:text-foreground` can't flash the icon
+																// white for a frame while `transition-colors` runs on toggle.
+																"text-muted-foreground/70 hover:text-muted-foreground/70",
+														toolbarDisabled
+															? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
+															: null,
+													)}
+													onClick={() => onChangeTerminalMode(!terminalMode)}
+												>
+													<SquareTerminal
+														className="size-[14px]"
+														strokeWidth={1.8}
+													/>
+												</ComposerButton>
+											</TooltipTrigger>
+											<TooltipContent
+												side="top"
+												sideOffset={4}
+												className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
+											>
+												<span>Terminal mode</span>
+												{toggleTerminalShortcut ? (
+													<InlineShortcutDisplay
+														hotkey={toggleTerminalShortcut}
+														className="text-background/60"
+													/>
+												) : null}
+											</TooltipContent>
+										</Tooltip>
+									)}
 									{onToggleContextPanel ? (
 										<Tooltip>
 											<TooltipTrigger asChild>
@@ -1231,9 +1219,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 													aria-pressed={contextPanelOpen}
 													disabled={toolbarDisabled}
 													className={cn(
-														composerToolbarTriggerClassName,
+														`size-7 justify-center px-0 ${composerToolbarTriggerClassName}`,
 														contextPanelOpen
-															? "text-foreground"
+															? composerToolbarActiveClassName
 															: "text-muted-foreground/70 hover:text-muted-foreground/70",
 														toolbarDisabled
 															? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
@@ -1241,7 +1229,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 													)}
 													onClick={onToggleContextPanel}
 												>
-													<Layers className="size-[13px]" strokeWidth={1.8} />
+													<Layers className="size-[14px]" strokeWidth={1.8} />
 												</ComposerButton>
 											</TooltipTrigger>
 											<TooltipContent
@@ -1438,17 +1426,9 @@ function PlanModeButton({
 			className={className}
 			onClick={onToggle}
 		>
-			<ClipboardList className="size-[13px]" strokeWidth={1.8} />
-			{/* Collapses to icon-only in narrow surfaces. */}
-			<span className="@max-lg/composer:hidden">Plan</span>
+			<ClipboardList className="size-[14px]" strokeWidth={1.8} />
 		</ComposerButton>
 	);
-	// Main window: the bare button, exactly as before this feature (also keeps
-	// composer tests free of a TooltipProvider requirement). Quick panel: the
-	// label collapses to icon-only, so hover gets a tooltip.
-	if (!isQuickPanelWindow) {
-		return button;
-	}
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>{button}</TooltipTrigger>
