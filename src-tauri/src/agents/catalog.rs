@@ -125,7 +125,6 @@ fn codex_section() -> AgentModelSection {
             codex_model("gpt-5.5", "GPT-5.5"),
             codex_model("gpt-5.4", "GPT-5.4"),
             codex_model("gpt-5.4-mini", "GPT-5.4-Mini"),
-            codex_model("gpt-5.3-codex-spark", "GPT-5.3-Codex-Spark"),
         ],
     }
 }
@@ -630,7 +629,7 @@ mod tests {
                 .iter()
                 .map(|model| model.id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark",]
+            vec!["gpt-5.5", "gpt-5.4", "gpt-5.4-mini",]
         );
         assert!(sections[1]
             .options

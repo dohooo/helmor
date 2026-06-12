@@ -22,11 +22,9 @@ import { OpencodeSessionManager } from "./opencode-session-manager.js";
 import {
 	errorMessage,
 	optionalObject,
-	optionalString,
 	parseAgentProxySettings,
 	parseGetContextUsageParams,
 	parseListSlashCommandsParams,
-	parseOptionalStringRecord,
 	parseProvider,
 	parseRequest,
 	parseSendMessageParams,
@@ -39,10 +37,7 @@ import type {
 	SessionManager,
 	UserInputResolution,
 } from "./session-manager.js";
-import {
-	TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
-	TITLE_GENERATION_TIMEOUT_MS,
-} from "./title.js";
+import { TITLE_GENERATION_TIMEOUT_MS } from "./title.js";
 import { handleRunTriageTick, handleStopTriageTick } from "./triage/index.js";
 
 const claudeManager = new ClaudeSessionManager();
@@ -189,12 +184,6 @@ function collectErrorChainCodes(err: Error): string[] {
 	return codes;
 }
 
-function buildTitleProviderOrder(provider: Provider | null): Provider[] {
-	if (provider === "codex") return ["codex", "claude", "cursor"];
-	if (provider === "cursor") return ["cursor", "claude", "codex"];
-	return ["claude", "codex", "cursor"];
-}
-
 logger.info("Sidecar starting", { pid: process.pid });
 emitter.ready(1);
 
@@ -239,6 +228,49 @@ async function handleSendMessage(
 	}
 }
 
+interface TitleAttempt {
+	readonly provider: Provider;
+	readonly model?: string;
+	readonly claudeEnvironment?: Record<string, string>;
+}
+
+function asStringRecord(v: unknown): Record<string, string> | undefined {
+	if (!v || typeof v !== "object") return undefined;
+	const out: Record<string, string> = {};
+	for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+		if (typeof val === "string") out[k] = val;
+	}
+	return Object.keys(out).length > 0 ? out : undefined;
+}
+
+// Parse Rust's ordered title-generation attempt chain. Each entry is a
+// { provider, model?, claudeEnvironment? }. Always yields at least one entry
+// so a missing/empty list still tries claude's default.
+function parseTitleAttempts(raw: unknown): TitleAttempt[] {
+	const out: TitleAttempt[] = [];
+	if (Array.isArray(raw)) {
+		for (const item of raw) {
+			if (!item || typeof item !== "object") continue;
+			const obj = item as Record<string, unknown>;
+			const provider =
+				obj.provider === "claude" ||
+				obj.provider === "codex" ||
+				obj.provider === "cursor" ||
+				obj.provider === "opencode"
+					? obj.provider
+					: null;
+			if (!provider) continue;
+			out.push({
+				provider,
+				model: typeof obj.model === "string" ? obj.model : undefined,
+				claudeEnvironment: asStringRecord(obj.claudeEnvironment),
+			});
+		}
+	}
+	if (out.length === 0) out.push({ provider: "claude" });
+	return out;
+}
+
 async function handleGenerateTitle(
 	id: string,
 	params: Record<string, unknown>,
@@ -249,103 +281,51 @@ async function handleGenerateTitle(
 			typeof params.branchRenamePrompt === "string"
 				? params.branchRenamePrompt
 				: null;
-		const claudeModel = optionalString(params, "claudeModel");
-		const provider =
-			typeof params.provider === "string" &&
-			(params.provider === "claude" ||
-				params.provider === "codex" ||
-				params.provider === "cursor")
-				? params.provider
-				: null;
-		const claudeEnvironment = parseOptionalStringRecord(
-			params,
-			"claudeEnvironment",
-		);
 		const agentProxy = parseAgentProxySettings(params, "agentProxy");
 		// Default true so older clients without the field keep getting both
 		// title and branch. Pass `false` to skip the branch slug entirely.
 		const generateBranch =
 			typeof params.generateBranch === "boolean" ? params.generateBranch : true;
+		// Rust builds the ordered attempt chain from the user's configured
+		// models (action → review → default, deduped); each claude/opencode
+		// step tries the custom model first, then the provider's fast default.
+		// Walk it and stop at the first attempt that produces a title.
+		const attempts = parseTitleAttempts(params.attempts);
 		logger.debug(`[${id}] generateTitle`, {
 			userMessage: userMessage.slice(0, 100),
-			provider: provider ?? "default",
-			claudeModel: claudeModel ?? "haiku",
-			customClaudeEnvironment: Boolean(claudeEnvironment),
+			attempts: attempts.map((a) => `${a.provider}:${a.model ?? "(default)"}`),
 			generateBranch,
 		});
 
-		const order = buildTitleProviderOrder(provider);
 		let lastError: unknown = null;
-
-		for (const titleProvider of order) {
+		for (const attempt of attempts) {
+			logger.debug(
+				`[${id}] generateTitle attempt provider=${attempt.provider} model=${attempt.model ?? "(default)"} customEnv=${Boolean(attempt.claudeEnvironment)}`,
+			);
 			try {
-				if (titleProvider === "claude") {
-					try {
-						await managers.claude.generateTitle(
-							id,
-							userMessage,
-							branchRenamePrompt,
-							emitter,
-							TITLE_GENERATION_TIMEOUT_MS,
-							{
-								model: claudeModel,
-								claudeEnvironment,
-								agentProxy,
-								generateBranch,
-							},
-						);
-						logger.debug(`[${id}] generateTitle completed (claude)`);
-					} catch (claudeErr) {
-						if (!claudeModel && !claudeEnvironment) throw claudeErr;
-						logger.debug(
-							`[${id}] generateTitle custom claude failed, trying official claude: ${errorMessage(claudeErr)}`,
-						);
-						await managers.claude.generateTitle(
-							id,
-							userMessage,
-							branchRenamePrompt,
-							emitter,
-							TITLE_GENERATION_TIMEOUT_MS,
-							{ agentProxy, generateBranch },
-						);
-						logger.debug(`[${id}] generateTitle completed (official claude)`);
-					}
-					return;
-				}
-				if (titleProvider === "codex") {
-					await managers.codex.generateTitle(
-						id,
-						userMessage,
-						branchRenamePrompt,
-						emitter,
-						TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
-						{ agentProxy, generateBranch },
-					);
-					logger.debug(`[${id}] generateTitle completed (codex)`);
-					return;
-				}
-				await managers.cursor.generateTitle(
+				await managers[attempt.provider].generateTitle(
 					id,
 					userMessage,
 					branchRenamePrompt,
 					emitter,
-					TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
-					{ generateBranch },
+					TITLE_GENERATION_TIMEOUT_MS,
+					{
+						model: attempt.model,
+						claudeEnvironment: attempt.claudeEnvironment,
+						agentProxy,
+						generateBranch,
+					},
 				);
-				logger.debug(`[${id}] generateTitle completed (cursor)`);
+				logger.debug(`[${id}] generateTitle completed (${attempt.provider})`);
 				return;
 			} catch (err) {
 				lastError = err;
-				const nextProvider = order[order.indexOf(titleProvider) + 1];
-				if (nextProvider) {
-					logger.debug(
-						`[${id}] generateTitle ${titleProvider} failed, trying ${nextProvider}: ${errorMessage(err)}`,
-					);
-				}
+				logger.debug(
+					`[${id}] generateTitle attempt ${attempt.provider} failed: ${errorMessage(err)}`,
+				);
 			}
 		}
-
-		throw lastError ?? new Error("No title generation provider was available");
+		throw lastError ?? new Error("no title attempt produced a result");
 	} catch (err) {
 		const msg = errorMessage(err);
 		logger.error(`[${id}] generateTitle FAILED: ${msg}`, errorDetails(err));
