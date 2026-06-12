@@ -322,6 +322,10 @@ function TerminalOutputImpl({
 			fontFamily: resolveTerminalFontFamily(terminalFontFamily),
 			lineHeight,
 			theme: resolveTerminalTheme(),
+			// TUIs emit truecolor picked for dark backgrounds; on light themes it
+			// reads near-invisible. Nudge low-contrast fg at render time (VS
+			// Code's default ratio).
+			minimumContrastRatio: 4.5,
 			cursorBlink: false,
 			cursorStyle: "bar",
 			cursorInactiveStyle: "none",
