@@ -2,6 +2,14 @@
 	"_readme": "AUTO-GENERATED from .announcements during `bun run release:version`. Each item is one released version's in-app announcement. Do not edit released entries by hand.",
 	"items": [
 		{
+			"releaseVersion": "0.36.0",
+			"items": [
+				{
+					"text": "URLs in terminal output are now clickable — ⌘+click a link in the Terminal, Run, or Setup panels to open it in your browser."
+				}
+			]
+		},
+		{
 			"releaseVersion": "0.35.0",
 			"items": [
 				{
