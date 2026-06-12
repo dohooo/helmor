@@ -148,7 +148,7 @@ export class CursorCore {
 			try {
 				const agent = await withCursorRetry("Agent.create", () =>
 					params.resume
-						? Agent.resume(params.resume, { apiKey })
+						? Agent.resume(params.resume, { apiKey, local: { cwd } })
 						: Agent.create({
 								apiKey,
 								model: { id: modelId },
