@@ -508,20 +508,39 @@ function stageCodexFromVendorRoot(archRoot: string): void {
 		}
 	}
 
-	// Windows codex (layoutVersion 1) ships a `codex-resources/` dir
-	// (command-runner + sandbox helpers) that the flattened binary expects
-	// adjacent to itself. Copy it next to codex.exe.
+	// codex (layoutVersion 1) ships a `codex-resources/` dir that the flattened
+	// binary expects adjacent to itself. On macOS it nests a `zsh/bin/zsh`
+	// Mach-O; on Windows it carries command-runner + sandbox helpers. Copy it
+	// next to codex[.exe] and re-sign every nested Mach-O — notarization rejects
+	// any unsigned executable inside the bundle, even several dirs deep.
 	if (resourcesDir) {
 		const resSrc = join(archRoot, resourcesDir);
 		if (existsSync(resSrc)) {
 			const resDest = join(DIST_VENDOR, "codex", resourcesDir);
 			cpSync(resSrc, resDest, { recursive: true });
-			for (const entry of readdirSync(resDest)) {
-				const file = join(resDest, entry);
-				if (statSync(file).isFile()) {
-					chmodSync(file, 0o755);
-					maybeSignMacBinary(file, false);
-				}
+			signCodexResourcesTree(resDest);
+		}
+	}
+}
+
+// Walk `codex-resources/` recursively: make every file executable and re-sign
+// each Mach-O with our Developer ID + hardened runtime. The tree can nest
+// binaries (e.g. `zsh/bin/zsh`), so a flat top-level pass misses them and
+// notarization fails.
+function signCodexResourcesTree(root: string): void {
+	const stack = [root];
+	while (stack.length > 0) {
+		const cur = stack.pop();
+		if (!cur) continue;
+		for (const entry of readdirSync(cur)) {
+			const p = join(cur, entry);
+			const st = lstatSync(p);
+			if (st.isSymbolicLink()) continue;
+			if (st.isDirectory()) {
+				stack.push(p);
+			} else if (st.isFile()) {
+				chmodSync(p, 0o755);
+				if (isMachO(p)) maybeSignMacBinary(p, false);
 			}
 		}
 	}
