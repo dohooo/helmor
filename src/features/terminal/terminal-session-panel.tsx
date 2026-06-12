@@ -11,7 +11,6 @@ import {
 	attach,
 	detach,
 	ensureTerminal,
-	type PendingBoot,
 	resize,
 	TRUNCATION_NOTICE,
 	takePendingBoot,
@@ -76,13 +75,6 @@ export function TerminalSessionPanel({
 				: null) ?? presetBootCommand(agentKind);
 	}
 
-	// Consume the composer-initiated boot once (boot command + fast mode).
-	// Lazy-init ref so an effect re-run never re-reads it as null.
-	const pendingBootRef = useRef<PendingBoot | null | undefined>(undefined);
-	if (pendingBootRef.current === undefined) {
-		pendingBootRef.current = takePendingBoot(sessionId);
-	}
-
 	// Attach the live listener + one-shot replay. Independent of spawn: the
 	// listener is keyed by sessionId and receives output once the PTY starts.
 	const focusAssertedRef = useRef(false);
@@ -145,7 +137,10 @@ export function TerminalSessionPanel({
 				return;
 			}
 			spawnedRef.current = true;
-			const pending = pendingBootRef.current;
+			// Consume the composer-staged boot here (commit phase, exactly once,
+			// right before spawn). Taking it during render would leak the
+			// one-shot value if React ever discards that render attempt.
+			const pending = takePendingBoot(sessionId);
 			const boot = pending?.bootCommand ?? bootCommandRef.current ?? null;
 			ensureTerminal(
 				repoId,
