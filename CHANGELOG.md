@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.37.0
+
+### Minor Changes
+
+- [#817](https://github.com/dohooo/helmor/pull/817) [`d0d97ea`](https://github.com/dohooo/helmor/commit/d0d97ea0a67b84eb3f201afc396ab2d6e2278521) Thanks [@dohooo](https://github.com/dohooo)! - Add session context injection and a round of UI polish:
+  - New chats can inject selected previous sessions as context.
+  - Polish the overall interface across the composer, tabs, shortcuts, and empty states.
+
+### Patch Changes
+
+- [#818](https://github.com/dohooo/helmor/pull/818) [`051408c`](https://github.com/dohooo/helmor/commit/051408c41a68ff11d63d94b2f57e9a4595968d07) Thanks [@natllian](https://github.com/natllian)! - Fix Cursor sessions failing with "Agent not found" when resumed after an app restart.
+
 ## 0.36.0
 
 ### Minor Changes
