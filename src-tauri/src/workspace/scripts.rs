@@ -792,7 +792,10 @@ pub(crate) fn run_script_with_shell(
     cmd.args(shell_args)
         .current_dir(working_dir)
         .env("TERM", "xterm-256color")
-        .env("FORCE_COLOR", "1")
+        // Truecolor advertisement — without it chalk/supports-color caps at
+        // 256 colors and CLIs quantize their palette (orange → pink).
+        .env("COLORTERM", "truecolor")
+        .env("FORCE_COLOR", "3")
         .env("CLICOLOR_FORCE", "1")
         .env("HELMOR_ROOT_PATH", &context.root_path);
 

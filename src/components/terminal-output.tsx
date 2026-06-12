@@ -12,6 +12,7 @@ import {
 	flushTerminalWrites,
 	scheduleTerminalWrite,
 } from "./terminal-output-scheduler";
+import { createTuiWheelHandler } from "./terminal-wheel";
 
 type TerminalOutputProps = {
 	terminalRef?: React.RefObject<TerminalHandle | null>;
@@ -321,6 +322,10 @@ function TerminalOutputImpl({
 			fontFamily: resolveTerminalFontFamily(terminalFontFamily),
 			lineHeight,
 			theme: resolveTerminalTheme(),
+			// TUIs emit truecolor picked for dark backgrounds; on light themes it
+			// reads near-invisible. Nudge low-contrast fg at render time (VS
+			// Code's default ratio).
+			minimumContrastRatio: 4.5,
 			cursorBlink: false,
 			cursorStyle: "bar",
 			cursorInactiveStyle: "none",
@@ -372,6 +377,9 @@ function TerminalOutputImpl({
 			}
 			return true;
 		});
+
+		// Restore proportional wheel scrolling inside TUIs (claude/codex).
+		terminal.attachCustomWheelEventHandler(createTuiWheelHandler(terminal));
 
 		const linkProviderDisposable = detectLinks
 			? terminal.registerLinkProvider(createHttpLinkProvider(terminal))
