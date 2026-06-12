@@ -17,7 +17,15 @@ import { createTuiWheelHandler } from "./terminal-wheel";
 type TerminalOutputProps = {
 	terminalRef?: React.RefObject<TerminalHandle | null>;
 	className?: string;
-	detectLinks?: boolean;
+	/**
+	 * URL detection in terminal output.
+	 * - `true`: plain click opens the URL (read-only previews like login
+	 *   dialogs, where clicking the link is the primary action).
+	 * - `"modifier-click"`: Cmd/Ctrl+click opens the URL — standard terminal
+	 *   behavior (Terminal.app, iTerm2, VS Code), so plain clicks still
+	 *   select text without accidentally opening the browser.
+	 */
+	detectLinks?: boolean | "modifier-click";
 	fontSize?: number;
 	fontFamily?: string;
 	lineHeight?: number;
@@ -102,6 +110,10 @@ function openHttpUrl(value: string) {
 	void openUrl(url);
 }
 
+function shouldActivateLink(event: MouseEvent, requireModifier: boolean) {
+	return !requireModifier || event.metaKey || event.ctrlKey;
+}
+
 function findLineForOffset(
 	lineOffsets: readonly number[],
 	lineTexts: readonly string[],
@@ -116,7 +128,10 @@ function findLineForOffset(
 	return null;
 }
 
-function createHttpLinkProvider(terminal: Terminal): ILinkProvider {
+function createHttpLinkProvider(
+	terminal: Terminal,
+	requireModifier: boolean,
+): ILinkProvider {
 	return {
 		provideLinks(bufferLineNumber, callback) {
 			const buffer = terminal.buffer.active;
@@ -185,8 +200,10 @@ function createHttpLinkProvider(terminal: Terminal): ILinkProvider {
 							pointerCursor: true,
 							underline: true,
 						},
-						activate: (_event: MouseEvent, linkText: string) => {
-							openHttpUrl(linkText);
+						activate: (event: MouseEvent, linkText: string) => {
+							if (shouldActivateLink(event, requireModifier)) {
+								openHttpUrl(linkText);
+							}
 						},
 					};
 				})
@@ -335,8 +352,10 @@ function TerminalOutputImpl({
 			macOptionIsMeta: true,
 			linkHandler: detectLinks
 				? {
-						activate: (_event, text) => {
-							openHttpUrl(text);
+						activate: (event, text) => {
+							if (shouldActivateLink(event, detectLinks === "modifier-click")) {
+								openHttpUrl(text);
+							}
 						},
 					}
 				: null,
@@ -382,7 +401,9 @@ function TerminalOutputImpl({
 		terminal.attachCustomWheelEventHandler(createTuiWheelHandler(terminal));
 
 		const linkProviderDisposable = detectLinks
-			? terminal.registerLinkProvider(createHttpLinkProvider(terminal))
+			? terminal.registerLinkProvider(
+					createHttpLinkProvider(terminal, detectLinks === "modifier-click"),
+				)
 			: null;
 
 		// Leading + trailing throttled fit. fit.fit() reflows the 5000-line

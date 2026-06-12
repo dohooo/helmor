@@ -164,6 +164,7 @@ export function SetupTab({
 						<TerminalOutput
 							terminalRef={termRef}
 							className="h-full"
+							detectLinks="modifier-click"
 							onData={handleData}
 							onResize={handleResize}
 						/>
