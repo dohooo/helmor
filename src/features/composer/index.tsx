@@ -82,7 +82,9 @@ import { PasteImagePlugin } from "./editor/plugins/paste-image-plugin";
 import { ShimmerKeywordPlugin } from "./editor/plugins/shimmer-keyword-plugin";
 import { SlashCommandPlugin } from "./editor/plugins/slash-command-plugin";
 import { SubmitPlugin } from "./editor/plugins/submit-plugin";
+import { TerminalDirectivePlugin } from "./editor/plugins/terminal-directive-plugin";
 import { ShimmerKeywordNode } from "./editor/shimmer-keyword-node";
+import { TerminalDirectiveNode } from "./editor/terminal-directive-node";
 import { $extractComposerContent } from "./editor/utils";
 import { $appendComposerInsertItems } from "./editor-ops";
 import { FastModeLottieIcon } from "./fast-mode-lottie-icon";
@@ -370,6 +372,11 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const [hasContent, setHasContent] = useState(false);
 	const [isInputFocused, setIsInputFocused] = useState(false);
 	const [modelPickerOpen, setModelPickerOpen] = useState(false);
+	const [terminalDirectiveState, setTerminalDirectiveState] = useState({
+		active: false,
+		emptyAfter: false,
+	});
+	const terminalDirectiveModeRef = useRef(false);
 	useEffect(() => {
 		const handleFocusComposer = () => {
 			if (disabled) return;
@@ -520,6 +527,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const submitDisabledForPlugin = !submitEnabled;
 	const showFocusHint =
 		!isInputFocused && !hasContent && !inputDisabled && Boolean(focusShortcut);
+	const showTerminalDirectiveHint =
+		terminalDirectiveState.emptyAfter && !inputDisabled;
 
 	// Lexical initial config — must be a new object per mount for key resets
 	const initialConfig = useRef({
@@ -531,9 +540,31 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			CustomTagBadgeNode,
 			AddDirTriggerNode,
 			ShimmerKeywordNode,
+			TerminalDirectiveNode,
 		],
 		onError: onEditorError,
 	}).current;
+
+	useEffect(() => {
+		if (!onChangeTerminalMode) {
+			terminalDirectiveModeRef.current = false;
+			return;
+		}
+
+		if (terminalDirectiveState.active) {
+			terminalDirectiveModeRef.current = true;
+			if (!terminalMode) {
+				onChangeTerminalMode(true);
+			}
+			return;
+		}
+
+		if (!terminalDirectiveModeRef.current) return;
+		terminalDirectiveModeRef.current = false;
+		if (terminalMode) {
+			onChangeTerminalMode(false);
+		}
+	}, [onChangeTerminalMode, terminalDirectiveState.active, terminalMode]);
 
 	useEffect(() => {
 		const pendingIds = new Set(
@@ -872,6 +903,11 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								}
 								ErrorBoundary={LexicalErrorBoundary}
 							/>
+							{showTerminalDirectiveHint ? (
+								<div className="pointer-events-none absolute left-[88px] top-0 text-body leading-5 tracking-[-0.01em] text-muted-foreground/70">
+									Send to start in Terminal mode
+								</div>
+							) : null}
 							{showFocusHint && focusShortcut ? (
 								<div className="pointer-events-none absolute right-0 top-0 hidden h-5 items-center gap-1 text-ui leading-5 tracking-[-0.01em] text-muted-foreground/70 sm:flex">
 									<InlineShortcutDisplay hotkey={focusShortcut} />
@@ -946,6 +982,10 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						<EditablePlugin disabled={inputDisabled} />
 						<HasContentPlugin onChange={setHasContent} />
 						<ShimmerKeywordPlugin keywords={SHIMMER_KEYWORDS} />
+						<TerminalDirectivePlugin
+							enabled={Boolean(onChangeTerminalMode) && !inputDisabled}
+							onDirectiveChange={setTerminalDirectiveState}
+						/>
 					</LexicalComposer>
 
 					{sendError ? (

@@ -100,6 +100,11 @@ const EMPTY_FORGE_ACTION_STATUS: ForgeActionStatus = {
 	message: null,
 };
 
+const INSPECTOR_ACTION_ROW_STATE_CLASS =
+	"text-muted-foreground transition-colors hover:bg-accent/45";
+const INSPECTOR_ACTION_ICON_STATE_CLASS =
+	"hover:bg-accent/45 hover:text-foreground";
+
 type ActionsSectionProps = {
 	workspaceId: string | null;
 	workspaceState?: string | null;
@@ -341,7 +346,10 @@ export function ActionsSection({
 					onClick={onToggle}
 					variant="ghost"
 					size="icon-sm"
-					className="shrink-0 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+					className={cn(
+						"shrink-0 text-muted-foreground",
+						INSPECTOR_ACTION_ICON_STATE_CLASS,
+					)}
 				>
 					<ChevronDown
 						className="size-3.5"
@@ -358,17 +366,22 @@ export function ActionsSection({
 				<div className="min-h-0 flex-1">
 					<ScrollArea
 						aria-label="Actions panel body"
-						className="h-full min-h-0 bg-muted/18 text-mini"
+						className="h-full min-h-0 bg-muted/18 text-ui"
 					>
 						{showHelpersGroup && (
 							<>
 								<div className="px-2.5 pb-1 pt-2">
-									<span className="text-micro font-medium tracking-wide text-muted-foreground">
+									<span className="text-mini font-medium tracking-wide text-muted-foreground/70">
 										Helpers
 									</span>
 								</div>
 								{showReviewHelper && (
-									<div className="flex items-center gap-1.5 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
+									<div
+										className={cn(
+											"flex items-center gap-1.5 px-2.5 py-[3px]",
+											INSPECTOR_ACTION_ROW_STATE_CLASS,
+										)}
+									>
 										<EyeIcon
 											aria-hidden="true"
 											className="size-3 shrink-0"
@@ -381,7 +394,7 @@ export function ActionsSection({
 											disabled={reviewPending || workspaceId === null}
 											aria-busy={reviewPending ? true : undefined}
 											aria-label={reviewPending ? "Reviewing" : undefined}
-											className="ml-auto shrink-0 cursor-interactive text-micro text-foreground transition-colors hover:text-foreground/80 disabled:cursor-not-allowed disabled:opacity-50"
+											className="ml-auto shrink-0 cursor-interactive text-micro text-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
 										>
 											<span className="inline-flex items-center gap-1">
 												{reviewPending ? (
@@ -399,7 +412,7 @@ export function ActionsSection({
 							</>
 						)}
 						<div className="px-2.5 pb-1 pt-2">
-							<span className="text-micro font-medium tracking-wide text-muted-foreground">
+							<span className="text-mini font-medium tracking-wide text-muted-foreground/70">
 								Git
 							</span>
 						</div>
@@ -415,7 +428,10 @@ export function ActionsSection({
 							return (
 								<div
 									key={item.label}
-									className="flex items-center gap-1.5 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60"
+									className={cn(
+										"flex items-center gap-1.5 px-2.5 py-[3px]",
+										INSPECTOR_ACTION_ROW_STATE_CLASS,
+									)}
 								>
 									<StatusIcon status={item.status} />
 									<span className="truncate">{item.label}</span>
@@ -435,7 +451,7 @@ export function ActionsSection({
 												}
 												void onCommitAction?.(action.mode!);
 											}}
-											className="ml-auto shrink-0 cursor-interactive text-micro text-foreground transition-colors hover:text-foreground/80 disabled:cursor-not-allowed disabled:opacity-50"
+											className="ml-auto shrink-0 cursor-interactive text-micro text-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
 											disabled={
 												action.kind === "commit" ? actionDisabled : syncPending
 											}
@@ -465,14 +481,17 @@ export function ActionsSection({
 						{reviewRows.length > 0 && (
 							<>
 								<div className="px-2.5 pb-1 pt-2.5">
-									<span className="text-micro font-medium tracking-wide text-muted-foreground">
+									<span className="text-mini font-medium tracking-wide text-muted-foreground/70">
 										Review
 									</span>
 								</div>
 								{reviewRows.map((item) => (
 									<div
 										key={item.label}
-										className="flex items-center gap-1.5 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60"
+										className={cn(
+											"flex items-center gap-1.5 px-2.5 py-[3px]",
+											INSPECTOR_ACTION_ROW_STATE_CLASS,
+										)}
 									>
 										<StatusIcon status={item.status} />
 										<span className="truncate">{item.label}</span>
@@ -484,7 +503,7 @@ export function ActionsSection({
 						{sortedDeployments.length > 0 && (
 							<>
 								<div className="px-2.5 pb-1 pt-2.5">
-									<span className="text-micro font-medium tracking-wide text-muted-foreground">
+									<span className="text-mini font-medium tracking-wide text-muted-foreground/70">
 										Deployments
 									</span>
 								</div>
@@ -497,7 +516,7 @@ export function ActionsSection({
 						{sortedChecks.length > 0 && (
 							<>
 								<div className="px-2.5 pb-1 pt-2.5">
-									<span className="text-micro font-medium tracking-wide text-muted-foreground">
+									<span className="text-mini font-medium tracking-wide text-muted-foreground/70">
 										Checks
 									</span>
 								</div>
@@ -740,29 +759,38 @@ function ActionStatusRow({
 		item: ForgeActionItem,
 	) => AppendContextPayloadResult | Promise<AppendContextPayloadResult>;
 }) {
-	const actionButtonClassName =
-		"size-5 rounded-sm text-muted-foreground opacity-55 transition-[opacity,color,background-color] hover:bg-accent/60 hover:text-foreground hover:opacity-100 focus-visible:opacity-100 [&_svg]:size-3.5";
-	const appendActionButtonClassName =
-		"size-4 rounded-sm text-muted-foreground opacity-0 pointer-events-none group-hover/check-row:opacity-55 group-hover/check-row:pointer-events-auto group-focus-within/check-row:opacity-55 group-focus-within/check-row:pointer-events-auto hover:bg-accent/60 hover:text-foreground hover:opacity-100 focus-visible:opacity-100 [&_svg]:size-3";
+	const actionButtonClassName = cn(
+		"size-5 rounded-sm text-muted-foreground opacity-55 transition-[opacity,color,background-color] hover:opacity-100 focus-visible:opacity-100 [&_svg]:size-3.5",
+		INSPECTOR_ACTION_ICON_STATE_CLASS,
+	);
+	const appendActionButtonClassName = cn(
+		"size-4 rounded-sm text-muted-foreground opacity-0 pointer-events-none group-hover/check-row:opacity-55 group-hover/check-row:pointer-events-auto group-focus-within/check-row:opacity-55 group-focus-within/check-row:pointer-events-auto hover:opacity-100 focus-visible:opacity-100 [&_svg]:size-3",
+		INSPECTOR_ACTION_ICON_STATE_CLASS,
+	);
 
 	return (
-		<div className="group/check-row flex items-center justify-between gap-3 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
+		<div
+			className={cn(
+				"group/check-row flex items-center justify-between gap-3 px-2.5 py-[3px]",
+				INSPECTOR_ACTION_ROW_STATE_CLASS,
+			)}
+		>
 			<div className="flex min-w-0 flex-1 items-center gap-1.5">
 				<StatusIcon status={item.status} />
 				<ProviderIcon provider={item.provider} />
 				<span
-					className="min-w-0 truncate whitespace-nowrap text-foreground"
+					className="min-w-0 truncate whitespace-nowrap text-muted-foreground"
 					title={item.name}
 				>
 					{item.name}
 				</span>
 				{item.status === "skipped" ? (
-					<span className="shrink-0 text-micro text-muted-foreground">
+					<span className="shrink-0 text-micro text-muted-foreground/70">
 						skipped
 					</span>
 				) : (
 					item.duration && (
-						<span className="shrink-0 text-micro text-muted-foreground">
+						<span className="shrink-0 text-micro text-muted-foreground/70">
 							{item.duration}
 						</span>
 					)

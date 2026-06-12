@@ -66,10 +66,8 @@ export type InlineBadgeProps = {
  * Unified inline badge/chip. Replaces `ComposerPreviewBadge`,
  * `FileBadgeInline`, and `ImagePreviewBadge`.
  *
- * Styling uses pure baseline alignment — internal text baseline lines up
- * naturally with surrounding text regardless of font/size. See fix commits
- * where `align-middle` + `items-center` geometry was replaced with
- * `items-baseline` + icon `self-center`.
+ * Styling uses centered inline geometry so decorator chips align with the
+ * composer line box instead of inheriting browser baseline quirks.
  */
 export function InlineBadge({
 	icon,
@@ -179,7 +177,7 @@ export function InlineBadge({
 	const badge = (
 		<span
 			className={cn(
-				"mx-0.5 inline-flex items-baseline rounded-sm border border-border/60 text-body leading-none transition-colors hover:border-muted-foreground/40 hover:bg-accent/40",
+				"inline-flex h-5 items-center rounded-[5px] border border-border/60 text-body leading-none align-[-1px] transition-colors hover:border-muted-foreground/40 hover:bg-accent/40",
 				nonSelectable && "select-none",
 				nonSelectable && !canPreview && "cursor-default",
 				canPreview && "cursor-interactive",
@@ -190,38 +188,40 @@ export function InlineBadge({
 		>
 			<span
 				className={cn(
-					"inline-flex min-w-0 items-baseline gap-1.5 py-[3px] pl-2",
-					onRemove ? "pr-1" : "pr-2",
+					"inline-flex h-full min-w-0 items-center gap-1 px-1",
+					onRemove && "gap-1",
 				)}
 			>
-				<span className="inline-flex self-center">{icon}</span>
+				<span className="inline-flex shrink-0 items-center justify-center leading-none">
+					{icon}
+				</span>
 				<span
 					className={cn(
-						"max-w-[200px] truncate text-muted-foreground",
+						"max-w-[200px] truncate text-muted-foreground leading-none",
 						labelClassName,
 					)}
 				>
 					{label}
 				</span>
+				{onRemove ? (
+					<button
+						type="button"
+						aria-label={removeLabel}
+						className="inline-flex size-3.5 shrink-0 cursor-interactive items-center justify-center rounded-sm text-muted-foreground/40 transition-colors hover:text-muted-foreground"
+						onMouseDown={(event) => {
+							event.preventDefault();
+							event.stopPropagation();
+						}}
+						onClick={(event) => {
+							event.preventDefault();
+							event.stopPropagation();
+							onRemove();
+						}}
+					>
+						<X className="size-3" strokeWidth={1.8} />
+					</button>
+				) : null}
 			</span>
-			{onRemove ? (
-				<button
-					type="button"
-					aria-label={removeLabel}
-					className="mr-1 inline-flex size-4 shrink-0 cursor-interactive items-center justify-center self-center rounded-sm text-muted-foreground/40 transition-colors hover:text-muted-foreground"
-					onMouseDown={(event) => {
-						event.preventDefault();
-						event.stopPropagation();
-					}}
-					onClick={(event) => {
-						event.preventDefault();
-						event.stopPropagation();
-						onRemove();
-					}}
-				>
-					<X className="size-3" strokeWidth={1.8} />
-				</button>
-			) : null}
 		</span>
 	);
 

@@ -59,7 +59,7 @@ export function ScriptStatusIcon({ state, className }: ScriptStatusIconProps) {
 			return (
 				<CircleQuestionMark
 					aria-hidden="true"
-					className={cn("size-3 shrink-0 text-muted-foreground/60", className)}
+					className={cn("size-3 shrink-0 text-muted-foreground/70", className)}
 					strokeWidth={2}
 				/>
 			);
@@ -67,7 +67,7 @@ export function ScriptStatusIcon({ state, className }: ScriptStatusIconProps) {
 			return (
 				<CircleDashed
 					aria-hidden="true"
-					className={cn("size-3 shrink-0 text-muted-foreground/40", className)}
+					className={cn("size-3 shrink-0 text-muted-foreground/70", className)}
 					strokeWidth={1.8}
 				/>
 			);

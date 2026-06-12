@@ -887,7 +887,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				);
 
 				const headerClassName = cn(
-					"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 text-ui font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60 py-1",
+					"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 py-1 text-ui font-medium text-foreground hover:bg-accent/60",
 				);
 
 				// Repo header: no chevron/badge, but the header still toggles
@@ -1151,7 +1151,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			</div>
 
 			<div className="mt-1 flex items-center justify-between px-3">
-				<h2 className="text-body font-medium tracking-[-0.01em] text-muted-foreground">
+				<h2 className="text-title font-medium text-muted-foreground">
 					Workspaces
 				</h2>
 
