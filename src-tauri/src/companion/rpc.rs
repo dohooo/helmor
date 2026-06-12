@@ -259,7 +259,6 @@ async fn dispatch(
         "set_terminal_session_busy" => {
             crate::commands::terminal_commands::set_terminal_session_busy(
                 app.clone(),
-                app.state::<crate::agents::ActiveStreams>(),
                 arg_string(&args, "sessionId")?,
                 arg_string(&args, "workspaceId")?,
                 arg_opt_string(&args, "provider"),

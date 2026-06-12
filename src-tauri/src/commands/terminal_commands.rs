@@ -166,7 +166,11 @@ fn ensure_agent_hooks_file(
             "SessionStart": [{ "hooks": [{ "type": "command", "command": command }] }],
             "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": command }] }],
             "PreToolUse": [{ "hooks": [{ "type": "command", "command": command }] }],
-            "Stop": [{ "hooks": [{ "type": "command", "command": command }] }]
+            "Stop": [{ "hooks": [{ "type": "command", "command": command }] }],
+            // Stop does NOT fire on a user interrupt; SessionEnd is the only
+            // signal when the user quits claude mid-turn (the shell stays
+            // alive, so the PTY-exit fallback never sees it either).
+            "SessionEnd": [{ "hooks": [{ "type": "command", "command": command }] }]
         }
     });
     if fast_mode {
@@ -343,14 +347,26 @@ pub async fn stop_terminal(
 
 #[tauri::command]
 pub async fn write_terminal_stdin(
+    app: tauri::AppHandle,
     manager: State<'_, ScriptProcessManager>,
     repo_id: String,
     workspace_id: String,
     instance_id: String,
     data: String,
 ) -> CmdResult<bool> {
-    let key = (repo_id, make_script_type(&instance_id), Some(workspace_id));
-    Ok(manager.write_stdin(&key, data.as_bytes())?)
+    let key = (
+        repo_id,
+        make_script_type(&instance_id),
+        Some(workspace_id.clone()),
+    );
+    let written = manager.write_stdin(&key, data.as_bytes())?;
+    if written {
+        // instance_id == the helmor session id (it rides into the agent as
+        // HELMOR_TERMINAL_SESSION_ID); see terminal::observe_stdin for why
+        // interrupt inference hangs off this write path.
+        crate::terminal::observe_stdin(&app, &instance_id, &workspace_id, &data);
+    }
+    Ok(written)
 }
 
 #[tauri::command]
@@ -384,35 +400,12 @@ pub async fn convert_session_to_terminal(session_id: String, agent_type: String)
 #[tauri::command]
 pub async fn set_terminal_session_busy(
     app: tauri::AppHandle,
-    active_streams: State<'_, crate::agents::ActiveStreams>,
     session_id: String,
     workspace_id: String,
     provider: Option<String>,
     busy: bool,
 ) -> CmdResult<()> {
-    active_streams.set_session_active(
-        &session_id,
-        Some(workspace_id.clone()),
-        provider.as_deref().unwrap_or("terminal"),
-        busy,
-    );
-
-    let status = if busy { "streaming" } else { "idle" };
-    let sid = session_id.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::models::sessions::set_session_status(&sid, status)
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e}"))??;
-
-    crate::ui_sync::publish(&app, crate::ui_sync::UiMutationEvent::ActiveStreamsChanged);
-    // The session tab's spinner also reads sessions.status — refetch it now
-    // (interrupt/exit paths come through here, not through the hook's
-    // TerminalSessionIdle, so without this the tab lags the sidebar).
-    crate::ui_sync::publish(
-        &app,
-        crate::ui_sync::UiMutationEvent::SessionListChanged { workspace_id },
-    );
+    crate::terminal::set_busy(&app, &session_id, &workspace_id, provider.as_deref(), busy).await?;
     Ok(())
 }
 

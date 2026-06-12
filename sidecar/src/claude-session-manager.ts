@@ -876,8 +876,13 @@ export class ClaudeSessionManager implements SessionManager {
 		options?: GenerateTitleOptions,
 	): Promise<void> {
 		const abortController = new AbortController();
-		const timeout = setTimeout(() => abortController.abort(), timeoutMs);
+		let timedOut = false;
+		const timeout = setTimeout(() => {
+			timedOut = true;
+			abortController.abort();
+		}, timeoutMs);
 		const model = options?.model?.trim() || "haiku";
+		logger.debug(`[${requestId}] claude title generation using model ${model}`);
 		const claudeEnv =
 			options?.claudeEnvironment &&
 			Object.keys(options.claudeEnvironment).length > 0
@@ -918,6 +923,16 @@ export class ClaudeSessionManager implements SessionManager {
 				},
 			);
 			emitter.titleGenerated(requestId, title, branchName);
+		} catch (err) {
+			// A timeout aborts via `abortController`, which the SDK surfaces as
+			// "process aborted by user" — relabel it so logs don't read like a
+			// manual cancel.
+			if (timedOut) {
+				throw new Error(
+					`claude title generation timed out after ${timeoutMs}ms (model ${model})`,
+				);
+			}
+			throw err;
 		} finally {
 			clearTimeout(timeout);
 			try {

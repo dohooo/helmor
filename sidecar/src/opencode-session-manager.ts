@@ -1000,6 +1000,9 @@ export class OpencodeSessionManager implements SessionManager {
 		const timeout = timeoutMs ?? TITLE_GENERATION_TIMEOUT_MS;
 		const model = parseModelSlug(options?.model);
 		const directory = process.cwd();
+		logger.debug(
+			`[${requestId}] opencode title generation using model ${options?.model ?? "(opencode default)"}`,
+		);
 
 		let text = "";
 		let client: OpencodeClient | null = null;
@@ -1059,6 +1062,11 @@ export class OpencodeSessionManager implements SessionManager {
 				logError: (message, meta) => logger.error(message, meta),
 			},
 		);
+		// Throw on empty so the title cascade can fall through to the next
+		// attempt instead of treating a failed/empty opencode run as success.
+		if (!title) {
+			throw new Error("opencode title generation produced no title");
+		}
 		emitter.titleGenerated(requestId, title, branchName);
 	}
 

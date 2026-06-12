@@ -243,13 +243,13 @@ export function detach(sessionId: string) {
 export function writeStdin(sessionId: string, data: string) {
 	const entry = instances.get(sessionId);
 	if (!entry) return;
-	// NOTE: no ESC-keypress interrupt heuristic here. claude's ESC is
-	// overloaded (close menu / clear input / press-twice-to-interrupt), so
-	// keystroke sniffing misfires — and each misfire kicked an IPC +
-	// session-list invalidation whose re-render could break an in-flight IME
-	// composition (typing went dead until a session switch). Interrupts are
-	// hook-driven like ORCA: a real interrupt fires Stop (is_interrupt=true),
-	// which terminal-hook already maps to idle.
+	// NOTE: no ESC-keypress interrupt heuristic here, and don't re-add one.
+	// claude fires NO hook on a user interrupt (Stop is documented as not
+	// running then), so interrupt inference IS needed — but it lives in the
+	// backend off this same write (terminal::observe_stdin in src-tauri). A
+	// renderer-side heuristic was removed because each misfire kicked an IPC
+	// + session-list invalidation whose re-render could break an in-flight
+	// IME composition (typing went dead until a session switch).
 	void writeTerminalStdin(entry.repoId, entry.workspaceId, sessionId, data);
 }
 

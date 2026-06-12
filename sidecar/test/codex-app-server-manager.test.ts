@@ -248,7 +248,7 @@ describe("CodexAppServerManager", () => {
 
 		const models = await manager.listModels();
 
-		expect(models).toHaveLength(4);
+		expect(models).toHaveLength(3);
 		expect(models).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({

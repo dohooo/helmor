@@ -83,13 +83,6 @@ const MODEL_CATALOG: Record<Provider, readonly ProviderModelInfo[]> = {
 			effortLevels: CODEX_EFFORT_LEVELS,
 			supportsFastMode: true,
 		},
-		{
-			id: "gpt-5.3-codex-spark",
-			label: "GPT-5.3-Codex-Spark",
-			cliModel: "gpt-5.3-codex-spark",
-			effortLevels: CODEX_EFFORT_LEVELS,
-			supportsFastMode: true,
-		},
 	],
 	// Static seed; live set comes from `OpencodeSessionManager.listModels`.
 	// MUST stay in sync with Rust `opencode_section()` in agents/catalog.rs.

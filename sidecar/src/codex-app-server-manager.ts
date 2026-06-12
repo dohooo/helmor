@@ -1066,6 +1066,9 @@ export class CodexAppServerManager implements SessionManager {
 		const cwd = process.cwd();
 		const model = options?.model?.trim() || pickFastestCodexModel();
 		const fastMode = modelSupportsFastMode("codex", model);
+		logger.debug(
+			`[${requestId}] codex title generation using model ${model} (fastMode: ${fastMode})`,
+		);
 		const server = new CodexAppServer({
 			binaryPath: CODEX_BIN_PATH,
 			cwd,
@@ -1848,7 +1851,7 @@ function shouldEnrichCollabItem(params: unknown): boolean {
 	const item = (params as Record<string, unknown>).item as
 		| Record<string, unknown>
 		| undefined;
-	if (!item || item.type !== "collabAgentToolCall") return false;
+	if (item?.type !== "collabAgentToolCall") return false;
 	const receivers = item.receiverThreadIds;
 	return Array.isArray(receivers) && receivers.length > 0;
 }
