@@ -252,6 +252,9 @@ type WorkspaceComposerContainerProps = {
 	 *  `data-focus-scope` and gates surface-only hotkeys (plan-mode toggle
 	 *  vs cycle-repository). */
 	focusScope?: "start-composer" | "workspace-composer";
+	/** False when the surrounding surface can't host a terminal session
+	 *  (chat-mode start page — no repo to spawn the PTY in). */
+	terminalModeAvailable?: boolean;
 };
 
 const noopUserInputResponse: UserInputResponseHandler = () => {};
@@ -307,6 +310,7 @@ export const WorkspaceComposerContainer = memo(
 		startSubmitMenu = false,
 		linkedDirectoriesController = null,
 		focusScope = "workspace-composer",
+		terminalModeAvailable = true,
 	}: WorkspaceComposerContainerProps) {
 		const queryClient = useQueryClient();
 		const { settings, updateSettings } = useSettings();
@@ -848,8 +852,13 @@ export const WorkspaceComposerContainer = memo(
 			},
 			[isStartComposer, settings.startSurfacePreferences, updateSettings],
 		);
+		// Terminal sessions need a repo to spawn the PTY in — hide the toggle on
+		// chat surfaces (chat-mode start page via the prop, chat workspaces via
+		// the detail row) so a submit can't strand a session that never spawns.
 		const showTerminalToggle =
 			settings.enableTerminalMode &&
+			terminalModeAvailable &&
+			workspaceDetailQuery.data?.mode !== "chat" &&
 			findTerminalAgent(effectiveModel?.provider) !== null;
 
 		// App-scoped ⌘⇧T (global shortcut → shell event).

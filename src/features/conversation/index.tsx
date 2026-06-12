@@ -168,6 +168,9 @@ export type WorkspaceConversationContainerProps = {
 	 *  on the workspace-start page, `workspace-composer` everywhere else.
 	 *  See `WorkspaceComposerContainerProps.focusScope`. */
 	composerFocusScope?: "start-composer" | "workspace-composer";
+	/** False when the surrounding surface can't host a terminal session
+	 *  (chat-mode start page — no repo to spawn the PTY in). */
+	composerTerminalModeAvailable?: boolean;
 	/** Pre-workspace linked-directories controller. Forwarded to the
 	 *  composer; see `WorkspaceComposerContainerProps.linkedDirectoriesController`.
 	 *  Used by the start-page composer to collect /add-dir picks before any
@@ -223,6 +226,7 @@ export const WorkspaceConversationContainer = memo(
 		onToggleContextPanel,
 		composerStartSubmitMenu = false,
 		composerFocusScope = "workspace-composer",
+		composerTerminalModeAvailable = true,
 		composerLinkedDirectoriesController = null,
 	}: WorkspaceConversationContainerProps) {
 		const [composerModelSelections, setComposerModelSelections] = useState<
@@ -689,6 +693,7 @@ export const WorkspaceConversationContainer = memo(
 						onToggleContextPanel={onToggleContextPanel}
 						startSubmitMenu={composerStartSubmitMenu}
 						focusScope={composerFocusScope}
+						terminalModeAvailable={composerTerminalModeAvailable}
 						linkedDirectoriesController={composerLinkedDirectoriesController}
 					/>
 				</div>

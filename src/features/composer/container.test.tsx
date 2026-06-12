@@ -651,6 +651,83 @@ describe("WorkspaceComposerContainer", () => {
 		});
 	});
 
+	it("hides the terminal toggle on chat surfaces (no repo to spawn the PTY in)", () => {
+		const queryClient = createHelmorQueryClient();
+		queryClient.setQueryData(
+			helmorQueryKeys.agentModelSections,
+			MODEL_SECTIONS,
+		);
+
+		const settings = {
+			...DEFAULT_SETTINGS,
+			enableTerminalMode: true,
+			startSurfacePreferences: {
+				...DEFAULT_SETTINGS.startSurfacePreferences,
+				terminalModeActive: true,
+			},
+		};
+
+		const sharedProps = {
+			disabled: false,
+			sending: false,
+			sendError: null,
+			restoreDraft: null,
+			restoreImages: [],
+			restoreFiles: [],
+			restoreNonce: 0,
+			modelSelections: {},
+			effortLevels: {},
+			permissionModes: {},
+			fastModes: {},
+			onSelectModel: vi.fn(),
+			onSelectEffort: vi.fn(),
+			onChangePermissionMode: vi.fn(),
+			onChangeFastMode: vi.fn(),
+			onSubmit: vi.fn(),
+		};
+
+		// Chat-mode start page: availability threaded in via the prop.
+		render(
+			<SettingsContext.Provider
+				value={{ settings, isLoaded: true, updateSettings: vi.fn() }}
+			>
+				<QueryClientProvider client={queryClient}>
+					<WorkspaceComposerContainer
+						{...sharedProps}
+						displayedWorkspaceId={null}
+						displayedSessionId={null}
+						forceAvailable
+						focusScope="start-composer"
+						contextKeyOverride="start:chat"
+						terminalModeAvailable={false}
+					/>
+				</QueryClientProvider>
+			</SettingsContext.Provider>,
+		);
+		expect(composerMockState.lastOnChangeTerminalMode).toBeNull();
+
+		// Chat workspace: derived from the workspace detail row's mode.
+		queryClient.setQueryData(helmorQueryKeys.workspaceDetail("workspace-1"), {
+			...WORKSPACE_DETAIL,
+			mode: "chat",
+			repoId: "",
+		});
+		render(
+			<SettingsContext.Provider
+				value={{ settings, isLoaded: true, updateSettings: vi.fn() }}
+			>
+				<QueryClientProvider client={queryClient}>
+					<WorkspaceComposerContainer
+						{...sharedProps}
+						displayedWorkspaceId="workspace-1"
+						displayedSessionId="session-1"
+					/>
+				</QueryClientProvider>
+			</SettingsContext.Provider>,
+		);
+		expect(composerMockState.lastOnChangeTerminalMode).toBeNull();
+	});
+
 	it("auto-submits queued CLI prompts using the model + permission_mode pinned on the session row", async () => {
 		const queryClient = createHelmorQueryClient();
 		queryClient.setQueryData(
