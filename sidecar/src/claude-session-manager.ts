@@ -714,10 +714,11 @@ export class ClaudeSessionManager implements SessionManager {
 						uuid: randomUUID(),
 					});
 				}
-				const passthroughMessage = stripUserInputToolUseFromAssistant(message);
-				if (passthroughMessage) {
-					emitter.passthrough(requestId, passthroughMessage);
-				}
+				// AskUserQuestion tool_use blocks pass through INTACT — the Rust
+				// adapter renders them as the persistent Q&A card (and merges
+				// the tool_result answers into it), so stripping them here
+				// would lose the card on finalize/persist/reload.
+				emitter.passthrough(requestId, message);
 				if (isTerminalResult(message)) {
 					// Terminal result (success OR error) — both shapes carry
 					// `usage`/`modelUsage`, so both should update the ring.
@@ -1282,64 +1283,6 @@ function describeFastModeUnavailable(
 	// `off`: extra usage (overage) isn't enabled. Default reason — the init
 	// event reports `off` before the rate-limit event arrives.
 	return "Fast mode isn't active — it runs on extra usage, which isn't enabled for your account.";
-}
-
-function stripUserInputToolUseFromAssistant(
-	message: SDKMessage,
-): object | null {
-	if (message.type !== "assistant") {
-		return message;
-	}
-	if (!("message" in message)) {
-		return message;
-	}
-
-	const assistantMessage = (message as { message?: unknown }).message;
-	if (typeof assistantMessage !== "object" || assistantMessage === null) {
-		return message;
-	}
-
-	const content = (assistantMessage as { content?: unknown }).content;
-	if (!Array.isArray(content)) {
-		return message;
-	}
-
-	let removedDeferredTool = false;
-	const filteredContent = content.filter((block) => {
-		if (!isUserInputToolUseBlock(block)) {
-			return true;
-		}
-		removedDeferredTool = true;
-		return false;
-	});
-
-	if (!removedDeferredTool) {
-		return message;
-	}
-	if (filteredContent.length === 0) {
-		return null;
-	}
-
-	return {
-		...(message as Record<string, unknown>),
-		message: {
-			...(assistantMessage as Record<string, unknown>),
-			content: filteredContent,
-		},
-	};
-}
-
-function isUserInputToolUseBlock(block: unknown): boolean {
-	if (typeof block !== "object" || block === null) {
-		return false;
-	}
-
-	const value = block as { type?: unknown; name?: unknown };
-	return (
-		value.type === "tool_use" &&
-		typeof value.name === "string" &&
-		USER_INPUT_TOOL_NAMES.has(value.name)
-	);
 }
 
 /**

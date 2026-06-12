@@ -2418,3 +2418,44 @@ fn stream_opencode_user_question_declined() {
     let fingerprint = replay_stream_events("opencode", &events);
     assert_yaml_snapshot!(normalize_stream_fingerprint(&fingerprint));
 }
+
+#[test]
+fn auq_claude_split_rows_still_merge_answers() {
+    // The userInputRequest pause can flush the turn mid-message, splitting
+    // thinking and the AUQ tool_use into separate persisted rows. The
+    // cross-row late-merge must still attach the structured answers.
+    let thinking_row = assistant_json(
+        "a1",
+        json!([{"type": "thinking", "thinking": "Deciding what to ask.", "signature": "sig"}]),
+        None,
+    );
+    let tool_use_row = assistant_json(
+        "a2",
+        json!([{"type": "tool_use", "id": "tu-auq-1", "name": "AskUserQuestion", "input": {
+            "questions": [{
+                "question": "Pick a color",
+                "header": "Color",
+                "multiSelect": false,
+                "options": [{"label": "Red"}, {"label": "Blue"}]
+            }]
+        }}]),
+        None,
+    );
+    let result_msg = json!({
+        "type": "user",
+        "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "tu-auq-1",
+             "content": "Your questions have been answered: \"Pick a color\"=\"Red\". You can now continue with these answers in mind."}
+        ]},
+        "tool_use_result": {
+            "questions": [{"question": "Pick a color", "header": "Color"}],
+            "answers": {"Pick a color": "Red"}
+        }
+    });
+    let msgs = vec![
+        thinking_row,
+        tool_use_row,
+        make_record("u1", "user", &serde_json::to_string(&result_msg).unwrap()),
+    ];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}

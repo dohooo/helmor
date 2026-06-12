@@ -77,7 +77,7 @@ function createUserQuestionMessage(
 }
 
 describe("MemoConversationMessage user question", () => {
-	it("renders the question with the chosen answer highlighted", () => {
+	it("renders the question showing only the chosen answer", () => {
 		render(
 			<MemoConversationMessage
 				message={createUserQuestionMessage("answered")}
@@ -89,7 +89,8 @@ describe("MemoConversationMessage user question", () => {
 		expect(screen.getByText("Pick a color")).toBeInTheDocument();
 		expect(screen.getByText("Answered")).toBeInTheDocument();
 		expect(screen.getByText("Red")).toBeInTheDocument();
-		expect(screen.getByText("Blue")).toBeInTheDocument();
+		// Unchosen options stay out of the answered card.
+		expect(screen.queryByText("Blue")).not.toBeInTheDocument();
 	});
 
 	it("renders a declined question without selected answers", () => {

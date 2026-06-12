@@ -46,15 +46,24 @@ function resolveAnswer(
 function QuestionBlock({
 	question,
 	answers,
-	answered,
+	status,
 }: {
 	question: UserQuestionItem;
 	answers: Record<string, unknown> | undefined;
-	answered: boolean;
+	status: UserQuestionPart["status"];
 }) {
 	const { selected, otherText } = resolveAnswer(question, answers);
-	const options = question.options ?? [];
+	const answered = status === "answered";
 	const multi = question.multiSelect === true;
+	// Answered cards keep only what the user picked; an open question
+	// still shows every option so the card mirrors the pending panel.
+	// Declined/cancelled cards show just the question text.
+	const options =
+		status === "pending"
+			? (question.options ?? [])
+			: (question.options ?? []).filter(
+					(o) => answered && selected.has(o.label),
+				);
 
 	return (
 		<div className="flex flex-col gap-1">
@@ -64,7 +73,7 @@ function QuestionBlock({
 						{question.header}
 					</span>
 				) : null}
-				<span className="break-words text-ui leading-5 text-foreground">
+				<span className="break-words text-ui leading-5 text-muted-foreground">
 					{question.question}
 				</span>
 			</div>
@@ -121,7 +130,6 @@ function QuestionBlock({
  */
 export function UserQuestionCard({ part }: { part: UserQuestionPart }) {
 	const status = STATUS_META[part.status] ?? STATUS_META.answered;
-	const answered = part.status === "answered";
 
 	return (
 		<div className="my-1 flex flex-col gap-2 rounded-xl border-[1.5px] border-border/70 bg-background/60 px-3.5 py-3">
@@ -152,7 +160,7 @@ export function UserQuestionCard({ part }: { part: UserQuestionPart }) {
 					key={question.question}
 					question={question}
 					answers={part.answers}
-					answered={answered}
+					status={part.status}
 				/>
 			))}
 		</div>
