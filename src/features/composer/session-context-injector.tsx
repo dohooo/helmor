@@ -41,7 +41,7 @@ export function SessionContextInjector({
 							title={title}
 							onClick={() => onToggleSession(session.id)}
 							className={cn(
-								"grid h-6 max-w-[15rem] shrink-0 cursor-interactive grid-cols-[0.75rem_minmax(0,1fr)] items-center gap-1 rounded-md border px-1.5 text-small leading-none transition-[background-color,border-color,color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+								"grid h-6 max-w-[15rem] shrink-0 cursor-interactive grid-cols-[0.75rem_minmax(0,1fr)] items-center gap-1 rounded-md border py-0 pl-2 pr-1.5 text-small leading-none transition-[background-color,border-color,color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
 								isSelected
 									? "border-primary bg-primary text-primary-foreground shadow-xs"
 									: "border-border/70 bg-transparent text-muted-foreground hover:border-border hover:bg-muted/45 hover:text-foreground",
