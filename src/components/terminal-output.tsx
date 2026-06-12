@@ -12,6 +12,7 @@ import {
 	flushTerminalWrites,
 	scheduleTerminalWrite,
 } from "./terminal-output-scheduler";
+import { createTuiWheelHandler } from "./terminal-wheel";
 
 type TerminalOutputProps = {
 	terminalRef?: React.RefObject<TerminalHandle | null>;
@@ -372,6 +373,9 @@ function TerminalOutputImpl({
 			}
 			return true;
 		});
+
+		// Restore proportional wheel scrolling inside TUIs (claude/codex).
+		terminal.attachCustomWheelEventHandler(createTuiWheelHandler(terminal));
 
 		const linkProviderDisposable = detectLinks
 			? terminal.registerLinkProvider(createHttpLinkProvider(terminal))
