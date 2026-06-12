@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.36.0
+
+### Minor Changes
+
+- [#808](https://github.com/dohooo/helmor/pull/808) [`604145a`](https://github.com/dohooo/helmor/commit/604145a104d7481df1d7fb193a26e02069f6e436) Thanks [@dohooo](https://github.com/dohooo)! - Update the bundled agents and CLIs:
+
+  - Claude Code 2.1.173 — sub-agents can now spawn their own sub-agents, and the conversation view nests each one under the Task that spawned it instead of flattening it to the top level.
+  - Codex 0.139.0, opencode 1.17.3, gh 2.94.0, glab 1.102.0, and cloudflared 2026.6.0.
+
+- [#807](https://github.com/dohooo/helmor/pull/807) [`bb85248`](https://github.com/dohooo/helmor/commit/bb85248ec2d217f3a8931a465d3a9f2581118c78) Thanks [@dohooo](https://github.com/dohooo)! - Make terminal links clickable and polish a couple of UI states:
+  - URLs in terminal output are now clickable — hold ⌘ (or Ctrl) and click a link in the Terminal, Run, or Setup panels to open it in your browser.
+  - The sidebar Update button now uses the primary style so a ready-to-install update stands out.
+  - Confirmation dialogs now show a spinner on the confirm button while the action is running (e.g. cleaning up archived workspaces).
+
+### Patch Changes
+
+- [#815](https://github.com/dohooo/helmor/pull/815) [`6d5d700`](https://github.com/dohooo/helmor/commit/6d5d700c7d5ff2fb6e5eabd84af8e0d78a4c30b0) Thanks [@natllian](https://github.com/natllian)! - Fix the sidebar and session-tab spinners staying stuck after interrupting a terminal agent with Esc/Ctrl+C or quitting it mid-turn.
+
+- [#809](https://github.com/dohooo/helmor/pull/809) [`ebeeb80`](https://github.com/dohooo/helmor/commit/ebeeb80ab1d8468e52371d81a079536052565747) Thanks [@natllian](https://github.com/natllian)! - Fix mouse-wheel scrolling in terminal sessions being far too slow inside TUIs like Claude and Codex — scrolling now tracks wheel travel like a native terminal.
+
+- [#816](https://github.com/dohooo/helmor/pull/816) [`b017aa1`](https://github.com/dohooo/helmor/commit/b017aa1b6b7e2ee63ef63c8c038b29c6a40523a1) Thanks [@natllian](https://github.com/natllian)! - Improve Codex options and automatic session naming:
+
+  - Remove GPT-5.3-Codex-Spark from the Codex model picker.
+  - Generate session titles and branch names using your configured model's provider (action → review → default model) and prefer your custom model, so auto-naming keeps working when you only have a custom API and no official subscription.
+
+- [#805](https://github.com/dohooo/helmor/pull/805) [`b22ee89`](https://github.com/dohooo/helmor/commit/b22ee89d50915293a01c7ec71f592f07318730ce) Thanks [@natllian](https://github.com/natllian)! - Fix shifted colors in terminal sessions by advertising truecolor support, so CLIs like Claude Code render their exact palette instead of a 256-color approximation.
+
+- [#814](https://github.com/dohooo/helmor/pull/814) [`59b3b50`](https://github.com/dohooo/helmor/commit/59b3b5025e6009a1f5b61dd313d2af52a95d3fb4) Thanks [@natllian](https://github.com/natllian)! - Fix Chinese IME input in terminal sessions:
+
+  - Full-width punctuation (e.g. ？) typed with a Chinese input method no longer gets swallowed.
+  - Switching to another input method mid-composition no longer commits pinyin letters with stray spaces.
+
+- [#804](https://github.com/dohooo/helmor/pull/804) [`1ea186d`](https://github.com/dohooo/helmor/commit/1ea186d24731deacc4405c8fd2a034236569ba58) Thanks [@natllian](https://github.com/natllian)! - The start page composer now remembers your Terminal Mode toggle across visits, like its other pickers.
+
+- [#812](https://github.com/dohooo/helmor/pull/812) [`9452440`](https://github.com/dohooo/helmor/commit/9452440a136230670d422942e9f8a17d682ac05f) Thanks [@natllian](https://github.com/natllian)! - Make Terminal Mode launches more reliable:
+
+  - Consume the staged boot command at PTY spawn time so a terminal session can no longer open without the prompt it was launched with.
+  - Hide the Terminal Mode toggle on chat surfaces, where there is no repository to spawn a terminal in — submitting there left the session stuck on "Starting…".
+
+- [#811](https://github.com/dohooo/helmor/pull/811) [`30a8b12`](https://github.com/dohooo/helmor/commit/30a8b12365954dad41c3e995972621f3a56db1e9) Thanks [@natllian](https://github.com/natllian)! - Agent questions now stay in the chat as a dedicated Q&A card with your chosen answers highlighted, instead of disappearing after submit (#796).
+
+  - Claude AskUserQuestion, Codex requestUserInput and OpenCode questions all render through one unified question UI — Codex questions get the same option-card panel Claude has instead of a generic form.
+  - Answered, declined and still-open questions are all recorded in the transcript and survive reload.
+
 ## 0.35.0
 
 ### Minor Changes
