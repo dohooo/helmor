@@ -155,6 +155,7 @@ export function StartSurfacePane({
 				composerPlaceholder="Describe what you want to build"
 				composerCreateContext={startCreateContext}
 				composerFocusScope="start-composer"
+				composerTerminalModeAvailable={startMode !== "chat"}
 				contextPanelOpen={contextPanelOpen}
 				onToggleContextPanel={contextPanelActions.toggleContextPanel}
 				composerStartSubmitMenu

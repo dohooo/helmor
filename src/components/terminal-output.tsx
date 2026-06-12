@@ -6,17 +6,27 @@ import { resolveCssColor } from "@/lib/css-color";
 import { openUrl } from "@/lib/platform-bridge";
 import { useSettings } from "@/lib/settings";
 import "@xterm/xterm/css/xterm.css";
+import { createTerminalImeGuard } from "./terminal-ime";
 import {
 	clearTerminalWrites,
 	disposeTerminalWrites,
 	flushTerminalWrites,
 	scheduleTerminalWrite,
 } from "./terminal-output-scheduler";
+import { createTuiWheelHandler } from "./terminal-wheel";
 
 type TerminalOutputProps = {
 	terminalRef?: React.RefObject<TerminalHandle | null>;
 	className?: string;
-	detectLinks?: boolean;
+	/**
+	 * URL detection in terminal output.
+	 * - `true`: plain click opens the URL (read-only previews like login
+	 *   dialogs, where clicking the link is the primary action).
+	 * - `"modifier-click"`: Cmd/Ctrl+click opens the URL — standard terminal
+	 *   behavior (Terminal.app, iTerm2, VS Code), so plain clicks still
+	 *   select text without accidentally opening the browser.
+	 */
+	detectLinks?: boolean | "modifier-click";
 	fontSize?: number;
 	fontFamily?: string;
 	lineHeight?: number;
@@ -101,6 +111,10 @@ function openHttpUrl(value: string) {
 	void openUrl(url);
 }
 
+function shouldActivateLink(event: MouseEvent, requireModifier: boolean) {
+	return !requireModifier || event.metaKey || event.ctrlKey;
+}
+
 function findLineForOffset(
 	lineOffsets: readonly number[],
 	lineTexts: readonly string[],
@@ -115,7 +129,10 @@ function findLineForOffset(
 	return null;
 }
 
-function createHttpLinkProvider(terminal: Terminal): ILinkProvider {
+function createHttpLinkProvider(
+	terminal: Terminal,
+	requireModifier: boolean,
+): ILinkProvider {
 	return {
 		provideLinks(bufferLineNumber, callback) {
 			const buffer = terminal.buffer.active;
@@ -184,8 +201,10 @@ function createHttpLinkProvider(terminal: Terminal): ILinkProvider {
 							pointerCursor: true,
 							underline: true,
 						},
-						activate: (_event: MouseEvent, linkText: string) => {
-							openHttpUrl(linkText);
+						activate: (event: MouseEvent, linkText: string) => {
+							if (shouldActivateLink(event, requireModifier)) {
+								openHttpUrl(linkText);
+							}
 						},
 					};
 				})
@@ -321,6 +340,10 @@ function TerminalOutputImpl({
 			fontFamily: resolveTerminalFontFamily(terminalFontFamily),
 			lineHeight,
 			theme: resolveTerminalTheme(),
+			// TUIs emit truecolor picked for dark backgrounds; on light themes it
+			// reads near-invisible. Nudge low-contrast fg at render time (VS
+			// Code's default ratio).
+			minimumContrastRatio: 4.5,
 			cursorBlink: false,
 			cursorStyle: "bar",
 			cursorInactiveStyle: "none",
@@ -330,8 +353,10 @@ function TerminalOutputImpl({
 			macOptionIsMeta: true,
 			linkHandler: detectLinks
 				? {
-						activate: (_event, text) => {
-							openHttpUrl(text);
+						activate: (event, text) => {
+							if (shouldActivateLink(event, detectLinks === "modifier-click")) {
+								openHttpUrl(text);
+							}
 						},
 					}
 				: null,
@@ -344,8 +369,14 @@ function TerminalOutputImpl({
 		// visible terminals hold a GPU context — Chromium/WKWebView cap the
 		// number of live contexts, and N background terminals would exhaust it.
 
+		// WKWebView IME quirks: dropped full-width commits, lost composition
+		// commits, pinyin segmentation spaces. See terminal-ime.ts.
+		const ime = createTerminalImeGuard((data) => onDataRef.current?.(data));
+		if (terminal.textarea) ime.attach(terminal.textarea);
+
 		// Translate macOS Cmd combos to readline control codes.
 		terminal.attachCustomKeyEventHandler((event) => {
+			ime.observeKeyEvent(event);
 			if (event.type !== "keydown") return true;
 			if (!event.metaKey || event.ctrlKey || event.altKey) return true;
 
@@ -373,8 +404,13 @@ function TerminalOutputImpl({
 			return true;
 		});
 
+		// Restore proportional wheel scrolling inside TUIs (claude/codex).
+		terminal.attachCustomWheelEventHandler(createTuiWheelHandler(terminal));
+
 		const linkProviderDisposable = detectLinks
-			? terminal.registerLinkProvider(createHttpLinkProvider(terminal))
+			? terminal.registerLinkProvider(
+					createHttpLinkProvider(terminal, detectLinks === "modifier-click"),
+				)
 			: null;
 
 		// Leading + trailing throttled fit. fit.fit() reflows the 5000-line
@@ -416,7 +452,7 @@ function TerminalOutputImpl({
 		// the key → byte translation (e.g. Ctrl+C → `\x03`), we just
 		// forward whatever it produced.
 		const dataSub = terminal.onData((data) => {
-			onDataRef.current?.(data);
+			onDataRef.current?.(ime.filterData(data));
 		});
 
 		// xterm fires onResize after FitAddon changes the grid, font size
@@ -524,6 +560,7 @@ function TerminalOutputImpl({
 			}
 			dataSub.dispose();
 			resizeSub.dispose();
+			ime.detach();
 			linkProviderDisposable?.dispose();
 			themeObserver.disconnect();
 			resizeObserver.disconnect();

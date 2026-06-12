@@ -286,15 +286,20 @@ pub(super) fn group_child_messages(msgs: Vec<ThreadMessageLike>) -> Vec<ThreadMe
 /// just because they landed after a different Task tool in the timeline.
 ///
 /// Implementation: an `index` HashMap maps each Agent/Task
-/// `tool_call_id` to its location in `out` as `(out_idx, content_idx)`.
-/// We build it incrementally — every time a non-child message is
-/// pushed onto `out`, we scan its content for new Agent/Task tools and
-/// register them. Children then do an O(1) lookup.
+/// `tool_call_id` to a path into `out`: `[out_idx, content_idx,
+/// child_idx, ...]`. The first two hops address a top-level ToolCall
+/// part; each further hop descends into that tool's `children` —
+/// sub-agents can spawn their own sub-agents (Claude Code 2.1.172+),
+/// so a folded child message may itself contain Agent/Task tools that
+/// grandchild messages reference. We build the index incrementally —
+/// every time a message is pushed onto `out` (or folded into a
+/// parent's `children`), we scan its content for new Agent/Task tools
+/// and register them. Children then do an O(1) lookup.
 fn group_child_messages_under_parent(msgs: Vec<ThreadMessageLike>) -> Vec<ThreadMessageLike> {
     let mut out: Vec<ThreadMessageLike> = Vec::new();
-    // tool_call_id → (out_idx, content_idx) for every Agent/Task tool
-    // currently in `out`. Built incrementally as new messages land.
-    let mut index: HashMap<String, (usize, usize)> = HashMap::new();
+    // tool_call_id → path for every Agent/Task tool currently in
+    // `out`. Built incrementally as new messages land.
+    let mut index: HashMap<String, Vec<usize>> = HashMap::new();
 
     for m in msgs.into_iter() {
         let parent_tool_id =
@@ -303,11 +308,15 @@ fn group_child_messages_under_parent(msgs: Vec<ThreadMessageLike>) -> Vec<Thread
                 .and_then(|rest| rest.split(':').next());
 
         if let Some(target_tool_id) = parent_tool_id {
-            if let Some(&(out_idx, content_idx)) = index.get(target_tool_id) {
-                if let ExtendedMessagePart::Basic(MessagePart::ToolCall { children, .. }) =
-                    &mut out[out_idx].content[content_idx]
-                {
+            if let Some(path) = index.get(target_tool_id).cloned() {
+                if let Some(children) = agent_children_at_path(&mut out, &path) {
+                    let base = children.len();
                     children.extend_from_slice(&m.content);
+                    // Register any nested Agent/Task tools the child
+                    // just added so grandchild messages can find them.
+                    if m.role == MessageRole::Assistant {
+                        register_agent_tools(&children[base..], &path, base, &mut index);
+                    }
                     continue;
                 }
             }
@@ -323,22 +332,63 @@ fn group_child_messages_under_parent(msgs: Vec<ThreadMessageLike>) -> Vec<Thread
         let new_idx = out.len();
         out.push(m);
         if out[new_idx].role == MessageRole::Assistant {
-            for (cidx, part) in out[new_idx].content.iter().enumerate() {
-                if let ExtendedMessagePart::Basic(MessagePart::ToolCall {
-                    tool_name,
-                    tool_call_id,
-                    ..
-                }) = part
-                {
-                    if super::AGENT_TOOL_NAMES.contains(&tool_name.as_str()) {
-                        index.insert(tool_call_id.clone(), (new_idx, cidx));
-                    }
-                }
-            }
+            register_agent_tools(&out[new_idx].content, &[new_idx], 0, &mut index);
         }
     }
 
     out
+}
+
+/// Walk an index path down to the `children` Vec of the Agent/Task
+/// ToolCall it addresses. `path[0]` indexes `out`, `path[1]` indexes
+/// that message's `content`, every further element indexes the
+/// previous ToolCall's `children`.
+fn agent_children_at_path<'a>(
+    out: &'a mut [ThreadMessageLike],
+    path: &[usize],
+) -> Option<&'a mut Vec<ExtendedMessagePart>> {
+    let (&msg_idx, rest) = path.split_first()?;
+    let (&content_idx, rest) = rest.split_first()?;
+    let part = out.get_mut(msg_idx)?.content.get_mut(content_idx)?;
+    let ExtendedMessagePart::Basic(MessagePart::ToolCall { children, .. }) = part else {
+        return None;
+    };
+    let mut children = children;
+    for &idx in rest {
+        let part = children.get_mut(idx)?;
+        let ExtendedMessagePart::Basic(MessagePart::ToolCall {
+            children: nested, ..
+        }) = part
+        else {
+            return None;
+        };
+        children = nested;
+    }
+    Some(children)
+}
+
+/// Register every Agent/Task ToolCall in `parts` under
+/// `base_path + [offset + i]` so later child messages can attach to it.
+fn register_agent_tools(
+    parts: &[ExtendedMessagePart],
+    base_path: &[usize],
+    offset: usize,
+    index: &mut HashMap<String, Vec<usize>>,
+) {
+    for (i, part) in parts.iter().enumerate() {
+        if let ExtendedMessagePart::Basic(MessagePart::ToolCall {
+            tool_name,
+            tool_call_id,
+            ..
+        }) = part
+        {
+            if super::AGENT_TOOL_NAMES.contains(&tool_name.as_str()) {
+                let mut path = base_path.to_vec();
+                path.push(offset + i);
+                index.insert(tool_call_id.clone(), path);
+            }
+        }
+    }
 }
 
 /// If the input contains an abort notice row, fill `result` on every

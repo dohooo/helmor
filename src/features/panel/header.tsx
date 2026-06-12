@@ -414,10 +414,10 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 												if (previousDetail) {
 													queryClient.setQueryData<WorkspaceDetail | null>(
 														detailKey,
-														{
+														() => ({
 															...previousDetail,
 															intendedTargetBranch: branch,
-														},
+														}),
 													);
 												}
 
