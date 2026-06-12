@@ -60,6 +60,7 @@ import {
 } from "@/lib/workspace-helpers";
 import { publishShellEvent, useShellEvent } from "@/shell/event-bus";
 import { CodexGoalBanner } from "../panel/codex-goal-banner";
+import type { SessionContextCandidate } from "../panel/session-context";
 import {
 	type ComposerQuickAction,
 	ComposerQuickActions,
@@ -71,6 +72,7 @@ import {
 	type InputHistoryEntry,
 } from "./input-history";
 import type { PermissionPanelProps } from "./permission-panel";
+import { SessionContextInjector } from "./session-context-injector";
 import type { StartSubmitMode } from "./start-submit-mode";
 import { SubmitQueueList } from "./submit-queue-list";
 import { TriageQuickActions } from "./triage-quick-actions";
@@ -82,6 +84,8 @@ const EMPTY_SLASH_COMMANDS: SlashCommandEntry[] = [];
 const EMPTY_LINKED_DIRECTORIES: readonly string[] = [];
 const EMPTY_CANDIDATE_DIRECTORIES: readonly CandidateDirectory[] = [];
 const EMPTY_QUEUE_ITEMS: readonly QueuedSubmit[] = [];
+const EMPTY_CONTEXT_SESSION_CANDIDATES: readonly SessionContextCandidate[] = [];
+const EMPTY_SELECTED_CONTEXT_SESSION_IDS: readonly string[] = [];
 
 /**
  * Host-app slash commands. Prepended to the agent-supplied list so they
@@ -235,6 +239,9 @@ type WorkspaceComposerContainerProps = {
 	onSteerQueued?: (itemId: string) => void;
 	onRemoveQueued?: (itemId: string) => void;
 	onEditQueued?: (itemId: string) => void;
+	contextSessionCandidates?: readonly SessionContextCandidate[];
+	selectedContextSessionIds?: readonly string[];
+	onToggleContextSession?: (sessionId: string) => void;
 	contextPanelOpen?: boolean;
 	onToggleContextPanel?: () => void;
 	startSubmitMenu?: boolean;
@@ -305,6 +312,9 @@ export const WorkspaceComposerContainer = memo(
 		onSteerQueued,
 		onRemoveQueued,
 		onEditQueued,
+		contextSessionCandidates = EMPTY_CONTEXT_SESSION_CANDIDATES,
+		selectedContextSessionIds = EMPTY_SELECTED_CONTEXT_SESSION_IDS,
+		onToggleContextSession,
 		contextPanelOpen = false,
 		onToggleContextPanel,
 		startSubmitMenu = false,
@@ -1241,6 +1251,13 @@ export const WorkspaceComposerContainer = memo(
 
 				<div className="relative z-10">
 					<div className="pointer-events-none absolute inset-x-0 bottom-[calc(100%-1px)] z-20 flex flex-col items-center gap-1.5">
+						{onToggleContextSession ? (
+							<SessionContextInjector
+								candidates={contextSessionCandidates}
+								selectedSessionIds={selectedContextSessionIds}
+								onToggleSession={onToggleContextSession}
+							/>
+						) : null}
 						{isStackTip ? (
 							<ComposerQuickActions
 								onAction={handleQuickAction}

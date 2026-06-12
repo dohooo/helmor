@@ -59,6 +59,10 @@ import {
 } from "@/lib/workspace-helpers";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 import {
+	buildSessionContextPrompt,
+	type SessionContextReference,
+} from "../session-context-prompt";
+import {
 	createStreamEventDispatcher,
 	createStreamFlushers,
 	type StreamAccumulator,
@@ -134,6 +138,9 @@ type UseConversationStreamingArgs = {
 	 *  follow-up routing and the queue-drain trigger; survives this
 	 *  hook's unmount/remount. */
 	activeStreams: readonly ActiveStreamSummary[];
+	getSessionContextReferences?: (
+		sessionId: string,
+	) => readonly SessionContextReference[];
 	onInteractionSessionsChange?: (
 		sessionWorkspaceMap: Map<string, string>,
 		interactionCounts: Map<string, number>,
@@ -152,6 +159,7 @@ export function useConversationStreaming({
 	followUpBehavior,
 	submitQueue,
 	activeStreams,
+	getSessionContextReferences,
 	onInteractionSessionsChange,
 	onSessionCompleted,
 	onSessionAborted,
@@ -834,7 +842,14 @@ export function useConversationStreaming({
 			// side persists to `session_messages` as the user_prompt body.
 			const promptPrefix =
 				isFirstUserMessage && !isCompactCommand
-					? resolveGeneralPreferencePrefix(repoPreferences)
+					? [
+							buildSessionContextPrompt(
+								getSessionContextReferences?.(targetSessionId) ?? [],
+							),
+							resolveGeneralPreferencePrefix(repoPreferences),
+						]
+							.filter((prefix): prefix is string => Boolean(prefix?.trim()))
+							.join("\n\n") || null
 					: null;
 			// Pasted-tag spans inside the prompt — rendered as tag chips (the
 			// composer badge, post-send) instead of inlining the full paste.
@@ -1064,6 +1079,7 @@ export function useConversationStreaming({
 			composerContextKey,
 			displayedSessionId,
 			displayedWorkspaceId,
+			getSessionContextReferences,
 			invalidateConversationQueries,
 			markSendingState,
 			pushToast,

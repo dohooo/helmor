@@ -644,6 +644,144 @@ describe("useConversationStreaming", () => {
 		);
 	});
 
+	it("sends selected prior sessions via promptPrefix on the first prompt", async () => {
+		apiMocks.startAgentMessageStream.mockImplementation(async () => {});
+		const getSessionContextReferences = vi.fn().mockReturnValue([
+			{
+				id: "session-prior",
+				title: "Plan auth flow",
+				workspaceId: "workspace-1",
+			},
+		]);
+
+		const { Wrapper, queryClient } = createWrapper();
+		queryClient.setQueryData(helmorQueryKeys.workspaceSessions("workspace-1"), [
+			{
+				id: "session-1",
+				title: "Untitled",
+			},
+		]);
+		queryClient.setQueryData(sessionThreadCacheKey("session-1"), []);
+
+		const { result } = renderHook(
+			() =>
+				useConversationStreaming({
+					composerContextKey: "session:session-1",
+					displayedSelectedModelId: MODEL.id,
+					displayedSessionId: "session-1",
+					displayedWorkspaceId: "workspace-1",
+					repoId: "repo-1",
+					selectionPending: false,
+					followUpBehavior: "steer",
+					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
+					getSessionContextReferences,
+				}),
+			{ wrapper: Wrapper },
+		);
+
+		await act(async () => {
+			await result.current.handleComposerSubmit({
+				prompt: "Continue the work.",
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/repo",
+				effortLevel: "high",
+				permissionMode: "default",
+				fastMode: false,
+			});
+		});
+
+		expect(getSessionContextReferences).toHaveBeenCalledWith("session-1");
+		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
+			expect.objectContaining({
+				prompt: "Continue the work.",
+				promptPrefix: expect.stringContaining(
+					"session get-messages session-prior --position tail --limit 12 --body-limit 2000 --json",
+				),
+			}),
+			expect.any(Function),
+		);
+		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
+			expect.objectContaining({
+				promptPrefix: expect.stringContaining(
+					"Stop once you have enough context",
+				),
+			}),
+			expect.any(Function),
+		);
+	});
+
+	it("uses the latest selected session references when the selection changes before submit", async () => {
+		apiMocks.startAgentMessageStream.mockImplementation(async () => {});
+
+		const { Wrapper, queryClient } = createWrapper();
+		queryClient.setQueryData(helmorQueryKeys.workspaceSessions("workspace-1"), [
+			{
+				id: "session-1",
+				title: "Untitled",
+			},
+		]);
+		queryClient.setQueryData(sessionThreadCacheKey("session-1"), []);
+
+		const emptyReferences = vi.fn().mockReturnValue([]);
+		const selectedReferences = vi.fn().mockReturnValue([
+			{
+				id: "session-prior",
+				title: "Plan auth flow",
+				workspaceId: "workspace-1",
+			},
+		]);
+		const { result, rerender } = renderHook(
+			({ getSessionContextReferences }) =>
+				useConversationStreaming({
+					composerContextKey: "session:session-1",
+					displayedSelectedModelId: MODEL.id,
+					displayedSessionId: "session-1",
+					displayedWorkspaceId: "workspace-1",
+					repoId: "repo-1",
+					selectionPending: false,
+					followUpBehavior: "steer",
+					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
+					getSessionContextReferences,
+				}),
+			{
+				wrapper: Wrapper,
+				initialProps: { getSessionContextReferences: emptyReferences },
+			},
+		);
+
+		rerender({ getSessionContextReferences: selectedReferences });
+
+		await act(async () => {
+			await result.current.handleComposerSubmit({
+				prompt: "Continue after the prior session.",
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/repo",
+				effortLevel: "high",
+				permissionMode: "default",
+				fastMode: false,
+			});
+		});
+
+		expect(emptyReferences).not.toHaveBeenCalled();
+		expect(selectedReferences).toHaveBeenCalledWith("session-1");
+		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
+			expect.objectContaining({
+				promptPrefix: expect.stringContaining(
+					"session get-messages session-prior --position tail --limit 12 --body-limit 2000 --json",
+				),
+			}),
+			expect.any(Function),
+		);
+	});
+
 	it("restores draft and surfaces error when steer is rejected", async () => {
 		apiMocks.startAgentMessageStream.mockImplementation(
 			async (_payload: unknown, _onEvent: (event: unknown) => void) => {

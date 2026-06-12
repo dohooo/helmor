@@ -14,14 +14,18 @@ import { FileLinkProvider } from "@/features/panel/message-components/file-link-
 import type { SessionCloseRequest } from "@/features/panel/use-confirm-session-close";
 import {
 	type ActiveStreamSummary,
+	type AgentModelSection,
+	type AgentProvider,
 	type ChangeRequestInfo,
 	subscribeUiMutations,
 	updateSessionSettings,
+	type WorkspaceSessionSummary,
 } from "@/lib/api";
 import type { ResolvedComposerInsertRequest } from "@/lib/composer-insert";
 import { insertRequestMatchesComposer } from "@/lib/composer-insert";
 import { hasUnresolvedPlanReview } from "@/lib/plan-review";
 import {
+	agentModelSectionsQueryOptions,
 	sessionThreadMessagesQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
@@ -35,12 +39,23 @@ import { cn } from "@/lib/utils";
 import {
 	getComposerContextKey,
 	parseSessionIdFromContextKey,
+	resolveSessionDisplayProvider,
 } from "@/lib/workspace-helpers";
+import {
+	buildSessionContextCandidates,
+	type SessionContextCandidate,
+} from "../panel/session-context";
 import {
 	type ComposerSubmitPayload,
 	useConversationStreaming,
 } from "./hooks/use-streaming";
 import { useWatchSessionStream } from "./hooks/use-watch-session-stream";
+import type { SessionContextReference } from "./session-context-prompt";
+
+const EMPTY_WORKSPACE_SESSIONS: readonly WorkspaceSessionSummary[] = [];
+const EMPTY_MODEL_SECTIONS: AgentModelSection[] = [];
+const EMPTY_CONTEXT_SESSION_CANDIDATES: readonly SessionContextCandidate[] = [];
+const EMPTY_SELECTED_CONTEXT_SESSION_IDS: readonly string[] = [];
 
 export type { ComposerSubmitPayload } from "./hooks/use-streaming";
 
@@ -270,6 +285,100 @@ export const WorkspaceConversationContainer = memo(
 		const { settings } = useSettings();
 		const submitQueueApi = useSubmitQueueApi();
 
+		const { data: workspaceSessionsForContext = EMPTY_WORKSPACE_SESSIONS } =
+			useQuery({
+				...workspaceSessionsQueryOptions(displayedWorkspaceId ?? "__none__"),
+				enabled: Boolean(displayedWorkspaceId),
+			});
+		const { data: modelSectionsForContext = EMPTY_MODEL_SECTIONS } = useQuery(
+			agentModelSectionsQueryOptions(),
+		);
+		const displayProviderBySessionId = useMemo<
+			Partial<Record<string, AgentProvider>>
+		>(() => {
+			const providers: Partial<Record<string, AgentProvider>> = {};
+			for (const session of workspaceSessionsForContext) {
+				const provider = resolveSessionDisplayProvider({
+					session,
+					modelSelections: composerModelSelections,
+					modelSections: modelSectionsForContext,
+					settingsDefaultModelId: settings.defaultModelId,
+				});
+				if (provider) {
+					providers[session.id] = provider;
+				}
+			}
+			return providers;
+		}, [
+			composerModelSelections,
+			modelSectionsForContext,
+			settings.defaultModelId,
+			workspaceSessionsForContext,
+		]);
+		const isTerminalSession = useMemo(
+			() =>
+				workspaceSessionsForContext.find((s) => s.id === displayedSessionId)
+					?.sessionKind === "terminal",
+			[workspaceSessionsForContext, displayedSessionId],
+		);
+		const [contextSessionSelections, setContextSessionSelections] = useState<
+			Record<string, string[]>
+		>({});
+		const selectedContextSessionIds = useMemo(
+			() =>
+				displayedSessionId
+					? (contextSessionSelections[displayedSessionId] ?? [])
+					: EMPTY_SELECTED_CONTEXT_SESSION_IDS,
+			[contextSessionSelections, displayedSessionId],
+		);
+		const handleToggleContextSession = useCallback(
+			(sessionId: string) => {
+				if (!displayedSessionId) return;
+				setContextSessionSelections((current) => {
+					const selected = current[displayedSessionId] ?? [];
+					const next = selected.includes(sessionId)
+						? selected.filter((id) => id !== sessionId)
+						: [...selected, sessionId];
+					if (next.length === 0) {
+						const { [displayedSessionId]: _removed, ...rest } = current;
+						return rest;
+					}
+					return { ...current, [displayedSessionId]: next };
+				});
+			},
+			[displayedSessionId],
+		);
+		const getSessionContextReferences = useCallback(
+			(sessionId: string): readonly SessionContextReference[] => {
+				if (sessionId !== displayedSessionId) {
+					return [];
+				}
+				const selectedIds = contextSessionSelections[sessionId] ?? [];
+				if (selectedIds.length === 0) {
+					return [];
+				}
+				const sessionsById = new Map(
+					workspaceSessionsForContext.map((session) => [session.id, session]),
+				);
+				const references: SessionContextReference[] = [];
+				for (const id of selectedIds) {
+					const session = sessionsById.get(id);
+					if (!session) continue;
+					references.push({
+						id: session.id,
+						title: session.title,
+						workspaceId: session.workspaceId,
+					});
+				}
+				return references;
+			},
+			[
+				contextSessionSelections,
+				displayedSessionId,
+				workspaceSessionsForContext,
+			],
+		);
+
 		const {
 			activeSendError,
 			handleComposerSubmit,
@@ -302,6 +411,7 @@ export const WorkspaceConversationContainer = memo(
 			followUpBehavior: settings.followUpBehavior,
 			submitQueue: submitQueueApi,
 			activeStreams,
+			getSessionContextReferences,
 			onInteractionSessionsChange,
 			onSessionCompleted,
 			onSessionAborted,
@@ -316,17 +426,6 @@ export const WorkspaceConversationContainer = memo(
 
 		// Terminal sessions render a live PTY (no SDK thread): skip the message
 		// query + composer for them.
-		const sessionsQuery = useQuery({
-			...workspaceSessionsQueryOptions(displayedWorkspaceId ?? "__none__"),
-			enabled: Boolean(displayedWorkspaceId),
-		});
-		const isTerminalSession = useMemo(
-			() =>
-				(sessionsQuery.data ?? []).find((s) => s.id === displayedSessionId)
-					?.sessionKind === "terminal",
-			[sessionsQuery.data, displayedSessionId],
-		);
-
 		// Derived from thread messages — survives refresh / session switch.
 		const threadQuery = useQuery({
 			...sessionThreadMessagesQueryOptions(displayedSessionId ?? "__none__"),
@@ -357,6 +456,33 @@ export const WorkspaceConversationContainer = memo(
 			isSending || displayedSessionBusy || hasPendingOptimisticSubmit;
 		const sendingForComposer = isSending || displayedSessionStoppable;
 		const panelBusySessionIds = busySessionIds ?? localBusySessionIds;
+		const currentSessionForContext =
+			workspaceSessionsForContext.find(
+				(session) => session.id === displayedSessionId,
+			) ?? null;
+		const showSessionContextInjector =
+			Boolean(displayedSessionId) &&
+			!isTerminalSession &&
+			!sendingForComposer &&
+			threadQuery.data !== undefined &&
+			(threadQuery.data ?? []).every((message) => message.role !== "user") &&
+			currentSessionForContext?.sessionKind !== "terminal";
+		const sessionContextCandidates = useMemo(
+			() =>
+				showSessionContextInjector
+					? buildSessionContextCandidates({
+							sessions: workspaceSessionsForContext,
+							currentSessionId: displayedSessionId,
+							displayProviderBySessionId,
+						})
+					: EMPTY_CONTEXT_SESSION_CANDIDATES,
+			[
+				displayProviderBySessionId,
+				displayedSessionId,
+				showSessionContextInjector,
+				workspaceSessionsForContext,
+			],
+		);
 
 		// Auto-activate plan button when AI enters plan mode on its own.
 		const prevPlanReviewRef = useRef(false);
@@ -689,6 +815,9 @@ export const WorkspaceConversationContainer = memo(
 						onSteerQueued={handleSteerQueued}
 						onRemoveQueued={handleRemoveQueued}
 						onEditQueued={handleEditQueued}
+						contextSessionCandidates={sessionContextCandidates}
+						selectedContextSessionIds={selectedContextSessionIds}
+						onToggleContextSession={handleToggleContextSession}
 						contextPanelOpen={contextPanelOpen}
 						onToggleContextPanel={onToggleContextPanel}
 						startSubmitMenu={composerStartSubmitMenu}
