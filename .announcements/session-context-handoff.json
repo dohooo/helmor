@@ -1,0 +1,10 @@
+{
+	"items": [
+		{
+			"text": "New chats can now inject selected previous sessions as context, so agents can continue work without pasting full transcripts."
+		},
+		{
+			"text": "🎨 We polished the interface across the composer, tabs, shortcuts, and empty states."
+		}
+	]
+}
