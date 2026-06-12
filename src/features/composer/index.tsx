@@ -35,6 +35,7 @@ import { ShimmerText } from "@/components/ui/shimmer-text";
 import {
 	Tooltip,
 	TooltipContent,
+	TooltipProvider,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type { PendingPermission } from "@/features/conversation/hooks/use-streaming";
@@ -782,671 +783,683 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	);
 
 	return (
-		<div
-			ref={composerRootRef}
-			aria-label="Workspace composer"
-			data-focus-scope={focusScope}
-			onKeyDownCapture={handleComposerKeyDownCapture}
-			className={cn(
-				// Named container: the footer toolbar sheds label text and
-				// re-aligns in narrow surfaces (quick panel, mini mode) via
-				// pure CSS container queries — no JS width checks.
-				"@container/composer relative flex flex-col rounded-xl border border-border/70 bg-sidebar dark:border-border/40",
-				// Pending-interaction panels fill the shell edge-to-edge and own
-				// their own internal padding; the default composer gets the
-				// legacy px-4 pt-3 pb-3 breathing room.
-				hasPendingInteraction ? "p-0" : "px-4 pb-3 pt-3",
-				inputDisabled &&
-					!hasPendingInteraction &&
-					"cursor-not-allowed opacity-60",
-			)}
-		>
-			{/* Dev-only render counter; renders null (no DOM) and is dropped
+		<TooltipProvider delayDuration={0}>
+			<div
+				ref={composerRootRef}
+				aria-label="Workspace composer"
+				data-focus-scope={focusScope}
+				onKeyDownCapture={handleComposerKeyDownCapture}
+				className={cn(
+					// Named container: the footer toolbar sheds label text and
+					// re-aligns in narrow surfaces (quick panel, mini mode) via
+					// pure CSS container queries — no JS width checks.
+					"@container/composer relative flex flex-col rounded-xl border border-border/70 bg-sidebar dark:border-border/40",
+					// Pending-interaction panels fill the shell edge-to-edge and own
+					// their own internal padding; the default composer gets the
+					// legacy px-4 pt-3 pb-3 breathing room.
+					hasPendingInteraction ? "p-0" : "px-4 pb-3 pt-3",
+					inputDisabled &&
+						!hasPendingInteraction &&
+						"cursor-not-allowed opacity-60",
+				)}
+			>
+				{/* Dev-only render counter; renders null (no DOM) and is dropped
 			    from prod builds since `import.meta.env.DEV` is statically
 			    false there. */}
-			{import.meta.env.DEV ? (
-				<ComposerRenderProbe
-					contextKey={contextKey}
-					instanceId={instanceIdRef.current}
-				/>
-			) : null}
-			<label htmlFor="workspace-input" className="sr-only">
-				Workspace input
-			</label>
+				{import.meta.env.DEV ? (
+					<ComposerRenderProbe
+						contextKey={contextKey}
+						instanceId={instanceIdRef.current}
+					/>
+				) : null}
+				<label htmlFor="workspace-input" className="sr-only">
+					Workspace input
+				</label>
 
-			{hasPendingUserInput ? (
-				<UserInputPanel
-					userInput={pendingUserInput!}
-					disabled={disabled || userInputResponsePending}
-					onResponse={onUserInputResponse}
-				/>
-			) : hasPendingPermission ? (
-				<PermissionPanel
-					permission={pendingPermission!}
-					disabled={disabled}
-					onResponse={onPermissionResponse}
-				/>
-			) : hasGoalReplace ? (
-				<GoalReplaceConfirm
-					currentObjective={goalReplace.currentObjective}
-					newObjective={goalReplace.newObjective}
-					onReplace={goalReplace.onReplace}
-					onCancel={goalReplace.onCancel}
-					disabled={disabled}
-				/>
-			) : (
-				<>
-					{onRemoveLinkedDirectory ? (
-						<ContextBar
-							directories={linkedDirectories.map((path) => {
-								const match = addDirCandidates.find(
-									(c) => c.absolutePath === path,
-								);
-								// Display name follows the sidebar's rule
-								// (`row-item.tsx`): if the workspace has a branch,
-								// show the humanized last segment of the branch
-								// (`natllian/refactor-messages` → `Refactor
-								// Messages`). Otherwise fall back to the workspace
-								// title. For Browse-picked arbitrary paths the
-								// match is absent and ContextBar falls back to the
-								// basename of `path`.
-								const name = match?.branch
-									? humanizeBranch(match.branch)
-									: match?.title;
-								return {
-									path,
-									name,
-									branch: match?.branch ?? null,
-									repoIconSrc: match?.repoIconSrc ?? null,
-									repoInitials: match?.repoInitials ?? null,
-									repoName: match?.repoName ?? null,
-								};
-							})}
-							onRemove={onRemoveLinkedDirectory}
-							disabled={linkedDirectoriesDisabled}
-						/>
-					) : null}
-					<LexicalComposer initialConfig={initialConfig}>
-						<div
-							className="relative"
-							onFocusCapture={() => setIsInputFocused(true)}
-							onBlurCapture={(event) => {
-								if (
-									event.currentTarget.contains(
-										event.relatedTarget as Node | null,
-									)
-								) {
-									return;
-								}
-								setIsInputFocused(false);
-							}}
-						>
-							<PlainTextPlugin
-								contentEditable={
-									<ContentEditable
-										id="workspace-input"
-										aria-label="Workspace input"
-										aria-multiline
-										className={cn(
-											"composer-editor min-h-[64px] max-h-[240px] resize-none overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-body leading-5 tracking-[-0.01em] text-foreground outline-none",
-											showFocusHint && "pr-28",
-										)}
-									/>
-								}
-								placeholder={
-									<div className="pointer-events-none absolute left-0 top-0 text-body leading-5 tracking-[-0.01em] text-muted-foreground/70">
-										{hasPlanReview && permissionMode === "plan"
-											? "Describe what to change, then click Request Changes"
-											: (placeholder ??
-												"Ask to make changes, @mention files, run /commands")}
-									</div>
-								}
-								ErrorBoundary={LexicalErrorBoundary}
-							/>
-							{showTerminalDirectiveHint ? (
-								<div className="pointer-events-none absolute left-[88px] top-0 text-body leading-5 tracking-[-0.01em] text-muted-foreground/70">
-									Send to start in Terminal mode
-								</div>
-							) : null}
-							{showFocusHint && focusShortcut ? (
-								<div className="pointer-events-none absolute right-0 top-0 hidden h-5 items-center gap-1 text-ui leading-5 tracking-[-0.01em] text-muted-foreground/70 sm:flex">
-									<InlineShortcutDisplay hotkey={focusShortcut} />
-									<span>to focus</span>
-								</div>
-							) : null}
-						</div>
-						<HistoryPlugin />
-						<SlashCommandPlugin
-							commands={slashCommands}
-							isLoading={slashCommandsLoading}
-							isError={slashCommandsError}
-							onRetry={onRetrySlashCommands}
-							onClientAction={(name, nodeToReplace) => {
-								// Built-in /add-dir: swap the typed `/add-dir` text
-								// for a purple pill decorator node. Subsequent typing
-								// is picked up by AddDirTypeaheadPlugin. Any other
-								// client-action name is a no-op here for now.
-								if (name === "add-dir" && editorRef.current) {
-									$insertAddDirTrigger(editorRef.current, nodeToReplace);
-								}
-								// `/workflows` opens the independent progress panel and
-								// is NEVER sent — drop the typed token so the composer
-								// returns to empty.
-								if (name === "workflows") {
-									if (nodeToReplace) {
-										editorRef.current?.update(() => {
-											nodeToReplace.remove();
-										});
-									}
-									onOpenWorkflows?.();
-								}
-							}}
-							popupAnchorRef={composerRootRef}
-						/>
-						<AddDirTypeaheadPlugin
-							candidates={addDirCandidates}
-							linkedDirectories={linkedDirectories}
-							onPick={onPickAddDir}
-							popupAnchorRef={composerRootRef}
-						/>
-						<FileMentionPlugin
-							workspaceRootPath={workspaceRootPath}
-							popupAnchorRef={composerRootRef}
-						/>
-						<SubmitPlugin
-							onSubmit={handleSubmit}
-							onSubmitOpposite={handleSubmitOpposite}
-							toggleHotkey={toggleFollowUpShortcut}
-							disabled={submitDisabledForPlugin}
-						/>
-						<CompositionGuardPlugin />
-						<PasteImagePlugin sessionId={effectiveSessionId} />
-						<DropFilePlugin />
-						<AutoResizePlugin minHeight={64} maxHeight={240} />
-						<EditorRefPlugin editorRef={editorRef} />
-						<DraftPersistencePlugin
-							contextKey={contextKey}
-							restoreDraft={restoreDraft}
-							restoreImages={restoreImages}
-							restoreFiles={restoreFiles}
-							restoreCustomTags={restoreCustomTags}
-							restoreEditorState={restoreEditorState}
-							restoreNonce={restoreNonce}
-						/>
-						{getInputHistory ? (
-							<HistoryRecallPlugin
-								getHistory={getInputHistory}
-								scopeKey={contextKey}
+				{hasPendingUserInput ? (
+					<UserInputPanel
+						userInput={pendingUserInput!}
+						disabled={disabled || userInputResponsePending}
+						onResponse={onUserInputResponse}
+					/>
+				) : hasPendingPermission ? (
+					<PermissionPanel
+						permission={pendingPermission!}
+						disabled={disabled}
+						onResponse={onPermissionResponse}
+					/>
+				) : hasGoalReplace ? (
+					<GoalReplaceConfirm
+						currentObjective={goalReplace.currentObjective}
+						newObjective={goalReplace.newObjective}
+						onReplace={goalReplace.onReplace}
+						onCancel={goalReplace.onCancel}
+						disabled={disabled}
+					/>
+				) : (
+					<>
+						{onRemoveLinkedDirectory ? (
+							<ContextBar
+								directories={linkedDirectories.map((path) => {
+									const match = addDirCandidates.find(
+										(c) => c.absolutePath === path,
+									);
+									// Display name follows the sidebar's rule
+									// (`row-item.tsx`): if the workspace has a branch,
+									// show the humanized last segment of the branch
+									// (`natllian/refactor-messages` → `Refactor
+									// Messages`). Otherwise fall back to the workspace
+									// title. For Browse-picked arbitrary paths the
+									// match is absent and ContextBar falls back to the
+									// basename of `path`.
+									const name = match?.branch
+										? humanizeBranch(match.branch)
+										: match?.title;
+									return {
+										path,
+										name,
+										branch: match?.branch ?? null,
+										repoIconSrc: match?.repoIconSrc ?? null,
+										repoInitials: match?.repoInitials ?? null,
+										repoName: match?.repoName ?? null,
+									};
+								})}
+								onRemove={onRemoveLinkedDirectory}
+								disabled={linkedDirectoriesDisabled}
 							/>
 						) : null}
-						<EditablePlugin disabled={inputDisabled} />
-						<HasContentPlugin onChange={setHasContent} />
-						<ShimmerKeywordPlugin keywords={SHIMMER_KEYWORDS} />
-						<TerminalDirectivePlugin
-							enabled={Boolean(onChangeTerminalMode) && !inputDisabled}
-							onDirectiveChange={setTerminalDirectiveState}
-						/>
-					</LexicalComposer>
-
-					{sendError ? (
-						<div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-small text-muted-foreground">
-							{sendError}
-						</div>
-					) : null}
-
-					<div className="@max-lg/composer:items-center mt-2.5 flex items-end justify-between gap-3">
-						<div className="flex flex-wrap items-center gap-2">
-							{modelsLoading ? (
-								<ShimmerText className="px-1 py-0.5 text-ui text-muted-foreground">
-									Loading models…
-								</ShimmerText>
-							) : (
-								<>
-									<DropdownMenu
-										open={modelPickerOpen}
-										onOpenChange={setModelPickerOpen}
-									>
-										<DropdownMenuTrigger
-											disabled={toolbarDisabled}
+						<LexicalComposer initialConfig={initialConfig}>
+							<div
+								className="relative"
+								onFocusCapture={() => setIsInputFocused(true)}
+								onBlurCapture={(event) => {
+									if (
+										event.currentTarget.contains(
+											event.relatedTarget as Node | null,
+										)
+									) {
+										return;
+									}
+									setIsInputFocused(false);
+								}}
+							>
+								<PlainTextPlugin
+									contentEditable={
+										<ContentEditable
+											id="workspace-input"
+											aria-label="Workspace input"
+											aria-multiline
 											className={cn(
-												`flex items-center gap-1.5 ${composerToolbarTriggerClassName}`,
-												composerToolbarActiveClassName,
-												toolbarDisabled &&
-													"cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground",
+												"composer-editor min-h-[64px] max-h-[240px] resize-none overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-body leading-5 tracking-[-0.01em] text-foreground outline-none",
+												showFocusHint && "pr-28",
 											)}
+										/>
+									}
+									placeholder={
+										<div className="pointer-events-none absolute left-0 top-0 text-body leading-5 tracking-[-0.01em] text-muted-foreground/70">
+											{hasPlanReview && permissionMode === "plan"
+												? "Describe what to change, then click Request Changes"
+												: (placeholder ??
+													"Ask to make changes, @mention files, run /commands")}
+										</div>
+									}
+									ErrorBoundary={LexicalErrorBoundary}
+								/>
+								{showTerminalDirectiveHint ? (
+									<div className="pointer-events-none absolute left-[88px] top-0 text-body leading-5 tracking-[-0.01em] text-muted-foreground/70">
+										Send to start in Terminal mode
+									</div>
+								) : null}
+								{showFocusHint && focusShortcut ? (
+									<div className="pointer-events-none absolute right-0 top-0 hidden h-5 items-center gap-1 text-ui leading-5 tracking-[-0.01em] text-muted-foreground/70 sm:flex">
+										<InlineShortcutDisplay hotkey={focusShortcut} />
+										<span>to focus</span>
+									</div>
+								) : null}
+							</div>
+							<HistoryPlugin />
+							<SlashCommandPlugin
+								commands={slashCommands}
+								isLoading={slashCommandsLoading}
+								isError={slashCommandsError}
+								onRetry={onRetrySlashCommands}
+								onClientAction={(name, nodeToReplace) => {
+									// Built-in /add-dir: swap the typed `/add-dir` text
+									// for a purple pill decorator node. Subsequent typing
+									// is picked up by AddDirTypeaheadPlugin. Any other
+									// client-action name is a no-op here for now.
+									if (name === "add-dir" && editorRef.current) {
+										$insertAddDirTrigger(editorRef.current, nodeToReplace);
+									}
+									// `/workflows` opens the independent progress panel and
+									// is NEVER sent — drop the typed token so the composer
+									// returns to empty.
+									if (name === "workflows") {
+										if (nodeToReplace) {
+											editorRef.current?.update(() => {
+												nodeToReplace.remove();
+											});
+										}
+										onOpenWorkflows?.();
+									}
+								}}
+								popupAnchorRef={composerRootRef}
+							/>
+							<AddDirTypeaheadPlugin
+								candidates={addDirCandidates}
+								linkedDirectories={linkedDirectories}
+								onPick={onPickAddDir}
+								popupAnchorRef={composerRootRef}
+							/>
+							<FileMentionPlugin
+								workspaceRootPath={workspaceRootPath}
+								popupAnchorRef={composerRootRef}
+							/>
+							<SubmitPlugin
+								onSubmit={handleSubmit}
+								onSubmitOpposite={handleSubmitOpposite}
+								toggleHotkey={toggleFollowUpShortcut}
+								disabled={submitDisabledForPlugin}
+							/>
+							<CompositionGuardPlugin />
+							<PasteImagePlugin sessionId={effectiveSessionId} />
+							<DropFilePlugin />
+							<AutoResizePlugin minHeight={64} maxHeight={240} />
+							<EditorRefPlugin editorRef={editorRef} />
+							<DraftPersistencePlugin
+								contextKey={contextKey}
+								restoreDraft={restoreDraft}
+								restoreImages={restoreImages}
+								restoreFiles={restoreFiles}
+								restoreCustomTags={restoreCustomTags}
+								restoreEditorState={restoreEditorState}
+								restoreNonce={restoreNonce}
+							/>
+							{getInputHistory ? (
+								<HistoryRecallPlugin
+									getHistory={getInputHistory}
+									scopeKey={contextKey}
+								/>
+							) : null}
+							<EditablePlugin disabled={inputDisabled} />
+							<HasContentPlugin onChange={setHasContent} />
+							<ShimmerKeywordPlugin keywords={SHIMMER_KEYWORDS} />
+							<TerminalDirectivePlugin
+								enabled={Boolean(onChangeTerminalMode) && !inputDisabled}
+								onDirectiveChange={setTerminalDirectiveState}
+							/>
+						</LexicalComposer>
+
+						{sendError ? (
+							<div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-small text-muted-foreground">
+								{sendError}
+							</div>
+						) : null}
+
+						<div className="@max-lg/composer:items-center mt-2.5 flex items-end justify-between gap-3">
+							<div className="flex flex-wrap items-center gap-2">
+								{modelsLoading ? (
+									<ShimmerText className="px-1 py-0.5 text-ui text-muted-foreground">
+										Loading models…
+									</ShimmerText>
+								) : (
+									<>
+										<DropdownMenu
+											open={modelPickerOpen}
+											onOpenChange={setModelPickerOpen}
 										>
-											<ModelIcon
-												model={selectedModel}
-												className="size-[13px]"
-											/>
-											<span>
-												{selectedModel?.label ??
-													selectedModelId ??
-													"Select model"}
-											</span>
-											<ChevronDown
-												className="size-3 opacity-40"
-												strokeWidth={2}
-											/>
-										</DropdownMenuTrigger>
-
-										<DropdownMenuContent
-											side="top"
-											align="start"
-											sideOffset={4}
-											className="min-w-[17rem]"
-										>
-											{modelSections.map((section, index) => (
-												<DropdownMenuGroup key={section.id}>
-													{index > 0 ? <DropdownMenuSeparator /> : null}
-													<DropdownMenuLabel>{section.label}</DropdownMenuLabel>
-													{section.options.map((option) => (
-														<DropdownMenuItem
-															key={option.id}
-															disabled={toolbarDisabled}
-															onClick={() => {
-																onSelectModel(option.id);
-															}}
-															className="flex items-center justify-between gap-3"
-														>
-															<div className="grid min-w-0 grid-cols-[1rem_minmax(0,1fr)] items-center gap-3">
-																<span className="flex size-4 items-center justify-center text-muted-foreground">
-																	<ModelIcon
-																		model={option}
-																		className="size-4"
-																	/>
-																</span>
-																<span className="truncate font-mono tabular-nums">
-																	{option.label}
-																</span>
-															</div>
-															{option.id === selectedModel?.id ? (
-																<span className="text-mini text-foreground">
-																	✓
-																</span>
-															) : null}
-														</DropdownMenuItem>
-													))}
-													{section.id === "claude" &&
-													!hasConfiguredClaudeProviderModels ? (
-														<DropdownMenuItem
-															onClick={handleOpenProviderSettings}
-															className="flex items-center gap-3"
-														>
-															<span className="flex size-4 items-center justify-center text-muted-foreground">
-																<Plus className="size-4" strokeWidth={1.8} />
-															</span>
-															<span className="font-mono tabular-nums">
-																Add custom model...
-															</span>
-														</DropdownMenuItem>
-													) : null}
-													{section.id === "opencode" &&
-													!hasOpencodeCustomProviders ? (
-														<DropdownMenuItem
-															onClick={handleOpenProviderSettings}
-															className="flex items-center gap-3"
-														>
-															<span className="flex size-4 items-center justify-center text-muted-foreground">
-																<Plus className="size-4" strokeWidth={1.8} />
-															</span>
-															<span className="font-mono tabular-nums">
-																Add custom model...
-															</span>
-														</DropdownMenuItem>
-													) : null}
-												</DropdownMenuGroup>
-											))}
-										</DropdownMenuContent>
-									</DropdownMenu>
-
-									{onChangeFastMode && supportsFastMode && (
-										<Tooltip>
-											<TooltipTrigger asChild>
-												<ComposerButton
-													aria-label="Fast mode"
-													disabled={toolbarDisabled}
-													className={cn(
-														"relative",
-														composerToolbarTriggerClassName,
-														fastMode
-															? "text-amber-500 hover:bg-amber-500/10 hover:text-amber-500"
-															: "text-muted-foreground",
-														toolbarDisabled
-															? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
-															: null,
-													)}
-													onClick={() => onChangeFastMode(!fastMode)}
-												>
-													<span className="relative block size-[14px]">
-														<Zap
-															className={cn(
-																"absolute inset-0 z-0 size-[14px]",
-																fastMode ? null : "opacity-55",
-															)}
-															strokeWidth={1.8}
-														/>
-														{showFastModePrelude ? (
-															<FastModeLottieIcon className="absolute inset-[-5px] z-10 drop-shadow-[0_0_4px_rgba(245,158,11,0.5)]" />
-														) : null}
-													</span>
-												</ComposerButton>
-											</TooltipTrigger>
-											<TooltipContent side="top" sideOffset={4}>
-												<span>Fast mode{fastMode ? " (on)" : ""}</span>
-											</TooltipContent>
-										</Tooltip>
-									)}
-
-									{supportsEffort && (
-										<DropdownMenu>
 											<DropdownMenuTrigger
 												disabled={toolbarDisabled}
 												className={cn(
-													`flex items-center gap-0.5 ${composerToolbarTriggerClassName}`,
+													`flex items-center gap-1.5 ${composerToolbarTriggerClassName}`,
 													composerToolbarActiveClassName,
-													toolbarDisabled
-														? "cursor-not-allowed opacity-45 hover:bg-transparent"
-														: null,
+													toolbarDisabled &&
+														"cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground",
 												)}
 											>
-												<span className="capitalize">
-													{effectiveEffort === "xhigh"
-														? "Extra High"
-														: effectiveEffort}
+												<ModelIcon
+													model={selectedModel}
+													className="size-[13px]"
+												/>
+												<span>
+													{selectedModel?.label ??
+														selectedModelId ??
+														"Select model"}
 												</span>
 												<ChevronDown
-													className="size-3 text-muted-foreground/40"
+													className="size-3 opacity-40"
 													strokeWidth={2}
 												/>
 											</DropdownMenuTrigger>
+
 											<DropdownMenuContent
 												side="top"
 												align="start"
 												sideOffset={4}
-												className="min-w-[11rem]"
+												className="min-w-[17rem]"
 											>
-												<DropdownMenuGroup>
-													<DropdownMenuLabel>Effort</DropdownMenuLabel>
-													{availableEffortLevels.map((level) => (
-														<DropdownMenuItem
-															key={level}
-															disabled={toolbarDisabled}
-															onClick={() => onSelectEffort(level)}
-															className="flex items-center justify-between gap-3"
-														>
-															<div className="flex items-center gap-2.5">
-																<EffortBrainIcon level={level} />
-																<span className="capitalize">
-																	{level === "xhigh" ? "Extra High" : level}
+												{modelSections.map((section, index) => (
+													<DropdownMenuGroup key={section.id}>
+														{index > 0 ? <DropdownMenuSeparator /> : null}
+														<DropdownMenuLabel>
+															{section.label}
+														</DropdownMenuLabel>
+														{section.options.map((option) => (
+															<DropdownMenuItem
+																key={option.id}
+																disabled={toolbarDisabled}
+																onClick={() => {
+																	onSelectModel(option.id);
+																}}
+																className="flex items-center justify-between gap-3"
+															>
+																<div className="grid min-w-0 grid-cols-[1rem_minmax(0,1fr)] items-center gap-3">
+																	<span className="flex size-4 items-center justify-center text-muted-foreground">
+																		<ModelIcon
+																			model={option}
+																			className="size-4"
+																		/>
+																	</span>
+																	<span className="truncate font-mono tabular-nums">
+																		{option.label}
+																	</span>
+																</div>
+																{option.id === selectedModel?.id ? (
+																	<span className="text-mini text-foreground">
+																		✓
+																	</span>
+																) : null}
+															</DropdownMenuItem>
+														))}
+														{section.id === "claude" &&
+														!hasConfiguredClaudeProviderModels ? (
+															<DropdownMenuItem
+																onClick={handleOpenProviderSettings}
+																className="flex items-center gap-3"
+															>
+																<span className="flex size-4 items-center justify-center text-muted-foreground">
+																	<Plus className="size-4" strokeWidth={1.8} />
 																</span>
-															</div>
-															{level === effectiveEffort ? (
-																<span className="text-mini text-foreground">
-																	✓
+																<span className="font-mono tabular-nums">
+																	Add custom model...
 																</span>
-															) : null}
-														</DropdownMenuItem>
-													))}
-												</DropdownMenuGroup>
+															</DropdownMenuItem>
+														) : null}
+														{section.id === "opencode" &&
+														!hasOpencodeCustomProviders ? (
+															<DropdownMenuItem
+																onClick={handleOpenProviderSettings}
+																className="flex items-center gap-3"
+															>
+																<span className="flex size-4 items-center justify-center text-muted-foreground">
+																	<Plus className="size-4" strokeWidth={1.8} />
+																</span>
+																<span className="font-mono tabular-nums">
+																	Add custom model...
+																</span>
+															</DropdownMenuItem>
+														) : null}
+													</DropdownMenuGroup>
+												))}
 											</DropdownMenuContent>
 										</DropdownMenu>
-									)}
-									{supportsPlanMode ? (
-										<PlanModeButton
-											disabled={toolbarDisabled}
-											className={cn(
-												`size-7 justify-center px-0 ${composerToolbarTriggerClassName}`,
-												permissionMode === "plan"
-													? composerToolbarActiveClassName
-													: "text-muted-foreground/70 hover:text-muted-foreground/70",
-											)}
-											onToggle={() =>
-												onChangePermissionMode(
-													permissionMode === "plan"
-														? "bypassPermissions"
-														: "plan",
-												)
-											}
-										/>
-									) : null}
-									{onChangeTerminalMode && (
-										<Tooltip>
-											<TooltipTrigger asChild>
-												<ComposerButton
-													aria-label="Terminal mode"
-													disabled={toolbarDisabled}
-													className={cn(
-														`size-7 justify-center px-0 ${composerToolbarTriggerClassName}`,
-														terminalMode
-															? composerToolbarActiveClassName
-															: // Pin the hover text color (like the Plan toggle) so the
-																// toolbar base `hover:text-foreground` can't flash the icon
-																// white for a frame while `transition-colors` runs on toggle.
-																"text-muted-foreground/70 hover:text-muted-foreground/70",
-														toolbarDisabled
-															? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
-															: null,
-													)}
-													onClick={() => onChangeTerminalMode(!terminalMode)}
-												>
-													<SquareTerminal
-														className="size-[14px]"
-														strokeWidth={1.8}
-													/>
-												</ComposerButton>
-											</TooltipTrigger>
-											<TooltipContent
-												side="top"
-												sideOffset={4}
-												className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
-											>
-												<span>Terminal mode</span>
-												{toggleTerminalShortcut ? (
-													<InlineShortcutDisplay
-														hotkey={toggleTerminalShortcut}
-														className="text-background/60"
-													/>
-												) : null}
-											</TooltipContent>
-										</Tooltip>
-									)}
-									{onToggleContextPanel ? (
-										<Tooltip>
-											<TooltipTrigger asChild>
-												<ComposerButton
-													aria-label="Add context"
-													aria-pressed={contextPanelOpen}
-													disabled={toolbarDisabled}
-													className={cn(
-														`size-7 justify-center px-0 ${composerToolbarTriggerClassName}`,
-														contextPanelOpen
-															? composerToolbarActiveClassName
-															: "text-muted-foreground/70 hover:text-muted-foreground/70",
-														toolbarDisabled
-															? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
-															: null,
-													)}
-													onClick={onToggleContextPanel}
-												>
-													<Layers className="size-[14px]" strokeWidth={1.8} />
-												</ComposerButton>
-											</TooltipTrigger>
-											<TooltipContent
-												side="top"
-												sideOffset={4}
-												className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
-											>
-												<span>Add context</span>
-												{toggleContextPanelShortcut ? (
-													<InlineShortcutDisplay
-														hotkey={toggleContextPanelShortcut}
-														className="text-background/60"
-													/>
-												) : null}
-											</TooltipContent>
-										</Tooltip>
-									) : null}
-								</>
-							)}
-						</div>
 
-						<div className="flex items-center gap-1">
-							<UsageStatsIndicator agentType={agentType} disabled={disabled} />
-							{sessionId && supportsContextUsage ? (
-								<ContextUsageRing
-									sessionId={sessionId}
-									providerSessionId={providerSessionId}
-									composerModelId={selectedModel?.id ?? null}
-									cwd={workspaceRootPath}
+										{onChangeFastMode && supportsFastMode && (
+											<Tooltip>
+												<TooltipTrigger asChild>
+													<ComposerButton
+														aria-label="Fast mode"
+														disabled={toolbarDisabled}
+														className={cn(
+															"relative",
+															composerToolbarTriggerClassName,
+															fastMode
+																? "text-amber-500 hover:bg-amber-500/10 hover:text-amber-500"
+																: "text-muted-foreground",
+															toolbarDisabled
+																? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
+																: null,
+														)}
+														onClick={() => onChangeFastMode(!fastMode)}
+													>
+														<span className="relative block size-[14px]">
+															<Zap
+																className={cn(
+																	"absolute inset-0 z-0 size-[14px]",
+																	fastMode ? null : "opacity-55",
+																)}
+																strokeWidth={1.8}
+															/>
+															{showFastModePrelude ? (
+																<FastModeLottieIcon className="absolute inset-[-5px] z-10 drop-shadow-[0_0_4px_rgba(245,158,11,0.5)]" />
+															) : null}
+														</span>
+													</ComposerButton>
+												</TooltipTrigger>
+												<TooltipContent side="top" sideOffset={4}>
+													<span>Fast mode{fastMode ? " (on)" : ""}</span>
+												</TooltipContent>
+											</Tooltip>
+										)}
+
+										{supportsEffort && (
+											<DropdownMenu>
+												<DropdownMenuTrigger
+													disabled={toolbarDisabled}
+													className={cn(
+														`flex items-center gap-0.5 ${composerToolbarTriggerClassName}`,
+														composerToolbarActiveClassName,
+														toolbarDisabled
+															? "cursor-not-allowed opacity-45 hover:bg-transparent"
+															: null,
+													)}
+												>
+													<span className="capitalize">
+														{effectiveEffort === "xhigh"
+															? "Extra High"
+															: effectiveEffort}
+													</span>
+													<ChevronDown
+														className="size-3 text-muted-foreground/40"
+														strokeWidth={2}
+													/>
+												</DropdownMenuTrigger>
+												<DropdownMenuContent
+													side="top"
+													align="start"
+													sideOffset={4}
+													className="min-w-[11rem]"
+												>
+													<DropdownMenuGroup>
+														<DropdownMenuLabel>Effort</DropdownMenuLabel>
+														{availableEffortLevels.map((level) => (
+															<DropdownMenuItem
+																key={level}
+																disabled={toolbarDisabled}
+																onClick={() => onSelectEffort(level)}
+																className="flex items-center justify-between gap-3"
+															>
+																<div className="flex items-center gap-2.5">
+																	<EffortBrainIcon level={level} />
+																	<span className="capitalize">
+																		{level === "xhigh" ? "Extra High" : level}
+																	</span>
+																</div>
+																{level === effectiveEffort ? (
+																	<span className="text-mini text-foreground">
+																		✓
+																	</span>
+																) : null}
+															</DropdownMenuItem>
+														))}
+													</DropdownMenuGroup>
+												</DropdownMenuContent>
+											</DropdownMenu>
+										)}
+										{supportsPlanMode ? (
+											<PlanModeButton
+												disabled={toolbarDisabled}
+												className={cn(
+													`size-7 justify-center px-0 ${composerToolbarTriggerClassName}`,
+													permissionMode === "plan"
+														? composerToolbarActiveClassName
+														: "text-muted-foreground/70 hover:text-muted-foreground/70",
+												)}
+												onToggle={() =>
+													onChangePermissionMode(
+														permissionMode === "plan"
+															? "bypassPermissions"
+															: "plan",
+													)
+												}
+											/>
+										) : null}
+										{onChangeTerminalMode && (
+											<Tooltip>
+												<TooltipTrigger asChild>
+													<ComposerButton
+														aria-label="Terminal mode"
+														disabled={toolbarDisabled}
+														className={cn(
+															`size-7 justify-center px-0 ${composerToolbarTriggerClassName}`,
+															terminalMode
+																? composerToolbarActiveClassName
+																: // Pin the hover text color (like the Plan toggle) so the
+																	// toolbar base `hover:text-foreground` can't flash the icon
+																	// white for a frame while `transition-colors` runs on toggle.
+																	"text-muted-foreground/70 hover:text-muted-foreground/70",
+															toolbarDisabled
+																? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
+																: null,
+														)}
+														onClick={() => onChangeTerminalMode(!terminalMode)}
+													>
+														<SquareTerminal
+															className="size-[14px]"
+															strokeWidth={1.8}
+														/>
+													</ComposerButton>
+												</TooltipTrigger>
+												<TooltipContent
+													side="top"
+													sideOffset={4}
+													className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
+												>
+													<span>Terminal mode</span>
+													{toggleTerminalShortcut ? (
+														<InlineShortcutDisplay
+															hotkey={toggleTerminalShortcut}
+															className="text-background/60"
+														/>
+													) : null}
+												</TooltipContent>
+											</Tooltip>
+										)}
+										{onToggleContextPanel ? (
+											<Tooltip>
+												<TooltipTrigger asChild>
+													<ComposerButton
+														aria-label="Add context"
+														aria-pressed={contextPanelOpen}
+														disabled={toolbarDisabled}
+														className={cn(
+															`size-7 justify-center px-0 ${composerToolbarTriggerClassName}`,
+															contextPanelOpen
+																? composerToolbarActiveClassName
+																: "text-muted-foreground/70 hover:text-muted-foreground/70",
+															toolbarDisabled
+																? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
+																: null,
+														)}
+														onClick={onToggleContextPanel}
+													>
+														<Layers className="size-[14px]" strokeWidth={1.8} />
+													</ComposerButton>
+												</TooltipTrigger>
+												<TooltipContent
+													side="top"
+													sideOffset={4}
+													className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
+												>
+													<span>Add context</span>
+													{toggleContextPanelShortcut ? (
+														<InlineShortcutDisplay
+															hotkey={toggleContextPanelShortcut}
+															className="text-background/60"
+														/>
+													) : null}
+												</TooltipContent>
+											</Tooltip>
+										) : null}
+									</>
+								)}
+							</div>
+
+							<div className="flex items-center gap-1">
+								<UsageStatsIndicator
 									agentType={agentType}
-									alwaysShow={alwaysShowContextUsage}
 									disabled={disabled}
 								/>
-							) : null}
-							{/* Trailing actions sit behind a visible outline/border, while the
+								{sessionId && supportsContextUsage ? (
+									<ContextUsageRing
+										sessionId={sessionId}
+										providerSessionId={providerSessionId}
+										composerModelId={selectedModel?.id ?? null}
+										cwd={workspaceRootPath}
+										agentType={agentType}
+										alwaysShow={alwaysShowContextUsage}
+										disabled={disabled}
+									/>
+								) : null}
+								{/* Trailing actions sit behind a visible outline/border, while the
 							    indicators to the left don't — that pulls the perceived gap in
 							    by ~6 px. ml-1.5 reserves the missing space so the row reads as
 							    evenly spaced. */}
-							{hasPlanReview && permissionMode === "plan" ? (
-								<div className="ml-1.5 flex items-center gap-2">
-									<Button
-										variant="ghost"
-										size="sm"
-										aria-label="Request Changes"
-										onClick={handlePlanRequestChanges}
-										disabled={disabled || !hasContent}
-										className="my-0.5 h-7 cursor-interactive gap-1 rounded-lg px-2 text-small transition-none text-muted-foreground hover:text-foreground"
-									>
-										<MessageSquareMore className="size-3.5" strokeWidth={1.8} />
-										Request Changes
-									</Button>
-									<Button
-										variant="default"
-										size="sm"
-										aria-label="Implement"
-										onClick={handlePlanImplement}
-										disabled={disabled}
-										className="my-0.5 h-7 cursor-interactive gap-1 rounded-lg px-2 text-small transition-none"
-									>
-										<Check className="size-3.5" strokeWidth={2} />
-										Implement
-									</Button>
-								</div>
-							) : sending ? (
-								<div className="ml-1.5 flex items-center gap-1.5">
-									<Button
-										variant="destructive"
-										size="icon"
-										aria-label="Stop"
-										onClick={onStop}
-										disabled={disabled || submitDisabled}
-										className="rounded-[9px]"
-									>
-										<Square className="size-3 fill-current" strokeWidth={0} />
-									</Button>
-									{hasContent ? (
+								{hasPlanReview && permissionMode === "plan" ? (
+									<div className="ml-1.5 flex items-center gap-2">
 										<Button
-											variant="outline"
+											variant="ghost"
+											size="sm"
+											aria-label="Request Changes"
+											onClick={handlePlanRequestChanges}
+											disabled={disabled || !hasContent}
+											className="my-0.5 h-7 cursor-interactive gap-1 rounded-lg px-2 text-small transition-none text-muted-foreground hover:text-foreground"
+										>
+											<MessageSquareMore
+												className="size-3.5"
+												strokeWidth={1.8}
+											/>
+											Request Changes
+										</Button>
+										<Button
+											variant="default"
+											size="sm"
+											aria-label="Implement"
+											onClick={handlePlanImplement}
+											disabled={disabled}
+											className="my-0.5 h-7 cursor-interactive gap-1 rounded-lg px-2 text-small transition-none"
+										>
+											<Check className="size-3.5" strokeWidth={2} />
+											Implement
+										</Button>
+									</div>
+								) : sending ? (
+									<div className="ml-1.5 flex items-center gap-1.5">
+										<Button
+											variant="destructive"
 											size="icon"
-											aria-label="Steer"
-											onClick={handleSubmit}
-											disabled={steerDisabled}
+											aria-label="Stop"
+											onClick={onStop}
+											disabled={disabled || submitDisabled}
 											className="rounded-[9px]"
 										>
-											<ArrowUp className="size-[15px]" strokeWidth={2.2} />
+											<Square className="size-3 fill-current" strokeWidth={0} />
 										</Button>
-									) : null}
-								</div>
-							) : (
-								<div className="ml-1.5 flex items-center">
-									{startSubmitMenu ? (
-										<DropdownMenu>
-											<ButtonGroup className="rounded-[9px]">
-												<Button
-													variant="outline"
-													size="sm"
-													aria-label={preferredStartSubmitLabel}
-													onClick={() => handleStartSubmitMode(startSubmitMode)}
-													disabled={sendDisabled}
-													className="gap-1.5 px-2.5"
-												>
-													{startSubmitMode === "saveForLater" ? (
-														<Clock3 className="size-3.5" strokeWidth={1.8} />
-													) : (
-														<ArrowUp className="size-3.5" strokeWidth={2.2} />
-													)}
-													<span className="@max-lg/composer:hidden">
-														{preferredStartSubmitLabel}
-													</span>
-													<span className="hidden @max-lg/composer:inline">
-														{compactStartSubmitLabel}
-													</span>
-												</Button>
-												<DropdownMenuTrigger asChild>
+										{hasContent ? (
+											<Button
+												variant="outline"
+												size="icon"
+												aria-label="Steer"
+												onClick={handleSubmit}
+												disabled={steerDisabled}
+												className="rounded-[9px]"
+											>
+												<ArrowUp className="size-[15px]" strokeWidth={2.2} />
+											</Button>
+										) : null}
+									</div>
+								) : (
+									<div className="ml-1.5 flex items-center">
+										{startSubmitMenu ? (
+											<DropdownMenu>
+												<ButtonGroup className="rounded-[9px]">
 													<Button
 														variant="outline"
 														size="sm"
-														aria-label="Start options"
+														aria-label={preferredStartSubmitLabel}
+														onClick={() =>
+															handleStartSubmitMode(startSubmitMode)
+														}
 														disabled={sendDisabled}
-														className="px-2.5"
+														className="gap-1.5 px-2.5"
 													>
-														<ChevronDown
-															className="size-3 text-muted-foreground"
-															strokeWidth={2}
-														/>
+														{startSubmitMode === "saveForLater" ? (
+															<Clock3 className="size-3.5" strokeWidth={1.8} />
+														) : (
+															<ArrowUp className="size-3.5" strokeWidth={2.2} />
+														)}
+														<span className="@max-lg/composer:hidden">
+															{preferredStartSubmitLabel}
+														</span>
+														<span className="hidden @max-lg/composer:inline">
+															{compactStartSubmitLabel}
+														</span>
 													</Button>
-												</DropdownMenuTrigger>
-											</ButtonGroup>
-											<DropdownMenuContent
-												side="bottom"
-												align="end"
-												sideOffset={6}
-												className="min-w-[133px] -translate-x-px"
-											>
-												<DropdownMenuItem
-													onClick={() =>
-														handleSelectStartSubmitMode(
-															alternateStartSubmitMode,
-														)
-													}
-													disabled={sendDisabled}
-													className="gap-2"
+													<DropdownMenuTrigger asChild>
+														<Button
+															variant="outline"
+															size="sm"
+															aria-label="Start options"
+															disabled={sendDisabled}
+															className="px-2.5"
+														>
+															<ChevronDown
+																className="size-3 text-muted-foreground"
+																strokeWidth={2}
+															/>
+														</Button>
+													</DropdownMenuTrigger>
+												</ButtonGroup>
+												<DropdownMenuContent
+													side="bottom"
+													align="end"
+													sideOffset={6}
+													className="min-w-[133px] -translate-x-px"
 												>
-													{alternateStartSubmitMode === "saveForLater" ? (
-														<Clock3 className="size-3.5" strokeWidth={1.8} />
-													) : (
-														<ArrowUp className="size-3.5" strokeWidth={2} />
-													)}
-													<span>{alternateStartSubmitLabel}</span>
-												</DropdownMenuItem>
-											</DropdownMenuContent>
-										</DropdownMenu>
-									) : (
-										<Button
-											variant="outline"
-											size="icon"
-											aria-label="Send"
-											onClick={handleSubmit}
-											disabled={sendDisabled}
-											className="rounded-[9px]"
-										>
-											<ArrowUp className="size-[15px]" strokeWidth={2.2} />
-										</Button>
-									)}
-								</div>
-							)}
+													<DropdownMenuItem
+														onClick={() =>
+															handleSelectStartSubmitMode(
+																alternateStartSubmitMode,
+															)
+														}
+														disabled={sendDisabled}
+														className="gap-2"
+													>
+														{alternateStartSubmitMode === "saveForLater" ? (
+															<Clock3 className="size-3.5" strokeWidth={1.8} />
+														) : (
+															<ArrowUp className="size-3.5" strokeWidth={2} />
+														)}
+														<span>{alternateStartSubmitLabel}</span>
+													</DropdownMenuItem>
+												</DropdownMenuContent>
+											</DropdownMenu>
+										) : (
+											<Button
+												variant="outline"
+												size="icon"
+												aria-label="Send"
+												onClick={handleSubmit}
+												disabled={sendDisabled}
+												className="rounded-[9px]"
+											>
+												<ArrowUp className="size-[15px]" strokeWidth={2.2} />
+											</Button>
+										)}
+									</div>
+								)}
+							</div>
 						</div>
-					</div>
-				</>
-			)}
+					</>
+				)}
 
-			{sendError && hasPendingUserInput ? (
-				<div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-small text-muted-foreground">
-					{sendError}
-				</div>
-			) : null}
-		</div>
+				{sendError && hasPendingUserInput ? (
+					<div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-small text-muted-foreground">
+						{sendError}
+					</div>
+				) : null}
+			</div>
+		</TooltipProvider>
 	);
 });
 

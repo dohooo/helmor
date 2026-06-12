@@ -764,14 +764,14 @@ describe("App global navigation shortcuts", () => {
 		expect(await screen.findByText("New worktree")).toBeInTheDocument();
 	});
 
-	it("toggles the context panel on Option+Command+C", async () => {
+	it("toggles the context panel on Command+Shift+C", async () => {
 		await renderAppReady();
 
 		fireEvent.keyDown(window, {
 			key: "c",
 			code: "KeyC",
 			metaKey: true,
-			altKey: true,
+			shiftKey: true,
 		});
 
 		await screen.findByRole("heading", { name: "Contexts" });

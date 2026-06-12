@@ -186,7 +186,7 @@ const WORKSPACE_STAR_NAMES = [
 	"zubeneschamali",
 ] as const;
 
-const WORKSPACE_STAR_INDEX = new Map(
+const WORKSPACE_STAR_INDEX = new Map<string, number>(
 	WORKSPACE_STAR_NAMES.map((name, index) => [name, index + 1]),
 );
 
