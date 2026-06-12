@@ -979,6 +979,88 @@ describe("CodexAppServerManager", () => {
 		});
 	});
 
+	test("requestUserInput round-trips raw questions out and canonical answers back", async () => {
+		const manager = new CodexAppServerManager();
+		const events: Array<Record<string, unknown>> = [];
+		const capturingEmitter = createSidecarEmitter((event) => {
+			events.push(event as Record<string, unknown>);
+		});
+
+		serverState.beforeTurnCompleted = () => {
+			serverState.onRequest?.({
+				id: "rpc-user-input-1",
+				method: "item/tool/requestUserInput",
+				params: {
+					threadId: "thread-1",
+					turnId: "turn-1",
+					questions: [
+						{
+							id: "q0",
+							header: "Mode",
+							question: "Pick one",
+							options: [{ label: "Fast", description: "skip checks" }],
+						},
+					],
+				},
+			});
+
+			const userInputEvent = events.find(
+				(e) => e.type === "userInputRequest",
+			) as Record<string, unknown> | undefined;
+			expect(userInputEvent).toBeDefined();
+			const payload = userInputEvent?.payload as Record<string, unknown>;
+			// Raw Codex questions pass through — Rust normalizes them.
+			expect(payload.kind).toBe("ask-user-question");
+			expect(payload.questions).toEqual([
+				expect.objectContaining({ id: "q0", question: "Pick one" }),
+			]);
+
+			const userInputId = userInputEvent?.userInputId as string;
+			const claimed = manager.resolveUserInput(userInputId, {
+				action: "submit",
+				// Unified AUQ content: answers keyed by question text.
+				content: { answers: { "Pick one": "Fast" } },
+			});
+			expect(claimed).toBe(true);
+		};
+
+		await manager.sendMessage(
+			"REQ-user-input",
+			{
+				sessionId: "session-user-input",
+				prompt: "ask me something",
+				model: "gpt-5.5",
+				cwd: "/tmp",
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: "high",
+				fastMode: false,
+				images: [],
+			},
+			capturingEmitter,
+		);
+
+		// Reverse-mapped to Codex's `{ id: { answers: [value] } }` shape.
+		const response = serverState.responses.find(
+			(r) => r.id === "rpc-user-input-1",
+		);
+		expect(response?.result).toEqual({
+			answers: { q0: { answers: ["Fast"] } },
+		});
+
+		// Resolved Q&A marker for the transcript card (persisted by Rust).
+		const resolved = events.find((e) => e.type === "user_question") as
+			| Record<string, unknown>
+			| undefined;
+		expect(resolved).toBeDefined();
+		expect(resolved?.source).toBe("Codex");
+		expect(resolved?.action).toBe("submit");
+		expect(resolved?.answers).toEqual({ "Pick one": "Fast" });
+		expect(resolved?.questions).toEqual([
+			expect.objectContaining({ id: "q0" }),
+		]);
+	});
+
 	test("plain Allow on tool-call approval sends accept without _meta", async () => {
 		const manager = new CodexAppServerManager();
 		const events: Array<Record<string, unknown>> = [];

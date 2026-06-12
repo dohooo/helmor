@@ -35,6 +35,7 @@ import type {
 	ThreadMessageLike,
 	TodoListPart,
 	ToolCallPart,
+	UserQuestionPart,
 	WorkflowPart,
 } from "./api";
 
@@ -179,6 +180,21 @@ export function partStructurallyEqual(
 		case "pasted-text": {
 			const pb = b as PastedTextPart;
 			return a.text === pb.text;
+		}
+		case "user-question": {
+			const qb = b as UserQuestionPart;
+			if (a.id !== qb.id) return false;
+			if (a.source !== qb.source) return false;
+			if (a.status !== qb.status) return false;
+			// Questions are immutable per id; answers flip exactly once
+			// (pending → resolved, captured by `status`) but compare the
+			// serialized map anyway so a re-render with different answers
+			// can't be skipped.
+			if (
+				JSON.stringify(a.answers ?? null) !== JSON.stringify(qb.answers ?? null)
+			)
+				return false;
+			return JSON.stringify(a.questions) === JSON.stringify(qb.questions);
 		}
 		case "plan-review": {
 			const pb = b as PlanReviewPart;

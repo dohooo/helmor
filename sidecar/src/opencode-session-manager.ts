@@ -403,6 +403,27 @@ export class OpencodeSessionManager implements SessionManager {
 					directory: pending.ctx.directory,
 				});
 			}
+			// Mark the resolved Q&A in the live stream so Rust persists the
+			// transcript card at this position (see emitter doc).
+			const { ctx } = pending;
+			if (
+				ctx.activeEmitter &&
+				ctx.activeRequestId &&
+				resolution.action !== "cancel"
+			) {
+				ctx.activeEmitter.userQuestionResolved(
+					ctx.activeRequestId,
+					pending.requestID,
+					"OpenCode",
+					pending.questions as unknown as Array<Record<string, unknown>>,
+					resolution.action === "submit"
+						? (resolution.content.answers as
+								| Record<string, unknown>
+								| undefined)
+						: undefined,
+					resolution.action,
+				);
+			}
 		} catch (error) {
 			logger.debug("opencode question reply failed", errorDetails(error));
 		}
@@ -936,21 +957,18 @@ export class OpencodeSessionManager implements SessionManager {
 			? (props.questions as OpencodeQuestion[])
 			: [];
 		this.pendingQuestions.set(requestID, { ctx, requestID, questions });
-		const normalized = questions.map((q) => ({
-			question: q.question,
-			header: q.header,
-			options: (q.options ?? []).map((o) => ({
-				label: o.label,
-				description: o.description,
-			})),
-			multiSelect: q.multiple ?? false,
-		}));
+		// Raw OpenCode questions (`multiple` flag and all) ride the unified
+		// ask-user-question payload — Rust normalizes them into the
+		// canonical shape before the frontend sees them.
 		ctx.activeEmitter.userInputRequest(
 			ctx.activeRequestId,
 			requestID,
 			"OpenCode",
 			questions[0]?.question ?? "OpenCode needs your input",
-			{ kind: "ask-user-question", questions: normalized },
+			{
+				kind: "ask-user-question",
+				questions: questions as unknown as Array<Record<string, unknown>>,
+			},
 		);
 	}
 

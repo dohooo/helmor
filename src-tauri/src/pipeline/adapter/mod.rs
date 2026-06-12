@@ -234,6 +234,17 @@ fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, Wo
             continue;
         }
 
+        // Persisted Q&A card from a resolved Codex/OpenCode user-input
+        // request (Claude's AskUserQuestion renders from its tool_use
+        // instead — see `push_tool_use`).
+        if msg_type == Some("user_question") {
+            if let Some(message) = convert_user_question_msg(msg, parsed) {
+                result.push(message);
+            }
+            i += 1;
+            continue;
+        }
+
         // Claude rate-limit notice. The SDK fires this on EVERY user
         // turn to report current 5h/24h utilization with `status =
         // "allowed"`, which is a usage gauge — we hide it because
@@ -754,6 +765,49 @@ fn convert_rate_limit_msg(msg: &IntermediateMessage, out: &mut Vec<ThreadMessage
             build_rate_limit_notice(parsed, &msg.id),
         ));
     }
+}
+
+/// Convert a persisted `user_question` row (written by the accumulator
+/// when a Codex/OpenCode question is answered or declined) into a
+/// single-part `UserQuestion` message. The payload already carries
+/// canonical questions — see `pipeline::user_question`.
+fn convert_user_question_msg(
+    msg: &IntermediateMessage,
+    parsed: Option<&Value>,
+) -> Option<ThreadMessageLike> {
+    let parsed = parsed?;
+    let questions: Vec<crate::pipeline::types::UserQuestionItem> =
+        serde_json::from_value(parsed.get("questions").cloned()?).ok()?;
+    if questions.is_empty() {
+        return None;
+    }
+    let status = match parsed.get("status").and_then(Value::as_str) {
+        Some("declined") => crate::pipeline::types::UserQuestionStatus::Declined,
+        Some("cancelled") => crate::pipeline::types::UserQuestionStatus::Cancelled,
+        _ => crate::pipeline::types::UserQuestionStatus::Answered,
+    };
+    Some(ThreadMessageLike {
+        role: MessageRole::Assistant,
+        id: Some(msg.id.clone()),
+        created_at: Some(msg.created_at.clone()),
+        content: vec![ExtendedMessagePart::Basic(MessagePart::UserQuestion {
+            id: parsed
+                .get("userInputId")
+                .and_then(Value::as_str)
+                .unwrap_or(&msg.id)
+                .to_string(),
+            source: parsed
+                .get("source")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            questions,
+            answers: parsed.get("answers").filter(|v| v.is_object()).cloned(),
+            status,
+        })],
+        status: None,
+        streaming: None,
+    })
 }
 
 fn convert_exit_plan_mode_msg(

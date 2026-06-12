@@ -535,10 +535,9 @@ export class ClaudeSessionManager implements SessionManager {
 				canUseTool: async (_toolName, input, options) => {
 					// AskUserQuestion: pause this `canUseTool` callback on the
 					// same live `query()`, surface the question through the
-					// unified `userInputRequest` flow (form mode with a
-					// synthesized JSON Schema), then return the user's answer
-					// via `updatedInput` so the SDK executes the tool normally.
-					// No `--resume`, no extra process (issue #397 / #402).
+					// unified `userInputRequest` flow, then return the user's
+					// answer via `updatedInput` so the SDK executes the tool
+					// normally. No `--resume`, no extra process (issue #397 / #402).
 					if (USER_INPUT_TOOL_NAMES.has(_toolName)) {
 						const toolUseId = options.toolUseID;
 						const auqInput = input as Record<string, unknown>;
@@ -591,13 +590,13 @@ export class ClaudeSessionManager implements SessionManager {
 							action: resolution.action,
 						});
 						if (resolution.action === "submit") {
-							// The frontend AUQ renderer produces the full
-							// `updatedInput` shape directly (questions +
-							// answers + annotations), matching what the SDK
-							// expects — no conversion needed here.
+							// The unified AUQ renderer submits only the answer
+							// payload (`{ answers, annotations? }` keyed by
+							// question text); merge it over the original tool
+							// input to build the `updatedInput` the SDK expects.
 							return {
 								behavior: "allow" as const,
-								updatedInput: resolution.content,
+								updatedInput: { ...auqInput, ...resolution.content },
 							};
 						}
 						return {

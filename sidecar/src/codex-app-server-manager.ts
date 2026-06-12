@@ -272,75 +272,37 @@ interface CodexQuestion {
 }
 
 /**
- * Build a JSON Schema from Codex's `requestUserInput` questions so the
- * unified `UserInputPanel` can render them as form fields. Mirrors the
- * shape the existing Rust bridge used to produce — moved into the
- * sidecar so Rust can stay generic about user-input semantics.
+ * Canonical answer key for a Codex question. MUST mirror the fallback
+ * chain Rust's `pipeline::user_question::normalize_question` uses to
+ * derive the canonical question text — the unified AUQ renderer keys its
+ * `answers` map by that text.
  */
-function buildCodexUserInputSchema(
-	questions: CodexQuestion[],
-): Record<string, unknown> {
-	const properties: Record<string, unknown> = {};
-	const required: string[] = [];
-
-	questions.forEach((q, i) => {
-		const key = q.id ?? `q${i}`;
-		required.push(key);
-		const header = q.header ?? "";
-		const questionText = q.question ?? "Question";
-		const title = header || questionText;
-		const description = header ? questionText : "";
-		const options = Array.isArray(q.options) ? q.options : [];
-		const hasOptions = options.length > 0;
-
-		const oneOf = hasOptions
-			? options.map((opt) => ({
-					const: opt.label ?? "",
-					title: opt.label ?? "",
-					description: opt.description ?? "",
-				}))
-			: [
-					{ const: "yes", title: "Yes" },
-					{ const: "no", title: "No" },
-				];
-
-		const prop: Record<string, unknown> = hasOptions
-			? {
-					type: "string",
-					title,
-					description,
-					oneOf,
-				}
-			: q.isOther
-				? { type: "string", title, description }
-				: { type: "string", title, description, oneOf };
-		if (q.isOther) {
-			prop["x-allow-other"] = true;
-		}
-		properties[key] = prop;
-	});
-
-	return { type: "object", properties, required };
+function codexQuestionKey(q: CodexQuestion, index: number): string {
+	return q.question || q.header || `Question ${index + 1}`;
 }
 
 /**
- * Reverse `buildCodexUserInputSchema`: take the unified form content
- * (`{ q0: "Option A", ... }`) and produce Codex's expected answer
- * shape (`{ q0: { answers: ["Option A"] }, ... }`).
+ * Map the unified AUQ response (`{ answers: { [questionText]: "label" } }`)
+ * back into Codex's expected shape (`{ id: { answers: ["label"] } }`),
+ * using the original question array we parked alongside the request.
  */
 function buildCodexAnswers(
+	questions: CodexQuestion[],
 	content: Record<string, unknown>,
 ): Record<string, { answers: string[] }> {
+	const byQuestion =
+		typeof content.answers === "object" &&
+		content.answers !== null &&
+		!Array.isArray(content.answers)
+			? (content.answers as Record<string, unknown>)
+			: {};
 	const answers: Record<string, { answers: string[] }> = {};
-	for (const [key, value] of Object.entries(content)) {
-		if (typeof value === "string") {
-			answers[key] = { answers: [value] };
-		} else if (Array.isArray(value)) {
-			answers[key] = {
-				answers: value.filter((v): v is string => typeof v === "string"),
-			};
-		}
-	}
+	questions.forEach((q, i) => {
+		const value = byQuestion[codexQuestionKey(q, i)];
+		if (typeof value !== "string" || !value) return;
+		const key = q.id ?? `q${i}`;
+		answers[key] = { answers: [value] };
+	});
 	return answers;
 }
 
@@ -509,9 +471,30 @@ export class CodexAppServerManager implements SessionManager {
 		} else {
 			const answers =
 				resolution.action === "submit"
-					? buildCodexAnswers(resolution.content)
+					? buildCodexAnswers(pending.questions, resolution.content)
 					: {};
 			ctx.server.sendResponse(pending.jsonRpcId, { answers });
+
+			// Mark the resolved Q&A in the live stream so Rust persists the
+			// transcript card at this position (see emitter doc).
+			if (
+				ctx.activeEmitter &&
+				ctx.activeRequestId &&
+				resolution.action !== "cancel"
+			) {
+				ctx.activeEmitter.userQuestionResolved(
+					ctx.activeRequestId,
+					userInputId,
+					"Codex",
+					pending.questions as unknown as Array<Record<string, unknown>>,
+					resolution.action === "submit"
+						? (resolution.content.answers as
+								| Record<string, unknown>
+								| undefined)
+						: undefined,
+					resolution.action,
+				);
+			}
 		}
 		logger.debug(`Codex user-input resolved`, {
 			userInputId,
@@ -874,7 +857,7 @@ export class CodexAppServerManager implements SessionManager {
 						: [];
 
 					// Park the entry alongside the question array so we can
-					// reverse-map the unified-form response back into Codex's
+					// reverse-map the unified AUQ response back into Codex's
 					// `{ id: { answers: [value] } }` shape.
 					this.pendingUserInputs.set(userInputId, {
 						kind: "codex-form",
@@ -883,12 +866,18 @@ export class CodexAppServerManager implements SessionManager {
 						questions,
 					});
 
+					// Raw Codex questions ride the unified ask-user-question
+					// payload — Rust normalizes them into the canonical shape
+					// (id/isOther/Yes-No fallback) before the frontend sees them.
 					emitter.userInputRequest(
 						requestId,
 						userInputId,
 						"Codex",
 						"Codex needs your input.",
-						{ kind: "form", schema: buildCodexUserInputSchema(questions) },
+						{
+							kind: "ask-user-question",
+							questions: questions as unknown as Array<Record<string, unknown>>,
+						},
 					);
 					logger.debug(`Codex user-input request`, { userInputId });
 					return;

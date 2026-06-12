@@ -626,6 +626,23 @@ fn push_tool_use(
             .to_string()
     });
 
+    // AskUserQuestion renders as the dedicated UserQuestion card instead
+    // of a generic ToolCall. Answers attach later via the tool_result
+    // merge passes below. While the input is still streaming there is no
+    // `questions` array yet — fall through to a regular ToolCall until
+    // the block finalizes.
+    if tool_name == "AskUserQuestion" {
+        let streaming_error = matches!(stream_status, Some(StreamingStatus::Error));
+        if let Some(part) = crate::pipeline::user_question::part_from_claude_tool_use(
+            &tool_call_id,
+            &args,
+            streaming_error,
+        ) {
+            parts.push(part);
+            return;
+        }
+    }
+
     // Claude TodoWrite collapses into the unified TodoList part so the
     // frontend renders it identically to Codex todo_list. We only do
     // this once the input has been fully streamed — partial streaming
@@ -717,6 +734,10 @@ struct ToolResultEntry {
     tool_use_id: String,
     content: String,
     is_error: Option<bool>,
+    /// The SDK user message's structured `tool_use_result` (e.g.
+    /// AskUserQuestion's `{questions, answers}`). Only attached when the
+    /// message carries a single tool_result block, so it can't misroute.
+    structured: Option<Value>,
 }
 
 /// Parse tool_result blocks from a `type=user` payload. Returns None if the
@@ -756,6 +777,7 @@ fn extract_tool_results(parsed: Option<&Value>) -> Option<Vec<ToolResultEntry>> 
                 tool_use_id,
                 content,
                 is_error,
+                structured: None,
             });
         } else if block_type == "text" {
             let text = obj.get("text").and_then(Value::as_str).unwrap_or("");
@@ -770,7 +792,46 @@ fn extract_tool_results(parsed: Option<&Value>) -> Option<Vec<ToolResultEntry>> 
     if !all_tool_result || results.is_empty() {
         return None;
     }
+    if results.len() == 1 {
+        results[0].structured = parsed
+            .get("tool_use_result")
+            .filter(|v| v.is_object())
+            .cloned();
+    }
     Some(results)
+}
+
+/// Apply one tool_result entry to a matching part. Returns `true` when a
+/// match was found (so callers can stop scanning).
+fn apply_tool_result_entry(part: &mut MessagePart, entry: &ToolResultEntry) -> bool {
+    match part {
+        MessagePart::ToolCall {
+            tool_call_id,
+            result,
+            is_error,
+            ..
+        } if *tool_call_id == entry.tool_use_id => {
+            *result = Some(Value::String(entry.content.clone()));
+            *is_error = entry.is_error;
+            true
+        }
+        MessagePart::UserQuestion {
+            id,
+            answers,
+            status,
+            ..
+        } if *id == entry.tool_use_id => {
+            crate::pipeline::user_question::apply_result_to_user_question(
+                answers,
+                status,
+                entry.structured.as_ref(),
+                &entry.content,
+                entry.is_error,
+            );
+            true
+        }
+        _ => false,
+    }
 }
 
 pub(super) fn merge_tool_results(parsed: Option<&Value>, target_parts: &mut [MessagePart]) -> bool {
@@ -780,18 +841,8 @@ pub(super) fn merge_tool_results(parsed: Option<&Value>, target_parts: &mut [Mes
     };
     for entry in results {
         for part in target_parts.iter_mut() {
-            if let MessagePart::ToolCall {
-                tool_call_id,
-                result,
-                is_error,
-                ..
-            } = part
-            {
-                if *tool_call_id == entry.tool_use_id {
-                    *result = Some(Value::String(entry.content));
-                    *is_error = entry.is_error;
-                    break;
-                }
+            if apply_tool_result_entry(part, &entry) {
+                break;
             }
         }
     }
@@ -811,16 +862,8 @@ pub(super) fn merge_tool_results_extended(
     };
     for entry in results {
         for part in target.iter_mut() {
-            if let ExtendedMessagePart::Basic(MessagePart::ToolCall {
-                tool_call_id,
-                result,
-                is_error,
-                ..
-            }) = part
-            {
-                if *tool_call_id == entry.tool_use_id {
-                    *result = Some(Value::String(entry.content));
-                    *is_error = entry.is_error;
+            if let ExtendedMessagePart::Basic(basic) = part {
+                if apply_tool_result_entry(basic, &entry) {
                     break;
                 }
             }
@@ -848,6 +891,10 @@ pub(super) fn late_merge_unresolved_tool_results(
             matches!(
                 p,
                 ExtendedMessagePart::Basic(MessagePart::ToolCall { result: None, .. })
+                    | ExtendedMessagePart::Basic(MessagePart::UserQuestion {
+                        status: crate::pipeline::types::UserQuestionStatus::Pending,
+                        ..
+                    })
             )
         })
     });
@@ -867,6 +914,7 @@ pub(super) fn late_merge_unresolved_tool_results(
         else {
             continue;
         };
+        let mut msg_entries: Vec<(String, ToolResultPatch)> = Vec::new();
         for b in blocks {
             let Some(obj) = b.as_object() else { continue };
             // Both shapes share the same `{tool_use_id, content, is_error?}`
@@ -889,12 +937,28 @@ pub(super) fn late_merge_unresolved_tool_results(
                 Some(true) => Some(true),
                 _ => None,
             };
+            msg_entries.push((
+                id.to_string(),
+                ToolResultPatch {
+                    content,
+                    is_error,
+                    structured: None,
+                },
+            ));
+        }
+        // Message-level `tool_use_result` belongs to the single tool_result
+        // inside this message — same guard as `extract_tool_results`.
+        if msg_entries.len() == 1 {
+            msg_entries[0].1.structured = parsed
+                .get("tool_use_result")
+                .filter(|v| v.is_object())
+                .cloned();
+        }
+        for (id, patch) in msg_entries {
             // First-write wins — the SDK occasionally re-emits the same
             // tool_use_id (retries, partial replays); the earliest entry
             // matches the chronological tool_use the user actually saw.
-            index
-                .entry(id.to_string())
-                .or_insert(ToolResultPatch { content, is_error });
+            index.entry(id).or_insert(patch);
         }
     }
 
@@ -904,20 +968,41 @@ pub(super) fn late_merge_unresolved_tool_results(
 
     for msg in out.iter_mut() {
         for part in msg.content.iter_mut() {
-            if let ExtendedMessagePart::Basic(MessagePart::ToolCall {
-                tool_call_id,
-                result,
-                is_error,
-                ..
-            }) = part
-            {
-                if result.is_some() {
-                    continue;
+            match part {
+                ExtendedMessagePart::Basic(MessagePart::ToolCall {
+                    tool_call_id,
+                    result,
+                    is_error,
+                    ..
+                }) => {
+                    if result.is_some() {
+                        continue;
+                    }
+                    if let Some(patch) = index.get(tool_call_id) {
+                        *result = Some(Value::String(patch.content.clone()));
+                        *is_error = patch.is_error;
+                    }
                 }
-                if let Some(patch) = index.get(tool_call_id) {
-                    *result = Some(Value::String(patch.content.clone()));
-                    *is_error = patch.is_error;
+                ExtendedMessagePart::Basic(MessagePart::UserQuestion {
+                    id,
+                    answers,
+                    status,
+                    ..
+                }) => {
+                    if *status != crate::pipeline::types::UserQuestionStatus::Pending {
+                        continue;
+                    }
+                    if let Some(patch) = index.get(id) {
+                        crate::pipeline::user_question::apply_result_to_user_question(
+                            answers,
+                            status,
+                            patch.structured.as_ref(),
+                            &patch.content,
+                            patch.is_error,
+                        );
+                    }
                 }
+                _ => {}
             }
         }
     }
@@ -926,6 +1011,7 @@ pub(super) fn late_merge_unresolved_tool_results(
 struct ToolResultPatch {
     content: String,
     is_error: Option<bool>,
+    structured: Option<Value>,
 }
 
 fn extract_tool_result_content(content: Option<&Value>) -> String {

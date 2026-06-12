@@ -1,0 +1,18 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: msg-1
+  content_length: 1
+  content:
+    - type: user-question
+      id: codex-input-1
+      source: Codex
+      status: answered
+      questions:
+        - "Apply the patch? [Yes|No]"
+      answers:
+        - Apply the patch? => Yes
+  status: ~
+  streaming: ~

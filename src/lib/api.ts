@@ -3507,6 +3507,39 @@ export type PastedTextPart = {
 	id: string;
 	text: string;
 };
+/** One option inside a `UserQuestionPart` question. */
+export type UserQuestionOption = {
+	label: string;
+	description?: string | null;
+	preview?: string | null;
+};
+export type UserQuestionItem = {
+	question: string;
+	header?: string | null;
+	multiSelect?: boolean;
+	options?: UserQuestionOption[];
+	/** Whether a free-text "Other" answer is allowed (Codex `isOther`). */
+	allowFreeText?: boolean;
+};
+export type UserQuestionStatus =
+	| "pending"
+	| "answered"
+	| "declined"
+	| "cancelled";
+/**
+ * Normalized agent→user question card — one shape for Claude
+ * AskUserQuestion, Codex `requestUserInput` and OpenCode `question`.
+ * `answers` maps question text → answer string (multi-select answers are
+ * comma-joined labels; free-text answers pass through verbatim).
+ */
+export type UserQuestionPart = {
+	type: "user-question";
+	id: string;
+	source: string;
+	questions: UserQuestionItem[];
+	answers?: Record<string, unknown>;
+	status: UserQuestionStatus;
+};
 export type PlanReviewAllowedPrompt = {
 	tool: string;
 	prompt: string;
@@ -3530,7 +3563,8 @@ export type MessagePart =
 	| PromptSuggestionPart
 	| FileMentionPart
 	| PastedTextPart
-	| PlanReviewPart;
+	| PlanReviewPart
+	| UserQuestionPart;
 
 export type CollapsedGroupPart = {
 	type: "collapsed-group";
@@ -3621,8 +3655,10 @@ export type AgentStreamEvent =
 			source: string;
 			message: string;
 			/** Discriminated by `payload.kind`:
-			 *  - `ask-user-question` → Claude AskUserQuestion (raw multi-question / option / preview shape)
-			 *  - `form` → JSON-Schema form (MCP form elicitation or Codex's synthesized form)
+			 *  - `ask-user-question` → canonical question card (Claude AskUserQuestion,
+			 *    Codex requestUserInput, OpenCode question — normalized by Rust's
+			 *    `pipeline::user_question`, see `UserQuestionItem`)
+			 *  - `form` → JSON-Schema form (MCP form elicitation)
 			 *  - `url` → URL launcher (MCP url-mode elicitation)
 			 *  See `pending-user-input.ts` for the typed payload union. */
 			payload: Record<string, unknown>;

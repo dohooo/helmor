@@ -1,0 +1,31 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: normalize_stream_fingerprint(&fingerprint)
+---
+emissions:
+  - kind: full
+    line_index: 0
+    event_type: user_question
+    messages:
+      - role: assistant
+        id: msg-1
+        content:
+          - type: other
+            original_type: "user-question:OpenCode:declined[]"
+        streaming: ~
+final_render:
+  - role: assistant
+    id: msg-1
+    content:
+      - type: other
+        original_type: "user-question:OpenCode:declined[]"
+    streaming: ~
+persisted_turn_blocks:
+  - []
+historical_render:
+  - role: assistant
+    id: msg-2
+    content:
+      - type: other
+        original_type: "user-question:OpenCode:declined[]"
+    streaming: ~

@@ -448,6 +448,14 @@ impl StreamAccumulator {
                 PushOutcome::Finalized
             }
             Some("auth_status") => PushOutcome::NoOp,
+            // Resolved Codex/OpenCode user-input question — the sidecar
+            // emits this at answer time so the Q&A lands in the transcript
+            // at its natural stream position. Claude AskUserQuestion skips
+            // this path (its tool_use already lives in the assistant turn).
+            Some("user_question") => {
+                self.handle_user_question(value);
+                PushOutcome::Finalized
+            }
             Some("system") => {
                 self.handle_claude_system(raw_line, value);
                 PushOutcome::Finalized
@@ -1134,6 +1142,51 @@ impl StreamAccumulator {
 
     fn handle_error(&mut self, raw_line: &str, value: &Value) {
         self.collect_message(raw_line, value, MessageRole::Error, None);
+    }
+
+    /// Sidecar `user_question` event — a Codex/OpenCode question the user
+    /// just answered (or declined). Normalizes the provider-raw questions
+    /// into the canonical persisted shape and pushes a standalone turn so
+    /// the Q&A card sits at its natural position between stream items.
+    fn handle_user_question(&mut self, value: &Value) {
+        let questions = crate::pipeline::user_question::normalize_questions(
+            &self.provider,
+            value.get("questions").unwrap_or(&Value::Null),
+        );
+        if questions.is_empty() {
+            return;
+        }
+        let action = value
+            .get("action")
+            .and_then(Value::as_str)
+            .unwrap_or("submit");
+        let status = if action == "decline" {
+            "declined"
+        } else {
+            "answered"
+        };
+        let mut synthetic = serde_json::json!({
+            "type": "user_question",
+            "userInputId": value.get("userInputId").and_then(Value::as_str).unwrap_or_default(),
+            "source": value.get("source").and_then(Value::as_str).unwrap_or_default(),
+            "questions": questions,
+            "status": status,
+        });
+        if action == "submit" {
+            if let Some(answers) = value.get("answers").filter(|v| v.is_object()) {
+                synthetic["answers"] = answers.clone();
+            }
+        }
+        let s = serde_json::to_string(&synthetic).unwrap_or_default();
+
+        self.flush_assistant();
+        let turn_id = uuid::Uuid::new_v4().to_string();
+        self.turns.push(CollectedTurn {
+            id: turn_id.clone(),
+            role: MessageRole::Assistant,
+            content_json: s.clone(),
+        });
+        self.collect_message(&s, &synthetic, MessageRole::Assistant, Some(&turn_id));
     }
 
     fn handle_rate_limit_event(&mut self, raw_line: &str, value: &Value) {

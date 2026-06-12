@@ -35,6 +35,7 @@ import {
 	isTextPart,
 	isTodoListPart,
 	isToolCallPart,
+	isUserQuestionPart,
 	isWorkflowPart,
 	reasoningLifecycle,
 } from "./shared";
@@ -46,6 +47,7 @@ import {
 } from "./subagent-tool";
 import { SystemNotice } from "./system-message";
 import { AssistantToolCall, CollapsedToolGroup } from "./tool-call";
+import { UserQuestionCard } from "./user-question";
 
 // --- AssistantText ---
 
@@ -305,6 +307,9 @@ export function ChatAssistantMessage({
 				}
 				if (isPlanReviewPart(part)) {
 					return <PlanReviewCard key={key} part={part} />;
+				}
+				if (isUserQuestionPart(part)) {
+					return <UserQuestionCard key={key} part={part} />;
 				}
 				return null;
 			})}

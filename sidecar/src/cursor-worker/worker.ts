@@ -48,6 +48,7 @@ const wireEmitter: SidecarEmitter = {
 	slashCommandsListed: noop,
 	permissionRequest: noop,
 	userInputRequest: noop,
+	userQuestionResolved: noop,
 	permissionModeChanged: noop,
 	modelsListed: noop,
 	contextUsageUpdated: noop,

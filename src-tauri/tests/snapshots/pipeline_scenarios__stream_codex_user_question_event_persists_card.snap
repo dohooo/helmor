@@ -1,0 +1,67 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: normalize_stream_fingerprint(&fingerprint)
+---
+emissions:
+  - kind: full
+    line_index: 0
+    event_type: item/completed
+    messages:
+      - role: assistant
+        id: msg-1
+        content:
+          - type: text
+            text: Before the question.
+        streaming: ~
+  - kind: full
+    line_index: 1
+    event_type: user_question
+    messages:
+      - role: assistant
+        id: msg-1
+        content:
+          - type: text
+            text: Before the question.
+          - type: other
+            original_type: "user-question:Codex:answered[Pick one => Fast]"
+        streaming: ~
+  - kind: full
+    line_index: 2
+    event_type: item/completed
+    messages:
+      - role: assistant
+        id: msg-1
+        content:
+          - type: text
+            text: Before the question.
+          - type: other
+            original_type: "user-question:Codex:answered[Pick one => Fast]"
+          - type: text
+            text: Continuing after the answer.
+        streaming: ~
+final_render:
+  - role: assistant
+    id: msg-1
+    content:
+      - type: text
+        text: Before the question.
+      - type: other
+        original_type: "user-question:Codex:answered[Pick one => Fast]"
+      - type: text
+        text: Continuing after the answer.
+    streaming: ~
+persisted_turn_blocks:
+  - []
+  - []
+  - []
+historical_render:
+  - role: assistant
+    id: msg-2
+    content:
+      - type: text
+        text: Before the question.
+      - type: other
+        original_type: "user-question:Codex:answered[Pick one => Fast]"
+      - type: text
+        text: Continuing after the answer.
+    streaming: ~

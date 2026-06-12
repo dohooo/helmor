@@ -110,6 +110,9 @@ fn fingerprint_message(msg: &ThreadMessageLike) -> MessageFingerprint {
             ExtendedMessagePart::Basic(MessagePart::PromptSuggestion { .. }) => {
                 "prompt-suggestion".into()
             }
+            ExtendedMessagePart::Basic(MessagePart::UserQuestion { status, .. }) => {
+                format!("user-question({status:?})")
+            }
             ExtendedMessagePart::CollapsedGroup(g) => {
                 format!("collapsed-group({:?},tools={})", g.category, g.tools.len())
             }
