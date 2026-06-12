@@ -5,6 +5,7 @@ import {
 	Pressable,
 	StyleSheet,
 	Text,
+	useWindowDimensions,
 	View,
 } from "react-native";
 import Animated, {
@@ -15,8 +16,10 @@ import Animated, {
 	withTiming,
 } from "react-native-reanimated";
 
+import { ChromaRing, FadeText } from "../../../components/ui";
 import { useThemedStyles } from "../../../lib/use-themed-styles";
-import type { HelmorTheme } from "../../../theme";
+import { type HelmorTheme, useHelmorTheme } from "../../../theme";
+import { CONNECTION_GUIDE_DISPLAY_FONT } from "../typography";
 
 type OnboardingCtaPanelProps = {
 	busy: boolean;
@@ -31,12 +34,12 @@ type AnimatedCtaItemProps = {
 	style?: object;
 };
 
-const CTA_ITEM_DURATION = 820;
+const CTA_ITEM_DURATION = 920;
 const CTA_TITLE_DELAY = 0;
-const CTA_DESCRIPTION_DELAY = 160;
-const CTA_BUTTON_DELAY = 360;
-const CTA_HINT_DELAY = 560;
-const CTA_ERROR_DELAY = 760;
+const CTA_DESCRIPTION_DELAY = 520;
+const CTA_BUTTON_DELAY = 1450;
+const CTA_HINT_DELAY = 2150;
+const CTA_ERROR_DELAY = 2850;
 
 export function OnboardingCtaPanel({
 	busy,
@@ -44,50 +47,84 @@ export function OnboardingCtaPanel({
 	onScanPress,
 	startDelay = 0,
 }: OnboardingCtaPanelProps) {
+	const theme = useHelmorTheme();
 	const styles = useThemedStyles(createStyles);
+	const { width } = useWindowDimensions();
+	const buttonWidth = Math.min(width - 48, 340);
+	const isDark = theme.mode === "dark";
 
 	return (
 		<View style={styles.panel}>
-			<AnimatedCtaItem delay={startDelay + CTA_TITLE_DELAY} style={styles.copy}>
-				<Text style={styles.title}>Connect your Helmor desktop</Text>
-			</AnimatedCtaItem>
+			<FadeText
+				inputs={["Connect your Helmor desktop"]}
+				initialDelay={startDelay + CTA_TITLE_DELAY}
+				wordDelay={82}
+				duration={620}
+				blurTint="prominent"
+				containerStyle={[styles.copy, styles.fadeTextContainer]}
+				style={styles.title}
+			/>
 
-			<AnimatedCtaItem
-				delay={startDelay + CTA_DESCRIPTION_DELAY}
-				style={styles.copy}
-			>
-				<Text style={styles.description}>
-					Open Helmor on your Mac and scan the QR code to sync your workspace.
-				</Text>
-			</AnimatedCtaItem>
+			<FadeText
+				inputs={[
+					"Open Helmor on your Mac and scan the QR code to sync your workspace.",
+				]}
+				initialDelay={startDelay + CTA_DESCRIPTION_DELAY}
+				wordDelay={42}
+				duration={620}
+				blurIntensity={[18, 7, 0]}
+				blurTint="prominent"
+				containerStyle={[styles.copy, styles.fadeTextContainer]}
+				style={styles.description}
+			/>
 
 			<AnimatedCtaItem
 				delay={startDelay + CTA_BUTTON_DELAY}
 				style={styles.buttonItem}
 			>
-				<Pressable
-					accessibilityRole="button"
-					accessibilityState={{ disabled: busy }}
-					disabled={busy}
-					hitSlop={8}
-					onPress={onScanPress}
-					style={({ pressed }) => [
-						styles.scanButton,
-						pressed && !busy && styles.scanButtonPressed,
-						busy && styles.scanButtonDisabled,
-					]}
+				<ChromaRing
+					background={
+						isDark ? "rgba(7, 10, 18, 0.86)" : "rgba(255, 255, 255, 0.84)"
+					}
+					base={isDark ? "#134e4a" : "#38bdf8"}
+					borderRadius={19}
+					borderWidth={2}
+					glow={isDark ? "#f0abfc" : "#7c3aed"}
+					height={58}
+					speed={1.35}
+					width={buttonWidth}
 				>
-					{busy ? (
-						<ActivityIndicator color={styles.scanButtonText.color} />
-					) : null}
-					{!busy ? <ScanIcon /> : null}
-					<Text style={styles.scanButtonText}>Scan to Connect</Text>
-				</Pressable>
+					<Pressable
+						accessibilityRole="button"
+						accessibilityState={{ disabled: busy }}
+						disabled={busy}
+						hitSlop={8}
+						onPress={onScanPress}
+						style={({ pressed }) => [
+							styles.scanButton,
+							pressed && !busy && styles.scanButtonPressed,
+							busy && styles.scanButtonDisabled,
+						]}
+					>
+						{busy ? (
+							<ActivityIndicator color={styles.scanButtonText.color} />
+						) : null}
+						{!busy ? <ScanIcon /> : null}
+						<Text style={styles.scanButtonText}>Scan to Connect</Text>
+					</Pressable>
+				</ChromaRing>
 			</AnimatedCtaItem>
 
-			<AnimatedCtaItem delay={startDelay + CTA_HINT_DELAY}>
-				<Text style={styles.hint}>Keep Helmor running on your desktop</Text>
-			</AnimatedCtaItem>
+			<FadeText
+				inputs={["Keep Helmor running on your desktop"]}
+				initialDelay={startDelay + CTA_HINT_DELAY}
+				wordDelay={48}
+				duration={560}
+				blurIntensity={[14, 5, 0]}
+				blurTint="prominent"
+				containerStyle={styles.fadeTextContainer}
+				style={styles.hint}
+			/>
 
 			{error ? (
 				<AnimatedCtaItem
@@ -164,7 +201,11 @@ function createStyles(theme: HelmorTheme) {
 			alignItems: "center",
 			maxWidth: 340,
 		},
+		fadeTextContainer: {
+			paddingHorizontal: 0,
+		},
 		buttonItem: {
+			alignItems: "center",
 			maxWidth: 340,
 		},
 		errorItem: {
@@ -172,6 +213,7 @@ function createStyles(theme: HelmorTheme) {
 		},
 		title: {
 			color: theme.colors.text,
+			fontFamily: CONNECTION_GUIDE_DISPLAY_FONT,
 			fontSize: 24,
 			fontWeight: "800",
 			letterSpacing: 0,
@@ -180,6 +222,7 @@ function createStyles(theme: HelmorTheme) {
 		},
 		description: {
 			color: theme.colors.textMuted,
+			fontFamily: CONNECTION_GUIDE_DISPLAY_FONT,
 			fontSize: 15,
 			fontWeight: "500",
 			letterSpacing: 0,
@@ -188,38 +231,30 @@ function createStyles(theme: HelmorTheme) {
 		},
 		scanButton: {
 			alignItems: "center",
-			backgroundColor: theme.colors.accent,
-			borderColor: isDark
-				? "rgba(255, 255, 255, 0.18)"
-				: "rgba(24, 24, 27, 0.10)",
 			borderCurve: "continuous",
 			borderRadius: 17,
-			borderWidth: 1,
-			boxShadow: isDark
-				? "0 14px 28px rgba(0, 0, 0, 0.30)"
-				: "0 14px 28px rgba(24, 24, 27, 0.14)",
 			flexDirection: "row",
 			gap: 10,
-			height: 54,
+			height: "100%",
 			justifyContent: "center",
-			maxWidth: 340,
 			width: "100%",
 		},
 		scanButtonPressed: {
-			opacity: 0.88,
-			transform: [{ scale: 0.985 }],
+			opacity: 0.78,
 		},
 		scanButtonDisabled: {
 			opacity: 0.56,
 		},
 		scanButtonText: {
-			color: theme.colors.accentText,
+			color: isDark ? "#f8fafc" : "#0f172a",
+			fontFamily: CONNECTION_GUIDE_DISPLAY_FONT,
 			fontSize: 16,
 			fontWeight: "800",
 			letterSpacing: 0,
 		},
 		hint: {
 			color: theme.colors.textSubtle,
+			fontFamily: CONNECTION_GUIDE_DISPLAY_FONT,
 			fontSize: theme.text.ui,
 			fontWeight: "600",
 			letterSpacing: 0,
@@ -242,6 +277,7 @@ function createStyles(theme: HelmorTheme) {
 		},
 		errorText: {
 			color: theme.colors.danger,
+			fontFamily: CONNECTION_GUIDE_DISPLAY_FONT,
 			fontSize: theme.text.body,
 			fontWeight: "600",
 			letterSpacing: 0,
@@ -254,7 +290,7 @@ function createStyles(theme: HelmorTheme) {
 			width: 18,
 		},
 		scanCorner: {
-			borderColor: theme.colors.accentText,
+			borderColor: isDark ? "#f8fafc" : "#0f172a",
 			height: 7,
 			position: "absolute",
 			width: 7,

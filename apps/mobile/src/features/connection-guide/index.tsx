@@ -1,22 +1,28 @@
 import { BlurView } from "expo-blur";
-import { LinearGradient } from "expo-linear-gradient";
 import { StatusBar } from "expo-status-bar";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { useEffect } from "react";
-import { StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import {
+	Image,
+	StyleSheet,
+	Text,
+	useWindowDimensions,
+	View,
+} from "react-native";
 import Animated, {
 	Easing,
 	useAnimatedStyle,
 	useSharedValue,
 	withDelay,
-	withRepeat,
 	withTiming,
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { GrainyGradient } from "../../components/ui";
 import { useThemedStyles } from "../../lib/use-themed-styles";
 import { type HelmorTheme, useHelmorTheme } from "../../theme";
 import { OnboardingCtaPanel } from "./components/onboarding-cta-panel";
+import { CONNECTION_GUIDE_DISPLAY_FONT } from "./typography";
 
 type ConnectionGuideProps = {
 	busy: boolean;
@@ -25,8 +31,8 @@ type ConnectionGuideProps = {
 };
 
 const GUIDE_VIDEO = require("../../../assets/connection-guide/desktop-pairing-guide.mp4");
-const INTRO_HERO_MOVE_DELAY = 800;
-const CTA_SHOW_DELAY = 1200;
+const HELMOR_ICON = require("../../../assets/icon.png");
+const VIDEO_TRANSITION_SYNC_DELAY = 5500;
 
 const HERO_WIDTH_RATIO = 0.96;
 const HERO_MAX_WIDTH = 460;
@@ -35,7 +41,7 @@ const HERO_MAX_HEIGHT_RATIO = 0.34;
 const HERO_FINAL_SCALE = 0.95;
 const HERO_MOVE_DISTANCE_RATIO = 0.085;
 const HERO_MOVE_DURATION = 760;
-const CTA_ITEM_SEQUENCE_DELAY = CTA_SHOW_DELAY + 80;
+const CTA_ITEM_SEQUENCE_DELAY = VIDEO_TRANSITION_SYNC_DELAY;
 const HERO_INITIAL_BOTTOM_OFFSET = 120;
 const HERO_INITIAL_BOTTOM_OFFSET_COMPACT = 100;
 
@@ -59,7 +65,7 @@ export function ConnectionGuide({
 
 	useEffect(() => {
 		heroProgress.value = withDelay(
-			INTRO_HERO_MOVE_DELAY,
+			VIDEO_TRANSITION_SYNC_DELAY,
 			withTiming(1, {
 				duration: HERO_MOVE_DURATION,
 				easing: Easing.out(Easing.cubic),
@@ -88,6 +94,11 @@ export function ConnectionGuide({
 			<BackgroundWash />
 
 			<View style={styles.header}>
+				<Image
+					accessibilityIgnoresInvertColors
+					source={HELMOR_ICON}
+					style={styles.brandLogo}
+				/>
 				<Text style={styles.brand}>Helmor</Text>
 			</View>
 
@@ -145,94 +156,28 @@ function OnboardingVideoSurface() {
 function BackgroundWash() {
 	const theme = useHelmorTheme();
 	const styles = useThemedStyles(createStyles);
-	const glowProgress = useSharedValue(0);
 	const isDark = theme.mode === "dark";
-	const baseColors: [string, string, string] = isDark
-		? ["#0f0f0f", "#111116", "#0f0f0f"]
-		: ["#ffffff", "#f8fafc", "#ffffff"];
-	const primaryColors: [string, string, string] = isDark
-		? ["transparent", "rgba(94, 234, 212, 0.20)", "transparent"]
-		: ["transparent", "rgba(14, 165, 233, 0.12)", "transparent"];
-	const secondaryColors: [string, string, string] = isDark
-		? ["transparent", "rgba(129, 140, 248, 0.18)", "transparent"]
-		: ["transparent", "rgba(168, 85, 247, 0.10)", "transparent"];
-	const tertiaryColors: [string, string, string] = isDark
-		? ["transparent", "rgba(244, 114, 182, 0.10)", "transparent"]
-		: ["transparent", "rgba(45, 212, 191, 0.08)", "transparent"];
-
-	useEffect(() => {
-		glowProgress.value = withRepeat(
-			withTiming(1, {
-				duration: 9200,
-				easing: Easing.inOut(Easing.cubic),
-			}),
-			-1,
-			true,
-		);
-	}, [glowProgress]);
-
-	const primaryGlowStyle = useAnimatedStyle(() => ({
-		opacity: 0.44 + glowProgress.value * 0.16,
-		transform: [
-			{ translateX: -34 + glowProgress.value * 58 },
-			{ translateY: -16 + glowProgress.value * 28 },
-			{ rotate: "-13deg" },
-			{ scale: 1.03 + glowProgress.value * 0.05 },
-		],
-	}));
-
-	const secondaryGlowStyle = useAnimatedStyle(() => ({
-		opacity: 0.34 + (1 - glowProgress.value) * 0.16,
-		transform: [
-			{ translateX: 38 - glowProgress.value * 64 },
-			{ translateY: 22 - glowProgress.value * 38 },
-			{ rotate: "11deg" },
-			{ scale: 1.08 - glowProgress.value * 0.04 },
-		],
-	}));
-
-	const tertiaryGlowStyle = useAnimatedStyle(() => ({
-		opacity: 0.18 + glowProgress.value * 0.1,
-		transform: [
-			{ translateX: -18 + glowProgress.value * 34 },
-			{ translateY: 18 - glowProgress.value * 26 },
-			{ rotate: "-6deg" },
-			{ scale: 1.02 + glowProgress.value * 0.03 },
-		],
-	}));
+	const gradientColors: [string, string, string, string] = isDark
+		? ["#05070d", "#172554", "#0f766e", "#831843"]
+		: ["#f8fafc", "#bae6fd", "#ccfbf1", "#fbcfe8"];
 
 	return (
 		<View pointerEvents="none" style={styles.background}>
-			<LinearGradient colors={baseColors} style={StyleSheet.absoluteFill} />
-			<Animated.View style={[styles.auroraLayerPrimary, primaryGlowStyle]}>
-				<LinearGradient
-					colors={primaryColors}
-					end={{ x: 1, y: 0.5 }}
-					start={{ x: 0, y: 0.5 }}
-					style={styles.auroraGradient}
-				/>
-			</Animated.View>
-			<Animated.View style={[styles.auroraLayerSecondary, secondaryGlowStyle]}>
-				<LinearGradient
-					colors={secondaryColors}
-					end={{ x: 1, y: 0.5 }}
-					start={{ x: 0, y: 0.5 }}
-					style={styles.auroraGradient}
-				/>
-			</Animated.View>
-			<Animated.View style={[styles.auroraLayerTertiary, tertiaryGlowStyle]}>
-				<LinearGradient
-					colors={tertiaryColors}
-					end={{ x: 1, y: 0.5 }}
-					start={{ x: 0, y: 0.5 }}
-					style={styles.auroraGradient}
-				/>
-			</Animated.View>
+			<GrainyGradient
+				amplitude={0.18}
+				brightness={isDark ? -0.08 : 0.02}
+				colors={gradientColors}
+				intensity={isDark ? 0.085 : 0.052}
+				size={2.2}
+				speed={0.42}
+				style={StyleSheet.absoluteFill}
+			/>
 			<BlurView
-				intensity={42}
+				intensity={isDark ? 12 : 18}
 				style={StyleSheet.absoluteFill}
 				tint={theme.mode === "dark" ? "dark" : "light"}
 			/>
+			<View style={styles.backgroundVignette} />
 		</View>
 	);
 }
@@ -253,40 +198,34 @@ function createStyles(theme: HelmorTheme) {
 			right: 0,
 			top: 0,
 		},
-		auroraLayerPrimary: {
-			height: 180,
-			left: "-30%",
+		backgroundVignette: {
+			backgroundColor: isDark
+				? "rgba(0, 0, 0, 0.28)"
+				: "rgba(255, 255, 255, 0.10)",
+			bottom: 0,
+			left: 0,
 			position: "absolute",
-			top: "12%",
-			width: "160%",
-		},
-		auroraLayerSecondary: {
-			height: 220,
-			left: "-28%",
-			position: "absolute",
-			top: "36%",
-			width: "156%",
-		},
-		auroraLayerTertiary: {
-			bottom: "12%",
-			height: 170,
-			left: "-32%",
-			position: "absolute",
-			width: "164%",
-		},
-		auroraGradient: {
-			borderRadius: 90,
-			flex: 1,
+			right: 0,
+			top: 0,
 		},
 		header: {
 			alignItems: "center",
-			height: 32,
+			flexDirection: "row",
+			gap: 12,
+			height: 56,
 			justifyContent: "center",
 			paddingHorizontal: 24,
 		},
+		brandLogo: {
+			borderCurve: "continuous",
+			borderRadius: 13,
+			height: 44,
+			width: 44,
+		},
 		brand: {
 			color: theme.colors.text,
-			fontSize: 17,
+			fontFamily: CONNECTION_GUIDE_DISPLAY_FONT,
+			fontSize: 30,
 			fontWeight: "800",
 			letterSpacing: 0,
 		},
