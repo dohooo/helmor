@@ -524,6 +524,20 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add pr_url column")?;
     }
 
+    // Migration: mobile companion pairing rows now distinguish temporary
+    // quick/LAN links from fixed stable links. Legacy rows predate that
+    // information, so default them to temporary; stale quick links should
+    // disappear on the next cleanup path.
+    if has_table(connection, "paired_devices")
+        && !has_column(connection, "paired_devices", "connection_kind")
+    {
+        connection
+            .execute_batch(
+                "ALTER TABLE paired_devices ADD COLUMN connection_kind TEXT NOT NULL DEFAULT 'temporary'",
+            )
+            .context("Failed to add paired_devices.connection_kind column")?;
+    }
+
     // Migration: stacked PRs. `parent_workspace_id` links a workspace to the
     // one below it in a PR stack (its base). NULL = bottom of stack or a
     // non-stacked workspace. No SQL foreign key — consistent with
@@ -1191,13 +1205,15 @@ CREATE TABLE IF NOT EXISTS triage_fetch_cursor (
 );
 
 -- Mobile browser companion: paired phones. Stores only a SHA-256 of the PAT,
--- never the plaintext. Survives desktop restarts so a phone never re-scans.
+-- never the plaintext. Fixed-link rows survive desktop restarts; temporary
+-- rows are revoked when the connection they point at goes away.
 CREATE TABLE IF NOT EXISTS paired_devices (
     id TEXT PRIMARY KEY,
     label TEXT NOT NULL,
     pat_hash TEXT NOT NULL,
     created_at TEXT NOT NULL,
     last_seen_at TEXT,
+    connection_kind TEXT NOT NULL DEFAULT 'temporary',
     revoked_at TEXT
 );
 

@@ -10,6 +10,7 @@ describe("companionWebViewUrl", () => {
 	it("opens the companion shell with a token hash fallback", () => {
 		const pairing: NativePairing = {
 			baseUrl: "http://192.168.1.20:58758",
+			connectionKind: "temporary",
 			token: "hlm_lan",
 			pairedAt: "2026-01-02T03:04:05.000Z",
 			originalUrl:
@@ -24,6 +25,7 @@ describe("companionWebViewUrl", () => {
 	it("injects the pairing token into the companion global", () => {
 		const pairing: NativePairing = {
 			baseUrl: "http://192.168.1.20:58758",
+			connectionKind: "temporary",
 			token: "hlm_lan",
 			pairedAt: "2026-01-02T03:04:05.000Z",
 			originalUrl:
@@ -38,6 +40,7 @@ describe("companionWebViewUrl", () => {
 	it("installs WebView diagnostics", () => {
 		const pairing: NativePairing = {
 			baseUrl: "http://192.168.1.20:58758",
+			connectionKind: "temporary",
 			token: "hlm_lan",
 			pairedAt: "2026-01-02T03:04:05.000Z",
 			originalUrl:

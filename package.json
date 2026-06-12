@@ -172,10 +172,11 @@
 		]
 	},
 	"trustedDependencies": [
-		"@tauri-apps/cli",
-		"playwright",
-		"esbuild",
 		"@parcel/watcher",
-		"husky"
+		"@shopify/react-native-skia",
+		"@tauri-apps/cli",
+		"esbuild",
+		"husky",
+		"playwright"
 	]
 }

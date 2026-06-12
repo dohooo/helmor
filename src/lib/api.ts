@@ -4593,6 +4593,7 @@ export type CompanionPairingPayload = {
 	baseUrl: string;
 	/** Deep-link pairing URL to encode as a QR. */
 	url: string;
+	connectionKind: "temporary" | "fixed";
 };
 
 /** A paired phone (active, non-revoked). */
@@ -4601,6 +4602,7 @@ export type PairedDevice = {
 	label: string;
 	createdAt: string;
 	lastSeenAt: string | null;
+	connectionKind: "temporary" | "fixed";
 };
 
 export async function getCompanionStatus(): Promise<CompanionStatus> {

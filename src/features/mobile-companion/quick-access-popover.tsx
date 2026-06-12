@@ -88,7 +88,7 @@ function MobileStatusLight({ state }: { state: CompanionLightState }) {
 		<span
 			aria-hidden="true"
 			className={cn(
-				"absolute -right-0.5 -top-0.5 size-2.5 rounded-full border border-background",
+				"absolute -right-px top-0 size-2 rounded-full border border-background",
 				state === "connected" && "bg-status-success",
 				state === "ready" && "animate-pulse bg-status-info",
 				state === "preparing" && "animate-pulse bg-status-warning",
@@ -247,15 +247,15 @@ export function MobileCompanionQuickAccessPopover() {
 				align="start"
 				side="bottom"
 				sideOffset={8}
-				className="w-[320px] gap-4 p-4"
+				className="w-[264px] gap-4 p-4"
 			>
-				<div className="flex items-start justify-between gap-3">
+				<div className="flex items-center justify-between gap-2">
 					<div className="min-w-0">
 						<p className="text-ui font-semibold text-foreground">{title}</p>
 					</div>
 					<span
 						className={cn(
-							"mt-0.5 inline-flex h-6 shrink-0 items-center gap-1 rounded-full border px-2 text-nano font-medium",
+							"inline-flex h-5 shrink-0 items-center gap-1 rounded-full border px-1.5 text-mini font-medium leading-none",
 							lightState === "connected" &&
 								"border-status-success/30 bg-status-success/10 text-status-success",
 							lightState === "ready" &&

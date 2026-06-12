@@ -1,18 +1,22 @@
+import { BlurView } from "expo-blur";
+import { LinearGradient } from "expo-linear-gradient";
 import { StatusBar } from "expo-status-bar";
 import { useVideoPlayer, VideoView } from "expo-video";
-import {
-	ActivityIndicator,
-	Image,
-	Pressable,
-	StyleSheet,
-	Text,
-	useWindowDimensions,
-	View,
-} from "react-native";
+import { useEffect } from "react";
+import { StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import Animated, {
+	Easing,
+	useAnimatedStyle,
+	useSharedValue,
+	withDelay,
+	withRepeat,
+	withTiming,
+} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useThemedStyles } from "../../lib/use-themed-styles";
 import { type HelmorTheme, useHelmorTheme } from "../../theme";
+import { OnboardingCtaPanel } from "./components/onboarding-cta-panel";
 
 type ConnectionGuideProps = {
 	busy: boolean;
@@ -20,10 +24,20 @@ type ConnectionGuideProps = {
 	onOpenScanner: () => void;
 };
 
-const HELMOR_ICON = require("../../../assets/icon.png");
 const GUIDE_VIDEO = require("../../../assets/connection-guide/desktop-pairing-guide.mp4");
-const GRID_LINES = Array.from({ length: 18 }, (_, index) => index);
-const GUIDE_VIDEO_ASPECT_RATIO = 1068 / 720;
+const INTRO_HERO_MOVE_DELAY = 800;
+const CTA_SHOW_DELAY = 1200;
+
+const HERO_WIDTH_RATIO = 0.96;
+const HERO_MAX_WIDTH = 460;
+const HERO_ASPECT_RATIO = 4 / 3;
+const HERO_MAX_HEIGHT_RATIO = 0.34;
+const HERO_FINAL_SCALE = 0.95;
+const HERO_MOVE_DISTANCE_RATIO = 0.085;
+const HERO_MOVE_DURATION = 760;
+const CTA_ITEM_SEQUENCE_DELAY = CTA_SHOW_DELAY + 80;
+const HERO_INITIAL_BOTTOM_OFFSET = 120;
+const HERO_INITIAL_BOTTOM_OFFSET_COMPACT = 100;
 
 export function ConnectionGuide({
 	busy,
@@ -34,8 +48,78 @@ export function ConnectionGuide({
 	const styles = useThemedStyles(createStyles);
 	const insets = useSafeAreaInsets();
 	const { height, width } = useWindowDimensions();
-	const isShortScreen = height < 760;
-	const isVeryShortScreen = height < 700;
+	const heroProgress = useSharedValue(0);
+	const heroMoveDistance = Math.round(height * HERO_MOVE_DISTANCE_RATIO);
+	const heroWidth = Math.min(width * HERO_WIDTH_RATIO, HERO_MAX_WIDTH);
+	const heroHeight = Math.min(
+		heroWidth / HERO_ASPECT_RATIO,
+		height * HERO_MAX_HEIGHT_RATIO,
+	);
+	const isShortScreen = height < 720;
+
+	useEffect(() => {
+		heroProgress.value = withDelay(
+			INTRO_HERO_MOVE_DELAY,
+			withTiming(1, {
+				duration: HERO_MOVE_DURATION,
+				easing: Easing.out(Easing.cubic),
+			}),
+		);
+	}, [heroProgress]);
+
+	const heroAnimatedStyle = useAnimatedStyle(() => ({
+		transform: [
+			{ translateY: -heroMoveDistance * heroProgress.value },
+			{ scale: 1 - (1 - HERO_FINAL_SCALE) * heroProgress.value },
+		],
+	}));
+
+	return (
+		<View
+			style={[
+				styles.root,
+				{
+					paddingBottom: Math.max(insets.bottom, 18),
+					paddingTop: Math.max(insets.top, 16),
+				},
+			]}
+		>
+			<StatusBar style={theme.mode === "dark" ? "light" : "dark"} />
+			<BackgroundWash />
+
+			<View style={styles.header}>
+				<Text style={styles.brand}>Helmor</Text>
+			</View>
+
+			<View style={[styles.stage, isShortScreen && styles.stageCompact]}>
+				<Animated.View
+					style={[
+						styles.hero,
+						{
+							height: heroHeight,
+							width: heroWidth,
+						},
+						heroAnimatedStyle,
+					]}
+				>
+					<OnboardingVideoSurface />
+				</Animated.View>
+
+				<View style={styles.cta}>
+					<OnboardingCtaPanel
+						busy={busy}
+						error={error}
+						onScanPress={onOpenScanner}
+						startDelay={CTA_ITEM_SEQUENCE_DELAY}
+					/>
+				</View>
+			</View>
+		</View>
+	);
+}
+
+function OnboardingVideoSurface() {
+	const styles = useThemedStyles(createStyles);
 	const player = useVideoPlayer(GUIDE_VIDEO, (videoPlayer) => {
 		videoPlayer.loop = true;
 		videoPlayer.muted = true;
@@ -44,122 +128,111 @@ export function ConnectionGuide({
 	});
 
 	return (
-		<View style={styles.root}>
-			<StatusBar style={theme.mode === "dark" ? "light" : "dark"} />
-			<GridBackground />
-			<View
-				style={[
-					styles.content,
-					isShortScreen && styles.compactContent,
-					isVeryShortScreen && styles.veryCompactContent,
-					{
-						minHeight: height,
-						paddingTop:
-							Math.max(insets.top, 16) + (isVeryShortScreen ? 12 : 24),
-						paddingBottom: Math.max(insets.bottom, 16) + 12,
-					},
-				]}
-			>
-				<View style={styles.brand}>
-					<Image
-						accessibilityIgnoresInvertColors
-						source={HELMOR_ICON}
-						style={styles.brandIcon}
-					/>
-					<Text style={styles.brandText}>Helmor</Text>
-				</View>
-
-				<View style={styles.heroCopy}>
-					<Text style={styles.title}>Connect to Desktop</Text>
-					<Text style={styles.subtitle}>
-						Open Helmor Desktop and scan the QR code.
-					</Text>
-				</View>
-
-				<View
-					style={[
-						styles.videoCard,
-						{
-							height: width / GUIDE_VIDEO_ASPECT_RATIO,
-							width,
-						},
-					]}
-				>
-					<VideoView
-						allowsPictureInPicture={false}
-						allowsVideoFrameAnalysis={false}
-						contentFit="contain"
-						fullscreenOptions={{ enable: false }}
-						nativeControls={false}
-						player={player}
-						playsInline
-						startsPictureInPictureAutomatically={false}
-						style={styles.video}
-					/>
-				</View>
-
-				<Pressable
-					accessibilityRole="button"
-					accessibilityState={{ disabled: busy }}
-					disabled={busy}
-					hitSlop={8}
-					onPress={onOpenScanner}
-					style={({ pressed }) => [
-						styles.scanButton,
-						pressed && !busy && styles.scanButtonPressed,
-						busy && styles.scanButtonDisabled,
-					]}
-				>
-					{busy ? (
-						<ActivityIndicator color={theme.colors.accentText} />
-					) : (
-						<ScanIcon />
-					)}
-					<Text style={styles.scanButtonText}>Scan QR Code</Text>
-				</Pressable>
-
-				{error ? (
-					<View style={styles.errorBanner}>
-						<Text selectable style={styles.errorText}>
-							{error}
-						</Text>
-					</View>
-				) : null}
-			</View>
-		</View>
+		<VideoView
+			allowsPictureInPicture={false}
+			allowsVideoFrameAnalysis={false}
+			contentFit="cover"
+			fullscreenOptions={{ enable: false }}
+			nativeControls={false}
+			player={player}
+			playsInline
+			startsPictureInPictureAutomatically={false}
+			style={styles.video}
+		/>
 	);
 }
 
-function GridBackground() {
+function BackgroundWash() {
+	const theme = useHelmorTheme();
 	const styles = useThemedStyles(createStyles);
+	const glowProgress = useSharedValue(0);
+	const isDark = theme.mode === "dark";
+	const baseColors: [string, string, string] = isDark
+		? ["#0f0f0f", "#111116", "#0f0f0f"]
+		: ["#ffffff", "#f8fafc", "#ffffff"];
+	const primaryColors: [string, string, string] = isDark
+		? ["transparent", "rgba(94, 234, 212, 0.20)", "transparent"]
+		: ["transparent", "rgba(14, 165, 233, 0.12)", "transparent"];
+	const secondaryColors: [string, string, string] = isDark
+		? ["transparent", "rgba(129, 140, 248, 0.18)", "transparent"]
+		: ["transparent", "rgba(168, 85, 247, 0.10)", "transparent"];
+	const tertiaryColors: [string, string, string] = isDark
+		? ["transparent", "rgba(244, 114, 182, 0.10)", "transparent"]
+		: ["transparent", "rgba(45, 212, 191, 0.08)", "transparent"];
+
+	useEffect(() => {
+		glowProgress.value = withRepeat(
+			withTiming(1, {
+				duration: 9200,
+				easing: Easing.inOut(Easing.cubic),
+			}),
+			-1,
+			true,
+		);
+	}, [glowProgress]);
+
+	const primaryGlowStyle = useAnimatedStyle(() => ({
+		opacity: 0.44 + glowProgress.value * 0.16,
+		transform: [
+			{ translateX: -34 + glowProgress.value * 58 },
+			{ translateY: -16 + glowProgress.value * 28 },
+			{ rotate: "-13deg" },
+			{ scale: 1.03 + glowProgress.value * 0.05 },
+		],
+	}));
+
+	const secondaryGlowStyle = useAnimatedStyle(() => ({
+		opacity: 0.34 + (1 - glowProgress.value) * 0.16,
+		transform: [
+			{ translateX: 38 - glowProgress.value * 64 },
+			{ translateY: 22 - glowProgress.value * 38 },
+			{ rotate: "11deg" },
+			{ scale: 1.08 - glowProgress.value * 0.04 },
+		],
+	}));
+
+	const tertiaryGlowStyle = useAnimatedStyle(() => ({
+		opacity: 0.18 + glowProgress.value * 0.1,
+		transform: [
+			{ translateX: -18 + glowProgress.value * 34 },
+			{ translateY: 18 - glowProgress.value * 26 },
+			{ rotate: "-6deg" },
+			{ scale: 1.02 + glowProgress.value * 0.03 },
+		],
+	}));
 
 	return (
-		<View pointerEvents="none" style={styles.grid}>
-			{GRID_LINES.map((line) => (
-				<View
-					key={`v-${line}`}
-					style={[styles.gridLineVertical, { left: `${line * 6}%` }]}
+		<View pointerEvents="none" style={styles.background}>
+			<LinearGradient colors={baseColors} style={StyleSheet.absoluteFill} />
+			<Animated.View style={[styles.auroraLayerPrimary, primaryGlowStyle]}>
+				<LinearGradient
+					colors={primaryColors}
+					end={{ x: 1, y: 0.5 }}
+					start={{ x: 0, y: 0.5 }}
+					style={styles.auroraGradient}
 				/>
-			))}
-			{GRID_LINES.map((line) => (
-				<View
-					key={`h-${line}`}
-					style={[styles.gridLineHorizontal, { top: `${line * 6}%` }]}
+			</Animated.View>
+			<Animated.View style={[styles.auroraLayerSecondary, secondaryGlowStyle]}>
+				<LinearGradient
+					colors={secondaryColors}
+					end={{ x: 1, y: 0.5 }}
+					start={{ x: 0, y: 0.5 }}
+					style={styles.auroraGradient}
 				/>
-			))}
-		</View>
-	);
-}
-
-function ScanIcon() {
-	const styles = useThemedStyles(createStyles);
-
-	return (
-		<View style={styles.scanIcon}>
-			<View style={[styles.scanCorner, styles.scanCornerTopLeft]} />
-			<View style={[styles.scanCorner, styles.scanCornerTopRight]} />
-			<View style={[styles.scanCorner, styles.scanCornerBottomLeft]} />
-			<View style={[styles.scanCorner, styles.scanCornerBottomRight]} />
+			</Animated.View>
+			<Animated.View style={[styles.auroraLayerTertiary, tertiaryGlowStyle]}>
+				<LinearGradient
+					colors={tertiaryColors}
+					end={{ x: 1, y: 0.5 }}
+					start={{ x: 0, y: 0.5 }}
+					style={styles.auroraGradient}
+				/>
+			</Animated.View>
+			<BlurView
+				intensity={42}
+				style={StyleSheet.absoluteFill}
+				tint={theme.mode === "dark" ? "dark" : "light"}
+			/>
 		</View>
 	);
 }
@@ -169,182 +242,85 @@ function createStyles(theme: HelmorTheme) {
 
 	return StyleSheet.create({
 		root: {
-			backgroundColor: isDark ? "#030303" : "#ffffff",
+			backgroundColor: theme.colors.bg,
 			flex: 1,
 		},
-		content: {
+		background: {
+			bottom: 0,
+			left: 0,
+			overflow: "hidden",
+			position: "absolute",
+			right: 0,
+			top: 0,
+		},
+		auroraLayerPrimary: {
+			height: 180,
+			left: "-30%",
+			position: "absolute",
+			top: "12%",
+			width: "160%",
+		},
+		auroraLayerSecondary: {
+			height: 220,
+			left: "-28%",
+			position: "absolute",
+			top: "36%",
+			width: "156%",
+		},
+		auroraLayerTertiary: {
+			bottom: "12%",
+			height: 170,
+			left: "-32%",
+			position: "absolute",
+			width: "164%",
+		},
+		auroraGradient: {
+			borderRadius: 90,
+			flex: 1,
+		},
+		header: {
 			alignItems: "center",
-			flex: 1,
-			gap: 14,
-			justifyContent: "flex-start",
-			paddingHorizontal: 0,
-		},
-		compactContent: {
-			gap: 11,
-			justifyContent: "flex-start",
-		},
-		veryCompactContent: {
-			gap: 9,
-		},
-		grid: {
-			bottom: 0,
-			left: 0,
-			opacity: isDark ? 0.42 : 0.55,
-			position: "absolute",
-			right: 0,
-			top: 0,
-		},
-		gridLineVertical: {
-			backgroundColor: isDark
-				? "rgba(255, 255, 255, 0.035)"
-				: "rgba(10, 10, 10, 0.035)",
-			bottom: 0,
-			position: "absolute",
-			top: 0,
-			width: StyleSheet.hairlineWidth,
-		},
-		gridLineHorizontal: {
-			backgroundColor: isDark
-				? "rgba(255, 255, 255, 0.035)"
-				: "rgba(10, 10, 10, 0.035)",
-			height: StyleSheet.hairlineWidth,
-			left: 0,
-			position: "absolute",
-			right: 0,
+			height: 32,
+			justifyContent: "center",
+			paddingHorizontal: 24,
 		},
 		brand: {
+			color: theme.colors.text,
+			fontSize: 17,
+			fontWeight: "800",
+			letterSpacing: 0,
+		},
+		stage: {
 			alignItems: "center",
-			flexDirection: "row",
-			gap: 7,
+			flex: 1,
 			justifyContent: "center",
+			paddingBottom: HERO_INITIAL_BOTTOM_OFFSET,
+			paddingHorizontal: 18,
 		},
-		brandIcon: {
-			borderRadius: 6,
-			height: 22,
-			width: 22,
+		stageCompact: {
+			paddingBottom: HERO_INITIAL_BOTTOM_OFFSET_COMPACT,
 		},
-		brandText: {
-			color: theme.colors.text,
-			fontSize: 18,
-			fontWeight: "800",
-			letterSpacing: 0,
-		},
-		heroCopy: {
-			alignItems: "center",
-			gap: 5,
-		},
-		title: {
-			color: theme.colors.text,
-			fontSize: 24,
-			fontWeight: "800",
-			letterSpacing: 0,
-			lineHeight: 28,
-			textAlign: "center",
-		},
-		subtitle: {
-			color: isDark ? "rgba(255, 255, 255, 0.68)" : "rgba(24, 24, 27, 0.72)",
-			fontSize: 13,
-			fontWeight: "500",
-			letterSpacing: 0,
-			lineHeight: 19,
-			textAlign: "center",
-		},
-		videoCard: {
-			backgroundColor: isDark ? "#050505" : "#f4f4f5",
+		hero: {
+			backgroundColor: theme.colors.elevated,
+			borderColor: isDark
+				? "rgba(255, 255, 255, 0.13)"
+				: "rgba(24, 24, 27, 0.10)",
+			borderCurve: "continuous",
+			borderRadius: 26,
+			borderWidth: 1,
+			boxShadow: isDark
+				? "0 22px 46px rgba(0, 0, 0, 0.42)"
+				: "0 22px 46px rgba(24, 24, 27, 0.15)",
 			overflow: "hidden",
 		},
 		video: {
 			flex: 1,
 		},
-		scanButton: {
-			alignItems: "center",
-			backgroundColor: isDark
-				? "rgba(255, 255, 255, 0.10)"
-				: "rgba(24, 24, 27, 0.06)",
-			borderColor: isDark
-				? "rgba(255, 255, 255, 0.16)"
-				: "rgba(24, 24, 27, 0.10)",
-			borderCurve: "continuous",
-			borderRadius: 999,
-			borderWidth: 1,
-			boxShadow: isDark
-				? "0 8px 18px rgba(0, 0, 0, 0.24)"
-				: "0 8px 18px rgba(24, 24, 27, 0.08)",
-			flexDirection: "row",
-			gap: 8,
-			justifyContent: "center",
-			minHeight: 42,
-			paddingHorizontal: 18,
-		},
-		scanButtonPressed: {
-			transform: [{ scale: 0.985 }],
-		},
-		scanButtonDisabled: {
-			opacity: 0.62,
-		},
-		scanButtonText: {
-			color: theme.colors.text,
-			fontSize: 15,
-			fontWeight: "700",
-			letterSpacing: 0,
-		},
-		scanIcon: {
-			height: 18,
-			position: "relative",
-			width: 18,
-		},
-		scanCorner: {
-			borderColor: theme.colors.text,
-			height: 7,
+		cta: {
+			bottom: 28,
+			left: 0,
 			position: "absolute",
-			width: 7,
-		},
-		scanCornerTopLeft: {
-			borderLeftWidth: 2,
-			borderTopWidth: 2,
-			left: 0,
-			top: 0,
-		},
-		scanCornerTopRight: {
-			borderRightWidth: 2,
-			borderTopWidth: 2,
 			right: 0,
-			top: 0,
-		},
-		scanCornerBottomLeft: {
-			borderBottomWidth: 2,
-			borderLeftWidth: 2,
-			bottom: 0,
-			left: 0,
-		},
-		scanCornerBottomRight: {
-			borderBottomWidth: 2,
-			borderRightWidth: 2,
-			bottom: 0,
-			right: 0,
-		},
-		errorBanner: {
-			backgroundColor: isDark
-				? "rgba(251, 113, 133, 0.12)"
-				: "rgba(220, 38, 38, 0.08)",
-			borderColor: isDark
-				? "rgba(251, 113, 133, 0.26)"
-				: "rgba(220, 38, 38, 0.18)",
-			borderCurve: "continuous",
-			borderRadius: 14,
-			borderWidth: 1,
-			maxWidth: 520,
-			paddingHorizontal: 14,
-			paddingVertical: 10,
-			width: "92%",
-		},
-		errorText: {
-			color: theme.colors.danger,
-			fontSize: theme.text.body,
-			fontWeight: "600",
-			letterSpacing: 0,
-			lineHeight: 20,
-			textAlign: "center",
 		},
 	});
 }

@@ -1,5 +1,6 @@
 export type NativePairing = {
 	baseUrl: string;
+	connectionKind: "temporary" | "fixed";
 	token: string;
 	pairedAt: string;
 	originalUrl: string;
@@ -37,6 +38,7 @@ export function parsePairingUrl(
 
 		return {
 			baseUrl: baseUrl.origin,
+			connectionKind: connectionKindFromUrl(url),
 			token: token.trim(),
 			pairedAt: now().toISOString(),
 			originalUrl: url.toString(),
@@ -53,6 +55,7 @@ export function parsePairingUrl(
 
 	return {
 		baseUrl: url.origin,
+		connectionKind: connectionKindFromUrl(url),
 		token: token.trim(),
 		pairedAt: now().toISOString(),
 		originalUrl: url.toString(),
@@ -64,10 +67,32 @@ export function isNativePairing(value: unknown): value is NativePairing {
 	const record = value as Record<string, unknown>;
 	return (
 		typeof record.baseUrl === "string" &&
+		(record.connectionKind === "temporary" ||
+			record.connectionKind === "fixed") &&
 		typeof record.token === "string" &&
 		typeof record.pairedAt === "string" &&
 		typeof record.originalUrl === "string"
 	);
+}
+
+export function normalizeNativePairing(value: unknown): NativePairing | null {
+	if (!value || typeof value !== "object") return null;
+	const record = value as Record<string, unknown>;
+	if (
+		typeof record.baseUrl === "string" &&
+		typeof record.token === "string" &&
+		typeof record.pairedAt === "string" &&
+		typeof record.originalUrl === "string"
+	) {
+		return {
+			baseUrl: record.baseUrl,
+			connectionKind: record.connectionKind === "fixed" ? "fixed" : "temporary",
+			token: record.token,
+			pairedAt: record.pairedAt,
+			originalUrl: record.originalUrl,
+		};
+	}
+	return null;
 }
 
 export async function validatePairing(
@@ -91,7 +116,7 @@ export async function validatePairing(
 		if (response.ok) return;
 		if (response.status === 401) {
 			throw new Error(
-				"This pairing code expired. Create a new code in Helmor.",
+				"This Helmor connection is no longer valid. Open Helmor on your computer and scan a new QR code.",
 			);
 		}
 		throw new Error(
@@ -114,4 +139,8 @@ function tokenFromHash(hash: string): string | null {
 	const match = hash.match(/(?:^#|[&#?])(?:pair|token)=([^&]+)/);
 	if (!match) return null;
 	return decodeURIComponent(match[1] ?? "");
+}
+
+function connectionKindFromUrl(url: URL): NativePairing["connectionKind"] {
+	return url.searchParams.get("kind") === "fixed" ? "fixed" : "temporary";
 }

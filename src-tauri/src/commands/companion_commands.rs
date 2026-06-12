@@ -13,7 +13,7 @@ use serde::Serialize;
 use tauri::{AppHandle, State};
 
 use crate::companion::{self, stable_url, CompanionState, TunnelState};
-use crate::models::paired_devices::{self, PairedDevice};
+use crate::models::paired_devices::{self, ConnectionKind, PairedDevice};
 use crate::ui_sync::{self, UiMutationEvent};
 
 use super::common::{run_blocking, CmdResult};
@@ -50,6 +50,7 @@ pub struct PairingPayload {
     pub base_url: String,
     /// Deep-link pairing URL to encode as a QR.
     pub url: String,
+    pub connection_kind: ConnectionKind,
 }
 
 fn local_lan_ip() -> Option<IpAddr> {
@@ -77,12 +78,34 @@ fn lan_pairing_enabled() -> bool {
     cfg!(debug_assertions)
 }
 
-fn pairing_deep_link(base_url: &str, token: &str) -> String {
+fn pairing_deep_link(base_url: &str, token: &str, connection_kind: ConnectionKind) -> String {
     let mut url = url::Url::parse("helmor://pair").expect("static deep link is valid");
     url.query_pairs_mut()
         .append_pair("baseUrl", base_url)
-        .append_pair("token", token);
+        .append_pair("token", token)
+        .append_pair("kind", connection_kind.as_str());
     url.to_string()
+}
+
+async fn connection_kind_for_origin(origin: &str) -> CmdResult<ConnectionKind> {
+    let stable = run_blocking(stable_url::load).await?;
+    let Some(stable) = stable else {
+        return Ok(ConnectionKind::Temporary);
+    };
+    let Ok(url) = url::Url::parse(origin) else {
+        return Ok(ConnectionKind::Temporary);
+    };
+    Ok(if url.host_str() == Some(stable.hostname.as_str()) {
+        ConnectionKind::Fixed
+    } else {
+        ConnectionKind::Temporary
+    })
+}
+
+fn publish_paired_devices_changed_if_needed(app: &AppHandle, count: usize) {
+    if count > 0 {
+        ui_sync::publish(app, UiMutationEvent::PairedDevicesChanged);
+    }
 }
 
 async fn build_status(
@@ -155,17 +178,24 @@ pub async fn companion_enable(
 /// provisioning intact; the user can start it again from Settings).
 #[tauri::command]
 pub async fn companion_disable(
+    app: AppHandle,
     companion: State<'_, CompanionState>,
     tunnel: State<'_, TunnelState>,
 ) -> CmdResult<()> {
     tunnel.shutdown();
     companion.shutdown().await;
+    let revoked = run_blocking(|| {
+        paired_devices::revoke_devices_by_connection_kind(ConnectionKind::Temporary)
+    })
+    .await?;
+    publish_paired_devices_changed_if_needed(&app, revoked);
     Ok(())
 }
 
 /// Stop only the Cloudflare tunnel, leaving LAN access running.
 #[tauri::command]
 pub async fn companion_disable_tunnel(
+    app: AppHandle,
     companion: State<'_, CompanionState>,
     tunnel: State<'_, TunnelState>,
 ) -> CmdResult<CompanionStatus> {
@@ -173,6 +203,11 @@ pub async fn companion_disable_tunnel(
     if !lan_pairing_enabled() {
         companion.shutdown().await;
     }
+    let revoked = run_blocking(|| {
+        paired_devices::revoke_devices_by_connection_kind(ConnectionKind::Temporary)
+    })
+    .await?;
+    publish_paired_devices_changed_if_needed(&app, revoked);
     build_status(&companion, &tunnel).await
 }
 
@@ -185,7 +220,11 @@ pub async fn companion_sign_in_cloudflare() -> CmdResult<()> {
     Ok(())
 }
 
-async fn clear_stable_url(companion: &CompanionState, tunnel: &TunnelState) -> CmdResult<()> {
+async fn clear_stable_url(
+    app: &AppHandle,
+    companion: &CompanionState,
+    tunnel: &TunnelState,
+) -> CmdResult<()> {
     if let Some(record) = run_blocking(stable_url::load).await? {
         // Best-effort external cleanup — local state is cleared regardless.
         let _ = companion::registry::revoke(&record.device_id, &record.secret).await;
@@ -194,6 +233,10 @@ async fn clear_stable_url(companion: &CompanionState, tunnel: &TunnelState) -> C
             .await;
         run_blocking(stable_url::clear).await?;
     }
+    let revoked =
+        run_blocking(|| paired_devices::revoke_devices_by_connection_kind(ConnectionKind::Fixed))
+            .await?;
+    publish_paired_devices_changed_if_needed(app, revoked);
     tunnel.shutdown();
     companion.shutdown().await;
     Ok(())
@@ -203,10 +246,11 @@ async fn clear_stable_url(companion: &CompanionState, tunnel: &TunnelState) -> C
 /// local cloudflared login certificate.
 #[tauri::command]
 pub async fn companion_sign_out_cloudflare(
+    app: AppHandle,
     companion: State<'_, CompanionState>,
     tunnel: State<'_, TunnelState>,
 ) -> CmdResult<CompanionStatus> {
-    clear_stable_url(&companion, &tunnel).await?;
+    clear_stable_url(&app, &companion, &tunnel).await?;
     tauri::async_runtime::spawn_blocking(companion::sign_out_cloudflare)
         .await
         .map_err(|e| anyhow::anyhow!("sign-out task join failed: {e}"))??;
@@ -256,10 +300,11 @@ pub async fn companion_allocate_stable_url(
 /// persistence, and tear the companion down (re-enabling falls back to quick).
 #[tauri::command]
 pub async fn companion_destroy_stable_url(
+    app: AppHandle,
     companion: State<'_, CompanionState>,
     tunnel: State<'_, TunnelState>,
 ) -> CmdResult<CompanionStatus> {
-    clear_stable_url(&companion, &tunnel).await?;
+    clear_stable_url(&app, &companion, &tunnel).await?;
     build_status(&companion, &tunnel).await
 }
 
@@ -296,21 +341,28 @@ pub async fn companion_pair_device(
         }
     };
 
+    let connection_kind = connection_kind_for_origin(origin.trim_end_matches('/')).await?;
     let pairing = run_blocking(move || {
         Ok(paired_devices::create_pending_pairing(
             &label,
             replace_device_id.as_deref(),
+            connection_kind,
         ))
     })
     .await?;
 
-    let url = pairing_deep_link(origin.trim_end_matches('/'), &pairing.pat);
+    let url = pairing_deep_link(
+        origin.trim_end_matches('/'),
+        &pairing.pat,
+        pairing.connection_kind,
+    );
     Ok(PairingPayload {
         device_id: pairing.device_id,
         label: pairing.label,
         pat: pairing.pat,
         base_url: origin,
         url,
+        connection_kind: pairing.connection_kind,
     })
 }
 

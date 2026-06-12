@@ -2,6 +2,7 @@
 // Reserves space for the macOS traffic lights and surfaces the
 // app-update button + an inline "expand sidebar" toggle.
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
 import { Button } from "@/components/ui/button";
 import {
 	Tooltip,
@@ -43,8 +44,8 @@ export function WorkspaceHeaderLeading({
 			)}
 		>
 			{/* Spacer to avoid macOS traffic lights */}
-			<div className="w-[62px] shrink-0 max-[960px]:hidden" />
-			<div className="flex items-center gap-[2px]">
+			<TrafficLightSpacer side="left" className="max-[960px]:hidden" />
+			<div className="flex min-w-[76px] items-center justify-end gap-1">
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<Button

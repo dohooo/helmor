@@ -1,6 +1,6 @@
 import * as SecureStore from "expo-secure-store";
 
-import { isNativePairing, type NativePairing } from "./pairing";
+import { type NativePairing, normalizeNativePairing } from "./pairing";
 
 const PAIRING_KEY = "helmor.native.pairing";
 
@@ -10,7 +10,7 @@ export async function loadPairing(): Promise<NativePairing | null> {
 
 	try {
 		const parsed = JSON.parse(raw);
-		return isNativePairing(parsed) ? parsed : null;
+		return normalizeNativePairing(parsed);
 	} catch {
 		return null;
 	}

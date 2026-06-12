@@ -12,7 +12,11 @@ use tauri::{
 };
 
 use crate::workspace::scripts::{ScriptContext, ScriptEvent, ScriptProcessManager};
-use crate::{agents, data_dir, git_watcher, models::db, service, sidecar};
+use crate::{
+    agents, data_dir, git_watcher,
+    models::{db, paired_devices},
+    service, sidecar,
+};
 
 use super::common::{run_blocking, CmdResult};
 
@@ -1719,6 +1723,20 @@ pub async fn request_quit(app: tauri::AppHandle, force: bool) {
 
     // 1. Stop filesystem watchers so no new events arrive.
     app.state::<git_watcher::GitWatcherManager>().shutdown();
+
+    match paired_devices::revoke_devices_by_connection_kind(
+        paired_devices::ConnectionKind::Temporary,
+    ) {
+        Ok(0) => {}
+        Ok(revoked) => tracing::info!(
+            revoked,
+            "request_quit: revoked temporary mobile companion devices"
+        ),
+        Err(error) => tracing::warn!(
+            %error,
+            "request_quit: failed to revoke temporary mobile companion devices"
+        ),
+    }
 
     // 2. If tasks are in flight, gracefully stop every active stream.
     if force {

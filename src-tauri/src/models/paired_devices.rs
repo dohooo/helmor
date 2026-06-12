@@ -2,8 +2,8 @@
 //!
 //! A row holds only a SHA-256 of the PAT (never the plaintext) plus a label and
 //! timestamps. The PAT is shown once at pairing time (in the QR) and lives on
-//! the phone thereafter. Rows survive desktop restarts, so a paired phone never
-//! re-scans.
+//! the phone thereafter. Fixed-link rows survive desktop restarts; temporary
+//! rows are revoked when the desktop connection they point at goes away.
 
 use anyhow::Result;
 use base64::Engine;
@@ -20,6 +20,31 @@ const PENDING_TTL: Duration = Duration::from_secs(10 * 60);
 
 static PENDING_PAIRINGS: OnceLock<Mutex<HashMap<String, PendingPairing>>> = OnceLock::new();
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConnectionKind {
+    Temporary,
+    Fixed,
+}
+
+impl ConnectionKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Temporary => "temporary",
+            Self::Fixed => "fixed",
+        }
+    }
+}
+
+impl From<&str> for ConnectionKind {
+    fn from(value: &str) -> Self {
+        match value {
+            "fixed" => Self::Fixed,
+            _ => Self::Temporary,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairedDevice {
@@ -27,12 +52,14 @@ pub struct PairedDevice {
     pub label: String,
     pub created_at: String,
     pub last_seen_at: Option<String>,
+    pub connection_kind: ConnectionKind,
 }
 
 pub struct PendingPairingPayload {
     pub device_id: String,
     pub label: String,
     pub pat: String,
+    pub connection_kind: ConnectionKind,
 }
 
 pub struct PatVerification {
@@ -43,6 +70,7 @@ pub struct PatVerification {
 struct PendingPairing {
     id: String,
     label: String,
+    connection_kind: ConnectionKind,
     created_at: Instant,
 }
 
@@ -54,8 +82,8 @@ pub fn create_paired_device(label: &str) -> Result<(PairedDevice, String)> {
     let now = db::current_timestamp()?;
     let conn = db::write_conn()?;
     conn.execute(
-        "INSERT INTO paired_devices (id, label, pat_hash, created_at) VALUES (?1, ?2, ?3, ?4)",
-        params![id, label, hash_pat(&pat), now],
+        "INSERT INTO paired_devices (id, label, pat_hash, created_at, connection_kind) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![id, label, hash_pat(&pat), now, ConnectionKind::Temporary.as_str()],
     )?;
     Ok((
         PairedDevice {
@@ -63,6 +91,7 @@ pub fn create_paired_device(label: &str) -> Result<(PairedDevice, String)> {
             label: label.to_string(),
             created_at: now,
             last_seen_at: None,
+            connection_kind: ConnectionKind::Temporary,
         },
         pat,
     ))
@@ -73,6 +102,7 @@ pub fn create_paired_device(label: &str) -> Result<(PairedDevice, String)> {
 pub fn create_pending_pairing(
     label: &str,
     replace_device_id: Option<&str>,
+    connection_kind: ConnectionKind,
 ) -> PendingPairingPayload {
     let pat = generate_pat();
     let id = uuid::Uuid::new_v4().to_string();
@@ -86,6 +116,7 @@ pub fn create_pending_pairing(
         PendingPairing {
             id: id.clone(),
             label: label.to_string(),
+            connection_kind,
             created_at: Instant::now(),
         },
     );
@@ -93,6 +124,7 @@ pub fn create_pending_pairing(
         device_id: id,
         label: label.to_string(),
         pat,
+        connection_kind,
     }
 }
 
@@ -135,9 +167,15 @@ pub fn verify_or_pair_and_touch(pat: &str) -> Result<PatVerification> {
     let now = db::current_timestamp()?;
     let conn = db::write_conn()?;
     conn.execute(
-        "INSERT INTO paired_devices (id, label, pat_hash, created_at, last_seen_at) \
-         VALUES (?1, ?2, ?3, ?4, ?4)",
-        params![pending.id, pending.label, pat_hash, now],
+        "INSERT INTO paired_devices (id, label, pat_hash, created_at, last_seen_at, connection_kind) \
+         VALUES (?1, ?2, ?3, ?4, ?4, ?5)",
+        params![
+            pending.id,
+            pending.label,
+            pat_hash,
+            now,
+            pending.connection_kind.as_str()
+        ],
     )?;
     Ok(PatVerification {
         valid: true,
@@ -149,16 +187,18 @@ pub fn verify_or_pair_and_touch(pat: &str) -> Result<PatVerification> {
 pub fn list_paired_devices() -> Result<Vec<PairedDevice>> {
     let conn = db::read_conn()?;
     let mut stmt = conn.prepare(
-        "SELECT id, label, created_at, last_seen_at FROM paired_devices \
+        "SELECT id, label, created_at, last_seen_at, connection_kind FROM paired_devices \
          WHERE revoked_at IS NULL AND last_seen_at IS NOT NULL ORDER BY created_at DESC",
     )?;
     let rows = stmt
         .query_map([], |row| {
+            let connection_kind: String = row.get(4)?;
             Ok(PairedDevice {
                 id: row.get(0)?,
                 label: row.get(1)?,
                 created_at: row.get(2)?,
                 last_seen_at: row.get(3)?,
+                connection_kind: ConnectionKind::from(connection_kind.as_str()),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -174,6 +214,16 @@ pub fn revoke_paired_device(id: &str) -> Result<()> {
         params![now, id],
     )?;
     Ok(())
+}
+
+pub fn revoke_devices_by_connection_kind(connection_kind: ConnectionKind) -> Result<usize> {
+    let now = db::current_timestamp()?;
+    let conn = db::write_conn()?;
+    let updated = conn.execute(
+        "UPDATE paired_devices SET revoked_at = ?1 WHERE connection_kind = ?2 AND revoked_at IS NULL",
+        params![now, connection_kind.as_str()],
+    )?;
+    Ok(updated)
 }
 
 fn generate_pat() -> String {
@@ -219,6 +269,7 @@ mod tests {
         let list = list_paired_devices().unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, device.id);
+        assert_eq!(list[0].connection_kind, ConnectionKind::Temporary);
         assert!(list[0].last_seen_at.is_some());
 
         // After revoke: PAT rejected and row hidden from the list.
@@ -239,5 +290,47 @@ mod tests {
             .unwrap();
         assert_ne!(stored, pat);
         assert_eq!(stored.len(), 64); // SHA-256 hex
+    }
+
+    #[test]
+    fn pending_pairing_promotes_with_connection_kind() {
+        let _env = crate::testkit::TestEnv::new("paired-devices-pending-kind");
+
+        let temporary = create_pending_pairing("iPhone", None, ConnectionKind::Temporary);
+        let fixed = create_pending_pairing("iPad", None, ConnectionKind::Fixed);
+
+        let temporary_result = verify_or_pair_and_touch(&temporary.pat).unwrap();
+        assert!(temporary_result.valid);
+        assert!(temporary_result.promoted);
+
+        let fixed_result = verify_or_pair_and_touch(&fixed.pat).unwrap();
+        assert!(fixed_result.valid);
+        assert!(fixed_result.promoted);
+
+        let list = list_paired_devices().unwrap();
+        assert_eq!(list.len(), 2);
+        let temporary_row = list.iter().find(|d| d.id == temporary.device_id).unwrap();
+        let fixed_row = list.iter().find(|d| d.id == fixed.device_id).unwrap();
+        assert_eq!(temporary_row.connection_kind, ConnectionKind::Temporary);
+        assert_eq!(fixed_row.connection_kind, ConnectionKind::Fixed);
+    }
+
+    #[test]
+    fn revoke_by_connection_kind_only_revokes_matching_devices() {
+        let _env = crate::testkit::TestEnv::new("paired-devices-revoke-kind");
+
+        let temporary = create_pending_pairing("iPhone", None, ConnectionKind::Temporary);
+        let fixed = create_pending_pairing("iPad", None, ConnectionKind::Fixed);
+        assert!(verify_or_pair_and_touch(&temporary.pat).unwrap().valid);
+        assert!(verify_or_pair_and_touch(&fixed.pat).unwrap().valid);
+
+        let revoked = revoke_devices_by_connection_kind(ConnectionKind::Temporary).unwrap();
+        assert_eq!(revoked, 1);
+
+        assert!(!verify_or_pair_and_touch(&temporary.pat).unwrap().valid);
+        assert!(verify_or_pair_and_touch(&fixed.pat).unwrap().valid);
+        let list = list_paired_devices().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].connection_kind, ConnectionKind::Fixed);
     }
 }

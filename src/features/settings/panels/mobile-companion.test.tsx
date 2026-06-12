@@ -48,6 +48,7 @@ const PAIRING: CompanionPairingPayload = {
 	pat: "hlm_test",
 	baseUrl: "http://192.168.1.20:5000",
 	url: "helmor://pair?baseUrl=http%3A%2F%2F192.168.1.20%3A5000&token=hlm_test",
+	connectionKind: "temporary",
 };
 
 describe("MobileCompanionPanel tunnel bootstrap", () => {

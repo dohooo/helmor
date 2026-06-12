@@ -5,6 +5,7 @@ import { resolveMobileShellRoute } from "./mobile-shell-state";
 
 const pairing: NativePairing = {
 	baseUrl: "https://desktop.example",
+	connectionKind: "fixed",
 	originalUrl: "helmor://pair?baseUrl=https%3A%2F%2Fdesktop.example&pair=token",
 	pairedAt: "2026-06-09T00:00:00.000Z",
 	token: "token",

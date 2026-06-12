@@ -4,11 +4,14 @@
 	"main": "expo-router/entry",
 	"dependencies": {
 		"@expo/ui": "56.0.16",
+		"@shopify/react-native-skia": "2.6.2",
 		"expo": "~56.0.9",
+		"expo-blur": "~56.0.3",
 		"expo-camera": "~56.0.7",
 		"expo-constants": "~56.0.17",
 		"expo-glass-effect": "~56.0.4",
 		"expo-haptics": "~56.0.3",
+		"expo-linear-gradient": "~56.0.4",
 		"expo-linking": "~56.0.13",
 		"expo-router": "~56.2.9",
 		"expo-secure-store": "~56.0.4",
@@ -16,9 +19,11 @@
 		"expo-video": "56.1.2",
 		"react": "19.2.3",
 		"react-native": "0.85.3",
+		"react-native-reanimated": "4.3.1",
 		"react-native-safe-area-context": "~5.7.0",
 		"react-native-screens": "4.25.2",
-		"react-native-webview": "13.16.1"
+		"react-native-webview": "13.16.1",
+		"react-native-worklets": "0.8.3"
 	},
 	"devDependencies": {
 		"@types/react": "~19.2.2",

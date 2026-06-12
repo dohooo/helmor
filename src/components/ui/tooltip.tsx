@@ -5,6 +5,10 @@ import type * as React from "react";
 
 import { cn } from "@/lib/utils";
 
+// Temporary recording mode: keep triggers interactive, but suppress every
+// tooltip surface so hover labels do not appear in product videos.
+const TOOLTIPS_DISABLED = true;
+
 function TooltipProvider({
 	delayDuration = 0,
 	...props
@@ -36,6 +40,10 @@ function TooltipContent({
 	children,
 	...props
 }: React.ComponentProps<typeof TooltipPrimitive.Content>) {
+	if (TOOLTIPS_DISABLED) {
+		return null;
+	}
+
 	return (
 		<TooltipPrimitive.Portal>
 			<TooltipPrimitive.Content

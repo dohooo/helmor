@@ -505,9 +505,54 @@ pub fn run() {
                 });
             }
 
-            // Stable companion URLs are persisted, but the cloudflared tunnel is
-            // user-controlled from Settings → Mobile companion. Do not auto-start
-            // Cloudflare on launch merely because a stable URL exists.
+            // Stable companion URLs are persistent in release: bring the named
+            // tunnel back up so paired phones keep working across desktop
+            // restarts. Debug builds keep companion startup manual so local
+            // development does not spawn cloudflared unexpectedly.
+            #[cfg(not(debug_assertions))]
+            {
+                let companion_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let should_start =
+                        match tauri::async_runtime::spawn_blocking(companion::stable_url::load)
+                            .await
+                        {
+                            Ok(Ok(Some(_))) => true,
+                            Ok(Ok(None)) => false,
+                            Ok(Err(error)) => {
+                                tracing::warn!(
+                                    error = %format!("{error:#}"),
+                                    "stable companion URL check failed"
+                                );
+                                false
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    error = %error,
+                                    "stable companion URL check task failed"
+                                );
+                                false
+                            }
+                        };
+                    if !should_start {
+                        return;
+                    }
+                    let companion_state = companion_handle.state::<companion::CompanionState>();
+                    let tunnel_state = companion_handle.state::<companion::TunnelState>();
+                    if let Err(error) = companion::start_with_tunnel(
+                        companion_handle.clone(),
+                        &companion_state,
+                        &tunnel_state,
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            error = %format!("{error:#}"),
+                            "stable companion auto-start failed"
+                        );
+                    }
+                });
+            }
 
             // On macOS, the default app-menu Quit item goes straight to
             // NSApplication.terminate:, which bypasses our event loop.
@@ -829,6 +874,19 @@ pub fn run() {
         // new version. By this point `request_quit` has stopped watchers
         // and torn down the sidecar, so blocking briefly here is safe.
         tauri::RunEvent::Exit => {
+            match models::paired_devices::revoke_devices_by_connection_kind(
+                models::paired_devices::ConnectionKind::Temporary,
+            ) {
+                Ok(0) => {}
+                Ok(revoked) => tracing::info!(
+                    revoked,
+                    "app exit: revoked temporary mobile companion devices"
+                ),
+                Err(error) => tracing::warn!(
+                    %error,
+                    "app exit: failed to revoke temporary mobile companion devices"
+                ),
+            }
             // Best-effort graceful shutdown of the companion server + tunnel
             // (no-op when never started). The tasks also die with the process.
             app_handle.state::<companion::TunnelState>().shutdown();
