@@ -13,7 +13,6 @@ pub struct GenerateSessionTitleRequest {
     pub session_id: String,
     pub user_message: String,
     pub title_seed: Option<String>,
-    pub provider: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -24,10 +23,13 @@ pub struct GenerateSessionTitleResponse {
     pub skipped: bool,
 }
 
-/// Sidecar response timeout. Title generation targets a single provider with
-/// a clean, context-free conversation (no skills / MCP / project context), so
-/// the sidecar's own 15s cap plus a small handoff buffer is enough.
-const TITLE_GEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+/// Per-attempt cap the sidecar enforces on title generation
+/// (`TITLE_GENERATION_TIMEOUT_MS` in `title.ts`).
+const TITLE_ATTEMPT_TIMEOUT_SECS: u64 = 15;
+/// Handoff buffer added on top of the whole attempt chain. The Rust wait gets
+/// no intermediate events to reset `recv_timeout`, so it must cover every
+/// attempt end-to-end: `attempts × 15s + buffer`.
+const TITLE_CHAIN_BUFFER_SECS: u64 = 10;
 
 type WorkspaceInfo = (String, String, Option<String>, String, Option<String>);
 
@@ -296,17 +298,19 @@ pub async fn generate_session_title(
             (Some(title), branch)
         } else {
             let request_id = Uuid::new_v4().to_string();
-            // Pick the provider from the user's configured models (action →
-            // review → default), then a cheap model within it: custom if set,
-            // else the provider's own fast/default pick (resolved sidecar-side).
-            // Skip the branch slug instruction when we won't apply it (local
-            // mode, already-renamed worktree, etc.) to save LLM output.
             // Build the provider/model attempt chain from the user's configured
-            // models (action → review → default, deduped); each claude step
-            // tries the custom model then the fast default, other providers
-            // contribute their own fast/default pick. The sidecar walks the
-            // list and stops at the first attempt that produces a title.
+            // models (action → review → default, deduped); each claude/opencode
+            // step tries the custom model then the fast default, other providers
+            // contribute their own fast/default pick. The sidecar walks the list
+            // and stops at the first attempt that produces a title. Skip the
+            // branch slug instruction when we won't apply it (local mode,
+            // already-renamed worktree, etc.) to save LLM output.
             let attempts = build_title_attempts();
+            // No intermediate events reset `recv_timeout`, so the Rust wait must
+            // cover the whole chain end-to-end: attempts × per-attempt + buffer.
+            let title_timeout = std::time::Duration::from_secs(
+                attempts.len() as u64 * TITLE_ATTEMPT_TIMEOUT_SECS + TITLE_CHAIN_BUFFER_SECS,
+            );
             let attempt_chain: Vec<String> = attempts
                 .iter()
                 .map(|a| {
@@ -360,7 +364,7 @@ pub async fn generate_session_title(
                     let mut branch_name: Option<String> = None;
 
                     loop {
-                        match rx.recv_timeout(TITLE_GEN_TIMEOUT) {
+                        match rx.recv_timeout(title_timeout) {
                             Ok(event) => match event.event_type() {
                                 "titleGenerated" => {
                                     title = event
@@ -398,7 +402,7 @@ pub async fn generate_session_title(
                             },
                             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                                 tracing::error!(
-                                    "generate_session_title: timed out after {TITLE_GEN_TIMEOUT:?}"
+                                    "generate_session_title: timed out after {title_timeout:?}"
                                 );
                                 break;
                             }
