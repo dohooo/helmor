@@ -29,6 +29,7 @@ pub mod sidecar;
 pub mod sidecar_host;
 pub mod slack;
 mod system_limits;
+pub mod terminal;
 pub mod triage;
 pub mod ui_sync;
 pub mod updater;
