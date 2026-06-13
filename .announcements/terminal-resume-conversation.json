@@ -1,7 +1,0 @@
-{
-	"items": [
-		{
-			"text": "Switching a conversation to the terminal now picks up where you left off — it resumes the same Claude or Codex session in the TUI instead of starting fresh."
-		}
-	]
-}
