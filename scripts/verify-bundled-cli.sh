@@ -35,11 +35,16 @@ fi
 
 echo "Bundled CLI smoke check passed."
 
-# ----- Vendor binary architecture check -----------------------------------
+# ----- Bundled binary architecture check -----------------------------------
 # helmor-cli is built per-arch via cargo --target, so its lipo arch is the
-# source of truth for what this bundle is targeting. Every vendored binary
-# must match — otherwise an x64 .dmg ends up shipping arm64 `gh` and Intel
-# users see "bad CPU type in executable" (#293).
+# source of truth for what this bundle is targeting. Every other bundled
+# executable must match — otherwise an x64 .dmg ends up shipping an arm64
+# binary and Intel users see "bad CPU type in executable" (#293).
+#
+# This includes helmor-sidecar: it's a Bun `--compile` artifact built in
+# sidecar/scripts/build.ts, which historically ignored the target triple and
+# emitted a host-arch binary. The CLI/vendor checks below did NOT cover it, so
+# an arm64 sidecar shipped in the x86_64 release. Keep it first in the list.
 EXPECTED_ARCH="$(lipo -archs "${CLI_PATH}")"
 case "${EXPECTED_ARCH}" in
   arm64|x86_64) ;;
@@ -54,6 +59,7 @@ esac
 # under their sub-paths anymore.
 VENDOR_ROOT="${APP_BUNDLE}/Contents/Resources/vendor"
 VENDOR_BINARIES=(
+  "${APP_BUNDLE}/Contents/MacOS/helmor-sidecar"
   "${VENDOR_ROOT}/gh/gh"
   "${VENDOR_ROOT}/glab/glab"
   "${VENDOR_ROOT}/codex/codex"
