@@ -84,7 +84,7 @@ const MODEL_CATALOG: Record<Provider, readonly ProviderModelInfo[]> = {
 			supportsFastMode: true,
 		},
 	],
-	// Static seed; live set comes from `OpencodeSessionManager.listModels`.
+	// Static seed; live set comes from `OpencodeProtocolSessionManager.listModels`.
 	// MUST stay in sync with Rust `opencode_section()` in agents/catalog.rs.
 	// Ids are opencode's `provider/model` slug.
 	opencode: [

@@ -1,7 +1,9 @@
-// SessionManager over opencode's HTTP server. SSE `/event` is directory-scoped,
+// SessionManager over the opencode-protocol HTTP server (opencode itself, or
+// a protocol-compatible fork like MiMo Code). SSE `/event` is directory-scoped,
 // so each session subscribes per-directory and we demux by `sessionID`.
-// Does NO normalization: forwards events verbatim (namespaced `opencode/<type>`)
-// for the Rust accumulator. Only transport + turn lifecycle (idle = turn end).
+// Does NO normalization: forwards events verbatim (namespaced `opencode/<type>`
+// — the protocol-family namespace, shared by every fork) for the Rust
+// accumulator. Only transport + turn lifecycle (idle = turn end).
 
 import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -11,25 +13,39 @@ import type {
 	PermissionRuleset,
 	TextPartInput,
 } from "@opencode-ai/sdk/v2";
-import { ActiveTurnRegistry } from "./active-turn-registry.js";
-import type { SidecarEmitter } from "./emitter.js";
-import { prependLinkedDirectoriesContext } from "./linked-directories-context.js";
-import { errorDetails, logger } from "./logger.js";
-import { OpencodeServer } from "./opencode-server.js";
+import { ActiveTurnRegistry } from "../active-turn-registry.js";
+import type { SidecarEmitter } from "../emitter.js";
+import { prependLinkedDirectoriesContext } from "../linked-directories-context.js";
+import { errorDetails, logger } from "../logger.js";
 import type {
 	GenerateTitleOptions,
 	ListSlashCommandsParams,
+	Provider,
 	ProviderModelInfo,
 	SendMessageParams,
 	SessionManager,
 	SlashCommandInfo,
 	UserInputResolution,
-} from "./session-manager.js";
+} from "../session-manager.js";
 import {
 	buildTitlePrompt,
 	parseTitleAndBranchWithDiagnostics,
 	TITLE_GENERATION_TIMEOUT_MS,
-} from "./title.js";
+} from "../title.js";
+import { OpencodeProtocolServer, type ProtocolServerConfig } from "./server.js";
+
+/** Branding/routing knobs that differ between opencode and a protocol-
+ *  compatible fork. The event namespace stays `opencode/<type>` for EVERY
+ *  provider — that's the wire contract with the Rust accumulator. */
+export interface ProtocolManagerConfig {
+	/** Routing id used in request dispatch and user-facing error prefixes. */
+	readonly provider: Provider;
+	/** Prefix namespacing permission ids (`index.ts` routes replies by it). */
+	readonly permissionPrefix: string;
+	/** Human-readable source badge for question/permission cards. */
+	readonly sourceBadge: string;
+	readonly server: ProtocolServerConfig;
+}
 
 interface TurnSettle {
 	resolve: () => void;
@@ -261,8 +277,6 @@ export function parseModelSlug(
 	};
 }
 
-const OPENCODE_PERMISSION_PREFIX = "opencode-";
-
 // opencode always runs full-access at the permission layer; plan mode's
 // read-only behavior comes entirely from selecting the `plan` agent.
 export function buildPermissionRules(): PermissionRuleset {
@@ -285,7 +299,7 @@ export async function reapplySessionPermission(
 			permission: buildPermissionRules(),
 		});
 	} catch (error) {
-		logger.debug("opencode permission reapply failed", errorDetails(error));
+		logger.debug("session permission reapply failed", errorDetails(error));
 	}
 }
 
@@ -323,10 +337,10 @@ export function buildContextUsageMeta(input: {
 	});
 }
 
-export class OpencodeSessionManager implements SessionManager {
+export class OpencodeProtocolSessionManager implements SessionManager {
 	// The shared server's process death is a terminal signal for every
 	// in-flight turn bound to it — settle them so `await turnDone` can't hang.
-	private readonly server = new OpencodeServer(() => this.handleServerExit());
+	private readonly server: OpencodeProtocolServer;
 	private readonly sessions = new Map<string, SessionCtx>();
 	private readonly byOpencodeId = new Map<string, SessionCtx>();
 	private readonly turns = new ActiveTurnRegistry();
@@ -340,6 +354,12 @@ export class OpencodeSessionManager implements SessionManager {
 		string,
 		{ ctx: SessionCtx; requestID: string; questions: OpencodeQuestion[] }
 	>();
+
+	constructor(private readonly config: ProtocolManagerConfig) {
+		this.server = new OpencodeProtocolServer(config.server, () =>
+			this.handleServerExit(),
+		);
+	}
 
 	resolveUserInput(
 		userInputId: string,
@@ -373,7 +393,10 @@ export class OpencodeSessionManager implements SessionManager {
 				directory: ctx.directory,
 			});
 		} catch (error) {
-			logger.debug("opencode permission.reply failed", errorDetails(error));
+			logger.debug(
+				`${this.config.provider} permission.reply failed`,
+				errorDetails(error),
+			);
 		}
 	}
 
@@ -414,7 +437,7 @@ export class OpencodeSessionManager implements SessionManager {
 				ctx.activeEmitter.userQuestionResolved(
 					ctx.activeRequestId,
 					pending.requestID,
-					"OpenCode",
+					this.config.sourceBadge,
 					pending.questions as unknown as Array<Record<string, unknown>>,
 					resolution.action === "submit"
 						? (resolution.content.answers as
@@ -425,7 +448,10 @@ export class OpencodeSessionManager implements SessionManager {
 				);
 			}
 		} catch (error) {
-			logger.debug("opencode question reply failed", errorDetails(error));
+			logger.debug(
+				`${this.config.provider} question reply failed`,
+				errorDetails(error),
+			);
 		}
 	}
 
@@ -452,12 +478,15 @@ export class OpencodeSessionManager implements SessionManager {
 		this.turns.begin(params.sessionId, requestId, emitter, () =>
 			this.tearDownTurn(params.sessionId),
 		);
-		let handle: Awaited<ReturnType<OpencodeServer["start"]>>;
+		let handle: Awaited<ReturnType<OpencodeProtocolServer["start"]>>;
 		try {
 			handle = await this.server.start(process.env);
 		} catch (error) {
 			if (!this.turns.isAbortRequested(params.sessionId)) {
-				emitter.error(requestId, `opencode: ${errorMessage(error)}`);
+				emitter.error(
+					requestId,
+					`${this.config.provider}: ${errorMessage(error)}`,
+				);
 				emitter.end(requestId);
 			}
 			this.turns.end(params.sessionId);
@@ -487,7 +516,7 @@ export class OpencodeSessionManager implements SessionManager {
 				// Stale/absent id → create fresh so old chats recover.
 				if (resumeId) {
 					logger.debug(
-						`opencode resume ${resumeId} not found; creating a fresh session`,
+						`${this.config.provider} resume ${resumeId} not found; creating a fresh session`,
 					);
 				}
 				try {
@@ -499,7 +528,10 @@ export class OpencodeSessionManager implements SessionManager {
 					openCodeSessionId = created.data?.id ?? null;
 				} catch (error) {
 					if (!this.turns.isAbortRequested(params.sessionId)) {
-						emitter.error(requestId, `opencode: ${errorMessage(error)}`);
+						emitter.error(
+							requestId,
+							`${this.config.provider}: ${errorMessage(error)}`,
+						);
 						emitter.end(requestId);
 					}
 					this.turns.end(params.sessionId);
@@ -508,7 +540,10 @@ export class OpencodeSessionManager implements SessionManager {
 			}
 			if (!openCodeSessionId) {
 				if (!this.turns.isAbortRequested(params.sessionId)) {
-					emitter.error(requestId, "opencode: session.create returned no id");
+					emitter.error(
+						requestId,
+						`${this.config.provider}: session.create returned no id`,
+					);
 					emitter.end(requestId);
 				}
 				this.turns.end(params.sessionId);
@@ -630,7 +665,10 @@ export class OpencodeSessionManager implements SessionManager {
 			ctx.activeRequestId = null;
 			ctx.activeEmitter = null;
 			if (!this.turns.isAbortRequested(params.sessionId)) {
-				emitter.error(requestId, `opencode: ${errorMessage(error)}`);
+				emitter.error(
+					requestId,
+					`${this.config.provider}: ${errorMessage(error)}`,
+				);
 				emitter.end(requestId);
 			}
 			this.turns.end(params.sessionId);
@@ -655,7 +693,7 @@ export class OpencodeSessionManager implements SessionManager {
 		}
 
 		if (turnError) {
-			emitter.error(requestId, `opencode: ${turnError.message}`);
+			emitter.error(requestId, `${this.config.provider}: ${turnError.message}`);
 		} else if (ctx.planMode) {
 			// Re-surface the captured plan as a plan-review card (lands after the
 			// turn's prose, before `end`) so the Implement / Request-Changes CTA shows.
@@ -715,13 +753,20 @@ export class OpencodeSessionManager implements SessionManager {
 			// instead of leaving `await turnDone` pending forever.
 			if (!abort.signal.aborted) {
 				ctx.settle?.reject(
-					new Error("opencode event stream ended before the turn finished"),
+					new Error(
+						`${this.config.provider} event stream ended before the turn finished`,
+					),
 				);
 			}
 		} catch (error) {
 			if (abort.signal.aborted) return;
-			logger.error("opencode session pump failed", errorDetails(error));
-			ctx.settle?.reject(new Error("opencode event stream disconnected"));
+			logger.error(
+				`${this.config.provider} session pump failed`,
+				errorDetails(error),
+			);
+			ctx.settle?.reject(
+				new Error(`${this.config.provider} event stream disconnected`),
+			);
 		} finally {
 			// Only clear the flag if we still own the current controller — a
 			// reuse may have already started a replacement pump.
@@ -737,7 +782,9 @@ export class OpencodeSessionManager implements SessionManager {
 	 */
 	private handleServerExit(): void {
 		for (const ctx of this.sessions.values()) {
-			ctx.settle?.reject(new Error("opencode server exited unexpectedly"));
+			ctx.settle?.reject(
+				new Error(`${this.config.provider} server exited unexpectedly`),
+			);
 			// Tear down the pump bound to the dead server (its SSE may hang, leaving
 			// `pumpStarted` stuck true); the next turn rebinds to the respawned one.
 			ctx.abort.abort();
@@ -864,7 +911,7 @@ export class OpencodeSessionManager implements SessionManager {
 			cost = (got.data as { cost?: number } | undefined)?.cost ?? 0;
 		} catch (error) {
 			logger.debug(
-				"opencode context-usage cost fetch failed",
+				`${this.config.provider} context-usage cost fetch failed`,
 				errorDetails(error),
 			);
 		}
@@ -936,7 +983,7 @@ export class OpencodeSessionManager implements SessionManager {
 			props.metadata && typeof props.metadata === "object"
 				? (props.metadata as Record<string, unknown>)
 				: {};
-		const permissionId = `${OPENCODE_PERMISSION_PREFIX}${requestID}`;
+		const permissionId = `${this.config.permissionPrefix}${requestID}`;
 		this.pendingPermissions.set(permissionId, { ctx, requestID });
 		ctx.activeEmitter.permissionRequest(
 			ctx.activeRequestId,
@@ -963,8 +1010,8 @@ export class OpencodeSessionManager implements SessionManager {
 		ctx.activeEmitter.userInputRequest(
 			ctx.activeRequestId,
 			requestID,
-			"OpenCode",
-			questions[0]?.question ?? "OpenCode needs your input",
+			this.config.sourceBadge,
+			questions[0]?.question ?? `${this.config.sourceBadge} needs your input`,
 			{
 				kind: "ask-user-question",
 				questions: questions as unknown as Array<Record<string, unknown>>,
@@ -1001,7 +1048,7 @@ export class OpencodeSessionManager implements SessionManager {
 		const model = parseModelSlug(options?.model);
 		const directory = process.cwd();
 		logger.debug(
-			`[${requestId}] opencode title generation using model ${options?.model ?? "(opencode default)"}`,
+			`[${requestId}] ${this.config.provider} title generation using model ${options?.model ?? "(provider default)"}`,
 		);
 
 		let text = "";
@@ -1031,7 +1078,7 @@ export class OpencodeSessionManager implements SessionManager {
 						() =>
 							reject(
 								new Error(
-									`opencode title generation timed out after ${timeout}ms`,
+									`${this.config.provider} title generation timed out after ${timeout}ms`,
 								),
 							),
 						timeout,
@@ -1040,7 +1087,10 @@ export class OpencodeSessionManager implements SessionManager {
 			]);
 			text = extractTitleText(res.data?.parts);
 		} catch (error) {
-			logger.debug("opencode generateTitle failed", errorDetails(error));
+			logger.debug(
+				`${this.config.provider} generateTitle failed`,
+				errorDetails(error),
+			);
 		} finally {
 			if (client && sessionID) {
 				const abandoned = client;
@@ -1065,7 +1115,9 @@ export class OpencodeSessionManager implements SessionManager {
 		// Throw on empty so the title cascade can fall through to the next
 		// attempt instead of treating a failed/empty opencode run as success.
 		if (!title) {
-			throw new Error("opencode title generation produced no title");
+			throw new Error(
+				`${this.config.provider} title generation produced no title`,
+			);
 		}
 		emitter.titleGenerated(requestId, title, branchName);
 	}
@@ -1073,12 +1125,12 @@ export class OpencodeSessionManager implements SessionManager {
 	async listSlashCommands(
 		params: ListSlashCommandsParams,
 	): Promise<readonly SlashCommandInfo[]> {
-		let handle: Awaited<ReturnType<OpencodeServer["start"]>>;
+		let handle: Awaited<ReturnType<OpencodeProtocolServer["start"]>>;
 		try {
 			handle = await this.server.start(process.env);
 		} catch (error) {
 			logger.debug(
-				"opencode listSlashCommands: server unavailable",
+				`${this.config.provider} listSlashCommands: server unavailable`,
 				errorDetails(error),
 			);
 			return [];
@@ -1103,7 +1155,10 @@ export class OpencodeSessionManager implements SessionManager {
 			out.sort((a, b) => a.name.localeCompare(b.name));
 			return out;
 		} catch (error) {
-			logger.debug("opencode command.list failed", errorDetails(error));
+			logger.debug(
+				`${this.config.provider} command.list failed`,
+				errorDetails(error),
+			);
 			return [];
 		}
 	}
@@ -1124,7 +1179,7 @@ export class OpencodeSessionManager implements SessionManager {
 			return known ? parsed : null;
 		} catch (error) {
 			logger.debug(
-				"opencode command.list (resolve) failed",
+				`${this.config.provider} command.list (resolve) failed`,
 				errorDetails(error),
 			);
 			return null;
@@ -1136,12 +1191,12 @@ export class OpencodeSessionManager implements SessionManager {
 	}): Promise<readonly ProviderModelInfo[]> {
 		// Restart to re-read global config (its cache TTL is infinity).
 		if (opts?.forceReload) void this.server.kill();
-		let handle: Awaited<ReturnType<OpencodeServer["start"]>>;
+		let handle: Awaited<ReturnType<OpencodeProtocolServer["start"]>>;
 		try {
 			handle = await this.server.start(process.env);
 		} catch (error) {
 			logger.debug(
-				"opencode listModels: server unavailable",
+				`${this.config.provider} listModels: server unavailable`,
 				errorDetails(error),
 			);
 			return [];
@@ -1153,7 +1208,10 @@ export class OpencodeSessionManager implements SessionManager {
 			this.captureContextLimits(res.data);
 			return flattenOpencodeModels(res.data);
 		} catch (error) {
-			logger.debug("opencode provider.list failed", errorDetails(error));
+			logger.debug(
+				`${this.config.provider} provider.list failed`,
+				errorDetails(error),
+			);
 			return [];
 		}
 	}
@@ -1183,7 +1241,10 @@ export class OpencodeSessionManager implements SessionManager {
 				}),
 			)
 			.catch((error) =>
-				logger.debug("opencode abort failed", errorDetails(error)),
+				logger.debug(
+					`${this.config.provider} abort failed`,
+					errorDetails(error),
+				),
 			);
 	}
 
@@ -1222,7 +1283,7 @@ export class OpencodeSessionManager implements SessionManager {
 				parts: buildPromptParts(prompt, images),
 			});
 		} catch (error) {
-			logger.debug("opencode steer failed", errorDetails(error));
+			logger.debug(`${this.config.provider} steer failed`, errorDetails(error));
 			return false;
 		}
 		// Accepted → render the steer bubble.

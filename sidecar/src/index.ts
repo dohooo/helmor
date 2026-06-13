@@ -18,7 +18,8 @@ import { CursorSessionManager } from "./cursor-session-manager.js";
 import { createSidecarEmitter } from "./emitter.js";
 import { resolveHostResponse, setHostWriter } from "./host-bridge.js";
 import { errorDetails, logger } from "./logger.js";
-import { OpencodeSessionManager } from "./opencode-session-manager.js";
+import { OPENCODE_PROTOCOL_CONFIG } from "./opencode-protocol/opencode.js";
+import { OpencodeProtocolSessionManager } from "./opencode-protocol/session-manager.js";
 import {
 	errorMessage,
 	optionalObject,
@@ -43,7 +44,9 @@ import { handleRunTriageTick, handleStopTriageTick } from "./triage/index.js";
 const claudeManager = new ClaudeSessionManager();
 const codexManager = new CodexAppServerManager();
 const cursorManager = new CursorSessionManager();
-const opencodeManager = new OpencodeSessionManager();
+const opencodeManager = new OpencodeProtocolSessionManager(
+	OPENCODE_PROTOCOL_CONFIG,
+);
 const managers: Record<Provider, SessionManager> = {
 	claude: claudeManager,
 	codex: codexManager,
