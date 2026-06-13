@@ -549,7 +549,7 @@ export const WorkspaceComposerContainer = memo(
 			session: currentSession,
 			modelSelections,
 			modelSections,
-			settingsDefaultModelId: settings.defaultModelId,
+			settingsDefaultModelId: settings.defaultModel?.modelId ?? null,
 			contextKey: composerContextKey,
 		});
 		const selectedModel = useMemo(

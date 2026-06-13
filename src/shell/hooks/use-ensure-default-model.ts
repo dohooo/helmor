@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
 import type { AgentModelSection } from "@/lib/api";
 import { agentModelSectionsQueryOptions } from "@/lib/query-client";
-import { type AppSettings, useSettings } from "@/lib/settings";
+import { type AppSettings, type ModelRef, useSettings } from "@/lib/settings";
 import { isQuickPanelWindow } from "@/lib/window-role";
 import { findModelOption } from "@/lib/workspace-helpers";
 
@@ -22,7 +22,7 @@ function isModelCatalogSettled(sections: AgentModelSection[]) {
 
 /**
  * Invariant: once the model catalog has settled, every stored model id must
- * point to a model that still exists. `defaultModelId` is repaired to a
+ * point to a model that still exists. `defaultModel` is repaired to a
  * sensible default; stale `review`/`pr` picks (e.g. a delisted model) are
  * unset so they fall back to the default. No per-model migration needed —
  * this self-heals on cold-start for any future delist.
@@ -47,42 +47,46 @@ export function useEnsureDefaultModel() {
 		// confuse "delisted" with "still loading".
 		if (settled) {
 			if (
-				settings.reviewModelId &&
-				!findModelOption(sections, settings.reviewModelId)
+				settings.reviewModel &&
+				!findModelOption(sections, settings.reviewModel.modelId)
 			) {
-				patch.reviewModelId = null;
+				patch.reviewModel = null;
 			}
 			if (
-				settings.prModelId &&
-				!findModelOption(sections, settings.prModelId)
+				settings.prModel &&
+				!findModelOption(sections, settings.prModel.modelId)
 			) {
-				patch.prModelId = null;
+				patch.prModel = null;
 			}
 		}
 
-		const defaultValid =
-			!!settings.defaultModelId &&
-			!!findModelOption(sections, settings.defaultModelId);
+		const defaultOption = settings.defaultModel
+			? findModelOption(sections, settings.defaultModel.modelId)
+			: null;
 
 		// Repair the default when it's never been set, or was set but is now
 		// definitively gone (wait for every provider to settle first).
-		if (!defaultValid && (settled || !settings.defaultModelId)) {
+		if (!defaultOption && (settled || !settings.defaultModel)) {
 			// Prefer the Claude `default` entry (auto-latest Opus) over the
 			// first listed option — pricier models (Fable 5) sit above it in
 			// the picker but must not become the app default.
 			const claudeOptions =
 				sections.find((s) => s.id === "claude")?.options ?? [];
-			const pick =
-				claudeOptions.find((o) => o.id === "default")?.id ??
-				claudeOptions[0]?.id ??
-				allOptions[0]?.id ??
+			const pickOption =
+				claudeOptions.find((o) => o.id === "default") ??
+				claudeOptions[0] ??
+				allOptions[0] ??
 				null;
-			if (pick) {
-				patch.defaultModelId = pick;
+			if (pickOption) {
+				const pick: ModelRef = {
+					provider: pickOption.provider,
+					modelId: pickOption.id,
+				};
+				patch.defaultModel = pick;
 				// Materialize null review/pr fields alongside the default so a
 				// fresh install doesn't depend on the next cold-start migration.
-				if (settings.reviewModelId === null) patch.reviewModelId = pick;
-				if (settings.prModelId === null) patch.prModelId = pick;
+				if (settings.reviewModel === null) patch.reviewModel = pick;
+				if (settings.prModel === null) patch.prModel = pick;
 				if (settings.reviewEffort === null) {
 					patch.reviewEffort = settings.defaultEffort;
 				}
@@ -100,9 +104,9 @@ export function useEnsureDefaultModel() {
 	}, [
 		isLoaded,
 		sections,
-		settings.defaultModelId,
-		settings.reviewModelId,
-		settings.prModelId,
+		settings.defaultModel,
+		settings.reviewModel,
+		settings.prModel,
 		settings.reviewEffort,
 		settings.prEffort,
 		settings.reviewFastMode,

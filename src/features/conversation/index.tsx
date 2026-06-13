@@ -302,7 +302,7 @@ export const WorkspaceConversationContainer = memo(
 					session,
 					modelSelections: composerModelSelections,
 					modelSections: modelSectionsForContext,
-					settingsDefaultModelId: settings.defaultModelId,
+					settingsDefaultModelId: settings.defaultModel?.modelId ?? null,
 				});
 				if (provider) {
 					providers[session.id] = provider;
@@ -312,7 +312,7 @@ export const WorkspaceConversationContainer = memo(
 		}, [
 			composerModelSelections,
 			modelSectionsForContext,
-			settings.defaultModelId,
+			settings.defaultModel?.modelId,
 			workspaceSessionsForContext,
 		]);
 		const isTerminalSession = useMemo(

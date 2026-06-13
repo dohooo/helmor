@@ -4211,7 +4211,7 @@ export async function createSession(
 		/** Pin the session row's `model` at creation. Inspector helpers
 		 *  (Create PR/MR, Review) push the user's configured model here so
 		 *  the composer reads it off the row instead of falling back to
-		 *  settings.defaultModelId. Leave null for the default flow. */
+		 *  settings.defaultModel. Leave null for the default flow. */
 		model?: string | null;
 		/** Pin `effort_level` at creation; null falls back to the user
 		 *  setting on the backend. */

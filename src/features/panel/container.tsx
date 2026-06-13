@@ -335,13 +335,13 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 						session,
 						modelSelections,
 						modelSections,
-						settingsDefaultModelId: settings.defaultModelId,
+						settingsDefaultModelId: settings.defaultModel?.modelId ?? null,
 					});
 					return provider ? [session.id, provider] : null;
 				})
 				.filter((entry): entry is [string, AgentProvider] => entry !== null),
 		);
-	}, [modelSelections, queryClient, sessions, settings.defaultModelId]);
+	}, [modelSelections, queryClient, sessions, settings.defaultModel?.modelId]);
 
 	// The router's session intent only applies once the workspace selection
 	// has converged onto the paint track. During a deferred flip / cold hold
