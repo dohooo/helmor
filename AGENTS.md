@@ -70,14 +70,15 @@ Feature-based layout. Each feature folder follows: `index.tsx` (main) + `contain
 | Module | Role |
 | --- | --- |
 | `lib.rs` | Tauri app builder. Registers commands, runs setup hook. |
-| `commands/` | Tauri command handlers split by domain (session, repository, workspace, editor, github, conductor, settings, system). `terminal_commands.rs` includes `set_terminal_session_busy` and `create_session` (now accepts `session_kind` and `agent_type` parameters). |
-| `agents/` | Agent streaming + persistence (catalog, persistence, queries, streaming, support). |
+| `commands/` | Tauri command handlers split by domain (session, repository, workspace, editor, github, conductor, settings, system). `terminal_commands.rs` includes `set_terminal_session_busy` and `create_session` (now accepts `session_kind` and `agent_type` parameters). `automation_commands.rs` provides IPC for automation management (list, create, update, pause, resume, delete, run). |
+| `agents/` | Agent streaming + persistence (catalog, persistence, queries, streaming, support). Integrates with scheduled automations: `AgentSendRequest.source` and `ExchangeContext.is_background` track automation-initiated turns so they skip mark-read side effects. |
+| `automations/` | Scheduled automations: `mod.rs` (main exports), `dispatch.rs` (dispatch logic), `ops.rs` (CRUD operations), `schedule.rs` (schedule calculation/parsing), `scheduler.rs` (background scheduler, 30-second tick). |
 | `cli/` | CLI entry point + subcommands. `terminal_hook.rs` provides the hidden `terminal-hook` command used by agent CLIs to communicate PTY lifecycle events (session id, busy/idle, prompt capture). |
 | `pipeline/` | Message pipeline: `accumulator/` -> `adapter/` + `collapse` -> `ThreadMessageLike[]`. Includes `event_filter.rs`, `classify.rs`, `types.rs`. |
 | `workspace/` | Workspace operations (branching, lifecycle, helpers) + `files/` sub-module (editor, changes, types). `scripts.rs` includes PTY output coalescing (8ms flush window, 16KB threshold, UTF-8 safe flush). |
 | `git/` | Git operations (ops, watcher). |
 | `github/` | GitHub integration (auth, CLI, GraphQL). |
-| `models/` | Persistence layer (db, repos, sessions, settings, workspaces). Sessions table now has `session_kind` (distinguishes terminal vs GUI sessions) and `agent_type` (tracks which agent is being used). |
+| `models/` | Persistence layer (db, repos, sessions, settings, workspaces, automations). Sessions table now has `session_kind` (distinguishes terminal vs GUI sessions) and `agent_type` (tracks which agent is being used). `automations` contains the Automation struct and persistence. |
 | `service.rs` | Service layer. |
 | `sidecar.rs` | Sidecar process manager (spawn, stdio, graceful SIGTERM). |
 | `schema.rs` | DB schema + idempotent migrations. |

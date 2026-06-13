@@ -43,6 +43,9 @@ helmor workspace stack helmor/earth           # show PR stack for a workspace
 helmor session list --workspace helmor/earth
 helmor session new --workspace helmor/earth
 helmor send --workspace helmor/earth "Refactor the auth module"
+helmor automation list
+helmor automation create --title "Daily digest" --prompt "summarize inbox" \
+  --workspace helmor/earth --daily 09:00
 ```
 
 Debug builds use the same commands under `helmor-dev`.
@@ -97,6 +100,104 @@ The agent provides three commands for stacked PR workflows:
 - `helmor workspace stack <ref>` displays the full PR stack chain
 
 ## CLI Commands
+
+### Automation Commands
+
+Helmor automations allow you to schedule recurring prompts that run on an interval. Each automation can run in a chat (appending turns to an existing session) or in a workspace (creating a fresh session per run).
+
+#### helmor automation list
+
+List all automations.
+
+Example:
+```bash
+helmor automation list
+```
+
+#### helmor automation show <id>
+
+Show details of an automation including title, status, schedule, prompt, and next/last run times.
+
+Example:
+```bash
+helmor automation show abc123
+```
+
+#### helmor automation create
+
+Create a new automation with a title, prompt, target (chat or workspace), and schedule.
+
+Syntax:
+```bash
+helmor automation create --title <title> --prompt <prompt> \
+  [--chat <session-id> | --workspace <workspace>] \
+  [--hourly | --daily HH:MM | --weekly DAY:HH:MM | --every Nm|Nh]
+```
+
+Options:
+- **`--title`** — Descriptive name for the automation
+- **`--prompt`** — The message to send when the automation runs
+- **`--chat <session-id>`** — Run in an existing chat session (each run appends a turn)
+- **`--workspace <workspace>`** — Run in a workspace (each run creates a fresh session)
+- **`--hourly`** — Run every hour
+- **`--daily HH:MM`** — Run every day at a local wall-clock time (e.g. 09:00)
+- **`--weekly DAY:HH:MM`** — Run weekly on a specific day and time (e.g. mon:09:30)
+- **`--every Nm|Nh`** — Run every N minutes or hours (e.g. 15m, 2h)
+
+Examples:
+```bash
+# Run hourly in a chat
+helmor automation create --title "Order monitor" --prompt "check order status" \
+  --chat <session-id> --hourly
+
+# Run daily in a workspace
+helmor automation create --title "Daily digest" --prompt "summarize inbox" \
+  --workspace helmor/earth --daily 09:00
+
+# Run weekly
+helmor automation create --title "Weekly report" --prompt "generate status report" \
+  --workspace helmor/earth --weekly mon:09:30
+
+# Run every 15 minutes
+helmor automation create --title "Frequent check" --prompt "check status" \
+  --workspace helmor/earth --every 15m
+```
+
+#### helmor automation pause <id>
+
+Pause an automation. The automation remains listed but stops firing until resumed.
+
+Example:
+```bash
+helmor automation pause abc123
+```
+
+#### helmor automation resume <id>
+
+Resume a paused automation. The next run time is computed from now.
+
+Example:
+```bash
+helmor automation resume abc123
+```
+
+#### helmor automation run <id>
+
+Manually trigger an automation to run on the app's next scheduler tick (within ~30 seconds). The automation must be active (not paused).
+
+Example:
+```bash
+helmor automation run abc123
+```
+
+#### helmor automation delete <id>
+
+Delete an automation. The chats or sessions it created remain untouched.
+
+Example:
+```bash
+helmor automation delete abc123
+```
 
 ### Workspace Commands
 
