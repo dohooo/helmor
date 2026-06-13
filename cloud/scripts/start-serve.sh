@@ -40,6 +40,19 @@ if pgrep -f "${HELMOR_HOME}/helmor serve" >/dev/null 2>&1; then
 	exit 0
 fi
 
+# Cloud run identity (subscription): the Worker injects the ChatGPT auth.json via
+# CODEX_AUTH_JSON; drop it where codex looks (CODEX_HOME, default ~/.codex) so the
+# agent authenticates as the user's subscription. Verified end-to-end in-container
+# (codex login status = "Logged in using ChatGPT", real turn completed). Phase-1
+# will inject a per-turn short-lived token from the control-plane broker instead.
+if [ -n "${CODEX_AUTH_JSON:-}" ]; then
+	codex_dir="${CODEX_HOME:-${HOME:-/root}/.codex}"
+	mkdir -p "$codex_dir"
+	printf '%s' "$CODEX_AUTH_JSON" >"$codex_dir/auth.json"
+	chmod 600 "$codex_dir/auth.json"
+	echo "helmor-start-serve: wrote $codex_dir/auth.json ($(wc -c <"$codex_dir/auth.json") bytes)"
+fi
+
 # 1. Independent Xvfb daemon (idempotent — skip if one is already running).
 if ! pgrep -x Xvfb >/dev/null 2>&1; then
 	Xvfb "$DISPLAY" -screen 0 1280x800x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &

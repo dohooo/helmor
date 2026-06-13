@@ -21,6 +21,11 @@ interface Env {
 	HELMOR_COMPANION_TOKEN: string;
 	/** PAT for PR6 clone / push, injected into the serve process env (secret). */
 	GITHUB_TOKEN?: string;
+	/** Cloud run identity: ChatGPT auth.json (the user's subscription), written to
+	 *  the container's ~/.codex/auth.json so the agent authenticates as that
+	 *  subscription. Phase-0 passes the whole credential through; Phase-1 will have
+	 *  the control-plane broker mint a per-turn short-lived token instead. */
+	CODEX_AUTH_JSON?: string;
 }
 
 /** Boot script staged in the image (Xvfb daemon → readiness → `helmor serve`). */
@@ -78,6 +83,7 @@ async function ensureServe(
 			HELMOR_COMPANION_TOKEN: env.HELMOR_COMPANION_TOKEN,
 			HELMOR_SERVE_PORT: String(port),
 			...(env.GITHUB_TOKEN ? { GITHUB_TOKEN: env.GITHUB_TOKEN } : {}),
+			...(env.CODEX_AUTH_JSON ? { CODEX_AUTH_JSON: env.CODEX_AUTH_JSON } : {}),
 		},
 	});
 
