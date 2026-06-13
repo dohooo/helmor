@@ -69,6 +69,7 @@ import { AppearancePanel } from "./panels/appearance";
 import { ArchiveCleanupPanel } from "./panels/archive-cleanup";
 import { ComponentsPanel } from "./panels/components";
 import { ConductorImportPanel } from "./panels/conductor-import";
+import { CustomPromptSetting } from "./panels/custom-prompt";
 import { DevToolsPanel } from "./panels/dev-tools";
 import { InboxSettingsPanel } from "./panels/inbox";
 import { LocalLlmPanel } from "./panels/local-llm";
@@ -514,6 +515,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 											</ToggleGroupItem>
 										</ToggleGroup>
 									</SettingsRow>
+									<CustomPromptSetting />
 									<ArchiveCleanupPanel />
 									<AppUpdatesPanel />
 									<ComponentsPanel />

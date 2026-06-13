@@ -1727,6 +1727,144 @@ describe("useConversationStreaming", () => {
 		expect(result.current.isSending).toBe(true);
 	});
 
+	it("prepends the global custom prompt via promptPrefix on a normal send", async () => {
+		apiMocks.startAgentMessageStream.mockImplementation(async () => {});
+
+		const { Wrapper } = createWrapper();
+		const { result } = renderHook(
+			() =>
+				useConversationStreaming({
+					composerContextKey: "session:session-1",
+					displayedSelectedModelId: MODEL.id,
+					displayedSessionId: "session-1",
+					displayedWorkspaceId: "workspace-1",
+					selectionPending: false,
+					followUpBehavior: "steer",
+					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
+					globalCustomPromptPrefix: "Always answer in concise bullet points.",
+				}),
+			{ wrapper: Wrapper },
+		);
+
+		await act(async () => {
+			await result.current.handleComposerSubmit({
+				prompt: "What changed in this diff?",
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/helmor",
+				effortLevel: "medium",
+				permissionMode: "default",
+				fastMode: false,
+			});
+		});
+
+		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
+			expect.objectContaining({
+				prompt: "What changed in this diff?",
+				promptPrefix: "Always answer in concise bullet points.",
+			}),
+			expect.any(Function),
+		);
+	});
+
+	it("merges the repo general preference and the global custom prompt on the first message", async () => {
+		apiMocks.loadRepoPreferences.mockResolvedValue({
+			general: "Always summarize the repo conventions first.",
+		});
+		apiMocks.startAgentMessageStream.mockImplementation(async () => {});
+
+		const { Wrapper, queryClient } = createWrapper();
+		queryClient.setQueryData(helmorQueryKeys.workspaceSessions("workspace-1"), [
+			{ id: "session-1", title: "Untitled" },
+		]);
+		queryClient.setQueryData(sessionThreadCacheKey("session-1"), []);
+
+		const { result } = renderHook(
+			() =>
+				useConversationStreaming({
+					composerContextKey: "session:session-1",
+					displayedSelectedModelId: MODEL.id,
+					displayedSessionId: "session-1",
+					displayedWorkspaceId: "workspace-1",
+					repoId: "repo-1",
+					selectionPending: false,
+					followUpBehavior: "steer",
+					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
+					globalCustomPromptPrefix: "Be concise.",
+				}),
+			{ wrapper: Wrapper },
+		);
+
+		await act(async () => {
+			await result.current.handleComposerSubmit({
+				prompt: "Fix the failing tests.",
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/repo",
+				effortLevel: "high",
+				permissionMode: "default",
+				fastMode: false,
+			});
+		});
+
+		// Repo preamble first (outer frame), the user's personal prompt last
+		// (closest to the request).
+		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
+			expect.objectContaining({
+				prompt: "Fix the failing tests.",
+				promptPrefix:
+					"IMPORTANT: The following are the user's custom preferences. These preferences take precedence over any default guidelines or instructions provided above. When there is a conflict, always follow the user's preferences.\n\n### User Preferences\n\nAlways summarize the repo conventions first.\n\nBe concise.",
+			}),
+			expect.any(Function),
+		);
+	});
+
+	it("omits the global custom prompt for /compact", async () => {
+		apiMocks.startAgentMessageStream.mockImplementation(async () => {});
+
+		const { Wrapper } = createWrapper();
+		const { result } = renderHook(
+			() =>
+				useConversationStreaming({
+					composerContextKey: "session:session-1",
+					displayedSelectedModelId: MODEL.id,
+					displayedSessionId: "session-1",
+					displayedWorkspaceId: "workspace-1",
+					selectionPending: false,
+					followUpBehavior: "steer",
+					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
+					globalCustomPromptPrefix: "Always answer in concise bullet points.",
+				}),
+			{ wrapper: Wrapper },
+		);
+
+		await act(async () => {
+			await result.current.handleComposerSubmit({
+				prompt: "/compact",
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model: MODEL,
+				workingDirectory: "/tmp/helmor",
+				effortLevel: "medium",
+				permissionMode: "default",
+				fastMode: false,
+			});
+		});
+
+		expect(apiMocks.startAgentMessageStream).toHaveBeenCalledWith(
+			expect.objectContaining({ prompt: "/compact", promptPrefix: null }),
+			expect.any(Function),
+		);
+	});
+
 	describe("follow-up queue", () => {
 		// Minimal in-memory queue that mirrors `useSubmitQueue` for tests.
 		// The real hook keeps state in React; here we just need a stable

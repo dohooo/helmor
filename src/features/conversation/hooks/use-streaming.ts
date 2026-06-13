@@ -131,6 +131,11 @@ type UseConversationStreamingArgs = {
 	 *  as a new turn once the agent finishes; `'steer'` injects into
 	 *  the active turn (provider-native mid-turn steer). */
 	followUpBehavior: FollowUpBehavior;
+	/** Resolved global custom prompt, prepended to every send as a hidden
+	 *  `promptPrefix` (wire-only). `null` when the user hasn't enabled one.
+	 *  Unlike the repo "general preference" (first message only), this
+	 *  applies on every turn. Skipped for `/compact`. */
+	globalCustomPromptPrefix?: string | null;
 	/** App-level queue handle (read + mutate). Shared across session /
 	 *  workspace switches so the queue survives navigation. */
 	submitQueue: SubmitQueueApi;
@@ -157,6 +162,7 @@ export function useConversationStreaming({
 	displayedSelectedModelId,
 	selectionPending,
 	followUpBehavior,
+	globalCustomPromptPrefix,
 	submitQueue,
 	activeStreams,
 	getSessionContextReferences,
@@ -835,12 +841,16 @@ export function useConversationStreaming({
 			const repoPreferences = targetRepoId
 				? await loadRepoPreferences(targetRepoId)
 				: null;
-			// The general-preference preamble is prepended ONLY on the wire
-			// to the agent (Rust side stitches it onto `prompt_prefix`).
-			// `trimmedPrompt` is what the user typed — that's what we
-			// optimistically render in the chat bubble and what the Rust
-			// side persists to `session_messages` as the user_prompt body.
-			const promptPrefix =
+			// The preamble is prepended ONLY on the wire to the agent (Rust
+			// side stitches it onto `prompt_prefix`). `trimmedPrompt` is what
+			// the user typed — that's what we optimistically render in the
+			// chat bubble and what the Rust side persists to
+			// `session_messages` as the user_prompt body. Two sources combine:
+			// the repo "general preference" (first message only) and the
+			// global custom prompt (every message). Both are skipped for
+			// `/compact`. Repo preamble goes first (outer frame), the user's
+			// personal prompt last (closest to the request).
+			const repoGeneralPrefix =
 				isFirstUserMessage && !isCompactCommand
 					? [
 							buildSessionContextPrompt(
@@ -856,6 +866,9 @@ export function useConversationStreaming({
 			// Computed against `trimmedPrompt`, which is byte-identical to what
 			// the Rust side persists as the user_prompt body.
 			const pastedTexts = locatePastedTextRanges(trimmedPrompt, customTags);
+			const globalPrefix = isCompactCommand ? null : globalCustomPromptPrefix;
+			const promptPrefix =
+				[repoGeneralPrefix, globalPrefix].filter(Boolean).join("\n\n") || null;
 			const now = new Date().toISOString();
 			const userMessageId = crypto.randomUUID();
 			const optimisticUserMessage = createLiveThreadMessage({
@@ -1092,6 +1105,7 @@ export function useConversationStreaming({
 			activeStreams,
 			planReviewByContext,
 			followUpBehavior,
+			globalCustomPromptPrefix,
 			storeActions,
 			streamingStore,
 			submitQueue,

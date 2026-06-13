@@ -308,6 +308,11 @@ export type AppSettings = {
 	/** How Claude Code returns thinking content. Plumbed through to the
 	 *  sidecar's `thinking.display` field. */
 	claudeThinkingDisplay: ClaudeThinkingDisplay;
+	/** Free-text prompt silently prepended to every message the user sends
+	 *  (wire-only, via `prompt_prefix`). Gated by `customPromptEnabled`. */
+	customPrompt: string;
+	/** Master toggle for `customPrompt`. */
+	customPromptEnabled: boolean;
 	/** Force the context-usage ring to always be visible. When false (the
 	 *  default), the ring auto-hides until usage crosses
 	 *  `CONTEXT_USAGE_AUTO_REVEAL_THRESHOLD`. */
@@ -409,6 +414,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	zoomLevel: 1.0,
 	followUpBehavior: "steer",
 	claudeThinkingDisplay: "summarized",
+	customPrompt: "",
+	customPromptEnabled: false,
 	alwaysShowContextUsage: true,
 	showUsageStats: true,
 	autoArchiveOnMerge: false,
@@ -588,6 +595,8 @@ const SETTINGS_KEY_MAP: Record<
 	zoomLevel: "app.zoom_level",
 	followUpBehavior: "app.follow_up_behavior",
 	claudeThinkingDisplay: "app.claude_thinking_display",
+	customPrompt: "app.custom_prompt",
+	customPromptEnabled: "app.custom_prompt_enabled",
 	alwaysShowContextUsage: "app.always_show_context_usage",
 	showUsageStats: "app.show_usage_stats",
 	autoArchiveOnMerge: "app.auto_archive_on_merge",
@@ -1297,6 +1306,12 @@ export async function loadSettings(): Promise<AppSettings> {
 					? v
 					: DEFAULT_SETTINGS.claudeThinkingDisplay;
 			})(),
+			customPrompt:
+				raw[SETTINGS_KEY_MAP.customPrompt] ?? DEFAULT_SETTINGS.customPrompt,
+			customPromptEnabled:
+				raw[SETTINGS_KEY_MAP.customPromptEnabled] !== undefined
+					? raw[SETTINGS_KEY_MAP.customPromptEnabled] === "true"
+					: DEFAULT_SETTINGS.customPromptEnabled,
 			alwaysShowContextUsage:
 				raw[SETTINGS_KEY_MAP.alwaysShowContextUsage] !== undefined
 					? raw[SETTINGS_KEY_MAP.alwaysShowContextUsage] === "true"

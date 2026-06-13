@@ -375,6 +375,38 @@ describe("settings", () => {
 		);
 	});
 
+	it("hydrates and saves the global custom prompt and its toggle", async () => {
+		invokeMock.mockResolvedValue({
+			"app.custom_prompt": "Always answer in bullet points.",
+			"app.custom_prompt_enabled": "true",
+		});
+
+		const settings = await loadSettings();
+		expect(settings.customPrompt).toBe("Always answer in bullet points.");
+		expect(settings.customPromptEnabled).toBe(true);
+
+		invokeMock.mockResolvedValue({});
+		const defaulted = await loadSettings();
+		expect(defaulted.customPrompt).toBe("");
+		expect(defaulted.customPromptEnabled).toBe(false);
+
+		invokeMock.mockResolvedValue(undefined);
+		await saveSettings({
+			customPrompt: "Be concise.",
+			customPromptEnabled: true,
+		});
+
+		expect(invokeMock).toHaveBeenLastCalledWith(
+			"update_app_settings",
+			expect.objectContaining({
+				settingsMap: expect.objectContaining({
+					"app.custom_prompt": "Be concise.",
+					"app.custom_prompt_enabled": "true",
+				}),
+			}),
+		);
+	});
+
 	it("keeps default as a valid model id", async () => {
 		invokeMock.mockResolvedValue({
 			"app.default_model_id": "gpt-5.5",

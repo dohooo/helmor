@@ -409,6 +409,10 @@ export const WorkspaceConversationContainer = memo(
 			repoId,
 			selectionPending,
 			followUpBehavior: settings.followUpBehavior,
+			globalCustomPromptPrefix:
+				settings.customPromptEnabled && settings.customPrompt.trim()
+					? settings.customPrompt.trim()
+					: null,
 			submitQueue: submitQueueApi,
 			activeStreams,
 			getSessionContextReferences,
@@ -768,7 +772,9 @@ export const WorkspaceConversationContainer = memo(
 
 				<div
 					className={cn(
-						composerOnly ? "w-full" : "mt-auto px-4 pb-4 pt-0",
+						composerOnly
+							? "w-full"
+							: "mt-auto max-h-[70vh] shrink-0 overflow-y-auto px-4 pb-4 pt-0",
 						composerWrapperClassName,
 						isTerminalSession && "hidden",
 					)}
