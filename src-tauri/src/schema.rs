@@ -245,6 +245,20 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to drop full_message column")?;
     }
 
+    // Migration: add author_id to session_messages for multi-member cloud
+    // teams (Phase 2 / Block B). NULL = agent output or a local single-user
+    // message; non-NULL = the team member id. Idempotent.
+    let has_author_id: bool = connection
+        .prepare("SELECT 1 FROM pragma_table_info('session_messages') WHERE name = 'author_id'")
+        .and_then(|mut stmt| stmt.exists([]))
+        .unwrap_or(false);
+
+    if !has_author_id {
+        connection
+            .execute_batch("ALTER TABLE session_messages ADD COLUMN author_id TEXT")
+            .context("Failed to add author_id column")?;
+    }
+
     // Migration: add action_kind column so we can distinguish one-off "action
     // sessions" (e.g. create-pr, commit-and-push, resolve-conflicts, fix)
     // from normal chat sessions. NULL = chat session; any string value marks
@@ -1134,7 +1148,10 @@ CREATE TABLE IF NOT EXISTS session_messages (
     content TEXT,
     sent_at TEXT,
     is_ai_priming INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    -- Team member id for multi-member cloud rooms (Phase 2 / Block B).
+    -- NULL = agent output or local single-user message.
+    author_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS session_plan_state (
@@ -1863,6 +1880,23 @@ mod tests {
         assert!(!index_exists(&connection, "idx_session_messages_turn_id"));
         assert!(!index_exists(&connection, "idx_attachments_session_id"));
         assert!(!index_exists(&connection, "idx_diff_comments_workspace"));
+    }
+
+    #[test]
+    fn migration_adds_author_id_to_session_messages() {
+        let (connection, _dir) = open_test_db();
+        create_legacy_schema(&connection);
+        // Legacy session_messages has no author_id column.
+        assert!(!column_exists(&connection, "session_messages", "author_id"));
+
+        run_migrations(&connection).unwrap();
+
+        // Migration adds the nullable column (existing rows keep NULL).
+        assert!(column_exists(&connection, "session_messages", "author_id"));
+
+        // Idempotent on a second run.
+        run_migrations(&connection).unwrap();
+        assert!(column_exists(&connection, "session_messages", "author_id"));
     }
 
     #[test]

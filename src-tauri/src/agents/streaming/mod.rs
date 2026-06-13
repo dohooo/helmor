@@ -1435,6 +1435,7 @@ fn build_exit_plan_review_message(
         })],
         status: None,
         streaming: None,
+        author: None,
     }
 }
 

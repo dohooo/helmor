@@ -3664,6 +3664,18 @@ export type ExtendedMessagePart = MessagePart | CollapsedGroupPart;
  */
 export type MessageRole = "assistant" | "system" | "user" | "error";
 
+/**
+ * Mirror of the Rust `MessageAuthor` struct. Identifies the human author of
+ * a message in a multi-member cloud team. Absent on agent output and on
+ * local single-user messages (the only cases until the team registry,
+ * Phase ①, populates it).
+ */
+export type MessageAuthor = {
+	id: string;
+	displayName?: string;
+	avatarUrl?: string;
+};
+
 export type ThreadMessageLike = {
 	role: MessageRole;
 	id?: string;
@@ -3671,6 +3683,7 @@ export type ThreadMessageLike = {
 	content: ExtendedMessagePart[];
 	status?: { type: string; reason?: string };
 	streaming?: boolean;
+	author?: MessageAuthor;
 };
 
 // ---------------------------------------------------------------------------
