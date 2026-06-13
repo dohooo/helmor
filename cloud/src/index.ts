@@ -81,8 +81,9 @@ async function ensureServe(
 		},
 	});
 
-	// Cold start: Xvfb + GTK/WebKit init + companion bind. Poll up to ~60s.
-	for (let attempt = 0; attempt < 120; attempt++) {
+	// Cold start: Xvfb + GTK/WebKit init + companion bind. Poll up to ~120s
+	// (WebKitGTK init is heavy on a fresh container's first boot).
+	for (let attempt = 0; attempt < 240; attempt++) {
 		if (await healthOk(sandbox, port)) return;
 		await sleep(500);
 	}

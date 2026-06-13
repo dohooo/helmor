@@ -32,6 +32,14 @@ git config --global user.name "${HELMOR_GIT_NAME:-Helmor Cloud}" || true
 git config --global user.email "${HELMOR_GIT_EMAIL:-cloud@helmor.app}" || true
 git config --global --add safe.directory '*' || true
 
+# Idempotency: the Worker calls startProcess on every not-yet-ready request, so
+# bail out if a serve host is already running — a second one would fight for the
+# companion port and neither would bind cleanly.
+if pgrep -f "${HELMOR_HOME}/helmor serve" >/dev/null 2>&1; then
+	echo "helmor-start-serve: serve already running; nothing to do"
+	exit 0
+fi
+
 # 1. Independent Xvfb daemon (idempotent — skip if one is already running).
 if ! pgrep -x Xvfb >/dev/null 2>&1; then
 	Xvfb "$DISPLAY" -screen 0 1280x800x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &
