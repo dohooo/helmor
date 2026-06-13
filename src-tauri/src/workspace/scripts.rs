@@ -282,6 +282,11 @@ impl ScriptProcessManager {
         }
     }
 
+    pub fn has_live_handle(&self, key: &ProcessKey) -> bool {
+        let map = self.processes.lock().expect("process map poisoned");
+        map.contains_key(key)
+    }
+
     /// Write bytes into the PTY master (user typing, paste, Ctrl+C).
     /// Returns `Ok(false)` if no live script matches the key — callers
     /// treat that as a silent no-op (the user typed into a dead terminal).
@@ -348,6 +353,18 @@ fn escalating_kill(pid: Pid, pgid: Pid) -> bool {
     crate::platform::process::wait_for_tree_gone(tree, PROCESS_KILL_TIMEOUT, PTY_POLL_INTERVAL)
 }
 
+pub fn kill_registered_runtime_process(
+    process: &super::runtime_registry::RuntimeProcessIdentity,
+) -> bool {
+    let Some(pid) = registry_i32_to_pid(process.pid) else {
+        return false;
+    };
+    let Some(pgid) = registry_i32_to_pid(process.pgid) else {
+        return false;
+    };
+    escalating_kill(pid, pgid)
+}
+
 #[cfg(unix)]
 fn pid_to_registry_i32(pid: Pid) -> i32 {
     pid
@@ -356,6 +373,16 @@ fn pid_to_registry_i32(pid: Pid) -> i32 {
 #[cfg(windows)]
 fn pid_to_registry_i32(pid: Pid) -> i32 {
     pid as i32
+}
+
+#[cfg(unix)]
+fn registry_i32_to_pid(pid: i32) -> Option<Pid> {
+    (pid > 0).then_some(pid)
+}
+
+#[cfg(windows)]
+fn registry_i32_to_pid(pid: i32) -> Option<Pid> {
+    u32::try_from(pid).ok().filter(|pid| *pid > 0)
 }
 
 /// SIGKILL any `stop.command` cleanup tree currently published in
@@ -379,6 +406,40 @@ enum StopOutcome {
     CleanExit,
     NonZeroExit(Option<i32>),
     SpawnFailed(String),
+}
+
+pub fn run_configured_stop_command(
+    command: &str,
+    working_dir: &str,
+    ctx: &ScriptContext,
+    event_tx: &Channel<ScriptEvent>,
+) -> bool {
+    let _ = event_tx.send(ScriptEvent::Stopping);
+    let _ = event_tx.send(ScriptEvent::Stdout {
+        data: format!(
+            "\r\n\x1b[2m[Helmor] Running stop.command: {}\x1b[0m\r\n",
+            command
+        ),
+    });
+    let pgid_slot = Mutex::new(None);
+    let started = Instant::now();
+    let outcome = run_stop_command(command, working_dir, ctx, event_tx, &pgid_slot);
+    let elapsed_ms = started.elapsed().as_millis();
+    let success = matches!(outcome, StopOutcome::CleanExit);
+    let footer = match outcome {
+        StopOutcome::CleanExit => {
+            format!("\r\n\x1b[2m[Helmor] stop.command exited cleanly in {elapsed_ms}ms\x1b[0m\r\n")
+        }
+        StopOutcome::NonZeroExit(code) => format!(
+            "\r\n\x1b[33m[Helmor] stop.command exited with code {} after {elapsed_ms}ms\x1b[0m\r\n",
+            code.map(|c| c.to_string()).unwrap_or_else(|| "?".to_string())
+        ),
+        StopOutcome::SpawnFailed(err) => format!(
+            "\r\n\x1b[33m[Helmor] stop.command failed to spawn ({err}) — proceeding with force-kill\x1b[0m\r\n"
+        ),
+    };
+    let _ = event_tx.send(ScriptEvent::Stdout { data: footer });
+    success
 }
 
 /// Spawn `command` via `/bin/sh -c`, stream its stdout/stderr into the

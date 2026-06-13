@@ -15,6 +15,11 @@ fn run_script_type(action_id: &str) -> String {
     format!("run:{action_id}")
 }
 
+struct ResolvedScriptTarget {
+    context: ScriptContext,
+    working_dir: String,
+}
+
 /// Resolve which `RunAction` the caller is targeting.
 ///
 ///   - If `action_id` is supplied, look it up by id; error if it's gone.
@@ -41,6 +46,114 @@ fn resolve_run_target(
             .ok_or_else(|| anyhow::anyhow!("No run actions configured for repo {repo_id}"))?,
     };
     Ok(action)
+}
+
+fn resolve_script_target(
+    repo_id: &str,
+    workspace_id: Option<&str>,
+) -> anyhow::Result<ResolvedScriptTarget> {
+    let repo = repos::load_repository_by_id(repo_id)?
+        .ok_or_else(|| anyhow::anyhow!("Repository not found: {repo_id}"))?;
+    let workspace = match workspace_id {
+        Some(id) => crate::models::workspaces::load_workspace_record_by_id(id)?,
+        None => None,
+    };
+
+    // Run in the workspace directory when available, otherwise repo root.
+    let workspace_root = workspace
+        .as_ref()
+        .and_then(|ws| crate::workspace::helpers::workspace_path(ws).ok());
+    let working_dir = workspace_root
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| repo.root_path.clone());
+
+    // Allocate a stable per-workspace port range so HELMOR_PORT /
+    // HELMOR_PORT_COUNT can be injected below. Lazy: only allocates if
+    // the workspace has no range yet. Best-effort — a DB error here
+    // must not block the script run, scripts that don't read
+    // HELMOR_PORT continue to work exactly as before.
+    let port_range = workspace.as_ref().and_then(|ws| {
+        match crate::workspace::port_allocation::ensure_workspace_port_range(&ws.id) {
+            Ok(range) => range,
+            Err(error) => {
+                tracing::warn!(
+                    workspace_id = %ws.id,
+                    %error,
+                    "Failed to allocate workspace port range; skipping HELMOR_PORT env vars"
+                );
+                None
+            }
+        }
+    });
+
+    Ok(ResolvedScriptTarget {
+        context: ScriptContext {
+            root_path: repo.root_path.clone(),
+            workspace_path: Some(working_dir.clone()),
+            workspace_name: workspace.as_ref().map(|ws| ws.directory_name.clone()),
+            default_branch: repo.default_branch.clone(),
+            port_base: port_range.map(|r| r.base),
+            port_count: port_range.map(|r| r.count),
+        },
+        working_dir,
+    })
+}
+
+fn stop_orphaned_runtime_process(
+    repo_id: &str,
+    workspace_id: Option<&str>,
+    script_type: &str,
+    stop_command: Option<&str>,
+    channel: Option<&Channel<ScriptEvent>>,
+) -> anyhow::Result<Option<bool>> {
+    let Some(process) = crate::workspace::runtime_registry::live_process_for_identity(
+        repo_id,
+        workspace_id,
+        script_type,
+    )?
+    else {
+        return Ok(None);
+    };
+
+    tracing::warn!(
+        repo_id,
+        workspace_id = ?workspace_id,
+        script_type,
+        pid = process.pid,
+        pgid = process.pgid,
+        "Runtime registry: stopping live process not owned by the in-memory script manager"
+    );
+
+    if let Some(command) = stop_command
+        .map(str::trim)
+        .filter(|command| !command.is_empty())
+    {
+        let target = resolve_script_target(repo_id, workspace_id)?;
+        let sink = Channel::<ScriptEvent>::new(|_| Ok(()));
+        let tx = channel.unwrap_or(&sink);
+        crate::workspace::scripts::run_configured_stop_command(
+            command,
+            &target.working_dir,
+            &target.context,
+            tx,
+        );
+    }
+
+    let gone = crate::workspace::scripts::kill_registered_runtime_process(&process);
+    if gone {
+        crate::workspace::runtime_registry::record_processes_ended(std::slice::from_ref(&process))?;
+    }
+    tracing::info!(
+        repo_id,
+        workspace_id = ?workspace_id,
+        script_type,
+        pid = process.pid,
+        pgid = process.pgid,
+        gone,
+        "Runtime registry: orphaned process stop attempt finished"
+    );
+    Ok(Some(gone))
 }
 
 #[tauri::command]
@@ -80,6 +193,57 @@ pub async fn execute_repo_script(
         // independent because the filter compares the full string.
         if action.mode == "non-concurrent" {
             manager.kill_others_in_repo(&repo_id, &process_type, workspace_id.as_deref());
+        }
+
+        // Only fall back to the runtime registry when this exact action is NOT
+        // already owned by the in-memory manager. If it is live in-memory, the
+        // normal spawn path's register() collision handles the restart — running
+        // the registry orphan path here would re-run stop.command and kill the
+        // manager's own live process by PID.
+        let run_key = (repo_id.clone(), process_type.clone(), workspace_id.clone());
+        let orphan_stop: anyhow::Result<Option<bool>> = if manager.has_live_handle(&run_key) {
+            Ok(None)
+        } else {
+            tauri::async_runtime::spawn_blocking({
+                let repo_id = repo_id.clone();
+                let workspace_id = workspace_id.clone();
+                let process_type = process_type.clone();
+                let stop_command = action.stop_command.clone();
+                let channel = channel.clone();
+                move || {
+                    stop_orphaned_runtime_process(
+                        &repo_id,
+                        workspace_id.as_deref(),
+                        &process_type,
+                        stop_command.as_deref(),
+                        Some(&channel),
+                    )
+                }
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e}"))?
+        };
+
+        match orphan_stop {
+            Ok(Some(true)) | Ok(None) => {}
+            Ok(Some(false)) => {
+                let _ = channel.send(ScriptEvent::Error {
+                    message: format!(
+                        "Cannot start {}; Helmor found a live process from a prior launch and could not stop it. Try Stop again.",
+                        action.name
+                    ),
+                });
+                return Ok(());
+            }
+            Err(error) => {
+                let _ = channel.send(ScriptEvent::Error {
+                    message: format!(
+                        "Failed to clean up prior {} process: {error:#}",
+                        action.name
+                    ),
+                });
+                return Ok(());
+            }
         }
 
         return spawn_script(
@@ -140,58 +304,15 @@ async fn spawn_script(
     channel: Channel<ScriptEvent>,
     stop_command: Option<String>,
 ) -> CmdResult<()> {
-    let (repo, workspace) = tauri::async_runtime::spawn_blocking({
+    let target = tauri::async_runtime::spawn_blocking({
         let repo_id = repo_id.clone();
-        let ws_id = workspace_id.clone();
-        move || -> anyhow::Result<(repos::RepositoryRecord, Option<crate::models::workspaces::WorkspaceRecord>)> {
-            let repo = repos::load_repository_by_id(&repo_id)?
-                .ok_or_else(|| anyhow::anyhow!("Repository not found: {repo_id}"))?;
-            let ws = match ws_id {
-                Some(id) => crate::models::workspaces::load_workspace_record_by_id(&id)?,
-                None => None,
-            };
-            Ok((repo, ws))
-        }
+        let workspace_id = workspace_id.clone();
+        move || resolve_script_target(&repo_id, workspace_id.as_deref())
     })
     .await
     .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e}"))??;
-
-    // Run in the workspace directory when available, otherwise repo root.
-    let workspace_root = workspace
-        .as_ref()
-        .and_then(|ws| crate::workspace::helpers::workspace_path(ws).ok());
-    let working_dir = workspace_root
-        .as_ref()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| repo.root_path.clone());
-
-    // Allocate a stable per-workspace port range so HELMOR_PORT /
-    // HELMOR_PORT_COUNT can be injected below. Lazy: only allocates if
-    // the workspace has no range yet. Best-effort — a DB error here
-    // must not block the script run, scripts that don't read
-    // HELMOR_PORT continue to work exactly as before.
-    let port_range = workspace.as_ref().and_then(|ws| {
-        match crate::workspace::port_allocation::ensure_workspace_port_range(&ws.id) {
-            Ok(range) => range,
-            Err(error) => {
-                tracing::warn!(
-                    workspace_id = %ws.id,
-                    %error,
-                    "Failed to allocate workspace port range; skipping HELMOR_PORT env vars"
-                );
-                None
-            }
-        }
-    });
-
-    let context = ScriptContext {
-        root_path: repo.root_path.clone(),
-        workspace_path: Some(working_dir.clone()),
-        workspace_name: workspace.as_ref().map(|ws| ws.directory_name.clone()),
-        default_branch: repo.default_branch.clone(),
-        port_base: port_range.map(|r| r.base),
-        port_count: port_range.map(|r| r.count),
-    };
+    let working_dir = target.working_dir;
+    let context = target.context;
     let mgr = manager.inner().clone();
 
     // Build the graceful-stop bundle now (while we still own `context` /
@@ -248,8 +369,40 @@ pub async fn stop_repo_script(
     action_id: Option<String>,
 ) -> CmdResult<bool> {
     let process_type = process_type_for(&script_type, action_id.as_deref());
-    let key = (repo_id, process_type, workspace_id);
-    Ok(manager.kill(&key))
+    let key = (repo_id.clone(), process_type.clone(), workspace_id.clone());
+    if manager.kill(&key) {
+        return Ok(true);
+    }
+
+    let stop_command = if script_type == "run" {
+        let ws = workspace_id.clone();
+        let rid = repo_id.clone();
+        let aid = action_id.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            resolve_run_target(&rid, ws.as_deref(), aid.as_deref())
+                .map(|action| action.stop_command)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e}"))??
+    } else {
+        None
+    };
+
+    let stopped = tauri::async_runtime::spawn_blocking(move || {
+        stop_orphaned_runtime_process(
+            &repo_id,
+            workspace_id.as_deref(),
+            &process_type,
+            stop_command.as_deref(),
+            None,
+        )
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e}"))??;
+
+    // `Some(false)` means we found an orphan but could not confirm it died —
+    // report that as "not stopped" instead of a false success.
+    Ok(matches!(stopped, Some(true)))
 }
 
 /// Run a run action's configured `stop_command` as a standalone script
@@ -307,6 +460,66 @@ pub async fn execute_repo_stop_command(
     };
 
     let process_type = run_script_type(&action.id);
+    let key = (
+        repo_id.clone(),
+        process_type.clone(),
+        Some(workspace_id.clone()),
+    );
+
+    if manager.has_live_handle(&key) {
+        let _ = channel.send(ScriptEvent::Error {
+            message: format!(
+                "{} is still running; click Stop instead of Cleanup.",
+                action.name
+            ),
+        });
+        return Ok(());
+    }
+
+    let orphan_stop = tauri::async_runtime::spawn_blocking({
+        let repo_id = repo_id.clone();
+        let workspace_id = workspace_id.clone();
+        let process_type = process_type.clone();
+        let stop_command = stop_command.clone();
+        let channel = channel.clone();
+        move || {
+            stop_orphaned_runtime_process(
+                &repo_id,
+                Some(&workspace_id),
+                &process_type,
+                Some(&stop_command),
+                Some(&channel),
+            )
+        }
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e}"))?;
+
+    match orphan_stop {
+        Ok(Some(true)) => {
+            let _ = channel.send(ScriptEvent::Exited { code: None });
+            return Ok(());
+        }
+        Ok(Some(false)) => {
+            let _ = channel.send(ScriptEvent::Error {
+                message: format!(
+                    "Cannot clean up {}; Helmor found a live process from a prior launch and could not stop it. Try Stop again.",
+                    action.name
+                ),
+            });
+            return Ok(());
+        }
+        Ok(None) => {}
+        Err(error) => {
+            let _ = channel.send(ScriptEvent::Error {
+                message: format!(
+                    "Failed to clean up prior {} process: {error:#}",
+                    action.name
+                ),
+            });
+            return Ok(());
+        }
+    }
 
     spawn_script(
         app,
