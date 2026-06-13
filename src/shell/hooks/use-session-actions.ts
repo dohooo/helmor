@@ -6,7 +6,10 @@ import {
 } from "@/features/conversation/hooks/seed-session-title";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import type { SessionCloseRequest } from "@/features/panel/use-confirm-session-close";
-import { buildTerminalBootCommand } from "@/features/terminal/terminal-presets";
+import {
+	buildTerminalBootCommand,
+	resumeBootCommand,
+} from "@/features/terminal/terminal-presets";
 import { setPendingBoot } from "@/features/terminal/terminal-session-store";
 import {
 	closeMainWindow,
@@ -196,10 +199,13 @@ export function useSessionActions({
 		[handleSelectSession, pushWorkspaceToast, queryClient, selectionActions],
 	);
 
-	// Composer Terminal-Mode submit → terminal session booting the provider's
-	// TUI with the prompt + composer state as the initial invocation.
+	// Composer Terminal-Mode submit → convert the composer's CURRENT session into
+	// a Terminal session IN PLACE (one-way) and boot the provider's TUI. A
+	// session that already ran a turn resumes by its provider session id so the
+	// same conversation continues (the typed prompt rides along as the resumed
+	// turn); an empty one boots fresh with the prompt.
 	useShellEvent("create-terminal-session", (event) => {
-		const boot = buildTerminalBootCommand(event.provider, event);
+		const freshBoot = buildTerminalBootCommand(event.provider, event);
 
 		// Layer 1 of the two-layer title (same as GUI): provisional title from
 		// the prompt now; the agent hook drives the AI rename later.
@@ -212,14 +218,16 @@ export function useSessionActions({
 			});
 		};
 
+		// Fallback only: no current session to convert (cache miss / no id) →
+		// mint a fresh terminal session and boot it with the prompt.
 		const createNew = () => {
 			void handleCreateSession(
 				"terminal",
 				event.provider,
 				(sessionId) => {
-					if (boot) {
+					if (freshBoot) {
 						setPendingBoot(sessionId, {
-							bootCommand: boot,
+							bootCommand: freshBoot,
 							fastMode: event.fastMode,
 						});
 					}
@@ -229,9 +237,6 @@ export function useSessionActions({
 			);
 		};
 
-		// A brand-new (message-less) current session converts in place — no point
-		// stranding an empty Untitled session next to the terminal. Anything with
-		// history gets a fresh terminal session alongside it.
 		const sessions =
 			event.sessionId && event.workspaceId
 				? (queryClient.getQueryData<WorkspaceSessionSummary[]>(
@@ -241,22 +246,28 @@ export function useSessionActions({
 		const currentSession =
 			sessions.find((session) => session.id === event.sessionId) ?? null;
 
-		if (
-			!event.sessionId ||
-			!event.workspaceId ||
-			!isNewSession(currentSession)
-		) {
+		if (!event.sessionId || !event.workspaceId || !currentSession) {
 			createNew();
 			return;
 		}
 
 		const sessionId = event.sessionId;
 		const workspaceId = event.workspaceId;
+		// Resume continues the prior conversation; the typed prompt becomes the
+		// resumed turn's input. No provider id (turn never completed) → fresh boot.
+		const providerSessionId = currentSession.providerSessionId ?? null;
+		const boot = providerSessionId
+			? resumeBootCommand(event.provider, providerSessionId, {
+					addDirs: event.addDirs,
+					prompt: event.prompt,
+				})
+			: freshBoot;
+
 		void (async () => {
 			try {
 				await convertSessionToTerminal(sessionId, event.provider);
 			} catch (error) {
-				// Lost the message-less race / convert refused — fall back to new.
+				// Convert refused (unknown id race) — fall back to a new session.
 				console.warn(
 					"[terminal] in-place convert failed; creating new:",
 					error,

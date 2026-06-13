@@ -311,12 +311,11 @@ pub fn workspace_id_for_session(session_id: &str) -> Result<Option<String>> {
     Ok(workspace_id)
 }
 
-/// Convert a freshly-prepared GUI session into a Terminal session in place.
-/// Used by the start-surface terminal flow: the workspace-create pipeline
-/// mints a GUI session, and converting it (before it's ever used) avoids a
-/// throwaway placeholder. The message-less invariant is enforced by the
-/// UPDATE itself — a session with history (or an unknown id) errors instead
-/// of silently rewriting kind/agent/title.
+/// Convert a GUI session into a Terminal session in place. Works whether or
+/// not the session has history: an empty session boots fresh, a populated
+/// claude/codex session resumes by its `provider_session_id` in the TUI so the
+/// same conversation continues. One-way — there is no terminal→GUI path. Only
+/// an unknown id errors (no row updated).
 pub fn convert_session_to_terminal(session_id: &str, agent_type: &str) -> Result<()> {
     let connection = db::write_conn()?;
     // Leave `title` untouched ("Untitled" from prepare) so the prompt-captured
@@ -324,16 +323,12 @@ pub fn convert_session_to_terminal(session_id: &str, agent_type: &str) -> Result
     // overwrites "Untitled", so hardcoding "Terminal" here would freeze it.
     let rows = connection
         .execute(
-            "UPDATE sessions SET session_kind = 'terminal', agent_type = ?2 \
-             WHERE id = ?1 \
-               AND NOT EXISTS (SELECT 1 FROM session_messages WHERE session_id = ?1)",
+            "UPDATE sessions SET session_kind = 'terminal', agent_type = ?2 WHERE id = ?1",
             rusqlite::params![session_id, agent_type],
         )
         .with_context(|| format!("Failed to convert session {session_id} to terminal"))?;
     if rows != 1 {
-        anyhow::bail!(
-            "Refusing to convert session {session_id} to terminal: not found or it already has messages"
-        );
+        anyhow::bail!("Refusing to convert session {session_id} to terminal: not found");
     }
     Ok(())
 }
@@ -1397,7 +1392,7 @@ mod tests {
     }
 
     #[test]
-    fn convert_session_to_terminal_enforces_message_less_invariant() {
+    fn convert_session_to_terminal_converts_in_place() {
         // convert_session_to_terminal opens the app DB itself, so the test
         // must redirect the data dir before touching it.
         let _env = crate::testkit::TestEnv::new("convert-terminal");
@@ -1425,7 +1420,8 @@ mod tests {
             assert_eq!(title, "Test Session");
         }
 
-        // A session with history must be refused, untouched.
+        // A session WITH history also converts in place (it resumes by its
+        // provider_session_id in the TUI), and the agent_type is rewritten.
         {
             let conn = db::write_conn().unwrap();
             conn.execute(
@@ -1435,7 +1431,7 @@ mod tests {
             )
             .unwrap();
         }
-        assert!(convert_session_to_terminal("s1", "codex").is_err());
+        convert_session_to_terminal("s1", "codex").unwrap();
         {
             let conn = db::read_conn().unwrap();
             let agent_after: String = conn
@@ -1443,7 +1439,7 @@ mod tests {
                     r.get(0)
                 })
                 .unwrap();
-            assert_eq!(agent_after, "claude", "refused convert must not rewrite");
+            assert_eq!(agent_after, "codex", "populated session converts in place");
         }
 
         // Unknown ids error instead of silently no-opping.

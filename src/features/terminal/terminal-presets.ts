@@ -32,10 +32,11 @@ export type TerminalAgentSpec = {
 	 *  begins the turn immediately). */
 	boot(opts: TerminalBootOptions): string;
 	/** Resume a prior conversation by the agent's own session id;
-	 *  null = the CLI has no resume. */
+	 *  null = the CLI has no resume. `prompt`, when set, rides along as the
+	 *  resumed turn's initial input (composer convert-in-place → TUI). */
 	resume(
 		providerSessionId: string,
-		opts?: { addDirs?: readonly string[] | null },
+		opts?: { addDirs?: readonly string[] | null; prompt?: string | null },
 	): string | null;
 };
 
@@ -105,6 +106,9 @@ const CLAUDE_SPEC: TerminalAgentSpec = {
 			"--dangerously-skip-permissions",
 			...claudeAddDirFlags(opts?.addDirs),
 		];
+		// `claude [options] [prompt]` — a trailing positional prompt runs as the
+		// first turn of the resumed conversation.
+		if (opts?.prompt?.trim()) parts.push(shellQuotePrompt(opts.prompt));
 		return parts.join(" ");
 	},
 };
@@ -138,8 +142,13 @@ const CODEX_SPEC: TerminalAgentSpec = {
 		parts.push(shellQuotePrompt(opts.prompt));
 		return parts.join(" ");
 	},
-	resume(id) {
-		return `codex resume ${shellQuote(id)} -c model_reasoning_effort="high" --ask-for-approval never --sandbox danger-full-access`;
+	resume(id, opts) {
+		// `codex resume [OPTIONS] [SESSION_ID] [PROMPT]` — the trailing prompt
+		// starts the resumed session with the composer's input.
+		const base = `codex resume ${shellQuote(id)} -c model_reasoning_effort="high" --ask-for-approval never --sandbox danger-full-access`;
+		return opts?.prompt?.trim()
+			? `${base} ${shellQuotePrompt(opts.prompt)}`
+			: base;
 	},
 };
 
@@ -180,7 +189,7 @@ export function buildTerminalBootCommand(
 export function resumeBootCommand(
 	key: string | null | undefined,
 	sessionId: string,
-	opts?: { addDirs?: readonly string[] | null },
+	opts?: { addDirs?: readonly string[] | null; prompt?: string | null },
 ): string | null {
 	const invocation = findTerminalAgent(key)?.resume(sessionId, opts);
 	return invocation ? `${invocation}\n` : null;

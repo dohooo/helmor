@@ -4398,8 +4398,9 @@ export async function deleteSession(sessionId: string): Promise<void> {
 	await invoke("delete_session", { sessionId });
 }
 
-/** Convert a freshly-prepared (message-less) GUI session into a Terminal
- * session in place — the start-surface terminal flow's no-placeholder path. */
+/** Convert a GUI session into a Terminal session in place (one-way). Works on
+ * empty and populated sessions alike — a session that already ran a turn resumes
+ * by its provider session id in the TUI so the same conversation continues. */
 export async function convertSessionToTerminal(
 	sessionId: string,
 	agentType: string,
