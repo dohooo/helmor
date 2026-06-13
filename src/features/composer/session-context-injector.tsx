@@ -25,7 +25,7 @@ export function SessionContextInjector({
 	const selected = new Set(selectedSessionIds);
 
 	return (
-		<div className="pointer-events-auto mb-2 flex w-full items-center gap-2 self-start">
+		<div className="pointer-events-auto mb-2 flex w-full items-center gap-2 self-start pl-[17px]">
 			<span className="shrink-0 text-small leading-none text-muted-foreground">
 				Inject sessions:
 			</span>
