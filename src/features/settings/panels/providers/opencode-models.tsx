@@ -24,63 +24,69 @@ import {
 } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { ModelMultiSelect } from "./model-multi-select";
-import { useOpencodeModelSync } from "./use-opencode-model-sync";
+import type { SlugProviderAdapter } from "./slug-provider-adapter";
+import { useSlugProviderModelSync } from "./use-opencode-model-sync";
 
-export type OpencodeModelsHandle = {
-	/** `forceReload` restarts the opencode server first so newly-configured models show up. */
+export type SlugProviderModelsHandle = {
+	/** `forceReload` restarts the provider's server first so newly-configured models show up. */
 	refresh: (opts?: { forceReload?: boolean }) => void;
-	/** Best-effort: restart + re-read config ONLY if no opencode turn is running,
-	 *  so a config save never interrupts active work (most of the time it's idle). */
+	/** Best-effort: restart + re-read config ONLY if no turn of this provider
+	 *  is running, so a config save never interrupts active work (most of the
+	 *  time it's idle). */
 	syncIfIdle: () => void;
 };
 
-export function OpencodeModels({
+export function SlugProviderModels({
+	adapter,
 	ref,
 }: {
-	ref?: React.Ref<OpencodeModelsHandle>;
+	adapter: SlugProviderAdapter;
+	ref?: React.Ref<SlugProviderModelsHandle>;
 }) {
 	const queryClient = useQueryClient();
 	const { settings, updateSettings } = useSettings();
-	const opencode = settings.opencodeProvider;
-	const { sync, isSyncing } = useOpencodeModelSync();
+	const current = settings[adapter.settingsKey];
+	const { sync, isSyncing } = useSlugProviderModelSync(adapter);
 
 	const persist = useCallback(
 		async (patch: Partial<OpencodeProviderSettings>) => {
 			await Promise.resolve(
-				updateSettings({ opencodeProvider: { ...opencode, ...patch } }),
+				updateSettings({ [adapter.settingsKey]: { ...current, ...patch } }),
 			);
 			queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.agentModelSections,
 			});
 		},
-		[opencode, queryClient, updateSettings],
+		[adapter.settingsKey, current, queryClient, updateSettings],
 	);
 
-	// Syncing restarts `opencode serve`, which interrupts in-flight opencode
+	// Syncing restarts the provider's server, which interrupts its in-flight
 	// turns — stop them cleanly first so the restart doesn't strand them in a
 	// "running" state, and confirm before doing so from the manual button.
 	const activeStreamsQuery = useQuery(activeStreamsQueryOptions());
-	const runningOpencode = useMemo(
+	const runningStreams = useMemo(
 		() =>
-			(activeStreamsQuery.data ?? []).filter((s) => s.provider === "opencode"),
-		[activeStreamsQuery.data],
+			(activeStreamsQuery.data ?? []).filter(
+				(s) => s.provider === adapter.provider,
+			),
+		[activeStreamsQuery.data, adapter.provider],
 	);
 	const [confirmOpen, setConfirmOpen] = useState(false);
 
 	const reloadSync = useCallback(async () => {
 		await Promise.allSettled(
-			runningOpencode.map((s) => stopAgentStream(s.sessionId, "opencode")),
+			runningStreams.map((s) => stopAgentStream(s.sessionId, adapter.provider)),
 		);
 		await sync({ forceReload: true });
-	}, [runningOpencode, sync]);
+	}, [runningStreams, adapter.provider, sync]);
 
 	const onSyncClick = useCallback(() => {
-		if (runningOpencode.length > 0) {
+		if (runningStreams.length > 0) {
 			setConfirmOpen(true);
 			return;
 		}
 		void reloadSync();
-	}, [runningOpencode.length, reloadSync]);
+	}, [runningStreams.length, reloadSync]);
 
 	useImperativeHandle(
 		ref,
@@ -90,29 +96,29 @@ export function OpencodeModels({
 				else void sync();
 			},
 			syncIfIdle: () => {
-				if (runningOpencode.length === 0) void sync({ forceReload: true });
+				if (runningStreams.length === 0) void sync({ forceReload: true });
 			},
 		}),
-		[reloadSync, sync, runningOpencode.length],
+		[reloadSync, sync, runningStreams.length],
 	);
 
 	// Auto-fetch when no catalog yet or cache predates the current schema. Ref guards against re-firing within a mount.
 	const autoFetchedRef = useRef(false);
-	const cacheStale = (opencode.cacheVersion ?? 0) < OPENCODE_CACHE_VERSION;
+	const cacheStale = (current.cacheVersion ?? 0) < OPENCODE_CACHE_VERSION;
 	useEffect(() => {
-		const needsFetch = opencode.cachedModels === null || cacheStale;
+		const needsFetch = current.cachedModels === null || cacheStale;
 		if (needsFetch && !isSyncing && !autoFetchedRef.current) {
 			autoFetchedRef.current = true;
 			void sync();
 		}
-	}, [opencode.cachedModels, cacheStale, isSyncing, sync]);
+	}, [current.cachedModels, cacheStale, isSyncing, sync]);
 
-	const cached = opencode.cachedModels ?? [];
+	const cached = current.cachedModels ?? [];
 	const available = useMemo(
 		() => cached.map((m) => ({ id: m.slug, label: m.label })),
 		[cached],
 	);
-	const enabledIds = opencode.enabledModelIds ?? [];
+	const enabledIds = current.enabledModelIds ?? [];
 	const enabledSet = useMemo(() => new Set(enabledIds), [enabledIds]);
 
 	function toggle(id: string) {
@@ -127,7 +133,7 @@ export function OpencodeModels({
 		void persist({ enabledModelIds: [] });
 	}
 
-	const runningCount = runningOpencode.length;
+	const runningCount = runningStreams.length;
 
 	return (
 		<div className="flex w-full items-center gap-2">
@@ -156,7 +162,7 @@ export function OpencodeModels({
 					</Button>
 				</TooltipTrigger>
 				<TooltipContent>
-					Sync models — re-reads ~/.config/opencode
+					Sync models — re-reads {adapter.configPathLabel}
 				</TooltipContent>
 			</Tooltip>
 			<ConfirmDialog
@@ -164,8 +170,8 @@ export function OpencodeModels({
 				onOpenChange={(open) => {
 					if (!isSyncing) setConfirmOpen(open);
 				}}
-				title="Sync OpenCode models?"
-				description={`Re-reading your config restarts OpenCode and will stop ${runningCount} running ${runningCount === 1 ? "chat" : "chats"}.`}
+				title={`Sync ${adapter.displayName} models?`}
+				description={`Re-reading your config restarts ${adapter.displayName} and will stop ${runningCount} running ${runningCount === 1 ? "chat" : "chats"}.`}
 				confirmLabel="Sync anyway"
 				onConfirm={() => {
 					void reloadSync().finally(() => setConfirmOpen(false));

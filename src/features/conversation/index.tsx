@@ -29,7 +29,7 @@ import {
 	sessionThreadMessagesQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
-import { useSettings } from "@/lib/settings";
+import { type ModelRef, useSettings } from "@/lib/settings";
 import type { ContextCard } from "@/lib/sources/types";
 import {
 	useSubmitQueueApi,
@@ -245,7 +245,7 @@ export const WorkspaceConversationContainer = memo(
 		composerLinkedDirectoriesController = null,
 	}: WorkspaceConversationContainerProps) {
 		const [composerModelSelections, setComposerModelSelections] = useState<
-			Record<string, string>
+			Record<string, ModelRef>
 		>({});
 		const [composerEffortLevels, setComposerEffortLevels] = useState<
 			Record<string, string>
@@ -269,7 +269,7 @@ export const WorkspaceConversationContainer = memo(
 			composerContextKeyOverride ??
 			getComposerContextKey(displayedWorkspaceId, displayedSessionId);
 		const displayedSelectedModelId =
-			composerModelSelections[composerContextKey] ?? null;
+			composerModelSelections[composerContextKey]?.modelId ?? null;
 		// Pending ONLY for a session-level hold within the same workspace
 		// (selectSession's hold-until-ready). A workspace-level divergence (the
 		// one-frame display-flip window) keeps the composer bound to the
@@ -302,7 +302,7 @@ export const WorkspaceConversationContainer = memo(
 					session,
 					modelSelections: composerModelSelections,
 					modelSections: modelSectionsForContext,
-					settingsDefaultModelId: settings.defaultModelId,
+					settingsDefaultModel: settings.defaultModel,
 				});
 				if (provider) {
 					providers[session.id] = provider;
@@ -312,7 +312,7 @@ export const WorkspaceConversationContainer = memo(
 		}, [
 			composerModelSelections,
 			modelSectionsForContext,
-			settings.defaultModelId,
+			settings.defaultModel,
 			workspaceSessionsForContext,
 		]);
 		const isTerminalSession = useMemo(
@@ -510,7 +510,13 @@ export const WorkspaceConversationContainer = memo(
 			setComposerModelSelections((current) =>
 				current[targetKey]
 					? current
-					: { ...current, [targetKey]: payload.model.id },
+					: {
+							...current,
+							[targetKey]: {
+								provider: payload.model.provider,
+								modelId: payload.model.id,
+							},
+						},
 			);
 			setComposerEffortLevels((current) =>
 				current[targetKey]
@@ -553,11 +559,13 @@ export const WorkspaceConversationContainer = memo(
 		);
 
 		const handleSelectModel = useCallback(
-			(contextKey: string, modelId: string) => {
+			(contextKey: string, modelId: string, provider: string | null) => {
 				setComposerModelSelections((current) => ({
 					...current,
-					[contextKey]: modelId,
+					[contextKey]: { provider, modelId },
 				}));
+				// Only the bare model id is persisted to the session row; provider
+				// is re-pinned from agent_type once the turn runs.
 				persistSessionSetting(contextKey, { model: modelId });
 			},
 			[persistSessionSetting],

@@ -71,6 +71,7 @@ export const helmorQueryKeys = {
 	repositories: ["repositories"] as const,
 	agentModelSections: ["agentModelSections"] as const,
 	opencodeCustomProviders: ["opencodeCustomProviders"] as const,
+	mimoCustomProviders: ["mimoCustomProviders"] as const,
 	agentLoginStatus: ["agentLoginStatus"] as const,
 	agentVersions: ["agentVersions"] as const,
 	providerCapabilities: ["providerCapabilities"] as const,

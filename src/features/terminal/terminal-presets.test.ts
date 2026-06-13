@@ -116,6 +116,23 @@ describe("terminal agent specs", () => {
 		expect(resumeBootCommand("gemini", "id")).toBeNull();
 	});
 
+	it("resume carries the composer prompt as the resumed turn's input", () => {
+		expect(
+			resumeBootCommand("claude", "abc-123", { prompt: "keep going" }),
+		).toBe(
+			"claude --resume 'abc-123' --dangerously-skip-permissions 'keep going'\n",
+		);
+		expect(
+			resumeBootCommand("codex", "abc-123", { prompt: "keep going" }),
+		).toBe(
+			`codex resume 'abc-123' -c model_reasoning_effort="high" --ask-for-approval never --sandbox danger-full-access 'keep going'\n`,
+		);
+		// Blank prompt → no trailing positional (bare resume).
+		expect(resumeBootCommand("claude", "abc-123", { prompt: "  " })).toBe(
+			"claude --resume 'abc-123' --dangerously-skip-permissions\n",
+		);
+	});
+
 	it("preset fallback launches the bare CLI", () => {
 		expect(presetBootCommand("claude")).toBe(
 			"claude --dangerously-skip-permissions\n",

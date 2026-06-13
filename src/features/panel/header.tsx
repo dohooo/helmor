@@ -29,6 +29,7 @@ import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator"
 import {
 	ClaudeIcon,
 	CursorIcon,
+	MiMoCodeIcon,
 	OpenAIIcon,
 	OpenCodeIcon,
 } from "@/components/icons";
@@ -243,7 +244,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 				>
 					<TrafficLightSpacer
 						side="left"
-						width={60}
+						width={48}
 						className="hidden max-[960px]:block"
 					/>
 					{headerLeading}
@@ -869,6 +870,9 @@ function SessionProviderIcon({
 	}
 	if (agentType === "opencode") {
 		return <OpenCodeIcon className="size-3 shrink-0 text-muted-foreground" />;
+	}
+	if (agentType === "mimo") {
+		return <MiMoCodeIcon className="size-3 shrink-0 text-muted-foreground" />;
 	}
 	return <ClaudeIcon className="size-3 shrink-0 text-muted-foreground" />;
 }

@@ -763,8 +763,13 @@ export class ClaudeSessionManager implements SessionManager {
 				});
 			}
 			promptSource.close();
-			this.sessions.delete(sessionId);
-			this.turns.end(sessionId);
+			// Guard by `requestId`: a Stop drains the queue, so a same-session
+			// follow-up may have already re-registered here. A bare-sessionId
+			// delete would wipe the new turn's live session + Stop handle.
+			if (this.sessions.get(sessionId)?.requestId === requestId) {
+				this.sessions.delete(sessionId);
+			}
+			this.turns.end(sessionId, requestId);
 			// Only cancel waiters belonging to THIS session — `pendingUserInputs`
 			// is manager-wide and other sessions may have parked AUQs / MCP
 			// elicitations on it.

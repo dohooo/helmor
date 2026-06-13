@@ -20,23 +20,15 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import {
-	deleteOpencodeCustomProvider,
-	getOpencodeCustomProviders,
-	type OpencodeCustomModel,
-	type OpencodeCustomProvider,
-	upsertOpencodeCustomProvider,
-} from "@/lib/api";
+import type { OpencodeCustomModel, OpencodeCustomProvider } from "@/lib/api";
 import { I18nText } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
-import { helmorQueryKeys } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
 import {
-	findOpencodePreset,
 	OPENCODE_API_STYLES,
 	OPENCODE_PROVIDER_NPM,
-	OPENCODE_PROVIDER_PRESETS,
 } from "./builtin-opencode-providers";
+import type { SlugProviderAdapter } from "./slug-provider-adapter";
 
 const CUSTOM = "custom";
 
@@ -123,16 +115,18 @@ export function generateProviderId(
 	return `${base}-${taken.size + 1}`;
 }
 
-// Saves on blur. Presets need only an API key; "Custom" asks for base URL + models. Writes to the user's global opencode config.
-export function OpencodeCustomProvidersPanel({
+// Saves on blur. Presets need only an API key; "Custom" asks for base URL + models. Writes to the user's global config.
+export function SlugProviderCustomProvidersPanel({
+	adapter,
 	onChanged,
 }: {
+	adapter: SlugProviderAdapter;
 	onChanged?: () => void;
 }) {
 	const queryClient = useQueryClient();
 	const providersQuery = useQuery({
-		queryKey: helmorQueryKeys.opencodeCustomProviders,
-		queryFn: getOpencodeCustomProviders,
+		queryKey: adapter.customProvidersQueryKey,
+		queryFn: adapter.getCustomProviders,
 	});
 	const providers = useMemo(
 		() => providersQuery.data ?? [],
@@ -144,14 +138,12 @@ export function OpencodeCustomProvidersPanel({
 	);
 
 	// Selected dropdown kind: a preset key or CUSTOM.
-	const [kind, setKind] = useState<string>(
-		OPENCODE_PROVIDER_PRESETS[0]?.key ?? CUSTOM,
-	);
+	const [kind, setKind] = useState<string>(adapter.presets[0]?.key ?? CUSTOM);
 	const [presetKey, setPresetKey] = useState("");
 	const [custom, setCustom] = useState<CustomDraft>(EMPTY_CUSTOM);
 	const [error, setError] = useState<string | null>(null);
 
-	// Debounce the model-catalog sync: each config write restarts the opencode
+	// Debounce the model-catalog sync: each config write restarts the provider's
 	// server. The sync is best-effort (onChanged skips it when a turn is running),
 	// so it never interrupts work — debouncing just coalesces rapid blur saves.
 	const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -163,7 +155,7 @@ export function OpencodeCustomProvidersPanel({
 	);
 	const afterWrite = () => {
 		void queryClient.invalidateQueries({
-			queryKey: helmorQueryKeys.opencodeCustomProviders,
+			queryKey: adapter.customProvidersQueryKey,
 		});
 		if (refreshTimer.current) clearTimeout(refreshTimer.current);
 		refreshTimer.current = setTimeout(() => onChanged?.(), 1500);
@@ -176,9 +168,9 @@ export function OpencodeCustomProvidersPanel({
 			originalId: string | null;
 		}) => {
 			if (input.originalId && input.originalId !== input.provider.id) {
-				await deleteOpencodeCustomProvider(input.originalId);
+				await adapter.deleteCustomProvider(input.originalId);
 			}
-			await upsertOpencodeCustomProvider(input.provider, input.preset);
+			await adapter.upsertCustomProvider(input.provider, input.preset);
 		},
 		onSuccess: (_data, input) => {
 			setError(null);
@@ -191,7 +183,7 @@ export function OpencodeCustomProvidersPanel({
 	});
 
 	const deleteMutation = useMutation({
-		mutationFn: (id: string) => deleteOpencodeCustomProvider(id),
+		mutationFn: (id: string) => adapter.deleteCustomProvider(id),
 		onSuccess: () => {
 			setError(null);
 			afterWrite();
@@ -253,7 +245,7 @@ export function OpencodeCustomProvidersPanel({
 		// id is auto-derived; collision set must include custom blocks AND preset keys.
 		const taken = new Set<string>([
 			...providers.map((p) => p.id),
-			...OPENCODE_PROVIDER_PRESETS.map((p) => p.key),
+			...adapter.presets.map((p) => p.key),
 		]);
 		const id =
 			draft.originalId ?? generateProviderId(draft.name, draft.baseUrl, taken);
@@ -296,13 +288,14 @@ export function OpencodeCustomProvidersPanel({
 	}
 
 	const isCustom = kind === CUSTOM;
-	const preset = isCustom ? null : findOpencodePreset(kind);
+	const preset = isCustom ? null : adapter.findPreset(kind);
 	const presetApiKeyUrl = preset?.apiKeyUrl;
 
 	return (
 		<div className="flex w-full flex-col gap-3">
 			<div className="grid gap-2">
 				<ProviderPicker
+					adapter={adapter}
 					kind={kind}
 					configuredIds={new Set(providers.map((p) => p.id))}
 					onChange={pickKind}
@@ -376,6 +369,7 @@ export function OpencodeCustomProvidersPanel({
 			</div>
 
 			<ConfiguredList
+				adapter={adapter}
 				providers={providers}
 				editingId={isCustom ? custom.originalId : kind}
 				onEdit={editProvider}
@@ -386,15 +380,17 @@ export function OpencodeCustomProvidersPanel({
 }
 
 function ProviderPicker({
+	adapter,
 	kind,
 	configuredIds,
 	onChange,
 }: {
+	adapter: SlugProviderAdapter;
 	kind: string;
 	configuredIds: Set<string>;
 	onChange: (key: string) => void;
 }) {
-	const preset = kind === CUSTOM ? null : findOpencodePreset(kind);
+	const preset = kind === CUSTOM ? null : adapter.findPreset(kind);
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger
@@ -415,7 +411,7 @@ function ProviderPicker({
 				<ChevronDown className="size-3 shrink-0 opacity-40" />
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="start" className="max-h-[320px] w-[320px]">
-				{OPENCODE_PROVIDER_PRESETS.map((p) => (
+				{adapter.presets.map((p) => (
 					<DropdownMenuItem
 						key={p.key}
 						onClick={() => onChange(p.key)}
@@ -578,11 +574,13 @@ function ModelsEditor({
 }
 
 function ConfiguredList({
+	adapter,
 	providers,
 	editingId,
 	onEdit,
 	onDelete,
 }: {
+	adapter: SlugProviderAdapter;
 	providers: OpencodeCustomProvider[];
 	editingId: string | null;
 	onEdit: (provider: OpencodeCustomProvider) => void;
@@ -600,7 +598,7 @@ function ConfiguredList({
 			{providers.map((provider) => {
 				const preset = provider.baseUrl
 					? null
-					: findOpencodePreset(provider.id);
+					: adapter.findPreset(provider.id);
 				const label = preset?.label ?? (provider.name || provider.id);
 				const detail = provider.baseUrl
 					? `${provider.baseUrl} · ${provider.models.length} model${provider.models.length === 1 ? "" : "s"}`

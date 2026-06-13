@@ -25,6 +25,7 @@ import {
 	getRepoCurrentBranch,
 	listBranchesForWorkspacePicker,
 	moveLocalWorkspaceToWorktree,
+	prefetchRemoteRefs,
 	prewarmSlashCommandsForRepo,
 	type RepositoryCreateOption,
 	renameSession,
@@ -434,8 +435,19 @@ export function useStartSurfaceController(
 	);
 
 	const refetchBranches = useCallback(() => {
+		// Show cached refs immediately, then sync the remote so freshly
+		// pushed branches appear without a restart. Mirrors the header
+		// target-branch picker; backend rate-limits the fetch to 10s.
 		void startBranchesQuery.refetch();
-	}, [startBranchesQuery]);
+		if (!startRepository) return;
+		void prefetchRemoteRefs({ repoId: startRepository.id })
+			.then((result) => {
+				if (result.fetched) {
+					void startBranchesQuery.refetch();
+				}
+			})
+			.catch(() => {});
+	}, [startBranchesQuery, startRepository]);
 
 	const moveLocalToWorktree = useCallback(
 		(workspaceId: string) => {
