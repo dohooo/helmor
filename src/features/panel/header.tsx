@@ -241,7 +241,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 				>
 					<TrafficLightSpacer
 						side="left"
-						width={60}
+						width={48}
 						className="hidden max-[960px]:block"
 					/>
 					{headerLeading}
