@@ -25,7 +25,6 @@ import {
 import { useEdgePeek } from "@/shell/hooks/use-edge-peek";
 import { useEdgeSwipe } from "@/shell/hooks/use-edge-swipe";
 import { EdgeSwipeLayer } from "./edge-swipe-layer";
-import { MiniModeToggleButton } from "./mini-mode-toggle-button";
 
 type Props = {
 	collapsed: boolean;
@@ -44,13 +43,10 @@ type Props = {
 	leftSidebarToggleShortcut: string | null;
 	appUpdateStatus: AppUpdateStatus | null;
 	appSettings: AppSettings;
-	miniModePending: boolean;
-	miniModeToggleShortcut: string | null;
 	onSelectWorkspace: (workspaceId: string | null) => void;
 	onOpenNewWorkspace: () => void;
 	onAddRepositoryNeedsStart: (repositoryId: string) => void;
 	onMoveLocalToWorktree: (workspaceId: string) => void;
-	onToggleMiniMode: () => void;
 	onCollapseSidebar: () => void;
 	onOpenFeedback: () => void;
 	onOpenSettings: () => void;
@@ -70,13 +66,10 @@ export function ShellSidebarPane({
 	leftSidebarToggleShortcut,
 	appUpdateStatus,
 	appSettings,
-	miniModePending,
-	miniModeToggleShortcut,
 	onSelectWorkspace,
 	onOpenNewWorkspace,
 	onAddRepositoryNeedsStart,
 	onMoveLocalToWorktree,
-	onToggleMiniMode,
 	onCollapseSidebar,
 	onOpenFeedback,
 	onOpenSettings,
@@ -179,13 +172,6 @@ export function ShellSidebarPane({
 						/>
 					</div>
 					<div className="absolute right-[12px] top-[6px] z-20 flex items-center gap-[2px]">
-						<div className="flex items-center max-[960px]:hidden">
-							<MiniModeToggleButton
-								pending={miniModePending}
-								shortcut={miniModeToggleShortcut}
-								onToggle={onToggleMiniMode}
-							/>
-						</div>
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<Button

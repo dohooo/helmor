@@ -32,6 +32,16 @@ const COLLAPSED_GROUP_HEIGHT = 24;
 const USER_BUBBLE_VERTICAL_PADDING = 16;
 const USER_BUBBLE_HORIZONTAL_PADDING = 24;
 const USER_BUBBLE_WIDTH_RATIO = 0.75;
+// A user message taller than this many VISUAL lines renders line-clamped
+// with a "Show more" control (see ChatUserMessage — the browser reports the
+// actual truncation, so wrapped paragraphs count the same as hard newlines).
+// Exported so the renderer's clamp and the estimator share one constant: the
+// estimator prices an over-cap row at the clamped height — expanding happens
+// on a mounted row, where the real measurement takes over, so expansion
+// state never reaches the estimator.
+export const USER_MESSAGE_CLAMP_LINES = 20;
+// The "Show more" control row under the clamped text.
+const USER_CLAMP_CONTROL_HEIGHT = 28;
 const MIN_TEXT_WIDTH = 64;
 const MARKDOWN_BLOCK_GAP = 12;
 const MARKDOWN_HEADING_MARGIN_TOP = 10;
@@ -438,19 +448,41 @@ function estimateUserMessageHeight(
 		)
 		.map((part) => part.text)
 		.join("\n");
+	// A pasted-text tag renders as a one-line chip (see PastedTextBadge), not
+	// its content — count it as a single line. This is what keeps a giant
+	// paste out of both the pretext layout and the mounted DOM: its text
+	// never reaches measureTextHeight.
+	const pastedChipHeight =
+		parts.filter((part) => part.type === "pasted-text").length *
+		USER_LINE_HEIGHT;
 	const bubbleWidth = Math.max(
 		MIN_TEXT_WIDTH,
 		Math.floor(options.contentWidth * USER_BUBBLE_WIDTH_RATIO) -
 			USER_BUBBLE_HORIZONTAL_PADDING,
 	);
-	const textHeight = measureTextHeight(text, {
-		fontSize: options.fontSize,
-		lineHeight: USER_LINE_HEIGHT,
-		maxWidth: bubbleWidth,
-		whiteSpace: "pre-wrap",
-	});
+	const textHeight =
+		text.trim().length > 0
+			? measureTextHeight(text, {
+					fontSize: options.fontSize,
+					lineHeight: USER_LINE_HEIGHT,
+					maxWidth: bubbleWidth,
+					whiteSpace: "pre-wrap",
+				})
+			: 0;
 
-	return textHeight + USER_BUBBLE_VERTICAL_PADDING + ROW_SHELL_BOTTOM_PADDING;
+	let contentHeight = Math.max(USER_LINE_HEIGHT, textHeight + pastedChipHeight);
+	// Same semantics as the renderer's truncation probe: content taller than
+	// the visual-line cap renders clamped plus the Show-more control row.
+	// `contentHeight` already IS the visual-line height (pretext wraps the
+	// text exactly like the bubble does), so no line counting here either.
+	const clampCapHeight = USER_MESSAGE_CLAMP_LINES * USER_LINE_HEIGHT;
+	if (contentHeight > clampCapHeight) {
+		contentHeight = clampCapHeight + USER_CLAMP_CONTROL_HEIGHT;
+	}
+
+	return (
+		contentHeight + USER_BUBBLE_VERTICAL_PADDING + ROW_SHELL_BOTTOM_PADDING
+	);
 }
 
 function estimateSystemMessageHeight(
@@ -524,7 +556,49 @@ function isMarkdownTableSeparator(line: string) {
 	return /^\|?(?:\s*:?-{3,}:?\s*\|)+(?:\s*:?-{3,}:?\s*)?$/.test(line);
 }
 
-function measureTextHeight(
+/**
+ * pretext renders `\t` at its default `tab-size: 8`, but the live `pre-wrap`
+ * surfaces (user bubble `<p class="whitespace-pre-wrap break-words">`, reasoning
+ * body, plan review) render at `tab-size: 4`. pretext 0.0.x exposes no option to
+ * change the tab stop, so for tab-indented pasted code pretext counts every tab
+ * as double its on-screen width and over-predicts how many lines the text wraps
+ * to. Expanding each tab to the spaces that reach the next 4-column tab stop —
+ * column-aware, per line — makes pretext see the exact glyphs the browser lays
+ * out, so the estimate matches the live tab-size-4 DOM. Width math (`maxWidth`)
+ * is untouched. Only the `pre-wrap` path calls this; `normal` collapses
+ * whitespace anyway.
+ */
+function expandTabsToFourColumnStops(text: string): string {
+	if (!text.includes("\t")) {
+		return text;
+	}
+	const lines = text.split("\n");
+	for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+		const line = lines[lineIndex] ?? "";
+		if (!line.includes("\t")) {
+			continue;
+		}
+		let expanded = "";
+		let column = 0;
+		for (const char of line) {
+			if (char === "\t") {
+				const advance = 4 - (column % 4);
+				expanded += " ".repeat(advance);
+				column += advance;
+			} else {
+				expanded += char;
+				column += 1;
+			}
+		}
+		lines[lineIndex] = expanded;
+	}
+	return lines.join("\n");
+}
+
+// Exported for the accuracy tests: long user messages now estimate to a
+// collapsed constant, so the pre-wrap measurement gates (break-word counting,
+// tab-size-4 normalization) lock this function directly.
+export function measureTextHeight(
 	text: string,
 	options: {
 		fontSize: number;
@@ -534,7 +608,9 @@ function measureTextHeight(
 	},
 ) {
 	const normalizedText =
-		options.whiteSpace === "pre-wrap" ? text : text.replace(/\s+/g, " ").trim();
+		options.whiteSpace === "pre-wrap"
+			? expandTabsToFourColumnStops(text)
+			: text.replace(/\s+/g, " ").trim();
 
 	if (normalizedText.length === 0) {
 		return options.lineHeight;

@@ -55,7 +55,7 @@ describe("getActiveScopes", () => {
 		(document.getElementById("probe") as HTMLInputElement).focus();
 		// Composer is nested inside chat — both scopes are active so
 		// chat-bound shortcuts (Cmd+T) AND composer-bound shortcuts
-		// (Shift+Tab) fire while typing in the composer.
+		// (Cmd+Shift+P) fire while typing in the composer.
 		expect(getActiveScopes()).toEqual(["composer", "chat"]);
 	});
 

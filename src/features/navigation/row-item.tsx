@@ -59,7 +59,7 @@ import { TriageSourceBadge, triageSourceMeta } from "./triage-source-badge";
 import { WorkspaceHoverCard } from "./workspace-hover-card";
 
 const rowVariants = cva(
-	"group/row relative flex h-7.5 select-none items-center gap-2 rounded-md px-2.5 text-ui cursor-interactive",
+	"group/row relative flex h-7.5 select-none items-center gap-2 rounded-md px-2.5 text-body cursor-interactive",
 	{
 		variants: {
 			active: {

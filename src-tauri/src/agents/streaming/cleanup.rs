@@ -10,9 +10,21 @@
 
 use crate::agents::{finalize_session_metadata, persist_error_message, ExchangeContext};
 
+/// Outcome of [`cleanup_abnormal_stream_exit`]. Kept as a struct (not an
+/// `AppHandle` injection) so the publish decision stays in the calling
+/// match arm in `streaming/mod.rs` where `app` is in scope.
+pub(crate) struct AbnormalExitCleanup {
+    /// `true` iff the session row was successfully transitioned to `idle`.
+    pub(crate) finalized: bool,
+    /// `true` iff the synthesized error row really inserted into
+    /// `session_messages`. The caller publishes `SessionTurnPersisted`
+    /// only when this is set — events must track real inserts.
+    pub(crate) persisted_error: bool,
+}
+
 /// Persist an error message and finalize the session after an abnormal
-/// stream exit (heartbeat timeout, channel disconnect). Returns `true` iff
-/// the session row was successfully transitioned to `idle`.
+/// stream exit (heartbeat timeout, channel disconnect). See
+/// [`AbnormalExitCleanup`] for what the caller learns.
 pub(crate) fn cleanup_abnormal_stream_exit(
     rid: &str,
     exchange_ctx: Option<&ExchangeContext>,
@@ -20,13 +32,16 @@ pub(crate) fn cleanup_abnormal_stream_exit(
     user_message: &str,
     effort_level: Option<&str>,
     permission_mode: Option<&str>,
-) -> bool {
+) -> AbnormalExitCleanup {
     let Some(ctx) = exchange_ctx else {
         tracing::debug!(
             rid = %rid,
             "cleanup_abnormal_stream_exit: no exchange_ctx — nothing to finalize"
         );
-        return false;
+        return AbnormalExitCleanup {
+            finalized: false,
+            persisted_error: false,
+        };
     };
     let conn = match crate::models::db::write_conn() {
         Ok(c) => c,
@@ -36,7 +51,10 @@ pub(crate) fn cleanup_abnormal_stream_exit(
                 session_id = %ctx.helmor_session_id,
                 "cleanup_abnormal_stream_exit: write_conn borrow failed — session may be stuck: {e}"
             );
-            return false;
+            return AbnormalExitCleanup {
+                finalized: false,
+                persisted_error: false,
+            };
         }
     };
 
@@ -66,21 +84,51 @@ pub(crate) fn cleanup_abnormal_stream_exit(
         );
     }
 
-    match finalize_session_metadata(&conn, ctx, "idle", effort_level, permission_mode) {
-        Ok(_) => {
-            tracing::debug!(
-                rid = %rid,
-                session_id = %ctx.helmor_session_id,
-                err_persist_ok,
-                "cleanup_abnormal_stream_exit: session finalized to idle"
-            );
-            true
-        }
+    let finalized =
+        match finalize_session_metadata(&conn, ctx, "idle", effort_level, permission_mode) {
+            Ok(_) => {
+                tracing::debug!(
+                    rid = %rid,
+                    session_id = %ctx.helmor_session_id,
+                    err_persist_ok,
+                    "cleanup_abnormal_stream_exit: session finalized to idle"
+                );
+                true
+            }
+            Err(error) => {
+                tracing::error!(
+                    rid = %rid,
+                    session_id = %ctx.helmor_session_id,
+                    "cleanup_abnormal_stream_exit: finalize_session_metadata failed: {error}"
+                );
+                false
+            }
+        };
+
+    AbnormalExitCleanup {
+        finalized,
+        persisted_error: err_persist_ok,
+    }
+}
+
+/// Finalize the session after a user abort. Returns `true` iff the session
+/// row really updated — the caller publishes `SessionTurnPersisted` only
+/// then (the aborted turn's rows were already inserted by that point).
+pub(crate) fn finalize_aborted_exchange(
+    rid: &str,
+    conn: &rusqlite::Connection,
+    ctx: &ExchangeContext,
+    status: &str,
+    effort_level: Option<&str>,
+    permission_mode: Option<&str>,
+) -> bool {
+    match finalize_session_metadata(conn, ctx, status, effort_level, permission_mode) {
+        Ok(_) => true,
         Err(error) => {
             tracing::error!(
                 rid = %rid,
                 session_id = %ctx.helmor_session_id,
-                "cleanup_abnormal_stream_exit: finalize_session_metadata failed: {error}"
+                "finalize_aborted_exchange: finalize_session_metadata failed: {error}"
             );
             false
         }
@@ -178,7 +226,7 @@ mod tests {
     #[test]
     fn finalizes_session_to_idle_and_persists_error_message() {
         with_session("streaming", || {
-            let persisted = cleanup_abnormal_stream_exit(
+            let outcome = cleanup_abnormal_stream_exit(
                 "rid-1",
                 Some(&ctx()),
                 "opus",
@@ -186,7 +234,14 @@ mod tests {
                 None,
                 None,
             );
-            assert!(persisted, "expected persisted=true on successful finalize");
+            assert!(
+                outcome.finalized,
+                "expected finalized=true on successful finalize"
+            );
+            assert!(
+                outcome.persisted_error,
+                "the error row really inserted — caller may publish SessionTurnPersisted"
+            );
             assert_eq!(session_status(), "idle");
             assert_eq!(error_message_count(), 1);
         });
@@ -195,9 +250,13 @@ mod tests {
     #[test]
     fn returns_false_and_does_not_touch_db_when_exchange_ctx_is_none() {
         with_session("streaming", || {
-            let persisted =
+            let outcome =
                 cleanup_abnormal_stream_exit("rid-2", None, "opus", "sidecar dead", None, None);
-            assert!(!persisted);
+            assert!(!outcome.finalized);
+            assert!(
+                !outcome.persisted_error,
+                "no insert happened — caller must NOT publish SessionTurnPersisted"
+            );
             assert_eq!(session_status(), "streaming");
             assert_eq!(error_message_count(), 0);
         });
@@ -208,7 +267,7 @@ mod tests {
         with_session("streaming", || {
             let mut bad_ctx = ctx();
             bad_ctx.helmor_session_id = "nonexistent".to_string();
-            let persisted = cleanup_abnormal_stream_exit(
+            let outcome = cleanup_abnormal_stream_exit(
                 "rid-3",
                 Some(&bad_ctx),
                 "opus",
@@ -216,7 +275,12 @@ mod tests {
                 None,
                 None,
             );
-            assert!(!persisted);
+            assert!(!outcome.finalized);
+            // FK enforcement is currently off (models/db.rs TODO), so the
+            // orphan error row still inserts; `persisted_error` reports the
+            // insert truthfully. The resulting publish is a harmless
+            // invalidate of a key nothing observes.
+            assert!(outcome.persisted_error);
         });
     }
 
@@ -228,7 +292,7 @@ mod tests {
                 Some("provider-sid-stale"),
                 "precondition: row starts with a provider session id",
             );
-            let persisted = cleanup_abnormal_stream_exit(
+            let outcome = cleanup_abnormal_stream_exit(
                 "rid-clear",
                 Some(&ctx()),
                 "opus",
@@ -236,13 +300,46 @@ mod tests {
                 None,
                 None,
             );
-            assert!(persisted);
+            assert!(outcome.finalized);
+            assert!(outcome.persisted_error);
             assert_eq!(
                 provider_session_id(),
                 None,
                 "abnormal exit must clear provider_session_id so the next send doesn't \
                  replay a corrupt resume target (issue #398)",
             );
+        });
+    }
+
+    #[test]
+    fn finalize_aborted_exchange_returns_true_and_sets_status() {
+        with_session("streaming", || {
+            let finalized = {
+                let conn = crate::models::db::write_conn().unwrap();
+                finalize_aborted_exchange("rid-abort", &conn, &ctx(), "aborted", None, None)
+            };
+            assert!(
+                finalized,
+                "session row updated — caller publishes SessionTurnPersisted"
+            );
+            assert_eq!(session_status(), "aborted");
+        });
+    }
+
+    #[test]
+    fn finalize_aborted_exchange_returns_false_for_missing_session() {
+        with_session("streaming", || {
+            let mut bad_ctx = ctx();
+            bad_ctx.helmor_session_id = "nonexistent".to_string();
+            let finalized = {
+                let conn = crate::models::db::write_conn().unwrap();
+                finalize_aborted_exchange("rid-abort-2", &conn, &bad_ctx, "aborted", None, None)
+            };
+            assert!(
+                !finalized,
+                "no row updated — caller must NOT publish SessionTurnPersisted"
+            );
+            assert_eq!(session_status(), "streaming");
         });
     }
 }

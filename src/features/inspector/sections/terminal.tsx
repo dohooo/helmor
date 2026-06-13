@@ -158,6 +158,8 @@ export function TerminalInstancePanel({
 				<TerminalOutput
 					terminalRef={termRef}
 					className="h-full"
+					detectLinks="modifier-click"
+					fontSize={13}
 					onData={handleData}
 					onResize={handleResize}
 					isVisible={isActive}

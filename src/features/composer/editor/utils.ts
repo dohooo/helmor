@@ -14,6 +14,7 @@ import type { ComposerCustomTag } from "@/lib/composer-insert";
 import { $isCustomTagBadgeNode } from "./custom-tag-badge-node";
 import { $isFileBadgeNode } from "./file-badge-node";
 import { $isImageBadgeNode } from "./image-badge-node";
+import { $isTerminalDirectiveNode } from "./terminal-directive-node";
 
 export function $extractComposerContent(): {
 	text: string;
@@ -62,6 +63,8 @@ export function $extractComposerContent(): {
 						textParts.push(" ");
 					}
 					textParts.push(customTag.submitText);
+				} else if ($isTerminalDirectiveNode(child)) {
+					// UI-only shortcut marker; do not include it in submitted text.
 				} else if ($isLineBreakNode(child)) {
 					textParts.push("\n");
 				}

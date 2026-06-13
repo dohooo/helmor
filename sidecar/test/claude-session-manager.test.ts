@@ -1043,12 +1043,12 @@ describe("ClaudeSessionManager.sendMessage", () => {
 	});
 
 	// AskUserQuestion goes through `canUseTool`: the sidecar emits a
-	// `deferredToolUse` event, parks the callback on a promise, and the
-	// frontend's `respondToDeferredTool` RPC resolves it with the user's
+	// `userInputRequest` event, parks the callback on a promise, and the
+	// frontend's `respondToUserInput` RPC resolves it with the user's
 	// answer. The same live `query()` continues — no `--resume`, no new
-	// process. The assistant message that contained the AUQ tool_use
-	// block must be stripped on the passthrough so the UI's deferred
-	// panel handles rendering instead of a duplicate tool-use bubble.
+	// process. The assistant message that contains the AUQ tool_use
+	// block passes through INTACT — the Rust adapter renders it as the
+	// persistent Q&A transcript card.
 	test("AskUserQuestion: canUseTool emits deferredToolUse, parks, returns answer via updatedInput", async () => {
 		let canUseToolResult: unknown = null;
 
@@ -1131,26 +1131,26 @@ describe("ClaudeSessionManager.sendMessage", () => {
 		);
 
 		// User submits answers — resolves the parked canUseTool promise.
-		// The frontend AUQ renderer produces the full `updatedInput` shape
-		// directly (questions + answers), and the sidecar passes that
-		// through to the SDK without further conversion.
+		// The unified AUQ renderer submits only the canonical answer payload
+		// (answers keyed by question text); the sidecar merges it over the
+		// original tool input to build `updatedInput`.
 		manager.resolveUserInput("tool-ask-1", {
 			action: "submit",
 			content: {
-				questions: [{ question: "Which path should we take?", options: [] }],
 				answers: { "Which path should we take?": "Option A" },
 			},
 		});
 
 		await sending;
 
-		// Assistant passthrough: the AUQ tool_use block must be stripped so
-		// the UI doesn't double-render it alongside the user-input panel.
+		// Assistant passthrough keeps the AUQ tool_use block — the Rust
+		// adapter converts it into the persistent Q&A card.
 		const assistantEvent = captured.find(
 			(event) => (event as { type?: string }).type === "assistant",
-		) as { message?: { content?: Array<{ type?: string; text?: string }> } };
+		) as { message?: { content?: Array<{ type?: string; name?: string }> } };
 		expect(assistantEvent?.message?.content).toEqual([
 			{ type: "text", text: "Need a quick decision." },
+			expect.objectContaining({ type: "tool_use", name: "AskUserQuestion" }),
 		]);
 
 		// userInputRequest event surfaces the question to the frontend with

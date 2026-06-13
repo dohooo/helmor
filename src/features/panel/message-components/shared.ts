@@ -3,11 +3,13 @@ import type {
 	FileMentionPart,
 	ImagePart,
 	MessagePart,
+	PastedTextPart,
 	PlanReviewPart,
 	PromptSuggestionPart,
 	SystemNoticePart,
 	ThreadMessageLike,
 	TodoListPart,
+	UserQuestionPart,
 	WorkflowPart,
 } from "@/lib/api";
 
@@ -113,6 +115,20 @@ export function isPromptSuggestionPart(
 export function isFileMentionPart(part: unknown): part is FileMentionPart {
 	return (
 		isObj(part) && part.type === "file-mention" && typeof part.path === "string"
+	);
+}
+
+export function isPastedTextPart(part: unknown): part is PastedTextPart {
+	return (
+		isObj(part) && part.type === "pasted-text" && typeof part.text === "string"
+	);
+}
+
+export function isUserQuestionPart(part: unknown): part is UserQuestionPart {
+	return (
+		isObj(part) &&
+		part.type === "user-question" &&
+		Array.isArray(part.questions)
 	);
 }
 

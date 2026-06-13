@@ -44,6 +44,68 @@ function createPlanReviewMessage(): ThreadMessageLike {
 	};
 }
 
+function createUserQuestionMessage(
+	status: "answered" | "declined",
+): ThreadMessageLike {
+	return {
+		id: "question-message-1",
+		role: "assistant",
+		createdAt: "2026-04-12T12:00:00.000Z",
+		content: [
+			{
+				type: "user-question",
+				id: "toolu-auq-1",
+				source: "Claude",
+				status,
+				questions: [
+					{
+						question: "Pick a color",
+						header: "Color",
+						multiSelect: false,
+						options: [
+							{ label: "Red", description: "warm" },
+							{ label: "Blue", description: "cool" },
+						],
+					},
+				],
+				...(status === "answered"
+					? { answers: { "Pick a color": "Red" } }
+					: {}),
+			},
+		],
+	};
+}
+
+describe("MemoConversationMessage user question", () => {
+	it("renders the question showing only the chosen answer", () => {
+		render(
+			<MemoConversationMessage
+				message={createUserQuestionMessage("answered")}
+				sessionId="session-1"
+				itemIndex={0}
+			/>,
+		);
+
+		expect(screen.getByText("Pick a color")).toBeInTheDocument();
+		expect(screen.getByText("Answered")).toBeInTheDocument();
+		expect(screen.getByText("Red")).toBeInTheDocument();
+		// Unchosen options stay out of the answered card.
+		expect(screen.queryByText("Blue")).not.toBeInTheDocument();
+	});
+
+	it("renders a declined question without selected answers", () => {
+		render(
+			<MemoConversationMessage
+				message={createUserQuestionMessage("declined")}
+				sessionId="session-1"
+				itemIndex={0}
+			/>,
+		);
+
+		expect(screen.getByText("Declined")).toBeInTheDocument();
+	});
+});
+
 describe("MemoConversationMessage plan review", () => {
 	it("renders plan content as read-only text in the chat area", () => {
 		render(

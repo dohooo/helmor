@@ -52,6 +52,8 @@ type Props = {
 	onPendingPromptConsumed: () => void;
 	queuePendingPromptForSession: ConversationProps["onQueuePendingPromptForSession"];
 	headerLeading: React.ReactNode;
+	/** Quick panel: composer pinned to the bottom, heading centered above. */
+	composerAtBottom?: boolean;
 };
 
 export function StartSurfacePane({
@@ -85,6 +87,7 @@ export function StartSurfacePane({
 	onPendingPromptConsumed,
 	queuePendingPromptForSession,
 	headerLeading,
+	composerAtBottom,
 }: Props) {
 	return (
 		<WorkspaceStartPage
@@ -112,6 +115,7 @@ export function StartSurfacePane({
 			headerLeading={headerLeading}
 			showWindowSafeTop={sidebarCollapsed}
 			onClosePreview={contextPanelActions.closeStartContextPreview}
+			composerAtBottom={composerAtBottom}
 		>
 			<WorkspaceConversationContainer
 				selectedWorkspaceId={null}
@@ -151,6 +155,7 @@ export function StartSurfacePane({
 				composerPlaceholder="Describe what you want to build"
 				composerCreateContext={startCreateContext}
 				composerFocusScope="start-composer"
+				composerTerminalModeAvailable={startMode !== "chat"}
 				contextPanelOpen={contextPanelOpen}
 				onToggleContextPanel={contextPanelActions.toggleContextPanel}
 				composerStartSubmitMenu

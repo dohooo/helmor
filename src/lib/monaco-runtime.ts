@@ -89,7 +89,7 @@ const fileContentCache = new Map<string, string>();
 const activeFileEditors = new Set<StandaloneEditor>();
 const activeDiffEditors = new Set<StandaloneDiffEditor>();
 const DEFAULT_MONACO_FONT_FAMILY =
-	'"SF Mono","Monaco","Cascadia Mono","Roboto Mono","Menlo",monospace';
+	'"Geist Mono Variable","SF Mono","Monaco","Menlo",monospace';
 let cssFontProbe: HTMLDivElement | null = null;
 
 type EditorTheme = "light" | "dark";

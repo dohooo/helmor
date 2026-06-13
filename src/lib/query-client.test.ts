@@ -1,5 +1,5 @@
 import { dehydrate } from "@tanstack/react-query";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
 	ChangeRequestInfo,
 	ForgeActionItem,
@@ -11,8 +11,21 @@ import {
 	createHelmorQueryClient,
 	forgeActionStatusRefetchInterval,
 	PERSIST_META,
+	sessionThreadMessagesQueryOptions,
 	workspaceForgeRefetchInterval,
 } from "./query-client";
+
+const apiMocks = vi.hoisted(() => ({
+	loadSessionThreadMessages: vi.fn(async () => []),
+}));
+
+vi.mock("./api", async () => {
+	const actual = await vi.importActual<typeof import("./api")>("./api");
+	return {
+		...actual,
+		loadSessionThreadMessages: apiMocks.loadSessionThreadMessages,
+	};
+});
 
 const OPEN_CHANGE_REQUEST: ChangeRequestInfo = {
 	url: "https://github.com/acme/repo/pull/1",
@@ -238,6 +251,31 @@ describe("workspaceForgeRefetchInterval", () => {
 		expect(
 			workspaceForgeRefetchInterval(forgeDetection({ provider: "unknown" })),
 		).toBe(false);
+	});
+});
+
+describe("sessionThreadMessagesQueryOptions — warm revisit stays IPC-free", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+		apiMocks.loadSessionThreadMessages.mockClear();
+	});
+
+	it("does not refire the thread queryFn on a warm revisit, even long after the fetch", async () => {
+		vi.useFakeTimers();
+		const client = createHelmorQueryClient();
+
+		await client.fetchQuery(sessionThreadMessagesQueryOptions("session-1"));
+		expect(apiMocks.loadSessionThreadMessages).toHaveBeenCalledTimes(1);
+
+		// Well past the old 10-minute staleTime. A remount-style fetch of
+		// the same options must be answered from cache — session threads
+		// only go stale via explicit invalidation (sessionTurnPersisted /
+		// sessionMessagesAppended events), never by clock.
+		vi.advanceTimersByTime(11 * 60_000);
+		await client.fetchQuery(sessionThreadMessagesQueryOptions("session-1"));
+		expect(apiMocks.loadSessionThreadMessages).toHaveBeenCalledTimes(1);
+
+		client.clear();
 	});
 });
 

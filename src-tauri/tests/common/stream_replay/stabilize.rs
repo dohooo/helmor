@@ -63,6 +63,12 @@ fn stabilize_part(part: &NormPart) -> StableNormPart {
                 NormPart::Image { kind, .. } => format!("image:{kind}"),
                 NormPart::PromptSuggestion { .. } => "prompt-suggestion".to_string(),
                 NormPart::PlanReview { .. } => "plan-review".to_string(),
+                NormPart::UserQuestion {
+                    source,
+                    status,
+                    answers,
+                    ..
+                } => format!("user-question:{source}:{status}[{}]", answers.join("; ")),
                 NormPart::FileMention { .. } => "file-mention".to_string(),
                 _ => "unknown".to_string(),
             },

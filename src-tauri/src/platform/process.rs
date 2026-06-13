@@ -192,6 +192,46 @@ fn can_signal_group(pgid: Pid) -> bool {
     }
 }
 
+/// System boot time as a Unix epoch (seconds), or `None` when it can't be
+/// determined. PIDs are unique only within a boot session, so a process
+/// recorded before the current boot can never still be the same process — the
+/// runtime registry uses this to refuse to signal a PID that may have been
+/// reused across a reboot.
+#[cfg(target_os = "macos")]
+pub fn boot_time_epoch() -> Option<i64> {
+    use std::ffi::CString;
+    let name = CString::new("kern.boottime").ok()?;
+    let mut tv = libc::timeval {
+        tv_sec: 0,
+        tv_usec: 0,
+    };
+    let mut size = std::mem::size_of::<libc::timeval>();
+    let ret = unsafe {
+        libc::sysctlbyname(
+            name.as_ptr(),
+            std::ptr::from_mut::<libc::timeval>(&mut tv).cast::<std::ffi::c_void>(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    (ret == 0).then_some(tv.tv_sec)
+}
+
+/// `/proc/stat` carries a `btime <epoch-seconds>` line written at boot.
+#[cfg(target_os = "linux")]
+pub fn boot_time_epoch() -> Option<i64> {
+    let stat = std::fs::read_to_string("/proc/stat").ok()?;
+    stat.lines()
+        .find_map(|line| line.strip_prefix("btime "))
+        .and_then(|value| value.trim().parse::<i64>().ok())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub fn boot_time_epoch() -> Option<i64> {
+    None
+}
+
 #[cfg(windows)]
 fn taskkill(pid: Pid, force: bool) -> std::io::Result<std::process::ExitStatus> {
     let pid = pid.to_string();

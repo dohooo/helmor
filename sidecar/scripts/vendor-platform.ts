@@ -21,6 +21,10 @@ export interface TargetInfo {
 	opencodePkg: string;
 	/** opencode npm tarball suffix: `darwin-arm64` / `darwin-x64`. */
 	opencodeNpmSuffix: string;
+	/** `@mimo-ai/mimocode-darwin-<arch>` is the npm optional-dep package. */
+	mimoPkg: string;
+	/** mimo npm tarball suffix: `darwin-arm64` / `darwin-x64` / `windows-x64`. */
+	mimoNpmSuffix: string;
 	/** `gh` release naming: `arm64` / `amd64`. */
 	ghArch: ReleaseArch;
 	/** `glab` release naming: `arm64` / `amd64`. */
@@ -36,22 +40,22 @@ export interface ArchivePlan {
 	sha256: string;
 }
 
-export const GH_VERSION = "2.91.0";
+export const GH_VERSION = "2.94.0";
 export const GH_SHA256 = {
-	arm64: "20446cd714d9fa1b69fbd410deade3731f38fe09a2b980c8488aa388dd320ada",
-	amd64: "8806784f93603fe6d3f95c3583a08df38f175df9ebc123dc8b15f919329980e2",
+	arm64: "4f9bc1a5e77500737290a307b40b4c396a4d23729f55340f2a83f414410165a1",
+	amd64: "733ee8fa49247d27cd94a6c7384455bdecaa82172a3bcfad63ac1ecc2867251d",
 } as const;
 
-export const GLAB_VERSION = "1.93.0";
+export const GLAB_VERSION = "1.102.0";
 export const GLAB_SHA256 = {
-	arm64: "6d6ffa97d430b5e7ff912e64dbac14703acc57967df654be1950ae71858d5b6f",
-	amd64: "79d1a4f933919689c5fb7774feb1dd08f30b9c896dff4283b4a7387689ee0531",
+	arm64: "24638bda18b6f3b1433ea9909f71df3787866ef525f34aaf2c4a25c53f6ff651",
+	amd64: "5744d5fdd19d6cdd8bc35052fbafdc284c8c4c34142e1e1ffa10cc68aa904fae",
 } as const;
 
-export const CLOUDFLARED_VERSION = "2026.5.2";
+export const CLOUDFLARED_VERSION = "2026.6.0";
 export const CLOUDFLARED_SHA256 = {
-	arm64: "ba94054c9fd4297645093d59d51442e5e546d07bb0516120e694a13d5b216d38",
-	amd64: "7240f709506bc2c1eb9da4d89cf2555499c60280ecb854b7d80e8f17d4b7903d",
+	arm64: "88e17987423d3fd49167305f8bda14d83a80ab9f2097ff9c82b317a39e342119",
+	amd64: "f6eaa91260ee327994331ac5ac2f7cec7925c4b6e15296b63fe0916992a06bdc",
 } as const;
 
 export const CODEX_SHA256: Readonly<
@@ -64,6 +68,10 @@ export const CODEX_SHA256: Readonly<
 	"0.134.0": {
 		arm64: "82c8bd152cdfb8175fd03d1d18ac0f8cddce22a7e68164572c107f628b0d8b7c",
 		x64: "fd518e72bb6f77d2183799b0be00e77d8cc1b465c06e7e129f69028218259a64",
+	},
+	"0.139.0": {
+		arm64: "ef8fc3766c3930b52ca95e54ee5486569e24327d71bc10e796fad3ace4920fab",
+		x64: "b70305a6b03113e48e73d37a1653123d30d20d1287ecebd1ecb75993c22ea78c",
 	},
 };
 
@@ -82,6 +90,10 @@ export const CLAUDE_CODE_SHA256: Readonly<
 		arm64: "95d699dd2f03827e95286fe854999d42e3d0bfeec37af88c5bf49908ee56aa53",
 		x64: "f3e63255173dc3a9fcaa4cbe945b87454c8530e5d245affcd5b207b20c3e8bb0",
 	},
+	"2.1.173": {
+		arm64: "f9fbce58073a202963872c78a69ade5dae679ff4318b7b1c0bccea8b42df1953",
+		x64: "cd44b111c2d767c8fc01e2af7a44f5ca54219c115e3533d0e7e2d19397e8cf9a",
+	},
 };
 
 export const OPENCODE_SHA256: Readonly<
@@ -90,6 +102,27 @@ export const OPENCODE_SHA256: Readonly<
 	"1.16.2": {
 		arm64: "2103383d7562c1783cb66d63d31630ff90448d1ade90f8a187778d18c4b9ee5f",
 		x64: "1be1b4ff8874f0f0848e88bf4de3943a4fff3a51c8b2a75c910fb7f710e7cd03",
+	},
+	"1.17.3": {
+		arm64: "773317f1225f8918d819dbaf3d1125a3b3cc585ab1e982b3fdd7881844a212ca",
+		x64: "16a79dc881910fe6769a074b458e2a809ba94547f437506be2daabdcad9e1317",
+	},
+};
+
+// Keyed by npm tarball suffix (not bare arch) because the windows tarball is
+// a distinct artifact from darwin-x64. Bumping: recompute via
+// `shasum -a 256 mimocode-<suffix>-<ver>.tgz` on the registry tarballs at
+// https://registry.npmjs.org/@mimo-ai/mimocode-<suffix>/-/mimocode-<suffix>-<ver>.tgz
+export const MIMO_SHA256: Readonly<
+	Record<string, Readonly<Record<string, string>>>
+> = {
+	"0.1.0": {
+		"darwin-arm64":
+			"b5309bddb9e4f19a07d30c1b6aa5b558852b1313b7d27237fab58b6e859680f4",
+		"darwin-x64":
+			"5596a9f04f5b216891696fb119f455597f2285b8fb932a07f5e29be0ea659d5b",
+		"windows-x64":
+			"071b0463806a28de00d2a685a53316be55a5860460ded02e262b1aade82d4aa9",
 	},
 };
 
@@ -143,6 +176,8 @@ const TARGETS: Readonly<Record<DarwinArch, TargetInfo>> = {
 		codexNpmSuffix: "darwin-arm64",
 		opencodePkg: "opencode-darwin-arm64",
 		opencodeNpmSuffix: "darwin-arm64",
+		mimoPkg: "@mimo-ai/mimocode-darwin-arm64",
+		mimoNpmSuffix: "darwin-arm64",
 		ghArch: "arm64",
 		glabArch: "arm64",
 		cloudflaredArch: "arm64",
@@ -157,6 +192,8 @@ const TARGETS: Readonly<Record<DarwinArch, TargetInfo>> = {
 		codexNpmSuffix: "darwin-x64",
 		opencodePkg: "opencode-darwin-x64",
 		opencodeNpmSuffix: "darwin-x64",
+		mimoPkg: "@mimo-ai/mimocode-darwin-x64",
+		mimoNpmSuffix: "darwin-x64",
 		ghArch: "amd64",
 		glabArch: "amd64",
 		cloudflaredArch: "amd64",
@@ -177,6 +214,8 @@ const WINDOWS_X64_TARGET: TargetInfo = {
 	codexNpmSuffix: "win32-x64",
 	opencodePkg: "opencode-windows-x64",
 	opencodeNpmSuffix: "windows-x64",
+	mimoPkg: "@mimo-ai/mimocode-windows-x64",
+	mimoNpmSuffix: "windows-x64",
 	ghArch: "amd64",
 	glabArch: "amd64",
 	cloudflaredArch: "amd64",
@@ -348,6 +387,26 @@ export function opencodeArchivePlan(
 		archiveName: `${slug}.tgz`,
 		url: `https://registry.npmjs.org/${target.opencodePkg}/-/opencode-${target.opencodeNpmSuffix}-${version}.tgz`,
 		sha256: shaTable[target.arch],
+	};
+}
+
+export function mimoArchivePlan(
+	target: TargetInfo,
+	version: string,
+): ArchivePlan {
+	const shaTable = MIMO_SHA256[version];
+	const sha256 = shaTable?.[target.mimoNpmSuffix];
+	if (!sha256) {
+		throw new Error(
+			`[stage-vendor] no pinned SHA256 for mimo ${version} (${target.mimoNpmSuffix}) — add it to MIMO_SHA256 in vendor-platform.ts`,
+		);
+	}
+	const slug = `mimocode-${target.mimoNpmSuffix}-${version}`;
+	return {
+		slug,
+		archiveName: `${slug}.tgz`,
+		url: `https://registry.npmjs.org/${target.mimoPkg}/-/${slug}.tgz`,
+		sha256,
 	};
 }
 

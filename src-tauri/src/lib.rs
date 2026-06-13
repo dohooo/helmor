@@ -20,6 +20,7 @@ pub mod mcp;
 pub mod models;
 pub mod pipeline;
 pub(crate) mod platform;
+pub mod quick_panel;
 pub mod rate_limits;
 pub mod schema;
 pub mod service;
@@ -28,6 +29,7 @@ pub mod sidecar;
 pub mod sidecar_host;
 pub mod slack;
 mod system_limits;
+pub mod terminal;
 pub mod triage;
 pub mod ui_sync;
 pub mod updater;
@@ -99,7 +101,13 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // The quick panel positions itself (bottom-center, stage-anchored
+        // resizes) — restoring stale geometry would fight that.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_denylist(&[quick_panel::QUICK_PANEL_LABEL])
+                .build(),
+        )
         // Inline Slack file previews. The webview hits
         // `slack-file://files-tmb/T…-F…/image.png`, we proxy the request
         // through the workspace cookie, and stream the bytes back as a
@@ -275,6 +283,11 @@ pub fn run() {
             if let Err(e) = models::sessions::reset_stale_terminal_statuses() {
                 tracing::warn!("Failed to reset stale terminal statuses: {e:#}");
             }
+
+            // Keep the managed `helmor` launcher pointing at THIS app after
+            // updates / moves (release-only; never elevates, never adopts a
+            // non-Helmor file). Without this the CLI silently lags the app.
+            commands::system_commands::ensure_cli_install_current();
 
             // Repair `.agent-contexts/` provisioning for existing worktree
             // workspaces. This is best-effort because a missing scratch dir
@@ -553,6 +566,7 @@ pub fn run() {
             agents::list_agent_model_sections,
             agents::list_cursor_models,
             agents::list_opencode_models,
+            agents::list_mimo_models,
             agents::list_provider_capabilities,
             agents::send_agent_message_stream,
             agents::subscribe_session_stream,
@@ -580,6 +594,9 @@ pub fn run() {
             commands::opencode_config_commands::get_opencode_custom_providers,
             commands::opencode_config_commands::upsert_opencode_custom_provider,
             commands::opencode_config_commands::delete_opencode_custom_provider,
+            commands::mimo_config_commands::get_mimo_custom_providers,
+            commands::mimo_config_commands::upsert_mimo_custom_provider,
+            commands::mimo_config_commands::delete_mimo_custom_provider,
             commands::settings_commands::get_claude_rate_limits,
             commands::settings_commands::get_codex_rate_limits,
             commands::local_llm_commands::detect_local_llm_hardware,
@@ -672,6 +689,7 @@ pub fn run() {
             commands::terminal_commands::write_terminal_stdin,
             commands::terminal_commands::resize_terminal,
             commands::terminal_commands::set_terminal_session_busy,
+            commands::terminal_commands::convert_session_to_terminal,
             commands::triage_commands::get_triage_config,
             commands::triage_commands::update_triage_config,
             commands::triage_commands::get_triage_active_status,
@@ -765,6 +783,9 @@ pub fn run() {
             commands::settings_commands::load_auto_close_opt_in_asked,
             commands::settings_commands::save_auto_close_opt_in_asked,
             global_hotkey::sync_global_hotkey,
+            quick_panel::toggle_quick_panel,
+            quick_panel::hide_quick_panel,
+            quick_panel::reveal_workspace_in_main_window,
             ui_sync::subscribe_ui_mutations,
             ui_sync::unsubscribe_ui_mutations,
             commands::updater_commands::get_app_update_status,
@@ -846,6 +867,18 @@ pub fn run() {
             #[cfg(not(target_os = "macos"))]
             emit_quit_requested(app_handle);
         }
+        // Quick panel: closing always just hides it (its conversation state
+        // lives in the webview and must survive across summons).
+        tauri::RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::CloseRequested { api, .. },
+            ..
+        } if label == quick_panel::QUICK_PANEL_LABEL => {
+            api.prevent_close();
+            if let Some(window) = app_handle.get_webview_window(quick_panel::QUICK_PANEL_LABEL) {
+                let _ = window.hide();
+            }
+        }
         // macOS Dock-icon click while the window is hidden: show it again.
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen { .. } => {
@@ -884,8 +917,12 @@ fn emit_quit_requested(app_handle: &tauri::AppHandle) {
     if let Err(e) = app_handle.emit("helmor://quit-requested", ()) {
         tracing::warn!(
             error = %e,
-            "Failed to emit quit-requested event; exiting directly",
+            "Failed to emit quit-requested event; cleaning up before exit",
         );
+        // force = false: the webview is already gone, so there are no live
+        // streams worth draining gracefully — run the fast teardown. The
+        // sidecar shutdown inside still kills any in-flight work on the way out.
+        commands::system_commands::cleanup_before_exit(app_handle, false);
         app_handle.exit(0);
     }
 }

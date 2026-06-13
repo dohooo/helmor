@@ -106,8 +106,12 @@ fn fingerprint_message(msg: &ThreadMessageLike) -> MessageFingerprint {
             ExtendedMessagePart::Basic(MessagePart::Workflow { .. }) => "workflow".into(),
             ExtendedMessagePart::Basic(MessagePart::Image { .. }) => "image".into(),
             ExtendedMessagePart::Basic(MessagePart::FileMention { .. }) => "file-mention".into(),
+            ExtendedMessagePart::Basic(MessagePart::PastedText { .. }) => "pasted-text".into(),
             ExtendedMessagePart::Basic(MessagePart::PromptSuggestion { .. }) => {
                 "prompt-suggestion".into()
+            }
+            ExtendedMessagePart::Basic(MessagePart::UserQuestion { status, .. }) => {
+                format!("user-question({status:?})")
             }
             ExtendedMessagePart::CollapsedGroup(g) => {
                 format!("collapsed-group({:?},tools={})", g.category, g.tools.len())

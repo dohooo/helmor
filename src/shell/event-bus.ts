@@ -33,6 +33,8 @@ export type ShellEvent =
 	| { type: "focus-composer" }
 	| { type: "toggle-context-panel" }
 	| { type: "focus-active-terminal" }
+	// App-scoped ⌘⇧T — the mounted composer flips its terminalMode.
+	| { type: "toggle-terminal-mode" }
 	// Imperative archive from surfaces outside the sidebar controller (reuses its optimistic path).
 	| { type: "request-archive-workspace"; workspaceId: string }
 	// Composer Terminal-Mode submit: create a terminal session in the current
@@ -44,6 +46,14 @@ export type ShellEvent =
 			modelId: string | null;
 			effortLevel: string | null;
 			permissionMode: string | null;
+			addDirs: readonly string[] | null;
+			fastMode: boolean;
+			/** Explicit target; null = the currently selected workspace. */
+			workspaceId: string | null;
+			/** The composer's current session — always converted in place (one-way);
+			 *  a session that already ran a turn resumes its conversation in the TUI.
+			 *  null only when there is no current session to convert. */
+			sessionId: string | null;
 	  };
 
 export type ShellEventType = ShellEvent["type"];

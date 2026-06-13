@@ -182,12 +182,15 @@ function sdkParams(id: string): SdkParam[] | undefined {
 }
 
 describe("computeModelParameterValues — fixture-driven", () => {
-	test("composer-2: only fast, effort silently dropped, no thinking", () => {
+	test("composer-2: fast forwarded explicitly on AND off, effort dropped", () => {
 		const params = fixtureParams("composer-2");
 		expect(computeModelParameterValues(params, "high", true)).toEqual([
 			{ id: "fast", value: "true" },
 		]);
-		expect(computeModelParameterValues(params, "high", false)).toEqual([]);
+		// OFF must be sent explicitly — omitting it lets Cursor default to fast.
+		expect(computeModelParameterValues(params, "high", false)).toEqual([
+			{ id: "fast", value: "false" },
+		]);
 	});
 
 	test("gpt-5.3-codex: reasoning + fast forwarded, no thinking auto-add", () => {
@@ -200,7 +203,10 @@ describe("computeModelParameterValues — fixture-driven", () => {
 
 	test("gpt-5.3-codex: invalid effort value silently dropped", () => {
 		const params = fixtureParams("gpt-5.3-codex");
-		expect(computeModelParameterValues(params, "max", false)).toEqual([]);
+		// Invalid effort dropped; fast=false still forwarded explicitly.
+		expect(computeModelParameterValues(params, "max", false)).toEqual([
+			{ id: "fast", value: "false" },
+		]);
 	});
 
 	test("claude-opus-4-7: thinking auto-on, effort surfaced, no fast", () => {

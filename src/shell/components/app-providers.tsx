@@ -9,6 +9,7 @@ import { SettingsDialog } from "@/features/settings";
 import { getPendingPairingToken } from "@/lib/ipc";
 import { helmorQueryPersister, QUERY_CACHE_BUSTER } from "@/lib/query-client";
 import { SettingsContext } from "@/lib/settings";
+import { isQuickPanelWindow } from "@/lib/window-role";
 import { router } from "@/router";
 import { EMPTY_SESSION_RUN_STATES } from "@/shell/constants";
 import type { AppBootstrap } from "@/shell/hooks/use-app-bootstrap";
@@ -84,14 +85,24 @@ export function AppProviders({
 				) : companionAuth === "unauthed" ? (
 					<CompanionPairingScreen />
 				) : appSettings === null ? null : !appSettings.onboardingCompleted ? (
-					<>
-						<AppOnboarding onComplete={completeOnboarding} />
-						<QuitConfirmDialog sessionRunStates={EMPTY_SESSION_RUN_STATES} />
-					</>
+					isQuickPanelWindow ? (
+						// The onboarding flow belongs to the main window; the panel
+						// summoned mid-onboarding just points the user there.
+						<div className="flex h-dvh items-center justify-center bg-background p-6 text-center text-ui text-muted-foreground">
+							Finish setting up Helmor in the main window first.
+						</div>
+					) : (
+						<>
+							<AppOnboarding onComplete={completeOnboarding} />
+							<QuitConfirmDialog sessionRunStates={EMPTY_SESSION_RUN_STATES} />
+						</>
+					)
 				) : (
 					<RouterProvider router={router} context={routerContext} />
 				)}
-				{splashMounted && <SplashScreen visible={splashVisible} />}
+				{splashMounted && !isQuickPanelWindow && (
+					<SplashScreen visible={splashVisible} />
+				)}
 				<SettingsDialog
 					open={settingsOpen}
 					workspaceId={settingsWorkspaceId}

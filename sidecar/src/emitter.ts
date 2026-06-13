@@ -119,6 +119,9 @@ export type UserInputRequestEvent = {
 export type UserInputPayload =
 	| {
 			readonly kind: "ask-user-question";
+			/** PROVIDER-RAW question array (Claude AUQ / Codex requestUserInput
+			 *  / OpenCode question shapes). Rust's `pipeline::user_question`
+			 *  normalizes it into the one canonical shape the frontend renders. */
 			readonly questions: ReadonlyArray<Record<string, unknown>>;
 			readonly metadata?: Record<string, unknown>;
 	  }
@@ -269,6 +272,21 @@ export interface SidecarEmitter {
 		message: string,
 		payload: UserInputPayload,
 	): void;
+	/**
+	 * Stream-position marker for a resolved Codex/OpenCode question. Rust's
+	 * accumulator turns it into a persisted `user_question` transcript row
+	 * (the Q&A card), so the answer survives reload at its natural position.
+	 * Claude AskUserQuestion does NOT emit this — its tool_use/tool_result
+	 * pair already lives in the assistant turn.
+	 */
+	userQuestionResolved(
+		requestId: string,
+		userInputId: string,
+		source: string,
+		questions: ReadonlyArray<Record<string, unknown>>,
+		answers: Record<string, unknown> | undefined,
+		action: "submit" | "decline",
+	): void;
 	permissionModeChanged(requestId: string, permissionMode: string): void;
 	planCaptured(requestId: string, toolUseId: string, plan: string | null): void;
 	modelsListed(
@@ -369,6 +387,23 @@ export function createSidecarEmitter(
 				source,
 				message,
 				payload,
+			}),
+		userQuestionResolved: (
+			requestId,
+			userInputId,
+			source,
+			questions,
+			answers,
+			action,
+		) =>
+			write({
+				id: requestId,
+				type: "user_question",
+				userInputId,
+				source,
+				questions,
+				...(answers ? { answers } : {}),
+				action,
 			}),
 		permissionModeChanged: (requestId, permissionMode) =>
 			write({

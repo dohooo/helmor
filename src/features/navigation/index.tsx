@@ -52,6 +52,7 @@ import {
 	useWorkspaceDnd,
 	type WorkspaceDndPolicy,
 } from "./dnd/use-workspace-dnd";
+import { applyImmediateWorkspaceHighlight } from "./immediate-highlight";
 import {
 	createInitialSectionOpenState,
 	readStoredSectionOpenState,
@@ -115,10 +116,6 @@ function getGroupHeaderHeight(_hasRows: boolean) {
 
 function getGroupGapSize(previousHasRows: boolean, nextHasRows: boolean) {
 	return previousHasRows && nextHasRows ? GROUP_GAP : EMPTY_GROUP_GAP;
-}
-
-function escapeAttributeSelectorValue(value: string) {
-	return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
 // ---------------------------------------------------------------------------
@@ -742,18 +739,10 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	}, []);
 	const applyImmediateSelectionClass = useCallback(
 		(workspaceId: string | null) => {
-			const root = scrollContainerRef.current;
-			if (!root) return;
-			for (const element of root.querySelectorAll(
-				"[data-workspace-row-body].workspace-row-selected",
-			)) {
-				element.classList.remove("workspace-row-selected");
-			}
-			if (!workspaceId) return;
-			const target = root.querySelector(
-				`[data-workspace-row-body][data-workspace-row-id="${escapeAttributeSelectorValue(workspaceId)}"]`,
-			);
-			target?.classList.add("workspace-row-selected");
+			// Root stays the sidebar's own scroll container (NOT a document-wide
+			// query) so standalone renders — and the pointerdown preview they
+			// test — keep working without `[data-helmor-sidebar-root]`.
+			applyImmediateWorkspaceHighlight(scrollContainerRef.current, workspaceId);
 		},
 		[],
 	);
@@ -898,7 +887,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				);
 
 				const headerClassName = cn(
-					"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 text-ui font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60 py-1",
+					"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 py-1 text-ui font-medium text-foreground hover:bg-accent/60",
 				);
 
 				// Repo header: no chevron/badge, but the header still toggles
@@ -1162,7 +1151,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			</div>
 
 			<div className="mt-1 flex items-center justify-between px-3">
-				<h2 className="text-body font-medium tracking-[-0.01em] text-muted-foreground">
+				<h2 className="text-title font-medium text-muted-foreground">
 					Workspaces
 				</h2>
 

@@ -49,6 +49,25 @@ describe("useGlobalHotkeySync", () => {
 		cleanup();
 	});
 
+	it("syncs every OS-level hotkey, including registry defaults", async () => {
+		apiMocks.syncGlobalHotkey.mockResolvedValue(undefined);
+
+		render(<Harness shortcuts={{}} updateShortcuts={vi.fn()} />);
+
+		await waitFor(() => {
+			// No overrides stored: global.hotkey has no default (null), the
+			// quick panel ships bound to Shift+Alt+Space.
+			expect(apiMocks.syncGlobalHotkey).toHaveBeenCalledWith(
+				"global.hotkey",
+				null,
+			);
+			expect(apiMocks.syncGlobalHotkey).toHaveBeenCalledWith(
+				"quickPanel.hotkey",
+				"Shift+Alt+Space",
+			);
+		});
+	});
+
 	it("clears a persisted global hotkey when registration fails", async () => {
 		apiMocks.syncGlobalHotkey.mockRejectedValue(
 			new Error("Hotkey unavailable"),
@@ -63,7 +82,13 @@ describe("useGlobalHotkeySync", () => {
 		);
 
 		await waitFor(() => {
+			// global.hotkey override removed (its default is null)…
 			expect(updateShortcuts).toHaveBeenCalledWith({});
+			// …and the default-bound quick panel hotkey unbound explicitly.
+			expect(updateShortcuts).toHaveBeenCalledWith({
+				"global.hotkey": "Mod+Shift+Space",
+				"quickPanel.hotkey": null,
+			});
 		});
 		expect(toastMocks.error).toHaveBeenCalledWith("Hotkey unavailable");
 	});
