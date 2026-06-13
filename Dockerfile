@@ -17,16 +17,29 @@
 # Only codex + gh are vendored (T3) — the image stays lean (<1GB). claude-code /
 # opencode / llama-cpp / cloudflared are intentionally omitted.
 
+# Declared in the global scope (before the first FROM) so the runtime stage's
+# FROM can interpolate it; MUST match @cloudflare/sandbox in cloud/package.json.
+ARG SANDBOX_VERSION=0.12.1
+
 # ─── Stage 1: frontend bundle (dist/) — embedded into the Rust binary ────────
-FROM oven/bun:1.3 AS frontend
+# Built on $BUILDPLATFORM (the build host's native arch), NOT the amd64 target.
+# dist/ is arch-independent static output, and vite's rolldown bundler ships a
+# native module that SIGILLs under QEMU x86_64 emulation on Apple Silicon.
+# Building natively dodges the emulator and is faster; on a native amd64 builder
+# (CI / Cloudflare) BUILDPLATFORM == TARGETPLATFORM, so the result is identical.
+FROM --platform=$BUILDPLATFORM oven/bun:1.3.2 AS frontend
 WORKDIR /app
-COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
+# The repo root is a bun workspace ("." + apps/*); a --frozen-lockfile install
+# needs every workspace member's package.json, so copy the full context first
+# (node_modules is .dockerignored, so no host arm64 binaries leak in). HUSKY=0
+# skips git-hook install (the build context has no .git).
+ENV HUSKY=0
 COPY . .
+RUN bun install --frozen-lockfile
 RUN bun run build
 
 # ─── Stage 2: sidecar binary + linux vendor (codex + gh) ─────────────────────
-FROM oven/bun:1.3 AS sidecar
+FROM oven/bun:1.3.2 AS sidecar
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends curl ca-certificates tar \
 	&& rm -rf /var/lib/apt/lists/*
@@ -65,8 +78,8 @@ RUN cp sidecar/dist/helmor-sidecar "sidecar/dist/helmor-sidecar-${TARGET_TRIPLE}
 RUN cd src-tauri && cargo build --release --bin helmor --bin helmor-cli
 
 # ─── Stage 4: runtime layer on the CF Sandbox base ───────────────────────────
-# Version MUST match the @cloudflare/sandbox npm dependency in cloud/ (PR5).
-ARG SANDBOX_VERSION=0.12.1
+# Version MUST match the @cloudflare/sandbox npm dependency in cloud/ (PR5);
+# SANDBOX_VERSION is declared once in the global scope near the top of the file.
 FROM docker.io/cloudflare/sandbox:${SANDBOX_VERSION} AS runtime
 # Runtime equivalents of the S2 build libs + xvfb (independent display daemon),
 # git (PR6 clone/push), and CA certs.

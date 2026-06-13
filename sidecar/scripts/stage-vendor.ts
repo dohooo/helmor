@@ -1147,8 +1147,8 @@ stageCodexBinary(target);
 // ----- opencode (desktop only) -----
 if (!IS_LINUX) stageOptional("opencode", () => stageOpencodeBinary(target));
 
-// ----- mimo -----
-stageOptional("mimo", () => stageMimoBinary(target));
+// ----- mimo (desktop only — skipped in the Linux serve image) -----
+if (!IS_LINUX) stageOptional("mimo", () => stageMimoBinary(target));
 
 // ----- gh + glab (forge CLIs) -----
 // Wrapped in stageOptional so a missing/unpublished Windows artifact downgrades

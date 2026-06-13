@@ -112,6 +112,8 @@ describe("vendor platform boundary", () => {
 			codexNpmSuffix: "linux-x64",
 			opencodePkg: "opencode-linux-x64",
 			opencodeNpmSuffix: "linux-x64",
+			mimoPkg: "@mimo-ai/mimocode-linux-x64",
+			mimoNpmSuffix: "linux-x64",
 			ghArch: "amd64",
 			glabArch: "amd64",
 			cloudflaredArch: "amd64",
