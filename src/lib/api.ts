@@ -2224,6 +2224,7 @@ export type UiMutationEvent =
 	| { type: "triageWorkspaceCreated"; workspaceId: string }
 	| { type: "fastModeUnavailable"; sessionId: string; reason: string }
 	| { type: "pairedDevicesChanged" }
+	| { type: "automationsChanged" }
 	| { type: "terminalSessionIdle"; sessionId: string; workspaceId: string }
 	| {
 			type: "terminalPromptCaptured";
@@ -3541,6 +3542,8 @@ export type ThreadMessageLike = {
 	content: ExtendedMessagePart[];
 	status?: { type: string; reason?: string };
 	streaming?: boolean;
+	/** Initiator of a user message: absent = human, "automation" = scheduler. */
+	source?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -3922,6 +3925,89 @@ export type ActiveStreamSummary = {
  *  ui-sync bridge. */
 export async function listActiveStreams(): Promise<ActiveStreamSummary[]> {
 	return await invoke<ActiveStreamSummary[]>("list_active_streams");
+}
+
+// ---------------------------------------------------------------------------
+// Automations — scheduled recurring prompts
+// ---------------------------------------------------------------------------
+
+export type AutomationSchedule =
+	| { kind: "hourly" }
+	| { kind: "daily"; time: string }
+	| { kind: "weekly"; weekday: number; time: string }
+	| { kind: "every"; amount: number; unit: "minutes" | "hours" };
+
+export type AutomationRunsIn = "chat" | "workspace";
+export type AutomationStatus = "active" | "paused";
+
+export type Automation = {
+	id: string;
+	title: string;
+	prompt: string;
+	runsIn: AutomationRunsIn;
+	sessionId: string | null;
+	workspaceId: string | null;
+	schedule: AutomationSchedule;
+	status: AutomationStatus;
+	nextRunAt: string;
+	lastRunAt: string | null;
+	createdAt: string;
+	updatedAt: string;
+};
+
+export type CreateAutomationRequest = {
+	title: string;
+	prompt: string;
+	runsIn: AutomationRunsIn;
+	sessionId?: string;
+	workspaceId?: string;
+	schedule: AutomationSchedule;
+};
+
+export type UpdateAutomationRequest = {
+	id: string;
+	title?: string;
+	prompt?: string;
+	runsIn?: AutomationRunsIn;
+	sessionId?: string;
+	workspaceId?: string;
+	schedule?: AutomationSchedule;
+};
+
+export async function listAutomations(): Promise<Automation[]> {
+	return await invoke<Automation[]>("list_automations");
+}
+
+export async function createAutomation(
+	request: CreateAutomationRequest,
+): Promise<Automation> {
+	return await invoke<Automation>("create_automation", { request });
+}
+
+export async function updateAutomation(
+	request: UpdateAutomationRequest,
+): Promise<Automation> {
+	return await invoke<Automation>("update_automation", { request });
+}
+
+export async function deleteAutomation(automationId: string): Promise<void> {
+	await invoke<void>("delete_automation", { automationId });
+}
+
+/** Pause/resume. Resume recomputes nextRunAt from now (no immediate fire). */
+export async function setAutomationStatus(
+	automationId: string,
+	status: AutomationStatus,
+): Promise<Automation> {
+	return await invoke<Automation>("set_automation_status", {
+		automationId,
+		status,
+	});
+}
+
+/** Dispatch immediately. Returns the session id the run landed in. */
+export async function runAutomationNow(automationId: string): Promise<string> {
+	return await invoke<string>("run_automation_now", { automationId });
 }
 
 export type AgentSteerRequest = {

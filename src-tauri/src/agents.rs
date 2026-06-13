@@ -191,6 +191,13 @@ pub struct AgentSendRequest {
     /// round-trip without regex re-extraction.
     #[serde(default)]
     pub images: Option<Vec<String>>,
+    /// Who initiated this turn. `None` = the user (frontend/CLI never set
+    /// it); `Some("automation")` = the automations scheduler. Persisted into
+    /// the `user_prompt` payload so the chat renders a "Sent via automation"
+    /// badge, and background turns skip the mark-read / active-session
+    /// side effects a human send performs.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 #[cfg(test)]
@@ -202,6 +209,11 @@ pub(crate) struct ExchangeContext {
     pub(crate) model_id: String,
     pub(crate) model_provider: String,
     pub(crate) user_message_id: String,
+    /// True for scheduler-initiated turns (`request.source` set). Finalize
+    /// then skips marking the session read and stealing the workspace's
+    /// active session — a background run must surface as unread, not
+    /// rearrange the user's UI.
+    pub(crate) is_background: bool,
 }
 
 #[tauri::command]
@@ -333,6 +345,46 @@ fn resolve_stream_working_directory(
     request: &AgentSendRequest,
 ) -> anyhow::Result<std::path::PathBuf> {
     resolve_working_directory(request.working_directory.as_deref())
+}
+
+/// Start an agent turn with no owning IPC channel — used by the automations
+/// scheduler. Identical to `send_agent_message_stream` minus the triage
+/// priming: persistence, ActiveStreams busy-locking, and watcher fan-out
+/// (`SessionStreamHub`) all run as for a frontend-initiated send, so an open
+/// conversation still streams the turn live. The no-op channel only drops the
+/// initiator-facing copy nobody is listening to.
+pub(crate) fn start_background_turn(app: &AppHandle, request: AgentSendRequest) -> CmdResult<()> {
+    let prompt = request.prompt.trim().to_string();
+    if prompt.is_empty() {
+        return Err(anyhow::anyhow!("Prompt cannot be empty.").into());
+    }
+
+    let model = resolve_model(&request.model_id, Some(request.provider.as_str()));
+    if request.provider != model.provider {
+        return Err(anyhow::anyhow!(
+            "Model {} does not belong to provider {}.",
+            request.model_id,
+            request.provider
+        )
+        .into());
+    }
+
+    let working_directory = resolve_stream_working_directory(&request)?;
+    let stream_id = Uuid::new_v4().to_string();
+    let sidecar = app.state::<crate::sidecar::ManagedSidecar>();
+    let active_streams = app.state::<ActiveStreams>();
+
+    stream_via_sidecar(
+        app.clone(),
+        Channel::new(|_| Ok(())),
+        &sidecar,
+        &active_streams,
+        &stream_id,
+        &model,
+        &prompt,
+        &request,
+        &working_directory,
+    )
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -840,10 +892,11 @@ mod tests {
             model_id: "opus-1m".to_string(),
             model_provider: "claude".to_string(),
             user_message_id: Uuid::new_v4().to_string(),
+            is_background: false,
         };
 
         // 1. Persist user message
-        persist_user_message(&conn, &ctx, "Hello", &[], &[]).unwrap();
+        persist_user_message(&conn, &ctx, "Hello", &[], &[], None).unwrap();
 
         persist_result_and_finalize(
             &conn,
@@ -913,9 +966,10 @@ mod tests {
             model_id: "opus-1m".to_string(),
             model_provider: "claude".to_string(),
             user_message_id: Uuid::new_v4().to_string(),
+            is_background: false,
         };
 
-        persist_user_message(&conn, &ctx, "Hi", &[], &[]).unwrap();
+        persist_user_message(&conn, &ctx, "Hi", &[], &[], None).unwrap();
         persist_result_and_finalize(
             &conn,
             &ctx,
@@ -971,10 +1025,11 @@ mod tests {
             model_id: "opus-1m".to_string(),
             model_provider: "claude".to_string(),
             user_message_id: Uuid::new_v4().to_string(),
+            is_background: false,
         };
 
         // Persist user message
-        persist_user_message(&conn, &ctx, "Do something", &[], &[]).unwrap();
+        persist_user_message(&conn, &ctx, "Do something", &[], &[], None).unwrap();
 
         // Persist two intermediate turns
         let turn1 = CollectedTurn {
@@ -1042,10 +1097,11 @@ mod tests {
             model_id: "opus-1m".to_string(),
             model_provider: "claude".to_string(),
             user_message_id: "user-initial".to_string(),
+            is_background: false,
         };
 
         // 1. Initial prompt persisted via the normal path.
-        persist_user_message(&conn, &ctx, "investigate the bug", &[], &[]).unwrap();
+        persist_user_message(&conn, &ctx, "investigate the bug", &[], &[], None).unwrap();
 
         // 2. Drive the accumulator the same way the streaming loop does:
         //    assistant deltas, steer event, more assistant deltas, result.

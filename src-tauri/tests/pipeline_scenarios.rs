@@ -108,6 +108,18 @@ fn user_prompt_wrapped() {
 }
 
 #[test]
+fn user_prompt_with_automation_source() {
+    // Scheduler-initiated prompt: persist_user_message adds
+    // `"source":"automation"`, which must surface as
+    // `ThreadMessageLike.source` so the chat renders the
+    // "Sent via automation" badge. Human prompts (no `source` key) must
+    // keep their exact wire shape — covered by every other snapshot in
+    // this file staying byte-identical.
+    let msgs = vec![user_prompt_from_automation("u1", "check the order status")];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
 fn user_prompt_with_brace_content() {
     // Latent-bug regression: prompts that happened to start with `{` were
     // mis-rendered as system "Event" because the sniff classified them as

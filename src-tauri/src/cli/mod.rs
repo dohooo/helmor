@@ -12,6 +12,7 @@
 //! / human formatting) and `refs` (UUID / name disambiguation).
 
 pub mod args;
+mod automation;
 mod conductor;
 mod data;
 mod files;
@@ -153,6 +154,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
         C::Repo { action } => repo::dispatch(action, cli),
         C::Workspace { action } => workspace::dispatch(action, cli),
         C::Session { action } => session::dispatch(action, cli),
+        C::Automation { action } => automation::dispatch(action, cli),
         C::Files { action } => files::dispatch(action, cli),
         C::Send(opts) => send::send(opts, cli),
         C::Models { action } => send::dispatch_models(action, cli),

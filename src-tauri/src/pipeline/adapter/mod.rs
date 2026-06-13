@@ -265,6 +265,7 @@ fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, Wo
                     })],
                     status: None,
                     streaming: None,
+                    source: None,
                 });
             }
             i += 1;
@@ -308,6 +309,7 @@ fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, Wo
                     content,
                     status: None,
                     streaming: if msg.is_streaming { Some(true) } else { None },
+                    source: None,
                 });
             }
             i += 1;
@@ -391,6 +393,7 @@ fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, Wo
                 content: parts.into_iter().map(ExtendedMessagePart::Basic).collect(),
                 status: Some(map_stop_reason(parsed)),
                 streaming: if is_streaming { Some(true) } else { None },
+                source: None,
             });
 
             // Re-emit any system messages we skipped over so they still
@@ -440,6 +443,10 @@ fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, Wo
             };
             let files = extract_strs("files");
             let images = extract_strs("images");
+            let source = parsed
+                .and_then(|p| p.get("source"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
             let parts = grouping::split_user_text_with_files(&text, &files, &images, &msg.id);
             result.push(ThreadMessageLike {
                 role: MessageRole::User,
@@ -448,6 +455,7 @@ fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, Wo
                 content: parts.into_iter().map(ExtendedMessagePart::Basic).collect(),
                 status: None,
                 streaming: None,
+                source,
             });
             i += 1;
             continue;
@@ -627,6 +635,7 @@ fn convert_user_type_msg(
                 })],
                 status: None,
                 streaming: None,
+                source: None,
             });
         }
         return;
@@ -799,5 +808,6 @@ fn convert_exit_plan_mode_msg(
         })],
         status: None,
         streaming: None,
+        source: None,
     }
 }

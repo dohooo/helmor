@@ -652,6 +652,28 @@ pub fn get_session_model(session_id: &str) -> Result<Option<String>> {
     Ok(model.filter(|s| !s.is_empty()))
 }
 
+/// (workspace_id, permission_mode) for dispatching a background turn into an
+/// existing session (automations). `Ok(None)` when the session row is gone —
+/// callers treat that as "target missing", not an error.
+pub fn get_session_workspace_and_permission(
+    session_id: &str,
+) -> Result<Option<(Option<String>, String)>> {
+    let conn = db::read_conn()?;
+    conn.query_row(
+        "SELECT workspace_id, permission_mode FROM sessions WHERE id = ?1",
+        [session_id],
+        |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?
+                    .unwrap_or_else(|| "default".to_string()),
+            ))
+        },
+    )
+    .optional()
+    .with_context(|| format!("Failed to read workspace+permission for session {session_id}"))
+}
+
 /// (model, agent_type) for a session — provider hint for `resolve_model`
 /// when ids like `"default"` are ambiguous.
 pub fn get_session_model_and_provider(

@@ -1,3 +1,4 @@
+pub mod automations;
 pub mod db;
 pub mod paired_devices;
 pub mod repos;

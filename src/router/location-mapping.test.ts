@@ -7,6 +7,8 @@ import {
 } from "@tanstack/react-router";
 import { describe, expect, it } from "vitest";
 import {
+	locationToSelection,
+	locationToSettingsPatch,
 	locationToViewInfo,
 	pathToSelection,
 	selectionToLocation,
@@ -240,26 +242,48 @@ describe("locationToViewInfo", () => {
 		expect(locationToViewInfo({ pathname: "/start", search: {} })).toEqual({
 			isStart: true,
 			isEditor: false,
+			isAutomations: false,
 		});
 		expect(locationToViewInfo({ pathname: "/", search: {} })).toEqual({
 			isStart: false,
 			isEditor: false,
+			isAutomations: false,
 		});
 		expect(
 			locationToViewInfo({ pathname: "/w/ws1/s/sess1", search: {} }),
-		).toEqual({ isStart: false, isEditor: false });
+		).toEqual({ isStart: false, isEditor: false, isAutomations: false });
 	});
 
 	it("flags ?view=editor as editor", () => {
 		expect(
 			locationToViewInfo({ pathname: "/w/ws1", search: { view: "editor" } }),
-		).toEqual({ isStart: false, isEditor: true });
+		).toEqual({ isStart: false, isEditor: true, isAutomations: false });
 		expect(
 			locationToViewInfo({
 				pathname: "/w/ws1/s/sess1",
 				search: { view: "editor" },
 			}),
-		).toEqual({ isStart: false, isEditor: true });
+		).toEqual({ isStart: false, isEditor: true, isAutomations: false });
+	});
+
+	it("flags /automations and round-trips it through the selection mapping", () => {
+		expect(
+			locationToViewInfo({ pathname: "/automations", search: {} }),
+		).toEqual({ isStart: false, isEditor: false, isAutomations: true });
+		expect(
+			selectionToLocation({
+				viewMode: "automations",
+				workspaceId: "ws1", // ignored — automations is a global page
+				sessionId: null,
+			}),
+		).toEqual({ to: "/automations" });
+		expect(
+			locationToSelection({ pathname: "/automations", search: {} }),
+		).toEqual({ workspaceId: null, sessionId: null, viewMode: "automations" });
+		// Never persisted — relaunch restores the last real surface.
+		expect(
+			locationToSettingsPatch({ pathname: "/automations", search: {} }),
+		).toEqual({});
 	});
 
 	it("treats an absent or conversation view as conversation (not editor)", () => {
@@ -410,7 +434,7 @@ describe("router location round-trips through the mapping", () => {
 				pathname: router.state.location.pathname,
 				search: router.state.location.search,
 			}),
-		).toEqual({ isStart: false, isEditor: false });
+		).toEqual({ isStart: false, isEditor: false, isAutomations: false });
 	});
 
 	it("keeps ?view=editor in the stored search", async () => {
@@ -428,7 +452,7 @@ describe("router location round-trips through the mapping", () => {
 				pathname: router.state.location.pathname,
 				search: router.state.location.search,
 			}),
-		).toEqual({ isStart: false, isEditor: true });
+		).toEqual({ isStart: false, isEditor: true, isAutomations: false });
 	});
 
 	it("navigates to the distinct /start route", async () => {
@@ -441,7 +465,7 @@ describe("router location round-trips through the mapping", () => {
 				pathname: router.state.location.pathname,
 				search: router.state.location.search,
 			}),
-		).toEqual({ isStart: true, isEditor: false });
+		).toEqual({ isStart: true, isEditor: false, isAutomations: false });
 	});
 
 	it("a bogus ?view never throws and falls back to conversation", async () => {

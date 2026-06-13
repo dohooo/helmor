@@ -132,6 +132,8 @@ export function AppShell({
 				onCollapseSidebar: () => panels.setSidebarCollapsed(true),
 				onOpenFeedback: () => s.setFeedbackOpen(true),
 				onOpenSettings: data.handleOpenSettings,
+				onOpenAutomations: () =>
+					sel.selectionActions.setViewMode("automations"),
 				pushWorkspaceToast: s.pushWorkspaceToast,
 			}}
 			sidebarCollapsed={panels.sidebarCollapsed}

@@ -267,6 +267,11 @@ function handleUiMutation(
 				queryKey: helmorQueryKeys.pairedDevices,
 			});
 			return;
+		case "automationsChanged":
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.automations,
+			});
+			return;
 		case "terminalSessionIdle":
 			// Terminal turn finished (agent Stop hook). Re-dispatch as the
 			// window event the read-state controller already listens on, so

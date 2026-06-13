@@ -1,3 +1,4 @@
+import { Clock } from "lucide-react";
 import { FileMentionBadge } from "@/components/file-mention-badge";
 import type { MessagePart } from "@/lib/api";
 import { useSettings } from "@/lib/settings";
@@ -21,6 +22,12 @@ export function ChatUserMessage({ message }: { message: RenderedMessage }) {
 			className="group/user flex min-w-0 justify-end"
 		>
 			<div className="relative flex max-w-[75%] min-w-0 flex-col items-end pb-5">
+				{message.source === "automation" && (
+					<div className="mb-1 flex items-center gap-1 text-[11px] leading-none text-muted-foreground/70">
+						<Clock className="size-3" strokeWidth={1.8} />
+						<span>Sent via automation</span>
+					</div>
+				)}
 				<div
 					className="conversation-body-text w-full overflow-hidden rounded-md bg-accent/55 px-3 py-2 leading-7"
 					style={{ fontSize: `${settings.chatFontSize}px` }}

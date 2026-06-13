@@ -54,7 +54,7 @@ import {
 	flattenWorkspaceRows,
 } from "@/shell/layout";
 
-export type ShellViewMode = "conversation" | "editor" | "start";
+export type ShellViewMode = "conversation" | "editor" | "start" | "automations";
 
 // Trailing window before the per-switch fire-and-forget IPC (git fetch +
 // slash-command prewarm) runs. Matches the inspector settle window so a held

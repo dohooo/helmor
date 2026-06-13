@@ -256,6 +256,7 @@ pub(super) fn stream_via_sidecar(
     let user_message_id_copy = request.user_message_id.clone();
     let files_copy = request.files.clone().unwrap_or_default();
     let images_copy = request.images.clone().unwrap_or_default();
+    let source_copy = request.source.clone();
     let sidecar_session_id_copy = sidecar_session_id.clone();
     let rid = request_id.clone();
 
@@ -312,6 +313,7 @@ pub(super) fn stream_via_sidecar(
                 user_message_id: user_message_id_copy
                     .clone()
                     .unwrap_or_else(|| Uuid::new_v4().to_string()),
+                is_background: source_copy.is_some(),
             };
 
             match crate::models::db::write_conn() {
@@ -323,8 +325,14 @@ pub(super) fn stream_via_sidecar(
                         tracing::error!(rid = %rid, "Failed to update fast_mode: {e}");
                     }
 
-                    match persist_user_message(&conn, &ctx, &prompt_copy, &files_copy, &images_copy)
-                    {
+                    match persist_user_message(
+                        &conn,
+                        &ctx,
+                        &prompt_copy,
+                        &files_copy,
+                        &images_copy,
+                        source_copy.as_deref(),
+                    ) {
                         Ok(()) => {
                             tracing::debug!(rid = %rid, "User message persisted to DB");
                             exchange_ctx = Some(ctx);
@@ -1366,6 +1374,7 @@ fn build_exit_plan_review_message(
         })],
         status: None,
         streaming: None,
+        source: None,
     }
 }
 

@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod automations;
 pub mod cli;
 pub(crate) mod codex_config;
 pub(crate) mod commands;
@@ -485,6 +486,11 @@ pub fn run() {
             // Triage: fetcher + auto-fire tick on the same 5-min thread.
             triage::fetcher::spawn_scheduler(app.handle().clone());
 
+            // Automations: stateless 30s poll over `automations.next_run_at`.
+            // Overdue rows (app was closed / machine slept) catch up once on
+            // the first tick after the startup delay.
+            automations::scheduler::spawn_scheduler(app.handle().clone());
+
             // Mobile browser companion (experimental, opt-in via env). Starts a
             // loopback-bound HTTP/SSE server that mirrors the IPC surface so the
             // same frontend can be served to a phone browser. Default app
@@ -578,6 +584,12 @@ pub fn run() {
             agents::list_slash_commands,
             agents::prewarm_slash_commands_for_workspace,
             agents::prewarm_slash_commands_for_repo,
+            commands::automation_commands::list_automations,
+            commands::automation_commands::create_automation,
+            commands::automation_commands::update_automation,
+            commands::automation_commands::delete_automation,
+            commands::automation_commands::set_automation_status,
+            commands::automation_commands::run_automation_now,
             commands::workspace_commands::prepare_archive_workspace,
             commands::workspace_commands::start_archive_workspace,
             commands::workspace_commands::validate_archive_workspace,

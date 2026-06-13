@@ -165,6 +165,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: SessionAction,
     },
+    /// Scheduled automations — recurring prompts on an interval.
+    Automation {
+        #[command(subcommand)]
+        action: AutomationAction,
+    },
     /// File listing, reading, writing, staging (editor surface).
     Files {
         #[command(subcommand)]
@@ -571,6 +576,59 @@ pub enum LinkedDirsAction {
 pub enum ReadState {
     Read,
     Unread,
+}
+
+// ---------------------------------------------------------------------------
+// automation
+// ---------------------------------------------------------------------------
+
+#[derive(Subcommand)]
+pub enum AutomationAction {
+    /// List all automations.
+    List,
+    /// Show one automation in full (prompt, schedule, next/last run).
+    Show { automation: String },
+    /// Create an automation.
+    ///
+    /// Examples:
+    ///   helmor automation create --title "Order monitor" --prompt "check order status" \
+    ///       --chat <session-id> --hourly
+    ///   helmor automation create --title "Daily digest" --prompt "summarize inbox" \
+    ///       --workspace my-repo/main --daily 09:00
+    ///   helmor automation create ... --weekly mon:09:30
+    ///   helmor automation create ... --every 15m
+    Create {
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        prompt: String,
+        /// Bind to an existing chat session (each run appends a turn there).
+        #[arg(long, conflicts_with = "workspace")]
+        chat: Option<String>,
+        /// Bind to a workspace (each run creates a fresh session there).
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Run every hour.
+        #[arg(long, group = "interval")]
+        hourly: bool,
+        /// Run every day at a local wall-clock time (HH:MM).
+        #[arg(long, group = "interval", value_name = "HH:MM")]
+        daily: Option<String>,
+        /// Run weekly: sun|mon|…|sat followed by HH:MM (e.g. mon:09:30).
+        #[arg(long, group = "interval", value_name = "DAY:HH:MM")]
+        weekly: Option<String>,
+        /// Run every N minutes/hours (e.g. 15m, 2h).
+        #[arg(long, group = "interval", value_name = "Nm|Nh")]
+        every: Option<String>,
+    },
+    /// Pause an automation (keeps it listed; stops firing).
+    Pause { automation: String },
+    /// Resume a paused automation. Next run is computed from now.
+    Resume { automation: String },
+    /// Delete an automation. The chats it wrote into are untouched.
+    Delete { automation: String },
+    /// Fire an automation on the app's next scheduler tick (≤30s).
+    Run { automation: String },
 }
 
 // ---------------------------------------------------------------------------

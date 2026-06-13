@@ -27,6 +27,9 @@ function dispatch(location: SelectionLocation): void {
 		case "/start":
 			void router.navigate({ to: "/start", replace: true });
 			return;
+		case "/automations":
+			void router.navigate({ to: "/automations", replace: true });
+			return;
 		case "/w/$workspaceId":
 			void router.navigate({
 				to: "/w/$workspaceId",
@@ -69,10 +72,16 @@ function alreadyAtTarget(input: SelectionLocationInput): boolean {
 	if (!samePath) return false;
 	const targetIsStart = input.viewMode === "start";
 	const targetIsEditor = input.viewMode === "editor";
+	const targetIsAutomations = input.viewMode === "automations";
 	const currentIsStart = current.pathname === "/start";
 	const currentIsEditor =
 		(current.search as { view?: string }).view === "editor";
-	return currentIsStart === targetIsStart && currentIsEditor === targetIsEditor;
+	const currentIsAutomations = current.pathname === "/automations";
+	return (
+		currentIsStart === targetIsStart &&
+		currentIsEditor === targetIsEditor &&
+		currentIsAutomations === targetIsAutomations
+	);
 }
 
 /**

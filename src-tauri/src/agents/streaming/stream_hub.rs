@@ -152,6 +152,7 @@ mod tests {
                 })],
                 status: None,
                 streaming: None,
+                source: None,
             }],
         }
     }

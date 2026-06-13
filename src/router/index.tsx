@@ -104,6 +104,12 @@ const startRoute = createRoute({
 	component: () => null,
 });
 
+const automationsRoute = createRoute({
+	getParentRoute: () => rootRoute,
+	path: "/automations",
+	component: () => null,
+});
+
 const workspaceRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: "/w/$workspaceId",
@@ -123,6 +129,7 @@ const workspaceSessionRoute = createRoute({
 const routeTree = rootRoute.addChildren([
 	indexRoute,
 	startRoute,
+	automationsRoute,
 	workspaceRoute,
 	workspaceSessionRoute,
 ]);

@@ -52,6 +52,7 @@ export type PathSelection = {
 export type SelectionLocation =
 	| { to: "/" }
 	| { to: "/start" }
+	| { to: "/automations" }
 	| {
 			to: "/w/$workspaceId";
 			params: { workspaceId: string };
@@ -83,6 +84,7 @@ export function selectionToLocation({
 	sessionId,
 }: SelectionLocationInput): SelectionLocation {
 	if (viewMode === "start") return { to: "/start" };
+	if (viewMode === "automations") return { to: "/automations" };
 	if (!workspaceId) return { to: "/" };
 	if (sessionId) {
 		return {
@@ -111,6 +113,7 @@ export function selectionToPath({
 	sessionId,
 }: SelectionLocationInput): string {
 	if (viewMode === "start") return "/start";
+	if (viewMode === "automations") return "/automations";
 	if (!workspaceId) return "/";
 	const encodedWorkspace = encodeURIComponent(workspaceId);
 	if (sessionId) {
@@ -146,6 +149,7 @@ export function pathToSelection(pathname: string): PathSelection {
 export type LocationViewInfo = {
 	isStart: boolean;
 	isEditor: boolean;
+	isAutomations: boolean;
 };
 
 /**
@@ -170,6 +174,7 @@ export function locationToViewInfo({
 	return {
 		isStart: pathname === "/start",
 		isEditor: (search as { view?: string }).view === "editor",
+		isAutomations: pathname === "/automations",
 	};
 }
 
@@ -203,13 +208,18 @@ export function locationToSelection({
 	pathname: string;
 	search: { view?: string } | Record<string, unknown>;
 }): LocationSelection {
-	const { isStart, isEditor } = locationToViewInfo({ pathname, search });
+	const { isStart, isEditor, isAutomations } = locationToViewInfo({
+		pathname,
+		search,
+	});
 	const { workspaceId, sessionId } = pathToSelection(pathname);
 	const viewMode: ShellViewMode = isStart
 		? "start"
-		: isEditor
-			? "editor"
-			: "conversation";
+		: isAutomations
+			? "automations"
+			: isEditor
+				? "editor"
+				: "conversation";
 	return { workspaceId, sessionId, viewMode };
 }
 
@@ -236,9 +246,14 @@ export function locationToSettingsPatch({
 	pathname: string;
 	search: { view?: string } | Record<string, unknown>;
 }): Partial<AppSettings> {
-	const { isStart } = locationToViewInfo({ pathname, search });
+	const { isStart, isAutomations } = locationToViewInfo({ pathname, search });
 	if (isStart) {
 		return { lastSurface: "workspace-start" };
+	}
+	if (isAutomations) {
+		// Like the boot index: never persisted. Relaunch restores the last
+		// real workspace/start surface, not the Automations page.
+		return {};
 	}
 	const { workspaceId, sessionId } = pathToSelection(pathname);
 	if (!workspaceId) {

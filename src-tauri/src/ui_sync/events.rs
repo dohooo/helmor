@@ -122,6 +122,10 @@ pub enum UiMutationEvent {
     /// The mobile-companion paired-device list changed (paired or revoked).
     /// Frontends invalidate the `pairedDevices` query.
     PairedDevicesChanged,
+    /// An automation was created/edited/deleted/paused, or the scheduler
+    /// fired a run (shifting next/last run). Frontends invalidate the
+    /// `automations` query.
+    AutomationsChanged,
     /// "Open in Helmor" from the quick panel. Only the MAIN window acts on
     /// this (navigates to the workspace/session); the quick panel ignores it.
     WorkspaceRevealRequested {
@@ -278,6 +282,7 @@ mod tests {
                 UiMutationEvent::ActiveStreamsChanged,
                 "activeStreamsChanged",
             ),
+            (UiMutationEvent::AutomationsChanged, "automationsChanged"),
         ];
         for (event, expected) in cases {
             let json = serde_json::to_value(&event).unwrap();

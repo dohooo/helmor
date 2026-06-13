@@ -49,6 +49,7 @@ pub(super) fn render_item_completed(
                         reason: Some("stop".to_string()),
                     }),
                     streaming: None,
+                    source: None,
                 });
             }
         }
@@ -109,6 +110,7 @@ fn render_command_execution(
             reason: Some("stop".to_string()),
         }),
         streaming: None,
+        source: None,
     });
 }
 
@@ -136,6 +138,7 @@ fn render_context_compaction(
         })],
         status: None,
         streaming: None,
+        source: None,
     });
 }
 
@@ -154,6 +157,7 @@ fn render_todo_list(msg: &IntermediateMessage, item: &Value, result: &mut Vec<Th
                 reason: Some("stop".to_string()),
             }),
             streaming: None,
+            source: None,
         });
     }
 }
@@ -176,6 +180,7 @@ fn render_reasoning(msg: &IntermediateMessage, item: &Value, result: &mut Vec<Th
                     reason: Some("stop".to_string()),
                 }),
                 streaming: None,
+                source: None,
             });
         }
     }
@@ -221,6 +226,7 @@ fn render_file_change(
             reason: Some("stop".to_string()),
         }),
         streaming: None,
+        source: None,
     });
 }
 
@@ -270,6 +276,7 @@ fn render_web_search(msg: &IntermediateMessage, item: &Value, result: &mut Vec<T
             reason: Some("stop".to_string()),
         }),
         streaming: None,
+        source: None,
     });
 }
 
@@ -318,6 +325,7 @@ fn render_mcp_tool_call(
             reason: Some("stop".to_string()),
         }),
         streaming: None,
+        source: None,
     });
 }
 
@@ -342,6 +350,7 @@ fn render_plan(msg: &IntermediateMessage, item: &Value, result: &mut Vec<ThreadM
             reason: Some("stop".to_string()),
         }),
         streaming: None,
+        source: None,
     });
 }
 
@@ -388,6 +397,7 @@ fn render_collab_agent_tool_call(
             reason: Some("stop".to_string()),
         }),
         streaming: None,
+        source: None,
     });
 }
 
@@ -442,5 +452,6 @@ fn render_image_generation(
             reason: Some("stop".to_string()),
         }),
         streaming: None,
+        source: None,
     });
 }

@@ -18,6 +18,10 @@ pub struct NormThreadMessage {
     pub content: Vec<NormPart>,
     pub status: Option<NormStatus>,
     pub streaming: Option<bool>,
+    /// Initiator marker (`"automation"`). Skipped when absent so the
+    /// pre-existing snapshot corpus stays byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -292,6 +296,7 @@ pub fn normalize_message(msg: &ThreadMessageLike) -> NormThreadMessage {
             reason: s.reason.clone(),
         }),
         streaming: msg.streaming,
+        source: msg.source.clone(),
     }
 }
 

@@ -75,6 +75,17 @@ pub fn user_prompt_with_files_and_images(
     make_record(id, "user", &serde_json::to_string(&parsed).unwrap())
 }
 
+/// Automation-initiated prompt. Same shape as `user_prompt` but with the
+/// `source` marker written by `persist_user_message` for scheduler turns.
+pub fn user_prompt_from_automation(id: &str, text: &str) -> HistoricalRecord {
+    let parsed = json!({
+        "type": "user_prompt",
+        "text": text,
+        "source": "automation",
+    });
+    make_record(id, "user", &serde_json::to_string(&parsed).unwrap())
+}
+
 /// Mid-turn steer prompt. Same shape as `user_prompt` but with the
 /// `steer: true` marker written by `persist_steer_message`.
 pub fn user_prompt_steer(id: &str, text: &str) -> HistoricalRecord {

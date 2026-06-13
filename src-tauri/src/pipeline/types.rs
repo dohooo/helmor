@@ -456,6 +456,11 @@ pub struct ThreadMessageLike {
     /// True when this message is still being streamed from an agent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub streaming: Option<bool>,
+    /// Who initiated a user message: `None` = human, `Some("automation")` =
+    /// the automations scheduler ("Sent via automation" badge). Absent from
+    /// the wire when unset so historical snapshots stay byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub source: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

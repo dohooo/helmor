@@ -4,6 +4,8 @@
 // branch and renders either <StartSurfacePane> (start) or
 // <ShellWorkspaceConversation> (chat) below the editor. Selection-track reads
 // stay inside ShellWorkspaceConversation; only the delivery channel moved.
+
+import { AutomationsSurface } from "@/features/automations";
 import type {
 	ComposerCreateContext,
 	WorkspaceConversationContainerProps,
@@ -26,6 +28,11 @@ import type {
 import type { StartSurfaceActions } from "@/shell/controllers/use-start-surface-controller";
 import { ShellWorkspaceConversation } from "./shell-workspace-conversation";
 import { StartSurfacePane } from "./start-surface-pane";
+
+// Prefilled prompt for "Create via chat" (mirrors Codex's flow): the agent
+// explains automations and creates one via the `helmor automation` CLI.
+const CREATE_AUTOMATION_VIA_CHAT_PROMPT =
+	"I want to set up an automation. Briefly explain how automations work in Helmor (run `helmor automation create --help` to see the options), then ask me a few questions to figure out what I'd like it to do and when it should run. Once we've agreed, create it with the helmor CLI.";
 
 type ConversationProps = WorkspaceConversationContainerProps;
 type StartPageProps = Parameters<typeof WorkspaceStartPage>[0];
@@ -170,7 +177,26 @@ export function WorkspacePaneSurface({
 							: "flex min-h-0 flex-1 flex-col"
 					}
 				>
-					{workspaceViewMode === "start" ? (
+					{workspaceViewMode === "automations" ? (
+						<AutomationsSurface
+							onOpenSession={(workspaceId, sessionId) => {
+								selectionActions.selectWorkspace(workspaceId);
+								selectionActions.selectSession(sessionId);
+							}}
+							onCreateViaChat={() => {
+								selectionActions.openStart();
+								pendingQueueActions.insertIntoComposer({
+									target: { contextKey: startComposerContextKey },
+									items: [
+										{
+											kind: "text",
+											text: CREATE_AUTOMATION_VIA_CHAT_PROMPT,
+										},
+									],
+								});
+							}}
+						/>
+					) : workspaceViewMode === "start" ? (
 						<StartSurfacePane
 							repositories={repositories}
 							startRepository={startRepository}

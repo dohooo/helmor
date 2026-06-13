@@ -908,6 +908,7 @@ mod tests {
             ],
             status: None,
             streaming: None,
+            source: None,
         }];
         collapse_pass(&mut messages);
         assert_eq!(messages[0].content.len(), 3); // text + Agent + text

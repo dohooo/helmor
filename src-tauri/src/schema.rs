@@ -1212,6 +1212,27 @@ CREATE TABLE IF NOT EXISTS paired_devices (
     revoked_at TEXT
 );
 
+-- Scheduled automations: periodically inject a fixed prompt into a session
+-- and run a normal agent turn. SQLite is the single source of truth for the
+-- schedule — the in-process scheduler is a stateless poll loop over
+-- `next_run_at`, so restarts/sleep just mean a late tick sees overdue rows.
+-- Timestamps use the db::current_timestamp() RFC3339-UTC-millis format,
+-- which compares chronologically as plain strings.
+CREATE TABLE IF NOT EXISTS automations (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    runs_in TEXT NOT NULL,
+    session_id TEXT,
+    workspace_id TEXT,
+    schedule TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    next_run_at TEXT NOT NULL,
+    last_run_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_session_messages_sent_at ON session_messages(session_id, sent_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace_id ON sessions(workspace_id);
@@ -1219,6 +1240,7 @@ CREATE INDEX IF NOT EXISTS idx_workspaces_repository_id ON workspaces(repository
 CREATE INDEX IF NOT EXISTS idx_runtime_processes_ended_at ON runtime_processes(ended_at);
 CREATE INDEX IF NOT EXISTS idx_triage_candidate_open ON triage_candidate(source_time DESC) WHERE decision IS NULL;
 CREATE INDEX IF NOT EXISTS idx_triage_candidate_source ON triage_candidate(source, source_time DESC);
+CREATE INDEX IF NOT EXISTS idx_automations_due ON automations(status, next_run_at);
 -- idx_workspaces_kind + idx_workspaces_triage_source are created in
 -- `run_migrations` (after the ALTERs on upgraded DBs).
 
