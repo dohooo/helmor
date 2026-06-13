@@ -225,6 +225,64 @@ export function isRetryableCursorError(err: unknown, depth = 0): boolean {
 	return isRetryableCursorError(o.cause, depth + 1);
 }
 
+/// "Agent already has an active run" conflict (SDK AgentBusyError / 409). A run
+/// left non-terminal in the cwd-scoped local store — e.g. the worker was killed
+/// mid-turn before it could cancel — blocks every follow-up `agent.send`. The
+/// local store throws it as a plain `Error("Agent <id> already has active run")`;
+/// the cloud path wraps it as AgentBusyError. Match both, walking `cause`.
+export function isAgentBusyError(err: unknown, depth = 0): boolean {
+	if (!err || typeof err !== "object" || depth > 4) return false;
+	const o = err as {
+		name?: unknown;
+		errorName?: unknown;
+		message?: unknown;
+		cause?: unknown;
+	};
+	if (o.name === "AgentBusyError" || o.errorName === "AgentBusyError")
+		return true;
+	if (
+		typeof o.message === "string" &&
+		/already has (an )?active run/i.test(o.message)
+	)
+		return true;
+	return isAgentBusyError(o.cause, depth + 1);
+}
+
+/// Authentication failures (SDK AuthenticationError / 401). Raw ConnectErrors
+/// from the SDK's background streaming tasks surface as `[unauthenticated] …`
+/// and never get wrapped, so match by ConnectError `code` and message text in
+/// addition to the wrapped class name. Walks `cause`.
+const AUTH_ERROR_CODES = new Set([
+	"unauthenticated",
+	"unauthorized",
+	"permission_denied",
+]);
+
+export function isAuthError(err: unknown, depth = 0): boolean {
+	if (!err || typeof err !== "object" || depth > 4) return false;
+	const o = err as {
+		name?: unknown;
+		errorName?: unknown;
+		code?: unknown;
+		message?: unknown;
+		cause?: unknown;
+	};
+	if (o.name === "AuthenticationError" || o.errorName === "AuthenticationError")
+		return true;
+	if (typeof o.code === "string" && AUTH_ERROR_CODES.has(o.code.toLowerCase()))
+		return true;
+	if (typeof o.message === "string") {
+		const m = o.message.toLowerCase();
+		if (
+			m.includes("[unauthenticated]") ||
+			m.includes("[unauthorized]") ||
+			m.includes("invalid api key")
+		)
+			return true;
+	}
+	return isAuthError(o.cause, depth + 1);
+}
+
 // Test-only export.
 export const __CURSOR_INTERNAL = {
 	namespaceEvent,
@@ -235,4 +293,6 @@ export const __CURSOR_INTERNAL = {
 	toCursorMode,
 	extractCreatePlanText,
 	isRetryableCursorError,
+	isAgentBusyError,
+	isAuthError,
 };

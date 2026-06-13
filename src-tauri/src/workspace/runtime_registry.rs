@@ -63,6 +63,15 @@ pub enum StaleProcessVerdict {
     MaybeAlive,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeProcessIdentity {
+    pub repo_id: String,
+    pub workspace_id: Option<String>,
+    pub script_type: String,
+    pub pid: i32,
+    pub pgid: i32,
+}
+
 /// Persist a row for a freshly-spawned script/terminal process. The
 /// returned id is used by `record_ended` (and any future surface
 /// that wants to address the registry row directly).
@@ -108,26 +117,47 @@ pub fn record_ended(id: &str) -> Result<()> {
     Ok(())
 }
 
-/// Force-stamp every still-open row to `ended_at = now()` — used by
-/// the graceful-quit path so the next launch's classification sweep
-/// doesn't waste cycles probing PIDs that we already terminated via
-/// `kill_all`. Returns the number of rows stamped.
-pub fn record_all_ended() -> Result<usize> {
-    let conn =
-        db::write_conn().context("Failed to borrow write connection for runtime registry sweep")?;
-    record_all_ended_in(&conn)
+/// Stamp only the runtime rows that match process identities Helmor just
+/// proved gone, leaving prior maybe-alive stale rows open so the next
+/// startup can keep reporting them.
+pub fn record_processes_ended(processes: &[RuntimeProcessIdentity]) -> Result<usize> {
+    let conn = db::write_conn()
+        .context("Failed to borrow write connection for runtime registry process update")?;
+    record_processes_ended_in(&conn, processes)
 }
 
 // Caller-supplied connection so tests can drive it against an in-memory DB.
-pub fn record_all_ended_in(conn: &Connection) -> Result<usize> {
-    let affected = conn
-        .execute(
-            "UPDATE runtime_processes
-             SET ended_at = datetime('now')
-             WHERE ended_at IS NULL",
-            [],
-        )
-        .context("Failed to mark live runtime registry rows as ended")?;
+pub fn record_processes_ended_in(
+    conn: &Connection,
+    processes: &[RuntimeProcessIdentity],
+) -> Result<usize> {
+    let mut affected = 0;
+    for process in processes {
+        affected += conn
+            .execute(
+                "UPDATE runtime_processes
+                 SET ended_at = datetime('now')
+                 WHERE ended_at IS NULL
+                   AND repo_id = ?1
+                   AND ((?2 IS NULL AND workspace_id IS NULL) OR workspace_id = ?2)
+                   AND script_type = ?3
+                   AND pid = ?4
+                   AND pgid = ?5",
+                rusqlite::params![
+                    process.repo_id.as_str(),
+                    process.workspace_id.as_deref(),
+                    process.script_type.as_str(),
+                    process.pid as i64,
+                    process.pgid as i64,
+                ],
+            )
+            .with_context(|| {
+                format!(
+                    "Failed to mark runtime process {} ({}/{}) as ended",
+                    process.pid, process.repo_id, process.script_type
+                )
+            })?;
+    }
     Ok(affected)
 }
 
@@ -274,10 +304,32 @@ mod tests {
     use crate::testkit::TestEnv;
 
     fn seed_row(conn: &Connection, id: &str, pid: i32, pgid: i32, ended_at: Option<&str>) {
+        seed_identity_row(conn, id, "r1", Some("w1"), "run", pid, pgid, ended_at);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn seed_identity_row(
+        conn: &Connection,
+        id: &str,
+        repo_id: &str,
+        workspace_id: Option<&str>,
+        script_type: &str,
+        pid: i32,
+        pgid: i32,
+        ended_at: Option<&str>,
+    ) {
         conn.execute(
             "INSERT INTO runtime_processes (id, repo_id, workspace_id, script_type, pid, pgid, ended_at)
-             VALUES (?1, 'r1', 'w1', 'run', ?2, ?3, ?4)",
-            rusqlite::params![id, pid as i64, pgid as i64, ended_at],
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                id,
+                repo_id,
+                workspace_id,
+                script_type,
+                pid as i64,
+                pgid as i64,
+                ended_at
+            ],
         )
         .unwrap();
     }
@@ -332,27 +384,68 @@ mod tests {
     }
 
     #[test]
-    fn record_all_ended_stamps_only_live_rows() {
+    fn record_processes_ended_only_stamps_matching_identities() {
         let conn = fresh_db();
-        seed_row(&conn, "live-1", 100, 100, None);
-        seed_row(&conn, "live-2", 200, 200, None);
-        seed_row(
+        seed_identity_row(&conn, "match", "r1", Some("w1"), "run", 100, 100, None);
+        seed_identity_row(
             &conn,
-            "already-ended",
-            300,
-            300,
-            Some("2026-01-01T00:00:00Z"),
+            "different-pid",
+            "r1",
+            Some("w1"),
+            "run",
+            101,
+            100,
+            None,
         );
+        seed_identity_row(
+            &conn,
+            "different-ws",
+            "r1",
+            Some("w2"),
+            "run",
+            100,
+            100,
+            None,
+        );
+        seed_identity_row(
+            &conn,
+            "different-repo",
+            "r2",
+            Some("w1"),
+            "run",
+            100,
+            100,
+            None,
+        );
+        seed_identity_row(&conn, "no-workspace", "r1", None, "run", 200, 200, None);
 
-        let affected = record_all_ended_in(&conn).unwrap();
+        let affected = record_processes_ended_in(
+            &conn,
+            &[
+                RuntimeProcessIdentity {
+                    repo_id: "r1".to_string(),
+                    workspace_id: Some("w1".to_string()),
+                    script_type: "run".to_string(),
+                    pid: 100,
+                    pgid: 100,
+                },
+                RuntimeProcessIdentity {
+                    repo_id: "r1".to_string(),
+                    workspace_id: None,
+                    script_type: "run".to_string(),
+                    pid: 200,
+                    pgid: 200,
+                },
+            ],
+        )
+        .unwrap();
+
         assert_eq!(affected, 2);
-        // Pre-stamped row's `ended_at` stays at the seed value.
-        assert_eq!(
-            read_ended_at(&conn, "already-ended").as_deref(),
-            Some("2026-01-01T00:00:00Z")
-        );
-        assert!(read_ended_at(&conn, "live-1").is_some());
-        assert!(read_ended_at(&conn, "live-2").is_some());
+        assert!(read_ended_at(&conn, "match").is_some());
+        assert!(read_ended_at(&conn, "no-workspace").is_some());
+        assert!(read_ended_at(&conn, "different-pid").is_none());
+        assert!(read_ended_at(&conn, "different-ws").is_none());
+        assert!(read_ended_at(&conn, "different-repo").is_none());
     }
 
     // ── classify_stale_processes ──────────────────────────────────────

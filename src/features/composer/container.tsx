@@ -24,6 +24,7 @@ import type {
 import {
 	createSession,
 	findProviderCapabilities,
+	getMimoCustomProviders,
 	getOpencodeCustomProviders,
 	mutateCodexGoal,
 	saveAutoCloseActionKinds,
@@ -48,7 +49,7 @@ import {
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
 import { readSessionThread } from "@/lib/session-thread-cache";
-import { useSettings } from "@/lib/settings";
+import { type ModelRef, useSettings } from "@/lib/settings";
 import type { QueuedSubmit } from "@/lib/use-submit-queue";
 import { cn } from "@/lib/utils";
 import {
@@ -108,7 +109,8 @@ const OPENCODE_COMPACT_COMMAND: SlashCommandEntry = {
 	name: "compact",
 	description: "Compact this conversation's context",
 	source: "builtin",
-	providers: ["opencode"],
+	// MiMo Code is an opencode-protocol fork; same /compact wire path.
+	providers: ["opencode", "mimo"],
 };
 
 const CODEX_GOAL_COMMAND: SlashCommandEntry = {
@@ -179,12 +181,16 @@ type WorkspaceComposerContainerProps = {
 	pendingPermission?: PendingPermission | null;
 	onPermissionResponse?: PermissionPanelProps["onResponse"];
 	hasPlanReview?: boolean;
-	modelSelections: Record<string, string>;
+	modelSelections: Record<string, ModelRef>;
 	effortLevels: Record<string, string>;
 	permissionModes: Record<string, string>;
 	fastModes: Record<string, boolean>;
 	activeFastPreludes?: Record<string, boolean>;
-	onSelectModel: (contextKey: string, modelId: string) => void;
+	onSelectModel: (
+		contextKey: string,
+		modelId: string,
+		provider: string | null,
+	) => void;
 	onSelectEffort: (contextKey: string, level: string) => void;
 	onChangePermissionMode: (contextKey: string, mode: string) => void;
 	onChangeFastMode: (contextKey: string, enabled: boolean) => void;
@@ -527,6 +533,15 @@ export const WorkspaceComposerContainer = memo(
 		});
 		const hasOpencodeCustomProviders =
 			(opencodeCustomProvidersQuery.data?.length ?? 0) > 0;
+		// Same jump for the MiMo Code section.
+		const mimoSectionPresent = modelSections.some((s) => s.id === "mimo");
+		const mimoCustomProvidersQuery = useQuery({
+			queryKey: helmorQueryKeys.mimoCustomProviders,
+			queryFn: getMimoCustomProviders,
+			enabled: mimoSectionPresent,
+		});
+		const hasMimoCustomProviders =
+			(mimoCustomProvidersQuery.data?.length ?? 0) > 0;
 		const currentSession =
 			(sessionsQuery.data ?? []).find(
 				(session) => session.id === displayedSessionId,
@@ -534,16 +549,21 @@ export const WorkspaceComposerContainer = memo(
 		const composerContextKey =
 			contextKeyOverride ??
 			getComposerContextKey(displayedWorkspaceId, displayedSessionId);
-		const selectedModelId = resolveSessionSelectedModelId({
+		const selectedRef = resolveSessionSelectedModelId({
 			session: currentSession,
 			modelSelections,
 			modelSections,
-			settingsDefaultModelId: settings.defaultModelId,
+			settingsDefaultModel: settings.defaultModel,
 			contextKey: composerContextKey,
 		});
 		const selectedModel = useMemo(
-			() => findModelOption(modelSections, selectedModelId),
-			[modelSections, selectedModelId],
+			() =>
+				findModelOption(
+					modelSections,
+					selectedRef?.modelId ?? null,
+					selectedRef?.provider,
+				),
+			[modelSections, selectedRef?.modelId, selectedRef?.provider],
 		);
 		const shortcutConflicts = useMemo(
 			() => getShortcutConflicts(settings.shortcuts),
@@ -573,7 +593,8 @@ export const WorkspaceComposerContainer = memo(
 			? null
 			: getShortcut(settings.shortcuts, "composer.toggleContextPanel");
 		const effectiveModel = selectedModel;
-		const effectiveSelectedModelId = effectiveModel?.id ?? selectedModelId;
+		const effectiveSelectedModelId =
+			effectiveModel?.id ?? selectedRef?.modelId ?? null;
 		const provider =
 			effectiveModel?.provider ?? currentSession?.agentType ?? "claude";
 		// "User-configured" = the session row carries an explicit model. Fresh
@@ -673,10 +694,15 @@ export const WorkspaceComposerContainer = memo(
 		]);
 
 		const handleModelSelect = useCallback(
-			async (modelId: string) => {
-				const newModel = findModelOption(modelSections, modelId);
+			async (modelId: string, pickedProvider: string | null) => {
 				const currentProvider = provider;
-				const newProvider = newModel?.provider;
+				// Provider comes straight from the picked option — opencode and
+				// mimo share a slug namespace, so re-deriving it from the id alone
+				// would resolve to the wrong section.
+				const newProvider =
+					pickedProvider ??
+					findModelOption(modelSections, modelId)?.provider ??
+					null;
 
 				// Only create a new session when provider changes AND the session
 				// already has messages. New/empty sessions just switch in-place.
@@ -712,14 +738,14 @@ export const WorkspaceComposerContainer = memo(
 							displayedWorkspaceId,
 							newSessionId,
 						);
-						onSelectModel(newContextKey, modelId);
+						onSelectModel(newContextKey, modelId, newProvider);
 						return;
 					} catch {
 						// Fall through to just update model
 					}
 				}
 
-				onSelectModel(composerContextKey, modelId);
+				onSelectModel(composerContextKey, modelId, newProvider);
 			},
 			[
 				modelSections,
@@ -748,7 +774,10 @@ export const WorkspaceComposerContainer = memo(
 		// cursor sessions as claude — the Rust cache then served cached
 		// claude skills back to the cursor popup. Keep cursor explicit.
 		const slashProvider: AgentProvider =
-			provider === "codex" || provider === "cursor" || provider === "opencode"
+			provider === "codex" ||
+			provider === "cursor" ||
+			provider === "opencode" ||
+			provider === "mimo"
 				? provider
 				: "claude";
 		// Prefer the repoId from a real workspace; on the start page there's no
@@ -1114,8 +1143,8 @@ export const WorkspaceComposerContainer = memo(
 		]);
 
 		const handleSelectModelInner = useCallback(
-			(modelId: string) => {
-				void handleModelSelect(modelId);
+			(modelId: string, provider: string | null) => {
+				void handleModelSelect(modelId, provider);
 			},
 			[handleModelSelect],
 		);
@@ -1297,7 +1326,9 @@ export const WorkspaceComposerContainer = memo(
 									? "cursor"
 									: effectiveModel?.provider === "opencode"
 										? "opencode"
-										: "claude"
+										: effectiveModel?.provider === "mimo"
+											? "mimo"
+											: "claude"
 						}
 						focusShortcut={focusShortcut}
 						togglePlanShortcut={togglePlanShortcut}
@@ -1313,8 +1344,10 @@ export const WorkspaceComposerContainer = memo(
 						onStop={onStop}
 						sending={sending}
 						selectedModelId={effectiveSelectedModelId}
+						selectedModelProvider={effectiveModel?.provider ?? null}
 						modelSections={modelSections}
 						hasOpencodeCustomProviders={hasOpencodeCustomProviders}
+						hasMimoCustomProviders={hasMimoCustomProviders}
 						modelsLoading={modelsLoading}
 						onSelectModel={handleSelectModelInner}
 						provider={provider}

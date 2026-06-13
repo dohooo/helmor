@@ -44,18 +44,20 @@ fn detect_title_providers() -> Vec<String> {
         "app.review_model_id",
         "app.default_model_id",
     ] {
-        let Ok(Some(model_id)) = crate::settings::load_setting_value(key) else {
+        let Ok(Some(raw)) = crate::settings::load_setting_value(key) else {
             continue;
         };
-        let trimmed = model_id.trim();
-        if trimmed.is_empty() {
+        let Some(stored) = super::model_ref::parse_stored_model(&raw) else {
             continue;
-        }
-        let provider = super::catalog::resolve_model(trimmed, None).provider;
+        };
+        // New `{provider, modelId}` form carries the provider; legacy bare ids
+        // fall back to the resolve_model heuristic (provider hint = None).
+        let provider =
+            super::catalog::resolve_model(&stored.model_id, stored.provider.as_deref()).provider;
         if !providers.contains(&provider) {
             tracing::debug!(
                 setting = key,
-                model_id = trimmed,
+                model_id = stored.model_id,
                 provider = %provider,
                 "detect_title_providers: provider from configured model"
             );
@@ -78,6 +80,7 @@ fn build_title_attempts() -> Vec<Value> {
         .into_iter()
         .next();
     let opencode_custom = first_opencode_custom_model();
+    let mimo_custom = first_mimo_custom_model();
     let mut attempts: Vec<Value> = Vec::new();
     for provider in detect_title_providers() {
         // A provider's custom model (if the user configured one) is tried
@@ -103,6 +106,14 @@ fn build_title_attempts() -> Vec<Value> {
                     }));
                 }
             }
+            "mimo" => {
+                if let Some(slug) = &mimo_custom {
+                    attempts.push(serde_json::json!({
+                        "provider": "mimo",
+                        "model": slug,
+                    }));
+                }
+            }
             _ => {}
         }
         // Provider's own fast/default model. For claude this is the
@@ -116,7 +127,17 @@ fn build_title_attempts() -> Vec<Value> {
 /// `provider/model` slug (e.g. `hundun/deepseek-v4-flash`). `None` when no
 /// custom opencode provider is set up.
 fn first_opencode_custom_model() -> Option<String> {
-    let providers = super::opencode_config::read_custom_providers().ok()?;
+    first_slug_custom_model(super::opencode_config::read_custom_providers().ok()?)
+}
+
+/// Same, for MiMo Code's `mimocode.json`.
+fn first_mimo_custom_model() -> Option<String> {
+    first_slug_custom_model(super::opencode_config::read_mimo_custom_providers().ok()?)
+}
+
+fn first_slug_custom_model(
+    providers: Vec<super::opencode_config::OpencodeCustomProvider>,
+) -> Option<String> {
     let provider = providers.into_iter().next()?;
     let model = provider.models.into_iter().next()?;
     Some(format!("{}/{}", provider.id, model.id))
@@ -1296,7 +1317,8 @@ fn parse_cursor_parameters(arr: &[Value]) -> Vec<CursorModelParameter> {
         .collect()
 }
 
-// opencode model list — proxied to the sidecar's `client.provider.list()`
+// opencode-protocol model list (opencode + mimo) — proxied to the sidecar's
+// `client.provider.list()`
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1315,11 +1337,26 @@ pub fn fetch_opencode_models(
     sidecar: &crate::sidecar::ManagedSidecar,
     force_reload: bool,
 ) -> CmdResult<Vec<OpencodeModelEntry>> {
+    fetch_slug_models(sidecar, "opencode", force_reload)
+}
+
+pub fn fetch_mimo_models(
+    sidecar: &crate::sidecar::ManagedSidecar,
+    force_reload: bool,
+) -> CmdResult<Vec<OpencodeModelEntry>> {
+    fetch_slug_models(sidecar, "mimo", force_reload)
+}
+
+fn fetch_slug_models(
+    sidecar: &crate::sidecar::ManagedSidecar,
+    provider: &str,
+    force_reload: bool,
+) -> CmdResult<Vec<OpencodeModelEntry>> {
     let request_id = Uuid::new_v4().to_string();
     let sidecar_req = crate::sidecar::SidecarRequest {
         id: request_id.clone(),
         method: "listModels".to_string(),
-        params: serde_json::json!({ "provider": "opencode", "forceReload": force_reload }),
+        params: serde_json::json!({ "provider": provider, "forceReload": force_reload }),
     };
 
     let rx = sidecar.subscribe(&request_id);
@@ -1378,13 +1415,13 @@ pub fn fetch_opencode_models(
             },
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 error = Some(format!(
-                    "opencode model list timed out after {}s",
+                    "{provider} model list timed out after {}s",
                     LIST_OPENCODE_MODELS_TIMEOUT.as_secs()
                 ));
                 break;
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                error = Some("Sidecar disconnected during opencode model list".to_string());
+                error = Some(format!("Sidecar disconnected during {provider} model list"));
                 break;
             }
         }
@@ -1642,6 +1679,30 @@ mod tests {
             detect_title_providers(),
             vec!["claude".to_string(), "cursor".to_string()]
         );
+
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    #[test]
+    fn detect_title_providers_uses_stored_provider_for_slug_models() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+        setup_test_db(dir.path());
+
+        // New JSON form pins the provider → a mimo slug resolves to mimo, NOT
+        // opencode (the bare-slug heuristic would have misrouted it).
+        crate::settings::upsert_setting_value(
+            "app.default_model_id",
+            r#"{"provider":"mimo","modelId":"xiaomi/mimo-v2.5-pro"}"#,
+        )
+        .unwrap();
+        assert_eq!(detect_title_providers(), vec!["mimo".to_string()]);
+
+        // Legacy bare slug still falls back to the heuristic (opencode).
+        crate::settings::upsert_setting_value("app.default_model_id", "anthropic/claude-opus-4-5")
+            .unwrap();
+        assert_eq!(detect_title_providers(), vec!["opencode".to_string()]);
 
         std::env::remove_var("HELMOR_DATA_DIR");
     }

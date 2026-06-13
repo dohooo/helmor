@@ -29,6 +29,7 @@ import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator"
 import {
 	ClaudeIcon,
 	CursorIcon,
+	MiMoCodeIcon,
 	OpenAIIcon,
 	OpenCodeIcon,
 } from "@/components/icons";
@@ -241,7 +242,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 				>
 					<TrafficLightSpacer
 						side="left"
-						width={60}
+						width={48}
 						className="hidden max-[960px]:block"
 					/>
 					{headerLeading}
@@ -668,7 +669,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 															) : null}
 														</span>
 														{!isEditing ? (
-															<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible group-focus-within/tab:pointer-events-auto group-focus-within/tab:visible">
+															<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible">
 																<span
 																	role="button"
 																	aria-label="Rename session"
@@ -867,6 +868,9 @@ function SessionProviderIcon({
 	}
 	if (agentType === "opencode") {
 		return <OpenCodeIcon className="size-3 shrink-0 text-muted-foreground" />;
+	}
+	if (agentType === "mimo") {
+		return <MiMoCodeIcon className="size-3 shrink-0 text-muted-foreground" />;
 	}
 	return <ClaudeIcon className="size-3 shrink-0 text-muted-foreground" />;
 }

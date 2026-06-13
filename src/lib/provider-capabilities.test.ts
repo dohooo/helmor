@@ -109,6 +109,7 @@ describe("DEFAULT_PROVIDER_CAPABILITIES (cold-start initialData)", () => {
 			"codex",
 			"cursor",
 			"opencode",
+			"mimo",
 		]);
 	});
 
@@ -148,6 +149,15 @@ describe("DEFAULT_PROVIDER_CAPABILITIES (cold-start initialData)", () => {
 		expect(opencode?.supportsContextUsage).toBe(true);
 		expect(opencode?.supportsActiveGoal).toBe(false);
 		expect(opencode?.requiresApiKey).toBe(false);
+		// MiMo Code (opencode-protocol fork) mirrors OpenCode's capability row.
+		const mimo = findProviderCapabilities(
+			DEFAULT_PROVIDER_CAPABILITIES,
+			"mimo",
+		);
+		expect(mimo?.displayName).toBe("MiMo Code");
+		expect(mimo?.supportsContextUsage).toBe(true);
+		expect(mimo?.supportsActiveGoal).toBe(false);
+		expect(mimo?.requiresApiKey).toBe(false);
 	});
 
 	it("is wired as the query's initialData so the cold-start window is closed", () => {

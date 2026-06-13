@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { matchesOrphanedServe, matchesServeOnPort } from "./opencode-server.js";
+import { matchesOrphanedServe, matchesServeOnPort } from "./server.js";
 
 const HELMOR_BIN =
 	"/Applications/Helmor.app/Contents/Resources/vendor/opencode/opencode";
