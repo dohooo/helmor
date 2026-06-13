@@ -69,7 +69,7 @@ export function WorkspaceHeaderActions({
 	return (
 		<div className="flex items-center gap-1">
 			{hasEditorActions ? (
-				<div className="flex -translate-x-2 items-center gap-0 max-[640px]:hidden">
+				<div className="flex -translate-x-[9px] items-center gap-0 max-[640px]:hidden">
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<Button
