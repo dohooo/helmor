@@ -529,7 +529,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const showFocusHint =
 		!isInputFocused && !hasContent && !inputDisabled && Boolean(focusShortcut);
 	const showTerminalDirectiveHint =
-		terminalDirectiveState.emptyAfter && !inputDisabled;
+		terminalDirectiveState.emptyAfter && !hasContent && !inputDisabled;
+	const showEditorPlaceholder = !hasContent && !showTerminalDirectiveHint;
 
 	// Lexical initial config — must be a new object per mount for key resets
 	const initialConfig = useRef({
@@ -896,12 +897,14 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										/>
 									}
 									placeholder={
-										<div className="pointer-events-none absolute left-0 top-0 text-body leading-5 tracking-[-0.01em] text-muted-foreground/70">
-											{hasPlanReview && permissionMode === "plan"
-												? "Describe what to change, then click Request Changes"
-												: (placeholder ??
-													"Ask to make changes, @mention files, run /commands")}
-										</div>
+										showEditorPlaceholder ? (
+											<div className="pointer-events-none absolute left-0 top-0 text-body leading-5 tracking-[-0.01em] text-muted-foreground/70">
+												{hasPlanReview && permissionMode === "plan"
+													? "Describe what to change, then click Request Changes"
+													: (placeholder ??
+														"Ask to make changes, @mention files, run /commands")}
+											</div>
+										) : null
 									}
 									ErrorBoundary={LexicalErrorBoundary}
 								/>

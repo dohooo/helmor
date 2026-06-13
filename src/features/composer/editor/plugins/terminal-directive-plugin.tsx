@@ -14,11 +14,22 @@ import {
 	type TextNode,
 } from "lexical";
 import { useEffect } from "react";
+import { $isCustomTagBadgeNode } from "../custom-tag-badge-node";
+import { $isFileBadgeNode } from "../file-badge-node";
+import { $isImageBadgeNode } from "../image-badge-node";
 import {
 	$createTerminalDirectiveNode,
 	$isTerminalDirectiveNode,
 	TerminalDirectiveNode,
 } from "../terminal-directive-node";
+
+function $isBadgeNode(node: import("lexical").LexicalNode): boolean {
+	return (
+		$isImageBadgeNode(node) ||
+		$isFileBadgeNode(node) ||
+		$isCustomTagBadgeNode(node)
+	);
+}
 
 function $findBangTrigger(): TextNode | null {
 	const root = $getRoot();
@@ -47,6 +58,7 @@ function $readTerminalDirectiveState(): TerminalDirectiveState {
 			continue;
 		}
 		if (!$isElementNode(child)) {
+			if ($isBadgeNode(child)) hasMeaningfulContent = true;
 			if (child.getTextContent().trim()) hasMeaningfulContent = true;
 			continue;
 		}
@@ -56,6 +68,10 @@ function $readTerminalDirectiveState(): TerminalDirectiveState {
 				continue;
 			}
 			if ($isLineBreakNode(desc)) continue;
+			if ($isBadgeNode(desc)) {
+				hasMeaningfulContent = true;
+				continue;
+			}
 			if (desc.getTextContent().trim()) {
 				hasMeaningfulContent = true;
 			}
