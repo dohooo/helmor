@@ -878,22 +878,23 @@ pub fn run() {
     });
 }
 
-/// Headless `helmor serve` host: build the windowless app (whose serve-mode
-/// setup hook starts the companion server bound to `0.0.0.0:$PORT`) and park
-/// the main thread. The S1 spike proved the companion server, RPC dispatch, and
-/// DB access all work without pumping the Wry event loop, so we deliberately do
-/// not call `app.run()` — we just keep the process (and its spawned tasks)
-/// alive. In a container the boot script starts an Xvfb display first so the
-/// GTK/WebKit runtime the binary links against can initialise.
+/// Headless `helmor serve` host: build the windowless app and run its event
+/// loop. The serve-mode `setup` hook (which runs `init_core` and binds the
+/// companion server on `0.0.0.0:$PORT`) only fires once the event loop starts,
+/// so we must call `app.run()` — parking the main thread alone never triggers
+/// setup, leaving the process alive but uninitialised. The app has no windows,
+/// so `prevent_exit` keeps it running if the runtime ever signals an exit. In a
+/// container the boot script starts an Xvfb display first so the GTK/WebKit
+/// runtime the binary links against can initialise.
 pub fn serve() {
     system_limits::raise_nofile_soft_limit();
-    // Held for the lifetime of the process; dropping it would tear down the
-    // managed state and the companion server.
-    let _app = build_app(AppMode::Serve);
-    tracing::info!("helmor serve: headless host up; parking main thread");
-    loop {
-        std::thread::park();
-    }
+    let app = build_app(AppMode::Serve);
+    tracing::info!("helmor serve: headless host up; running event loop");
+    app.run(|_app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { api, .. } = event {
+            api.prevent_exit();
+        }
+    });
 }
 
 // Route a user-initiated exit through the frontend quit-confirm flow.
