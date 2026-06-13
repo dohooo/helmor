@@ -24,6 +24,7 @@ import type {
 import {
 	createSession,
 	findProviderCapabilities,
+	getMimoCustomProviders,
 	getOpencodeCustomProviders,
 	mutateCodexGoal,
 	saveAutoCloseActionKinds,
@@ -108,7 +109,8 @@ const OPENCODE_COMPACT_COMMAND: SlashCommandEntry = {
 	name: "compact",
 	description: "Compact this conversation's context",
 	source: "builtin",
-	providers: ["opencode"],
+	// MiMo Code is an opencode-protocol fork; same /compact wire path.
+	providers: ["opencode", "mimo"],
 };
 
 const CODEX_GOAL_COMMAND: SlashCommandEntry = {
@@ -527,6 +529,15 @@ export const WorkspaceComposerContainer = memo(
 		});
 		const hasOpencodeCustomProviders =
 			(opencodeCustomProvidersQuery.data?.length ?? 0) > 0;
+		// Same jump for the MiMo Code section.
+		const mimoSectionPresent = modelSections.some((s) => s.id === "mimo");
+		const mimoCustomProvidersQuery = useQuery({
+			queryKey: helmorQueryKeys.mimoCustomProviders,
+			queryFn: getMimoCustomProviders,
+			enabled: mimoSectionPresent,
+		});
+		const hasMimoCustomProviders =
+			(mimoCustomProvidersQuery.data?.length ?? 0) > 0;
 		const currentSession =
 			(sessionsQuery.data ?? []).find(
 				(session) => session.id === displayedSessionId,
@@ -748,7 +759,10 @@ export const WorkspaceComposerContainer = memo(
 		// cursor sessions as claude — the Rust cache then served cached
 		// claude skills back to the cursor popup. Keep cursor explicit.
 		const slashProvider: AgentProvider =
-			provider === "codex" || provider === "cursor" || provider === "opencode"
+			provider === "codex" ||
+			provider === "cursor" ||
+			provider === "opencode" ||
+			provider === "mimo"
 				? provider
 				: "claude";
 		// Prefer the repoId from a real workspace; on the start page there's no
@@ -1297,7 +1311,9 @@ export const WorkspaceComposerContainer = memo(
 									? "cursor"
 									: effectiveModel?.provider === "opencode"
 										? "opencode"
-										: "claude"
+										: effectiveModel?.provider === "mimo"
+											? "mimo"
+											: "claude"
 						}
 						focusShortcut={focusShortcut}
 						togglePlanShortcut={togglePlanShortcut}
@@ -1315,6 +1331,7 @@ export const WorkspaceComposerContainer = memo(
 						selectedModelId={effectiveSelectedModelId}
 						modelSections={modelSections}
 						hasOpencodeCustomProviders={hasOpencodeCustomProviders}
+						hasMimoCustomProviders={hasMimoCustomProviders}
 						modelsLoading={modelsLoading}
 						onSelectModel={handleSelectModelInner}
 						provider={provider}

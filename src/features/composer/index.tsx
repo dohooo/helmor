@@ -138,6 +138,7 @@ type WorkspaceComposerProps = {
 	modelSections: AgentModelSection[];
 	/** false → OpenCode picker shows an "Add custom model…" jump. */
 	hasOpencodeCustomProviders?: boolean;
+	hasMimoCustomProviders?: boolean;
 	modelsLoading?: boolean;
 	onSelectModel: (modelId: string) => void;
 	provider?: string;
@@ -206,7 +207,7 @@ type WorkspaceComposerProps = {
 	 *  and selects which rate-limits API to query. `"cursor"` exists but
 	 *  Cursor's SDK doesn't expose rate-limit / context-usage endpoints
 	 *  yet, so the indicators just hide for cursor sessions. */
-	agentType?: "claude" | "codex" | "cursor" | "opencode" | null;
+	agentType?: "claude" | "codex" | "cursor" | "opencode" | "mimo" | null;
 	focusShortcut?: string | null;
 	togglePlanShortcut?: string | null;
 	toggleTerminalShortcut?: string | null;
@@ -293,6 +294,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	selectedModelId,
 	modelSections,
 	hasOpencodeCustomProviders = false,
+	hasMimoCustomProviders = false,
 	modelsLoading = false,
 	onSelectModel,
 	provider: _provider = "claude",
@@ -1085,8 +1087,10 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 																</span>
 															</DropdownMenuItem>
 														) : null}
-														{section.id === "opencode" &&
-														!hasOpencodeCustomProviders ? (
+														{(section.id === "opencode" &&
+															!hasOpencodeCustomProviders) ||
+														(section.id === "mimo" &&
+															!hasMimoCustomProviders) ? (
 															<DropdownMenuItem
 																onClick={handleOpenProviderSettings}
 																className="flex items-center gap-3"

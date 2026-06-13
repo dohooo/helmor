@@ -323,6 +323,8 @@ export type AppSettings = {
 	claudeCustomProviders: ClaudeCustomProviderSettings;
 	cursorProvider: CursorProviderSettings;
 	opencodeProvider: OpencodeProviderSettings;
+	/** MiMo Code (opencode-protocol fork) — same settings shape. */
+	mimoProvider: OpencodeProviderSettings;
 	agentProxy: AgentProxySettings;
 	localLlm: LocalLlmSettings;
 	inboxSourceConfig: InboxSourceConfig;
@@ -426,6 +428,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		cachedModels: null,
 	},
 	opencodeProvider: {
+		status: "unavailable",
+		connected: [],
+		cachedModels: null,
+		enabledModelIds: null,
+	},
+	mimoProvider: {
 		status: "unavailable",
 		connected: [],
 		cachedModels: null,
@@ -596,6 +604,7 @@ const SETTINGS_KEY_MAP: Record<
 	claudeCustomProviders: "app.claude_custom_providers",
 	cursorProvider: "app.cursor_provider",
 	opencodeProvider: "app.opencode_provider",
+	mimoProvider: "app.mimo_provider",
 	agentProxy: "app.agent_proxy",
 	localLlm: "app.local_llm",
 	inboxSourceConfig: "app.inbox_source_config",
@@ -967,10 +976,12 @@ function parseCursorProviderSettings(
 	}
 }
 
-function parseOpencodeProviderSettings(
+// Shared by opencodeProvider and mimoProvider — same persisted shape.
+function parseSlugProviderSettings(
 	raw: string | undefined,
+	fallback: OpencodeProviderSettings,
 ): OpencodeProviderSettings {
-	if (!raw) return DEFAULT_SETTINGS.opencodeProvider;
+	if (!raw) return fallback;
 	try {
 		const parsed = JSON.parse(raw) as Record<string, unknown>;
 		return {
@@ -982,7 +993,7 @@ function parseOpencodeProviderSettings(
 				typeof parsed.cacheVersion === "number" ? parsed.cacheVersion : 0,
 		};
 	} catch {
-		return DEFAULT_SETTINGS.opencodeProvider;
+		return fallback;
 	}
 }
 
@@ -1320,8 +1331,13 @@ export async function loadSettings(): Promise<AppSettings> {
 			cursorProvider: parseCursorProviderSettings(
 				raw[SETTINGS_KEY_MAP.cursorProvider],
 			),
-			opencodeProvider: parseOpencodeProviderSettings(
+			opencodeProvider: parseSlugProviderSettings(
 				raw[SETTINGS_KEY_MAP.opencodeProvider],
+				DEFAULT_SETTINGS.opencodeProvider,
+			),
+			mimoProvider: parseSlugProviderSettings(
+				raw[SETTINGS_KEY_MAP.mimoProvider],
+				DEFAULT_SETTINGS.mimoProvider,
 			),
 			agentProxy: parseAgentProxySettings(raw[SETTINGS_KEY_MAP.agentProxy]),
 			localLlm: parseLocalLlmSettings(raw[SETTINGS_KEY_MAP.localLlm]),
@@ -1371,6 +1387,7 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 				key === "claudeCustomProviders" ||
 				key === "cursorProvider" ||
 				key === "opencodeProvider" ||
+				key === "mimoProvider" ||
 				key === "agentProxy" ||
 				key === "localLlm" ||
 				key === "inboxSourceConfig" ||

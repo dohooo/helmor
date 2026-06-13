@@ -435,4 +435,34 @@ describe("settings", () => {
 			"xhigh",
 		]);
 	});
+
+	it("round-trips mimoProvider the same way as opencodeProvider", async () => {
+		invokeMock.mockResolvedValue({
+			"app.mimo_provider": JSON.stringify({
+				status: "ready",
+				connected: ["xiaomi"],
+				cachedModels: [
+					{
+						slug: "xiaomi/mimo-1",
+						label: "Xiaomi · MiMo 1",
+						effortLevels: ["low", "medium", "high"],
+					},
+				],
+				enabledModelIds: ["xiaomi/mimo-1"],
+				cacheVersion: 1,
+			}),
+		});
+
+		const settings = await loadSettings();
+
+		expect(settings.mimoProvider.status).toBe("ready");
+		expect(settings.mimoProvider.connected).toEqual(["xiaomi"]);
+		expect(settings.mimoProvider.enabledModelIds).toEqual(["xiaomi/mimo-1"]);
+		expect(settings.mimoProvider.cacheVersion).toBe(1);
+		expect(settings.mimoProvider.cachedModels?.[0]?.effortLevels).toEqual([
+			"low",
+			"medium",
+			"high",
+		]);
+	});
 });

@@ -944,6 +944,23 @@ describe("resolveSessionDisplayProvider", () => {
 		).toBe("opencode");
 	});
 
+	it("keeps the mimo icon regardless of the selected sub-provider model", () => {
+		expect(
+			resolveSessionDisplayProvider({
+				session: {
+					id: "session-2",
+					agentType: "mimo",
+					model: null,
+					lastUserMessageAt: null,
+				},
+				modelSelections: {
+					"session:session-2": "gpt-4o",
+				},
+				modelSections: MODEL_SECTIONS,
+			}),
+		).toBe("mimo");
+	});
+
 	it("falls back to the selected model's provider when the session has no agent", () => {
 		expect(
 			resolveSessionDisplayProvider({
