@@ -282,6 +282,9 @@ export type AppSettings = {
 	/** Shows the Terminal-Mode toggle in the composer; sending with it on
 	 *  opens the prompt in an agent TUI instead of a GUI session. */
 	enableTerminalMode: boolean;
+	/** When true, skip the heads-up dialog shown before sending a conversation
+	 *  with history to the terminal (new Terminal session + resume). */
+	suppressTerminalResumeWarning: boolean;
 	lastWorkspaceId: string | null;
 	lastSessionId: string | null;
 	lastSurface: AppSurface;
@@ -400,6 +403,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	notificationSound: "off",
 	terminalHoverExpansion: true,
 	enableTerminalMode: false,
+	suppressTerminalResumeWarning: false,
 	lastWorkspaceId: null,
 	lastSessionId: null,
 	lastSurface: "workspace",
@@ -585,6 +589,7 @@ const SETTINGS_KEY_MAP: Record<
 	notificationSound: "app.notification_sound",
 	terminalHoverExpansion: "app.terminal_hover_expansion",
 	enableTerminalMode: "app.enable_terminal_mode",
+	suppressTerminalResumeWarning: "app.suppress_terminal_resume_warning",
 	lastWorkspaceId: "app.last_workspace_id",
 	lastSessionId: "app.last_session_id",
 	lastSurface: "app.last_surface",
@@ -1280,6 +1285,8 @@ export async function loadSettings(): Promise<AppSettings> {
 					? raw[SETTINGS_KEY_MAP.terminalHoverExpansion] === "true"
 					: DEFAULT_SETTINGS.terminalHoverExpansion,
 			enableTerminalMode: raw[SETTINGS_KEY_MAP.enableTerminalMode] === "true",
+			suppressTerminalResumeWarning:
+				raw[SETTINGS_KEY_MAP.suppressTerminalResumeWarning] === "true",
 			lastWorkspaceId: raw[SETTINGS_KEY_MAP.lastWorkspaceId] || null,
 			lastSessionId: raw[SETTINGS_KEY_MAP.lastSessionId] || null,
 			lastSurface:

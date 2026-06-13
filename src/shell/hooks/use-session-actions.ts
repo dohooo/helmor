@@ -44,6 +44,7 @@ export function useSessionActions({
 	queryClient,
 	selectionActions,
 	requestCloseSession,
+	confirmTerminalResume,
 	handleSelectSession,
 	pushWorkspaceToast,
 	workspaceViewMode,
@@ -51,6 +52,9 @@ export function useSessionActions({
 	queryClient: QueryClient;
 	selectionActions: SelectionActions;
 	requestCloseSession: (request: SessionCloseRequest) => Promise<void>;
+	/** Gate a conversation-with-history → terminal resume behind the heads-up
+	 *  dialog (skipped when the user opted out). */
+	confirmTerminalResume: (provider: string, run: () => void) => void;
 	handleSelectSession: (sessionId: string | null) => void;
 	pushWorkspaceToast: PushWorkspaceToast;
 	workspaceViewMode: string;
@@ -199,11 +203,12 @@ export function useSessionActions({
 		[handleSelectSession, pushWorkspaceToast, queryClient, selectionActions],
 	);
 
-	// Composer Terminal-Mode submit → convert the composer's CURRENT session into
-	// a Terminal session IN PLACE (one-way) and boot the provider's TUI. A
-	// session that already ran a turn resumes by its provider session id so the
-	// same conversation continues (the typed prompt rides along as the resumed
-	// turn); an empty one boots fresh with the prompt.
+	// Composer Terminal-Mode submit → open the prompt in the provider's TUI.
+	// An EMPTY current session converts in place (no throwaway placeholder). A
+	// session that already has history is NOT converted — it stays a GUI chat,
+	// and we open a SEPARATE Terminal session that resumes the conversation,
+	// after a heads-up dialog (TUI messages don't sync back). The dialog is
+	// skippable via "don't remind again".
 	useShellEvent("create-terminal-session", (event) => {
 		const freshBoot = buildTerminalBootCommand(event.provider, event);
 
@@ -218,16 +223,15 @@ export function useSessionActions({
 			});
 		};
 
-		// Fallback only: no current session to convert (cache miss / no id) →
-		// mint a fresh terminal session and boot it with the prompt.
-		const createNew = () => {
+		// Mint a fresh Terminal session and boot it with `boot`.
+		const spawnTerminal = (boot: string | null) => {
 			void handleCreateSession(
 				"terminal",
 				event.provider,
 				(sessionId) => {
-					if (freshBoot) {
+					if (boot) {
 						setPendingBoot(sessionId, {
-							bootCommand: freshBoot,
+							bootCommand: boot,
 							fastMode: event.fastMode,
 						});
 					}
@@ -246,65 +250,78 @@ export function useSessionActions({
 		const currentSession =
 			sessions.find((session) => session.id === event.sessionId) ?? null;
 
+		// No current session to convert → just open a fresh Terminal session.
 		if (!event.sessionId || !event.workspaceId || !currentSession) {
-			createNew();
+			spawnTerminal(freshBoot);
 			return;
 		}
 
 		const sessionId = event.sessionId;
 		const workspaceId = event.workspaceId;
-		// Resume continues the prior conversation; the typed prompt becomes the
-		// resumed turn's input. No provider id (turn never completed) → fresh boot.
-		const providerSessionId = currentSession.providerSessionId ?? null;
-		const boot = providerSessionId
-			? resumeBootCommand(event.provider, providerSessionId, {
-					addDirs: event.addDirs,
-					prompt: event.prompt,
-				})
-			: freshBoot;
 
-		void (async () => {
-			try {
-				await convertSessionToTerminal(sessionId, event.provider);
-			} catch (error) {
-				// Convert refused (unknown id race) — fall back to a new session.
-				console.warn(
-					"[terminal] in-place convert failed; creating new:",
-					error,
+		// Empty current session → convert it in place (no throwaway placeholder).
+		if (isNewSession(currentSession)) {
+			void (async () => {
+				try {
+					await convertSessionToTerminal(sessionId, event.provider);
+				} catch (error) {
+					// Lost the message-less race / convert refused — fall back to new.
+					console.warn(
+						"[terminal] in-place convert failed; creating new:",
+						error,
+					);
+					spawnTerminal(freshBoot);
+					return;
+				}
+				if (freshBoot) {
+					setPendingBoot(sessionId, {
+						bootCommand: freshBoot,
+						fastMode: event.fastMode,
+					});
+				}
+				seedTitle(sessionId);
+				// Flip the cached row to terminal so the panel renders the TUI now,
+				// before the backend round-trip reconciles.
+				queryClient.setQueryData<WorkspaceSessionSummary[]>(
+					helmorQueryKeys.workspaceSessions(workspaceId),
+					(current) =>
+						(current ?? []).map((session) =>
+							session.id === sessionId
+								? {
+										...session,
+										sessionKind: "terminal",
+										agentType: event.provider,
+									}
+								: session,
+						),
 				);
-				createNew();
-				return;
-			}
-			if (boot) {
-				setPendingBoot(sessionId, {
-					bootCommand: boot,
-					fastMode: event.fastMode,
+				requestSidebarReconcile(queryClient);
+				void queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
 				});
-			}
-			seedTitle(sessionId);
-			// Flip the cached row to terminal so the panel renders the TUI now,
-			// before the backend round-trip reconciles.
-			queryClient.setQueryData<WorkspaceSessionSummary[]>(
-				helmorQueryKeys.workspaceSessions(workspaceId),
-				(current) =>
-					(current ?? []).map((session) =>
-						session.id === sessionId
-							? {
-									...session,
-									sessionKind: "terminal",
-									agentType: event.provider,
-								}
-							: session,
-					),
-			);
-			requestSidebarReconcile(queryClient);
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
-			});
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
-			});
-		})();
+				void queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
+				});
+			})();
+			return;
+		}
+
+		// Session with history. Resuming needs the agent's provider session id;
+		// without one there's nothing to resume, so just open a fresh terminal.
+		const providerSessionId = currentSession.providerSessionId ?? null;
+		if (!providerSessionId) {
+			spawnTerminal(freshBoot);
+			return;
+		}
+
+		// Open a NEW Terminal session that resumes the prior conversation (the
+		// typed prompt rides along as the resumed turn) — after the heads-up
+		// dialog, unless the user opted out.
+		const resumeBoot = resumeBootCommand(event.provider, providerSessionId, {
+			addDirs: event.addDirs,
+			prompt: event.prompt,
+		});
+		confirmTerminalResume(event.provider, () => spawnTerminal(resumeBoot));
 	});
 
 	useEffect(() => {
