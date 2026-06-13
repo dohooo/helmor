@@ -913,8 +913,12 @@ fn emit_quit_requested(app_handle: &tauri::AppHandle) {
     if let Err(e) = app_handle.emit("helmor://quit-requested", ()) {
         tracing::warn!(
             error = %e,
-            "Failed to emit quit-requested event; exiting directly",
+            "Failed to emit quit-requested event; cleaning up before exit",
         );
+        // force = false: the webview is already gone, so there are no live
+        // streams worth draining gracefully — run the fast teardown. The
+        // sidecar shutdown inside still kills any in-flight work on the way out.
+        commands::system_commands::cleanup_before_exit(app_handle, false);
         app_handle.exit(0);
     }
 }

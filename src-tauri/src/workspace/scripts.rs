@@ -44,6 +44,16 @@ pub enum ScriptEvent {
 /// Key = (repo_id, script_type, workspace_id)
 type ProcessKey = (String, String, Option<String>);
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptKillAttempt {
+    pub repo_id: String,
+    pub script_type: String,
+    pub workspace_id: Option<String>,
+    pub pid: i32,
+    pub pgid: i32,
+    pub gone: bool,
+}
+
 const PROCESS_TERM_TIMEOUT: Duration = Duration::from_millis(200);
 const PROCESS_KILL_TIMEOUT: Duration = Duration::from_millis(500);
 const PTY_POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -197,7 +207,8 @@ impl ScriptProcessManager {
     /// Signal every live script and terminal handle the manager currently
     /// owns. Used by the graceful-quit path so Run-tab scripts and
     /// embedded-terminal PTY sessions don't outlive Helmor as orphan
-    /// process trees. Returns the number of handles that were signaled.
+    /// process trees. Returns one attempt per handle so callers can persist
+    /// only the processes we actually proved gone.
     ///
     /// Mirrors `kill_others_in_repo`'s lock discipline: snapshot the
     /// handles under the map lock, drop the lock, then call
@@ -207,18 +218,28 @@ impl ScriptProcessManager {
     ///
     /// Does **not** reap — each `run_script` thread still owns its own
     /// `child.wait()`.
-    pub fn kill_all(&self) -> usize {
-        let victims: Vec<ProcessHandle> = {
+    pub fn kill_all(&self) -> Vec<ScriptKillAttempt> {
+        let victims: Vec<(ProcessKey, ProcessHandle)> = {
             let map = self.processes.lock().expect("process map poisoned");
-            map.values().cloned().collect()
+            map.iter()
+                .map(|(key, handle)| (key.clone(), handle.clone()))
+                .collect()
         };
-        let count = victims.len();
-        for h in victims {
+        let mut attempts = Vec::with_capacity(victims.len());
+        for (key, h) in victims {
             h.killed.store(true, Ordering::Release);
             kill_in_flight_stop_command(&h.stop_pgid);
-            escalating_kill(h.pid, h.pgid);
+            let gone = escalating_kill(h.pid, h.pgid);
+            attempts.push(ScriptKillAttempt {
+                repo_id: key.0,
+                script_type: key.1,
+                workspace_id: key.2,
+                pid: pid_to_registry_i32(h.pid),
+                pgid: pid_to_registry_i32(h.pgid),
+                gone,
+            });
         }
-        count
+        attempts
     }
 
     /// Signal the process group (and leader as a fallback) with SIGTERM,
@@ -315,17 +336,26 @@ impl ScriptProcessManager {
 /// a separate thread. When the script owns a separate process group, also wait
 /// for that group to disappear so a fast leader exit cannot leave descendants
 /// running after Stop returns.
-fn escalating_kill(pid: Pid, pgid: Pid) {
+fn escalating_kill(pid: Pid, pgid: Pid) -> bool {
     let tree = crate::platform::process::ProcessTree::new(pid, pgid);
     crate::platform::process::terminate_tree(tree);
 
     if crate::platform::process::wait_for_tree_gone(tree, PROCESS_TERM_TIMEOUT, PTY_POLL_INTERVAL) {
-        return;
+        return true;
     }
 
     crate::platform::process::kill_tree(tree);
-    let _ =
-        crate::platform::process::wait_for_tree_gone(tree, PROCESS_KILL_TIMEOUT, PTY_POLL_INTERVAL);
+    crate::platform::process::wait_for_tree_gone(tree, PROCESS_KILL_TIMEOUT, PTY_POLL_INTERVAL)
+}
+
+#[cfg(unix)]
+fn pid_to_registry_i32(pid: Pid) -> i32 {
+    pid
+}
+
+#[cfg(windows)]
+fn pid_to_registry_i32(pid: Pid) -> i32 {
+    pid as i32
 }
 
 /// SIGKILL any `stop.command` cleanup tree currently published in
@@ -864,10 +894,7 @@ pub(crate) fn run_script_with_shell(
     // i32; on Windows it is u32, so reinterpret the bits. Crash recovery only
     // compares this against live PIDs read back through the same path. The
     // cfg-gated rebinds keep the cast a no-op on Unix (no `unnecessary_cast`).
-    #[cfg(unix)]
-    let (pid_i32, pgid_i32): (i32, i32) = (pid, pgid);
-    #[cfg(windows)]
-    let (pid_i32, pgid_i32): (i32, i32) = (pid as i32, pgid as i32);
+    let (pid_i32, pgid_i32): (i32, i32) = (pid_to_registry_i32(pid), pid_to_registry_i32(pgid));
     let registry_id = match super::runtime_registry::record_started(
         repo_id,
         workspace_id,
@@ -1271,8 +1298,11 @@ mod tests {
         let (mut c3, _, _, k3) = spawn_and_register(&mgr, b_terminal.clone());
         let (mut c4, _, _, k4) = spawn_and_register(&mgr, auth.clone());
 
-        let signaled = mgr.kill_all();
-        assert_eq!(signaled, 4);
+        let attempts = mgr.kill_all();
+        assert_eq!(attempts.len(), 4);
+        assert!(attempts.iter().any(|attempt| attempt.repo_id == "A"));
+        assert!(attempts.iter().any(|attempt| attempt.repo_id == "B"));
+        assert!(attempts.iter().any(|attempt| attempt.repo_id == "__auth__"));
 
         // Reap each child to release pid resources, then prove the
         // killed flag was flipped on every handle.
@@ -1289,7 +1319,7 @@ mod tests {
     #[test]
     fn kill_all_with_empty_manager_is_zero() {
         let mgr = ScriptProcessManager::new();
-        assert_eq!(mgr.kill_all(), 0);
+        assert!(mgr.kill_all().is_empty());
     }
 
     /// Regression: `kill_all` must drop the process-map lock BEFORE
@@ -1351,7 +1381,9 @@ mod tests {
         }
 
         let start = Instant::now();
-        assert_eq!(mgr.kill_all(), 1);
+        let attempts = mgr.kill_all();
+        assert_eq!(attempts.len(), 1);
+        assert!(attempts[0].gone);
         // run_script's reaper must have unregistered + returned. If
         // kill_all held the map lock past the signal, the unregister
         // would have blocked and this join would hang.
@@ -2055,6 +2087,7 @@ mod tests {
     #[test]
     #[ignore = "fork-heavy; run via `cargo test graceful_kill -- --ignored`"]
     fn graceful_kill_runs_stop_command_then_escalates() {
+        let _env = crate::testkit::TestEnv::new("graceful-kill-stop-command");
         let mgr = Arc::new(ScriptProcessManager::new());
         let ctx = empty_ctx();
         let key: ProcessKey = ("repo".into(), "run".into(), Some("ws".into()));
@@ -2136,6 +2169,7 @@ mod tests {
     #[test]
     #[ignore = "fork-heavy; run via `cargo test graceful_kill -- --ignored`"]
     fn graceful_kill_force_stop_on_second_click_short_circuits() {
+        let _env = crate::testkit::TestEnv::new("graceful-kill-force-stop");
         let mgr = Arc::new(ScriptProcessManager::new());
         let ctx = empty_ctx();
         let key: ProcessKey = ("repo".into(), "run".into(), Some("ws".into()));

@@ -1836,7 +1836,13 @@ fn base64_decode(input: &str) -> anyhow::Result<Vec<u8>> {
 #[tauri::command]
 pub async fn request_quit(app: tauri::AppHandle, force: bool) {
     tracing::info!(force, "request_quit invoked from frontend");
+    cleanup_before_exit(&app, force);
 
+    // Done: terminate the process.
+    app.exit(0);
+}
+
+pub fn cleanup_before_exit(app: &tauri::AppHandle, force: bool) {
     // 1. Stop filesystem watchers so no new events arrive.
     app.state::<git_watcher::GitWatcherManager>().shutdown();
 
@@ -1858,29 +1864,47 @@ pub async fn request_quit(app: tauri::AppHandle, force: bool) {
     //    Helmor itself spawned. Each handle's owning `run_script` thread
     //    reaps its own `Child`, so we just need to deliver the signal.
     let scripts = app.state::<ScriptProcessManager>();
-    let signaled = scripts.kill_all();
+    let kill_attempts = scripts.kill_all();
+
+    // Belt-and-suspenders: stamp only rows for processes we just proved gone.
+    // The per-process `record_ended` calls in `run_script_with_shell` cover
+    // the common case; this catches handles that did not make it through their
+    // reaper before app exit. Prior maybe-alive stale rows must remain open so
+    // the next launch can keep reporting them.
+    let confirmed_gone: Vec<_> = kill_attempts
+        .iter()
+        .filter(|attempt| attempt.gone)
+        .map(
+            |attempt| crate::workspace::runtime_registry::RuntimeProcessIdentity {
+                repo_id: attempt.repo_id.clone(),
+                workspace_id: attempt.workspace_id.clone(),
+                script_type: attempt.script_type.clone(),
+                pid: attempt.pid,
+                pgid: attempt.pgid,
+            },
+        )
+        .collect();
+
+    let signaled = kill_attempts.len();
     if signaled > 0 {
+        let timed_out = signaled.saturating_sub(confirmed_gone.len());
         tracing::info!(
             signaled,
+            confirmed_gone = confirmed_gone.len(),
+            timed_out,
             "request_quit: signaled live script/terminal handles"
         );
     }
 
-    // Belt-and-suspenders: stamp every still-open runtime registry
-    // row as ended, so the next launch's classification sweep
-    // doesn't waste cycles probing PIDs we've already terminated.
-    // The per-process `record_ended` calls in `run_script_with_shell`
-    // cover the common case; this catches handles that didn't make
-    // it through their reaper before app exit.
-    match crate::workspace::runtime_registry::record_all_ended() {
+    match crate::workspace::runtime_registry::record_processes_ended(&confirmed_gone) {
         Ok(0) => {}
         Ok(stamped) => tracing::debug!(
             stamped,
-            "request_quit: stamped runtime registry rows as ended"
+            "request_quit: stamped confirmed runtime registry rows as ended"
         ),
         Err(error) => tracing::warn!(
             %error,
-            "request_quit: failed to stamp runtime registry rows ended; \
+            "request_quit: failed to stamp confirmed runtime registry rows ended; \
              next launch's sweep will reclassify"
         ),
     }
@@ -1899,9 +1923,6 @@ pub async fn request_quit(app: tauri::AppHandle, force: bool) {
         )
     };
     sidecar.shutdown(cooperative, escalation);
-
-    // 5. Done — terminate the process.
-    app.exit(0);
 }
 
 // ---------------------------------------------------------------------------
