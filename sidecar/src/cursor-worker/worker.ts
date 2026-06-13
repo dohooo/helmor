@@ -10,7 +10,7 @@ import { createInterface } from "node:readline";
 import { applyAgentProxyToProcessEnv } from "../agent-proxy.js";
 import type { SidecarEmitter } from "../emitter.js";
 import { CursorCore } from "./cursor-core.js";
-import { isRetryableCursorError } from "./cursor-helpers.js";
+import { isAuthError, isRetryableCursorError } from "./cursor-helpers.js";
 import type { EmitMsg, FromWorker, ToWorker } from "./protocol.js";
 
 // Keep stdout pristine: any stray console.log from the SDK would corrupt the
@@ -58,30 +58,56 @@ const wireEmitter: SidecarEmitter = {
 
 const core = new CursorCore();
 
-// A stray async network error from the SDK's HTTP/2 client (Cursor's API
-// intermittently resets the TLS handshake) surfaces as an uncaughtException,
-// which would otherwise kill the worker and show the user a bare "worker
-// exited unexpectedly". Catch it: fail in-flight turns with a real error and
-// release the proxy's awaiting send promises. For a transient network error
-// stay alive (sessions are dropped; the next turn reconnects); for anything
-// else exit so the supervisor respawns a clean worker.
+// The worker is a permanent resident shared by every cursor session. Errors
+// reach this handler only when they escape every try/catch — in practice that's
+// the SDK's HTTP/2 client throwing an operational error from a detached
+// background task (a network reset, or a raw `[unauthenticated]` ConnectError
+// from an event stream). Operational errors don't corrupt the process, and
+// `failActiveTurns` already drops every session, so the worker is as clean as a
+// fresh one afterwards. Killing it would only cold-restart every *other*
+// session for nothing — so we stay alive: log, fail the in-flight turns with an
+// actionable message, drop sessions (the next send re-resumes cleanly).
+//
+// Error type selects ONLY the user-facing copy, never the process lifecycle.
+//
+// The sole reason to give up the process is a crash-loop: if fatals keep firing
+// in a tight window the process is genuinely wedged (e.g. a leaked SDK
+// background loop faulting on repeat that `agent.close()` didn't stop), so we
+// exit once and let the supervisor respawn a clean worker.
+const FATAL_LOOP_WINDOW_MS = 10_000;
+const FATAL_LOOP_THRESHOLD = 5;
 let fatalExiting = false;
+let recentFatals: number[] = [];
+
+function fatalReason(err: unknown, message: string): string {
+	if (isRetryableCursorError(err))
+		return "Cursor lost its network connection. Please send the message again.";
+	if (isAuthError(err))
+		return "Cursor authentication failed. Please send the message again; if it keeps failing, re-check your Cursor API key in Settings → Models → Cursor.";
+	return `Cursor worker error: ${message}`;
+}
+
 function handleFatal(kind: string, err: unknown): void {
 	const message = errMessage(err);
 	console.error(`[cursor-worker] ${kind}: ${message}`);
-	const transient = isRetryableCursorError(err);
 	try {
-		const reason = transient
-			? "Cursor lost its network connection. Please send the message again."
-			: `Cursor worker error: ${message}`;
-		for (const requestId of core.failActiveTurns(reason)) {
+		for (const requestId of core.failActiveTurns(fatalReason(err, message))) {
 			out({ t: "sendDone", requestId });
 		}
 	} catch (recoverErr) {
 		console.error(`[cursor-worker] recovery failed: ${errMessage(recoverErr)}`);
 	}
-	if (transient || fatalExiting) return;
+
+	// Crash-loop breaker — the only condition under which the permanent worker
+	// gives up and lets the supervisor respawn.
+	const now = Date.now();
+	recentFatals = recentFatals.filter((t) => now - t < FATAL_LOOP_WINDOW_MS);
+	recentFatals.push(now);
+	if (recentFatals.length < FATAL_LOOP_THRESHOLD || fatalExiting) return;
 	fatalExiting = true;
+	console.error(
+		`[cursor-worker] ${recentFatals.length} fatal errors within ${FATAL_LOOP_WINDOW_MS}ms — respawning a clean worker`,
+	);
 	// Let the terminal events flush to the parent, then exit.
 	setTimeout(() => process.exit(1), 30);
 }

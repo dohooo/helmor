@@ -32,6 +32,7 @@ import {
 	buildCursorMessage,
 	computeModelParameterValues,
 	extractCreatePlanText,
+	isAgentBusyError,
 	isRetryableCursorError,
 	modelInfoToProviderInfo,
 	namespaceEvent,
@@ -203,28 +204,57 @@ export class CursorCore {
 		const { text, imagePaths } = parseImageRefs(params.prompt, params.images);
 		const message = await buildCursorMessage(text, imagePaths);
 		const activeSession = session;
+		// `local.force` expires a wedged active run (left non-terminal in the
+		// cwd-scoped store by a worker that died mid-turn) before starting this
+		// one. Only set on the recovery retry — never force-expire a run that's
+		// legitimately in flight.
+		const sendOptions = (force: boolean) => ({
+			// Pass mode every turn — Cursor sticks with the create-time mode
+			// otherwise, so toggling Plan on/off mid-conversation (incl.
+			// "Implement" → back to agent) wouldn't take effect.
+			mode: toCursorMode(params.permissionMode),
+			model: {
+				id: modelId,
+				...(modelParams.length > 0 ? { params: modelParams } : {}),
+			},
+			...(force ? { local: { force: true } } : {}),
+		});
 		let run: Run;
 		try {
 			run = await withCursorRetry("agent.send", () =>
-				activeSession.agent.send(message, {
-					// Pass mode every turn — Cursor sticks with the create-time
-					// mode otherwise, so toggling Plan on/off mid-conversation
-					// (incl. "Implement" → back to agent) wouldn't take effect.
-					mode: toCursorMode(params.permissionMode),
-					model: {
-						id: modelId,
-						...(modelParams.length > 0 ? { params: modelParams } : {}),
-					},
-				}),
+				activeSession.agent.send(message, sendOptions(false)),
 			);
 		} catch (error) {
-			const msg = error instanceof Error ? error.message : String(error);
-			logger.error(`[${requestId}] Cursor agent.send failed: ${msg}`, {
-				...errorDetails(error),
-			});
-			emitter.error(requestId, `Cursor: ${msg}`);
-			emitter.end(requestId);
-			return;
+			// A run wedged in the local store ("already has active run") blocks
+			// every follow-up send and survives app restarts. Retry once with
+			// `local.force` — the SDK's recovery path for agents left wedged by a
+			// crashed CLI/worker process — before surfacing a hard failure.
+			if (!isAgentBusyError(error)) {
+				const msg = error instanceof Error ? error.message : String(error);
+				logger.error(`[${requestId}] Cursor agent.send failed: ${msg}`, {
+					...errorDetails(error),
+				});
+				emitter.error(requestId, `Cursor: ${msg}`);
+				emitter.end(requestId);
+				return;
+			}
+			logger.info(
+				`[${requestId}] Cursor agent has a wedged active run; retrying agent.send with local.force`,
+			);
+			try {
+				run = await withCursorRetry("agent.send(force)", () =>
+					activeSession.agent.send(message, sendOptions(true)),
+				);
+			} catch (retryError) {
+				const msg =
+					retryError instanceof Error ? retryError.message : String(retryError);
+				logger.error(`[${requestId}] Cursor agent.send(force) failed: ${msg}`, {
+					...errorDetails(retryError),
+				});
+				emitter.error(requestId, `Cursor: ${msg}`);
+				emitter.end(requestId);
+				return;
+			}
 		}
 		session.currentRun = run;
 		session.currentRequestId = requestId;
