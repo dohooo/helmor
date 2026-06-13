@@ -204,6 +204,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 					) : visibleTerminalId ? null : activePane?.hasLoaded ? (
 						<ActiveThreadViewport
 							hasSession={!!selectedSession}
+							workspaceName={workspace?.directoryName ?? null}
 							pane={activePane}
 							missingScriptTypes={missingScriptTypes}
 							onInitializeScript={onInitializeScript}
@@ -215,6 +216,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 							<EmptyState
 								workspaceState={workspace?.state ?? null}
 								hasSession={!!selectedSession}
+								workspaceName={workspace?.directoryName ?? null}
 								missingScriptTypes={missingScriptTypes}
 								onInitializeScript={onInitializeScript}
 							/>

@@ -398,5 +398,13 @@
 			"label": "Umans AI Coding Plan",
 			"icon": "generic"
 		}
+	],
+	"mimo": [
+		{
+			"key": "xiaomi",
+			"label": "Xiaomi MiMo",
+			"icon": "xiaomi",
+			"apiKeyUrl": "https://platform.xiaomimimo.com/#/console/api-keys"
+		}
 	]
 }

@@ -14,10 +14,10 @@ export function CompanionPairingConfirm() {
 			<div className="flex w-full max-w-sm flex-col items-center gap-6 text-center">
 				<HelmorLogoAnimated size={56} className="opacity-90" />
 				<div className="flex flex-col gap-2">
-					<h1 className="font-semibold text-foreground text-lg">
+					<h1 className="font-semibold text-foreground text-heading">
 						Pair this browser
 					</h1>
-					<p className="text-muted-foreground text-sm">
+					<p className="text-muted-foreground text-body">
 						Connect this browser to your Helmor desktop so you can open your
 						workspaces, sessions, and agents from here. Only continue if you
 						started this pairing yourself.

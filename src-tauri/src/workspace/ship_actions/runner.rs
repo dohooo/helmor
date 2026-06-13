@@ -91,14 +91,24 @@ fn action_session_overrides(action: WorkspaceShipActionKind) -> Result<OwnedSess
         return Ok(OwnedSessionOverrides::default());
     }
 
+    // The model pref carries its provider (new `{provider, modelId}` form);
+    // pin it as the session's agent_type so a non-default provider (e.g. mimo)
+    // isn't misresolved from the bare slug. Legacy bare ids leave it None.
+    let model_pref =
+        load_model_pref("app.pr_model_id")?.or(load_model_pref("app.default_model_id")?);
     Ok(OwnedSessionOverrides {
-        model: load_setting_trimmed("app.pr_model_id")?
-            .or(load_setting_trimmed("app.default_model_id")?),
+        agent_type: model_pref.as_ref().and_then(|p| p.provider.clone()),
+        model: model_pref.map(|p| p.model_id),
         effort_level: load_setting_trimmed("app.pr_effort")?
             .or(load_setting_trimmed("app.default_effort")?),
         fast_mode: load_setting_bool("app.pr_fast_mode")?
             .or(load_setting_bool("app.default_fast_mode")?),
     })
+}
+
+fn load_model_pref(key: &str) -> Result<Option<crate::agents::model_ref::StoredModel>> {
+    Ok(settings::load_setting_value(key)?
+        .and_then(|raw| crate::agents::model_ref::parse_stored_model(&raw)))
 }
 
 fn load_setting_trimmed(key: &str) -> Result<Option<String>> {

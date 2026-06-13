@@ -91,23 +91,27 @@ pub fn is_session_disconnect(err: &io::Error) -> bool {
     }
 }
 
-/// Spawn `cmd` attached to a new PTY. The caller owns the rest of the
-/// orchestration (registering the handle, the reader thread, feeding the
-/// initial command, and reaping via `child.wait()`).
-pub fn spawn(cmd: Command) -> Result<PtySession> {
+/// Spawn `cmd` attached to a new PTY at an optional initial `(cols, rows)`. The
+/// caller owns the rest of the orchestration (registering the handle, the
+/// reader thread, feeding the initial command, and reaping via `child.wait()`).
+///
+/// An inline TUI paints its first frame against the size at spawn time —
+/// defaults leave ghost rows behind once the real fit arrives, so callers that
+/// know the renderer's size must pass it.
+pub fn spawn_with_size(cmd: Command, size: Option<(u16, u16)>) -> Result<PtySession> {
     #[cfg(unix)]
     {
-        spawn_unix(cmd)
+        spawn_unix(cmd, size)
     }
 
     #[cfg(windows)]
     {
-        spawn_windows(cmd)
+        spawn_windows(cmd, size)
     }
 
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = cmd;
+        let _ = (cmd, size);
         anyhow::bail!("PTY sessions are not yet implemented on this platform")
     }
 }
@@ -118,15 +122,16 @@ pub fn spawn(cmd: Command) -> Result<PtySession> {
 // drain loop relies on a 0-byte read (the pipe closing when the child exits)
 // to stop, which is what the orchestration already treats as `hung_up`.
 #[cfg(windows)]
-fn spawn_windows(cmd: Command) -> Result<PtySession> {
+fn spawn_windows(cmd: Command, size: Option<(u16, u16)>) -> Result<PtySession> {
     use std::sync::{Arc, Mutex};
 
     use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
+    let (cols, rows) = size.unwrap_or((120, 30));
     let pair = native_pty_system()
         .openpty(PtySize {
-            rows: 30,
-            cols: 120,
+            rows,
+            cols,
             pixel_width: 0,
             pixel_height: 0,
         })
@@ -331,13 +336,13 @@ impl PtyReader for UnixPtyReader {
 }
 
 #[cfg(unix)]
-fn spawn_unix(mut cmd: Command) -> Result<PtySession> {
+fn spawn_unix(mut cmd: Command, size: Option<(u16, u16)>) -> Result<PtySession> {
     use std::fs::File;
     use std::os::fd::FromRawFd;
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
 
-    let (master_fd, slave_fd) = open_pty()?;
+    let (master_fd, slave_fd) = open_pty(size)?;
     set_nonblocking(master_fd)?;
 
     // Dup master for the write side. `O_NONBLOCK` is shared with the read side
@@ -398,12 +403,13 @@ fn spawn_unix(mut cmd: Command) -> Result<PtySession> {
 
 /// Allocate a PTY pair via `openpty`. Returns (master_fd, slave_fd).
 #[cfg(unix)]
-fn open_pty() -> Result<(libc::c_int, libc::c_int)> {
+fn open_pty(size: Option<(u16, u16)>) -> Result<(libc::c_int, libc::c_int)> {
+    let (cols, rows) = size.unwrap_or((DEFAULT_COLS, DEFAULT_ROWS));
     let mut master: libc::c_int = 0;
     let mut slave: libc::c_int = 0;
     let ws = libc::winsize {
-        ws_row: DEFAULT_ROWS,
-        ws_col: DEFAULT_COLS,
+        ws_row: rows,
+        ws_col: cols,
         ws_xpixel: 0,
         ws_ypixel: 0,
     };
@@ -442,7 +448,7 @@ mod tests {
     fn spawn_runs_a_command_and_streams_pty_output() {
         let mut cmd = Command::new("/bin/sh");
         cmd.arg("-c").arg("printf hello; exit 0");
-        let mut session = spawn(cmd).expect("spawn pty");
+        let mut session = spawn_with_size(cmd, None).expect("spawn pty");
 
         // Drain the merged PTY output until the child exits / slave closes,
         // exactly like the orchestration's reader thread.

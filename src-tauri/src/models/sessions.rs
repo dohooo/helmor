@@ -311,17 +311,22 @@ pub fn workspace_id_for_session(session_id: &str) -> Result<Option<String>> {
     Ok(workspace_id)
 }
 
-/// Convert a freshly-prepared GUI session into a Terminal session in place.
-/// Used by the start-surface terminal flow: the workspace-create pipeline
-/// mints a GUI session, and converting it (before it's ever used) avoids a
-/// throwaway placeholder. The message-less invariant is enforced by the
-/// UPDATE itself — a session with history (or an unknown id) errors instead
-/// of silently rewriting kind/agent/title.
+/// Convert a freshly-prepared (message-less) GUI session into a Terminal
+/// session in place. Used by the terminal start flows where the pipeline mints
+/// an empty GUI session and converting it (before it's ever used) avoids a
+/// throwaway placeholder. A session that already has history is NOT converted
+/// here — that path opens a SEPARATE Terminal session that resumes the
+/// conversation instead (see the composer terminal flow). The message-less
+/// invariant is enforced by the UPDATE itself — a session with history (or an
+/// unknown id) errors instead of silently rewriting kind/agent/title.
 pub fn convert_session_to_terminal(session_id: &str, agent_type: &str) -> Result<()> {
     let connection = db::write_conn()?;
+    // Leave `title` untouched ("Untitled" from prepare) so the prompt-captured
+    // title generation can still replace it — `can_replace_session_title` only
+    // overwrites "Untitled", so hardcoding "Terminal" here would freeze it.
     let rows = connection
         .execute(
-            "UPDATE sessions SET session_kind = 'terminal', agent_type = ?2, title = 'Terminal' \
+            "UPDATE sessions SET session_kind = 'terminal', agent_type = ?2 \
              WHERE id = ?1 \
                AND NOT EXISTS (SELECT 1 FROM session_messages WHERE session_id = ?1)",
             rusqlite::params![session_id, agent_type],
@@ -589,15 +594,13 @@ pub fn create_session(
     let session_id =
         crate::workspace::lifecycle::resolve_seed_session_id(overrides.seed_session_id);
     let session_kind = overrides.session_kind.unwrap_or("gui");
-    let title = if session_kind == "terminal" {
-        "Terminal".to_string()
-    } else {
-        default_session_title_for_action_kind_with_workspace(
-            &transaction,
-            workspace_id,
-            action_kind,
-        )?
-    };
+    // Terminal sessions default to "Untitled" too (not "Terminal"), so the
+    // prompt-captured title generation can replace it like a normal session.
+    let title = default_session_title_for_action_kind_with_workspace(
+        &transaction,
+        workspace_id,
+        action_kind,
+    )?;
 
     transaction
         .execute(
@@ -1440,10 +1443,14 @@ mod tests {
                 .unwrap();
             assert_eq!(kind, "terminal");
             assert_eq!(agent, "claude");
-            assert_eq!(title, "Terminal");
+            // Convert must NOT clobber the title — leaving it ("Untitled" in
+            // prod, "Test Session" here) is what lets prompt-captured title
+            // generation replace it later.
+            assert_eq!(title, "Test Session");
         }
 
-        // A session with history must be refused, untouched.
+        // A session with history must be refused, untouched — those go through
+        // the resume-into-a-new-terminal flow instead.
         {
             let conn = db::write_conn().unwrap();
             conn.execute(

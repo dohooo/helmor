@@ -250,6 +250,15 @@ export function useGlobalShortcutHandlers({
 					workspaceViewMode === "conversation" || workspaceViewMode === "start",
 			},
 			{
+				id: "composer.toggleTerminalMode" as const,
+				callback: () => publishShellEvent({ type: "toggle-terminal-mode" }),
+				// Composer is the final gate; this just limits to surfaces with one.
+				enabled:
+					appSettings.enableTerminalMode &&
+					(workspaceViewMode === "conversation" ||
+						workspaceViewMode === "start"),
+			},
+			{
 				id: "composer.openModelPicker" as const,
 				callback: handleOpenModelPicker,
 				enabled: workspaceViewMode === "conversation",
@@ -286,6 +295,7 @@ export function useGlobalShortcutHandlers({
 		],
 		[
 			appSettings.zoomLevel,
+			appSettings.enableTerminalMode,
 			getCloseableCurrentSession,
 			handleCloseSelectedSession,
 			handleCopyWorkspacePath,

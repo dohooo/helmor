@@ -106,6 +106,10 @@ function serializeMessagePart(
 			return serializePromptSuggestionPart(part);
 		case "file-mention":
 			return serializeFileMentionPart(part);
+		// A pasted tag is still prompt text — copying the message must
+		// reproduce the full content, chip or not.
+		case "pasted-text":
+			return part.text;
 		case "reasoning":
 		case "tool-call":
 		case "collapsed-group":

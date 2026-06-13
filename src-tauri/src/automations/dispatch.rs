@@ -66,6 +66,7 @@ pub fn run_automation_now(
         files: None,
         images: None,
         source: Some("automation".to_string()),
+        pasted_texts: None,
     };
 
     crate::agents::start_background_turn(app, request).map_err(|error| {

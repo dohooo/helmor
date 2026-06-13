@@ -291,6 +291,9 @@ export function useWorkspaceCommitLifecycle({
 			mode: WorkspaceCommitButtonMode,
 			overrides?: {
 				modelId?: string | null;
+				/** Provider of the override model — pinned as agent_type so a
+				 *  slug-based model (mimo / opencode) routes correctly. */
+				provider?: string | null;
 				effort?: string | null;
 				fastMode?: boolean | null;
 			},
@@ -514,6 +517,7 @@ export function useWorkspaceCommitLifecycle({
 				const { sessionId } = await createSession(workspaceId, {
 					actionKind: mode,
 					model: overrides?.modelId ?? null,
+					agentType: overrides?.provider ?? null,
 					effortLevel: overrides?.effort ?? null,
 					fastMode: overrides?.fastMode ?? null,
 				});
@@ -643,10 +647,13 @@ export function useWorkspaceCommitLifecycle({
 	const handleInspectorReviewAction = useCallback(
 		async ({
 			modelId,
+			provider,
 			effort,
 			fastMode,
 		}: {
 			modelId: string | null;
+			/** Provider of the review model — pinned as agent_type. */
+			provider?: string | null;
 			effort?: string | null;
 			fastMode?: boolean | null;
 		}) => {
@@ -665,6 +672,7 @@ export function useWorkspaceCommitLifecycle({
 				const { sessionId } = await createSession(workspaceId, {
 					actionKind: "review",
 					model: modelId,
+					agentType: provider ?? null,
 					effortLevel: effort ?? null,
 					fastMode: fastMode ?? null,
 				});

@@ -57,8 +57,9 @@ export function useFeedbackSubmit(deps: Deps) {
 					helmorQueryKeys.agentModelSections,
 				) ?? [];
 			const allModels = sections.flatMap((section) => section.options);
-			const preferred = appSettings.defaultModelId
-				? allModels.find((m) => m.id === appSettings.defaultModelId)
+			const preferredId = appSettings.defaultModel?.modelId;
+			const preferred = preferredId
+				? allModels.find((m) => m.id === preferredId)
 				: undefined;
 			const model: AgentModelOption | undefined = preferred ?? allModels[0];
 			if (!model) {
@@ -174,7 +175,7 @@ export function useFeedbackSubmit(deps: Deps) {
 		[
 			appSettings.defaultEffort,
 			appSettings.defaultFastMode,
-			appSettings.defaultModelId,
+			appSettings.defaultModel?.modelId,
 			queryClient,
 			pushToast,
 			selectSession,

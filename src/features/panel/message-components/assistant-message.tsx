@@ -1,5 +1,6 @@
 import { AlertCircle, AlertTriangle, Clock3, Info } from "lucide-react";
 import { memo, Suspense } from "react";
+import { CodeBlockStreamingContext } from "@/components/ai/code-block";
 import {
 	Reasoning,
 	ReasoningContent,
@@ -34,6 +35,7 @@ import {
 	isTextPart,
 	isTodoListPart,
 	isToolCallPart,
+	isUserQuestionPart,
 	isWorkflowPart,
 	reasoningLifecycle,
 } from "./shared";
@@ -45,6 +47,7 @@ import {
 } from "./subagent-tool";
 import { SystemNotice } from "./system-message";
 import { AssistantToolCall, CollapsedToolGroup } from "./tool-call";
+import { UserQuestionCard } from "./user-question";
 
 // --- AssistantText ---
 
@@ -69,15 +72,17 @@ const AssistantText = memo(function AssistantText({
 			style={{ fontSize: `${settings.chatFontSize}px` }}
 		>
 			<Suspense fallback={<AssistantTextFallback text={smoothedText} />}>
-				<LazyStreamdown
-					animated={false}
-					caret={undefined}
-					className="conversation-streamdown"
-					isAnimating={false}
-					mode={mode}
-				>
-					{smoothedText}
-				</LazyStreamdown>
+				<CodeBlockStreamingContext.Provider value={streaming}>
+					<LazyStreamdown
+						animated={false}
+						caret={undefined}
+						className="conversation-streamdown"
+						isAnimating={false}
+						mode={mode}
+					>
+						{smoothedText}
+					</LazyStreamdown>
+				</CodeBlockStreamingContext.Provider>
 			</Suspense>
 		</div>
 	);
@@ -302,6 +307,9 @@ export function ChatAssistantMessage({
 				}
 				if (isPlanReviewPart(part)) {
 					return <PlanReviewCard key={key} part={part} />;
+				}
+				if (isUserQuestionPart(part)) {
+					return <UserQuestionCard key={key} part={part} />;
 				}
 				return null;
 			})}

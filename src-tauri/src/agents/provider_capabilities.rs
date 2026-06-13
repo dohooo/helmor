@@ -93,6 +93,18 @@ pub fn capabilities_for_provider(provider: &str) -> ProviderCapabilities {
             supports_slash_commands: true,
             requires_api_key: false,
         },
+        // MiMo Code is an opencode-protocol fork — identical capability
+        // surface, different branding.
+        "mimo" => ProviderCapabilities {
+            provider: "mimo".into(),
+            display_name: "MiMo Code".into(),
+            supports_plan_mode: true,
+            supports_active_goal: false,
+            supports_context_usage: true,
+            supports_steer: true,
+            supports_slash_commands: true,
+            requires_api_key: false,
+        },
         // Default arm covers "claude" and anything we haven't onboarded
         // yet — keeping the safe defaults equal to Claude's behaviour
         // means an unknown id never accidentally disables the
@@ -113,7 +125,7 @@ pub fn capabilities_for_provider(provider: &str) -> ProviderCapabilities {
 /// Convenience: list every provider Helmor ships today. Frontends use
 /// this to render the capability table in settings (eventually), and
 /// tests use it to assert there are no holes in the matrix.
-pub const KNOWN_PROVIDERS: &[&str] = &["claude", "codex", "cursor", "opencode"];
+pub const KNOWN_PROVIDERS: &[&str] = &["claude", "codex", "cursor", "opencode", "mimo"];
 
 #[cfg(test)]
 mod tests {
@@ -202,6 +214,25 @@ mod tests {
         assert!(caps.supports_steer);
         assert!(caps.supports_slash_commands);
         assert!(!caps.requires_api_key, "opencode uses embedded login");
+    }
+
+    #[test]
+    fn mimo_capabilities() {
+        let caps = capabilities_for_provider("mimo");
+        assert_eq!(caps.provider, "mimo");
+        assert_eq!(
+            caps.display_name, "MiMo Code",
+            "must not fall back to Claude"
+        );
+        assert!(
+            caps.supports_plan_mode,
+            "mimo inherits opencode's read-only plan agent"
+        );
+        assert!(!caps.supports_active_goal, "mimo has no /goal loop");
+        assert!(caps.supports_context_usage);
+        assert!(caps.supports_steer);
+        assert!(caps.supports_slash_commands);
+        assert!(!caps.requires_api_key, "mimo uses embedded login");
     }
 
     #[test]

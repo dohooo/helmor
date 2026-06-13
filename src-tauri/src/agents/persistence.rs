@@ -2,15 +2,16 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 
-use crate::pipeline::types::{AgentUsage, CollectedTurn, MessageRole};
+use crate::pipeline::types::{AgentUsage, CollectedTurn, MessageRole, PastedTextRange};
 use crate::sessions::mark_session_read_in_transaction;
 
 use super::ExchangeContext;
 
 /// Persist the user's prompt as the first message of the exchange.
-/// Wraps as `{"type":"user_prompt","text":"...","files":[...],"images":[...]}`.
-/// Empty arrays are omitted from the JSON; `source` (e.g. `"automation"`) is
-/// only written when present so pre-existing rows keep their exact shape.
+/// Wraps as `{"type":"user_prompt","text":"...","files":[...],"images":[...],
+/// "pastedTexts":[{"start":n,"end":n}]}`. Empty arrays are omitted from the
+/// JSON; `source` (e.g. `"automation"`) is only written when present so
+/// pre-existing rows keep their exact shape.
 pub(super) fn persist_user_message(
     conn: &Connection,
     ctx: &ExchangeContext,
@@ -18,6 +19,7 @@ pub(super) fn persist_user_message(
     files: &[String],
     images: &[String],
     source: Option<&str>,
+    pasted_texts: &[PastedTextRange],
 ) -> Result<()> {
     let now = current_timestamp_string()?;
     let user_message_id = ctx.user_message_id.clone();
@@ -43,6 +45,9 @@ pub(super) fn persist_user_message(
                 .map(|path| serde_json::Value::String(path.clone()))
                 .collect(),
         );
+    }
+    if !pasted_texts.is_empty() {
+        payload["pastedTexts"] = serde_json::to_value(pasted_texts)?;
     }
     let content = payload.to_string();
 
@@ -387,7 +392,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         make_messages_table(&conn);
         let ctx = test_exchange_context();
-        persist_user_message(&conn, &ctx, "fix bug X", &[], &[], None).unwrap();
+        persist_user_message(&conn, &ctx, "fix bug X", &[], &[], None, &[]).unwrap();
 
         let (role, content, id): (String, String, String) = conn
             .query_row(
@@ -404,6 +409,27 @@ mod tests {
         assert_eq!(parsed["text"], "fix bug X");
         // `files` array should be omitted when empty.
         assert!(parsed.get("files").is_none());
+        // ...and so should `pastedTexts`.
+        assert!(parsed.get("pastedTexts").is_none());
+    }
+
+    #[test]
+    fn persist_user_message_includes_pasted_texts_when_provided() {
+        let conn = Connection::open_in_memory().unwrap();
+        make_messages_table(&conn);
+        let ctx = test_exchange_context();
+        let pasted = vec![PastedTextRange { start: 4, end: 16 }];
+        persist_user_message(&conn, &ctx, "see <big paste> ok", &[], &[], None, &pasted).unwrap();
+
+        let content: String = conn
+            .query_row(
+                "SELECT content FROM session_messages WHERE id = ?1",
+                ["user-1"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed["pastedTexts"], json!([{ "start": 4, "end": 16 }]));
     }
 
     #[test]
@@ -412,7 +438,7 @@ mod tests {
         make_messages_table(&conn);
         let ctx = test_exchange_context();
         let files = vec!["a.rs".to_string(), "b.rs".to_string()];
-        persist_user_message(&conn, &ctx, "refactor", &files, &[], None).unwrap();
+        persist_user_message(&conn, &ctx, "refactor", &files, &[], None, &[]).unwrap();
 
         let content: String = conn
             .query_row(
@@ -437,7 +463,7 @@ mod tests {
         let images = vec![
             "/Users/me/Library/Application Support/CleanShot/CleanShot 2026-04-29 at 08.24.35@2x.jpg".to_string(),
         ];
-        persist_user_message(&conn, &ctx, "look at this", &[], &images, None).unwrap();
+        persist_user_message(&conn, &ctx, "look at this", &[], &images, None, &[]).unwrap();
 
         let content: String = conn
             .query_row(

@@ -909,7 +909,7 @@ export function useWorkspacesSidebarController({
 			});
 			queryClient.setQueryData<WorkspaceDetail | null>(
 				helmorQueryKeys.workspaceDetail(prepareResponse.workspaceId),
-				{
+				() => ({
 					...createOptimisticCreatingWorkspaceDetail(
 						preparedRow,
 						repoId,
@@ -931,7 +931,7 @@ export function useWorkspacesSidebarController({
 					defaultBranch: prepareResponse.defaultBranch,
 					initializationParentBranch: prepareResponse.defaultBranch,
 					intendedTargetBranch: prepareResponse.defaultBranch,
-				},
+				}),
 			);
 			queryClient.setQueryData<WorkspaceSessionSummary[]>(
 				helmorQueryKeys.workspaceSessions(prepareResponse.workspaceId),

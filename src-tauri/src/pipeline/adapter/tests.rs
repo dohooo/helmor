@@ -582,6 +582,116 @@ fn interleaved_subagent_children_attach_to_correct_parent() {
     }
 }
 
+/// Nested sub-agents (Claude Code 2.1.172+): a Task spawned by a Task.
+/// The grandchild's `parent_tool_use_id` points at the nested Task that
+/// lives inside the outer Task's `children`, so the grouping pass must
+/// index folded children too — otherwise the grandchild renders as an
+/// orphan top-level message instead of nesting under its parent.
+#[test]
+fn nested_subagent_children_attach_to_nested_task() {
+    let messages = vec![
+        // Top-level assistant spawns the outer Task.
+        im(
+            "p1",
+            "assistant",
+            json!({
+                "type": "assistant",
+                "message": {
+                    "id": "msg_parent",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "task_outer",
+                        "name": "Task",
+                        "input": {"description": "outer subagent", "subagent_type": "Explore"}
+                    }]
+                }
+            }),
+        ),
+        // Child of the outer Task: the sub-agent spawns its own Task.
+        im(
+            "c1",
+            "assistant",
+            json!({
+                "type": "assistant",
+                "parent_tool_use_id": "task_outer",
+                "message": {
+                    "id": "msg_child",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "task_nested",
+                        "name": "Task",
+                        "input": {"description": "nested subagent", "subagent_type": "Explore"}
+                    }]
+                }
+            }),
+        ),
+        // Grandchild: output of the nested sub-agent.
+        im(
+            "g1",
+            "assistant",
+            json!({
+                "type": "assistant",
+                "parent_tool_use_id": "task_nested",
+                "message": {
+                    "id": "msg_grandchild",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "GRANDCHILD"}]
+                }
+            }),
+        ),
+    ];
+
+    let result = convert(&messages);
+
+    // Everything folds into one assistant message — the grandchild must
+    // NOT surface as a standalone top-level message.
+    assert_eq!(
+        result.len(),
+        1,
+        "grandchild should nest, not render as an orphan top-level message"
+    );
+
+    let outer_children = result[0]
+        .content
+        .iter()
+        .find_map(|p| match p {
+            ExtendedMessagePart::Basic(MessagePart::ToolCall {
+                tool_call_id,
+                children,
+                ..
+            }) if tool_call_id == "task_outer" => Some(children),
+            _ => None,
+        })
+        .expect("outer Task tool-call present");
+
+    let nested_children = outer_children
+        .iter()
+        .find_map(|p| match p {
+            ExtendedMessagePart::Basic(MessagePart::ToolCall {
+                tool_call_id,
+                children,
+                ..
+            }) if tool_call_id == "task_nested" => Some(children),
+            _ => None,
+        })
+        .expect("nested Task tool-call folded into the outer Task's children");
+
+    let grandchild_texts: Vec<&str> = nested_children
+        .iter()
+        .filter_map(|p| match p {
+            ExtendedMessagePart::Basic(MessagePart::Text { text, .. }) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        grandchild_texts,
+        vec!["GRANDCHILD"],
+        "grandchild content should attach to the nested Task"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // R5: strict tool_use_id matching for server tool results
 // ---------------------------------------------------------------------------

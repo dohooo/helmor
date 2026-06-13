@@ -159,7 +159,7 @@ export type DataInfo = {
 	archiveRoot: string;
 };
 
-export type AgentProvider = "claude" | "codex" | "cursor" | "opencode";
+export type AgentProvider = "claude" | "codex" | "cursor" | "opencode" | "mimo";
 
 export type LocalLlmStatus = {
 	enabled: boolean;
@@ -215,6 +215,12 @@ export type ProviderCapabilities = {
 	requiresApiKey: boolean;
 };
 
+/** UTF-16 code-unit range of one pasted-text tag inside a prompt string. */
+export type PastedTextRange = {
+	start: number;
+	end: number;
+};
+
 export type AgentSendRequest = {
 	provider: AgentProvider;
 	modelId: string;
@@ -238,6 +244,11 @@ export type AgentSendRequest = {
 	 *  matching `@<path>` substrings out as image attachments without
 	 *  re-parsing the text — paths may contain whitespace. */
 	images?: string[] | null;
+	/** UTF-16 ranges of pasted-text tag spans inside `prompt` (composer
+	 *  badge pastes — see `locatePastedTextRanges`). Persisted with the
+	 *  user_prompt so those spans render as tag chips; the agent still
+	 *  receives the full prompt text. */
+	pastedTexts?: PastedTextRange[] | null;
 };
 
 export type WorkspaceSummary = {
@@ -936,13 +947,19 @@ export async function toggleMiniWindowMode(): Promise<boolean> {
 	return await invoke("toggle_mini_window_mode");
 }
 
-export type AgentLoginProvider = "claude" | "codex" | "cursor" | "opencode";
+export type AgentLoginProvider =
+	| "claude"
+	| "codex"
+	| "cursor"
+	| "opencode"
+	| "mimo";
 
 export type AgentLoginStatusResult = {
 	claude: boolean;
 	codex: boolean;
 	cursor: boolean;
 	opencode: boolean;
+	mimo: boolean;
 	codexProvider?: string | null;
 	codexAuthMethod?: "login" | "apiKey" | string | null;
 };
@@ -956,6 +973,7 @@ export type AgentVersionsResult = {
 	claude: string | null;
 	codex: string | null;
 	opencode: string | null;
+	mimo: string | null;
 };
 
 export async function getAgentVersions(): Promise<AgentVersionsResult> {
@@ -1184,6 +1202,17 @@ export const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities[] = [
 		supportsSlashCommands: true,
 		requiresApiKey: false,
 	},
+	// MiMo Code is an opencode-protocol fork — identical capability surface.
+	{
+		provider: "mimo",
+		displayName: "MiMo Code",
+		supportsPlanMode: true,
+		supportsActiveGoal: false,
+		supportsContextUsage: true,
+		supportsSteer: true,
+		supportsSlashCommands: true,
+		requiresApiKey: false,
+	},
 ];
 
 /** Look up a single provider's capabilities from a previously-fetched
@@ -1307,6 +1336,58 @@ export async function deleteOpencodeCustomProvider(id: string): Promise<void> {
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to delete opencode provider."),
+		);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// MiMo Code (opencode-protocol fork) — same shapes, its own config file.
+// ---------------------------------------------------------------------------
+
+// `forceReload` restarts the mimo server to pick up config changes.
+export async function listMimoModels(
+	forceReload = false,
+): Promise<OpencodeModelEntry[]> {
+	try {
+		return await invoke<OpencodeModelEntry[]>("list_mimo_models", {
+			forceReload,
+		});
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to list mimo models."));
+	}
+}
+
+export async function getMimoCustomProviders(): Promise<
+	OpencodeCustomProvider[]
+> {
+	try {
+		return await invoke<OpencodeCustomProvider[]>("get_mimo_custom_providers");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to read MiMo Code config."),
+		);
+	}
+}
+
+export async function upsertMimoCustomProvider(
+	provider: OpencodeCustomProvider,
+	preset: boolean,
+): Promise<void> {
+	try {
+		await invoke("upsert_mimo_custom_provider", { provider, preset });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to save MiMo Code provider."),
+		);
+	}
+}
+
+export async function deleteMimoCustomProvider(id: string): Promise<void> {
+	try {
+		await invoke("delete_mimo_custom_provider", { id });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to delete MiMo Code provider."),
 		);
 	}
 }
@@ -2200,6 +2281,7 @@ export type UiMutationEvent =
 	| { type: "codexGoalChanged"; sessionId: string }
 	| { type: "sessionPlanChanged"; sessionId: string }
 	| { type: "sessionMessagesAppended"; sessionId: string }
+	| { type: "sessionTurnPersisted"; sessionId: string }
 	| { type: "workspaceFilesChanged"; workspaceId: string }
 	| { type: "workspaceGitStateChanged"; workspaceId: string }
 	| { type: "workspaceForgeChanged"; workspaceId: string }
@@ -2875,7 +2957,12 @@ export type ChangeRequestInfo = {
 	isMerged: boolean;
 };
 
-export type ActionStatusKind = "success" | "pending" | "running" | "failure";
+export type ActionStatusKind =
+	| "success"
+	| "skipped"
+	| "pending"
+	| "running"
+	| "failure";
 export type ActionProvider = "github" | "gitlab" | "vercel" | "unknown";
 export type WorkspaceGitSyncStatus = "upToDate" | "behind" | "unknown";
 export type WorkspacePushStatus = "published" | "unpublished" | "unknown";
@@ -3483,6 +3570,47 @@ export type FileMentionPart = {
 	id: string;
 	path: string;
 };
+/** A span of the user's prompt that entered the composer as a pasted-text
+ *  tag badge. Renders as the same tag chip (hover previews the content);
+ *  the text itself is still part of the prompt the agent received. */
+export type PastedTextPart = {
+	type: "pasted-text";
+	id: string;
+	text: string;
+};
+/** One option inside a `UserQuestionPart` question. */
+export type UserQuestionOption = {
+	label: string;
+	description?: string | null;
+	preview?: string | null;
+};
+export type UserQuestionItem = {
+	question: string;
+	header?: string | null;
+	multiSelect?: boolean;
+	options?: UserQuestionOption[];
+	/** Whether a free-text "Other" answer is allowed (Codex `isOther`). */
+	allowFreeText?: boolean;
+};
+export type UserQuestionStatus =
+	| "pending"
+	| "answered"
+	| "declined"
+	| "cancelled";
+/**
+ * Normalized agent→user question card — one shape for Claude
+ * AskUserQuestion, Codex `requestUserInput` and OpenCode `question`.
+ * `answers` maps question text → answer string (multi-select answers are
+ * comma-joined labels; free-text answers pass through verbatim).
+ */
+export type UserQuestionPart = {
+	type: "user-question";
+	id: string;
+	source: string;
+	questions: UserQuestionItem[];
+	answers?: Record<string, unknown>;
+	status: UserQuestionStatus;
+};
 export type PlanReviewAllowedPrompt = {
 	tool: string;
 	prompt: string;
@@ -3505,7 +3633,9 @@ export type MessagePart =
 	| ImagePart
 	| PromptSuggestionPart
 	| FileMentionPart
-	| PlanReviewPart;
+	| PastedTextPart
+	| PlanReviewPart
+	| UserQuestionPart;
 
 export type CollapsedGroupPart = {
 	type: "collapsed-group";
@@ -3598,8 +3728,10 @@ export type AgentStreamEvent =
 			source: string;
 			message: string;
 			/** Discriminated by `payload.kind`:
-			 *  - `ask-user-question` → Claude AskUserQuestion (raw multi-question / option / preview shape)
-			 *  - `form` → JSON-Schema form (MCP form elicitation or Codex's synthesized form)
+			 *  - `ask-user-question` → canonical question card (Claude AskUserQuestion,
+			 *    Codex requestUserInput, OpenCode question — normalized by Rust's
+			 *    `pipeline::user_question`, see `UserQuestionItem`)
+			 *  - `form` → JSON-Schema form (MCP form elicitation)
 			 *  - `url` → URL launcher (MCP url-mode elicitation)
 			 *  See `pending-user-input.ts` for the typed payload union. */
 			payload: Record<string, unknown>;
@@ -4165,7 +4297,7 @@ export async function createSession(
 		/** Pin the session row's `model` at creation. Inspector helpers
 		 *  (Create PR/MR, Review) push the user's configured model here so
 		 *  the composer reads it off the row instead of falling back to
-		 *  settings.defaultModelId. Leave null for the default flow. */
+		 *  settings.defaultModel. Leave null for the default flow. */
 		model?: string | null;
 		/** Pin `effort_level` at creation; null falls back to the user
 		 *  setting on the backend. */
@@ -4222,7 +4354,6 @@ export async function generateSessionTitle(
 	sessionId: string,
 	userMessage: string,
 	titleSeed?: string | null,
-	provider?: AgentProvider | null,
 ): Promise<GenerateSessionTitleResponse | null> {
 	try {
 		return await invoke<GenerateSessionTitleResponse>(
@@ -4232,7 +4363,6 @@ export async function generateSessionTitle(
 					sessionId,
 					userMessage,
 					titleSeed: titleSeed ?? null,
-					provider: provider ?? null,
 				},
 			},
 		);
@@ -4424,8 +4554,9 @@ export async function deleteSession(sessionId: string): Promise<void> {
 	await invoke("delete_session", { sessionId });
 }
 
-/** Convert a freshly-prepared (message-less) GUI session into a Terminal
- * session in place — the start-surface terminal flow's no-placeholder path. */
+/** Convert a GUI session into a Terminal session in place (one-way). Works on
+ * empty and populated sessions alike — a session that already ran a turn resumes
+ * by its provider session id in the TUI so the same conversation continues. */
 export async function convertSessionToTerminal(
 	sessionId: string,
 	agentType: string,
@@ -4752,6 +4883,8 @@ export async function spawnTerminal(
 	bootCommand?: string | null,
 	agentKind?: string | null,
 	fastMode?: boolean,
+	initialCols?: number | null,
+	initialRows?: number | null,
 ): Promise<void> {
 	const channel = new Channel<ScriptEvent>();
 	channel.onmessage = onEvent;
@@ -4762,6 +4895,8 @@ export async function spawnTerminal(
 		agentKind: agentKind ?? null,
 		bootCommand: bootCommand ?? null,
 		fastMode: fastMode ?? null,
+		initialCols: initialCols ?? null,
+		initialRows: initialRows ?? null,
 		channel,
 	});
 }

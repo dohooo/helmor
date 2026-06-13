@@ -71,8 +71,7 @@ export type ShortcutGroup =
 // `start-composer` and `workspace-composer` are sibling leaf scopes that split
 // the composer namespace by surface. They both inherit from `composer` (and
 // transitively from `chat`) so generic composer shortcuts keep firing, but
-// surface-specific shortcuts (Shift+Tab → cycle repo on start, toggle plan
-// mode on workspace) can target one and not the other.
+// surface-specific shortcuts can target one and not the other.
 export type ShortcutScope =
 	| "app"
 	| "chat"

@@ -32,10 +32,11 @@ export type TerminalAgentSpec = {
 	 *  begins the turn immediately). */
 	boot(opts: TerminalBootOptions): string;
 	/** Resume a prior conversation by the agent's own session id;
-	 *  null = the CLI has no resume. */
+	 *  null = the CLI has no resume. `prompt`, when set, rides along as the
+	 *  resumed turn's initial input (composer convert-in-place → TUI). */
 	resume(
 		providerSessionId: string,
-		opts?: { addDirs?: readonly string[] | null },
+		opts?: { addDirs?: readonly string[] | null; prompt?: string | null },
 	): string | null;
 };
 
@@ -43,6 +44,25 @@ export type TerminalAgentSpec = {
  * inject shell syntax when spliced into the interactive boot command. */
 function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+/** Quote the user prompt for the boot command. A multi-line prompt single-
+ * quoted with literal newlines makes the boot command span multiple physical
+ * lines; the interactive shell's line editor then submits at the first newline
+ * (dangling quote → `quote>`, the CLI never launches) and a literal tab fires
+ * completion. When the prompt has those control chars, use `$'...'` ANSI-C
+ * quoting so the command stays one physical line and the shell rebuilds the
+ * real newlines/tabs in the CLI's argv. zsh/bash both support it (the boot
+ * prefix already requires one via `export VAR=...;`). */
+function shellQuotePrompt(value: string): string {
+	if (!/[\n\r\t]/.test(value)) return shellQuote(value);
+	const escaped = value
+		.replaceAll("\\", "\\\\")
+		.replaceAll("'", "\\'")
+		.replaceAll("\n", "\\n")
+		.replaceAll("\r", "\\r")
+		.replaceAll("\t", "\\t");
+	return `$'${escaped}'`;
 }
 
 /** Helmor's catalog uses the literal id "default" for "follow the CLI's own
@@ -73,7 +93,7 @@ const CLAUDE_SPEC: TerminalAgentSpec = {
 		if (effort) parts.push("--effort", shellQuote(effort));
 		if (permission) parts.push("--permission-mode", shellQuote(permission));
 		parts.push(...claudeAddDirFlags(opts.addDirs));
-		parts.push(shellQuote(opts.prompt));
+		parts.push(shellQuotePrompt(opts.prompt));
 		return parts.join(" ");
 	},
 	resume(id, opts) {
@@ -86,6 +106,9 @@ const CLAUDE_SPEC: TerminalAgentSpec = {
 			"--dangerously-skip-permissions",
 			...claudeAddDirFlags(opts?.addDirs),
 		];
+		// `claude [options] [prompt]` — a trailing positional prompt runs as the
+		// first turn of the resumed conversation.
+		if (opts?.prompt?.trim()) parts.push(shellQuotePrompt(opts.prompt));
 		return parts.join(" ");
 	},
 };
@@ -116,11 +139,16 @@ const CODEX_SPEC: TerminalAgentSpec = {
 				"danger-full-access",
 			);
 		}
-		parts.push(shellQuote(opts.prompt));
+		parts.push(shellQuotePrompt(opts.prompt));
 		return parts.join(" ");
 	},
-	resume(id) {
-		return `codex resume ${shellQuote(id)} -c model_reasoning_effort="high" --ask-for-approval never --sandbox danger-full-access`;
+	resume(id, opts) {
+		// `codex resume [OPTIONS] [SESSION_ID] [PROMPT]` — the trailing prompt
+		// starts the resumed session with the composer's input.
+		const base = `codex resume ${shellQuote(id)} -c model_reasoning_effort="high" --ask-for-approval never --sandbox danger-full-access`;
+		return opts?.prompt?.trim()
+			? `${base} ${shellQuotePrompt(opts.prompt)}`
+			: base;
 	},
 };
 
@@ -161,7 +189,7 @@ export function buildTerminalBootCommand(
 export function resumeBootCommand(
 	key: string | null | undefined,
 	sessionId: string,
-	opts?: { addDirs?: readonly string[] | null },
+	opts?: { addDirs?: readonly string[] | null; prompt?: string | null },
 ): string | null {
 	const invocation = findTerminalAgent(key)?.resume(sessionId, opts);
 	return invocation ? `${invocation}\n` : null;

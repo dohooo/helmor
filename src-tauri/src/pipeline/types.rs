@@ -231,9 +231,34 @@ pub enum MessagePart {
         allowed_prompts: Vec<PlanAllowedPrompt>,
     },
 
+    /// Normalized agent→user question card. One shape for Claude
+    /// AskUserQuestion, Codex `requestUserInput` and OpenCode `question`
+    /// — provider raw shapes are normalized by `pipeline::user_question`
+    /// so the frontend renders a single component.
+    #[serde(rename = "user-question", rename_all = "camelCase")]
+    UserQuestion {
+        /// `userInputId` round-trip key (Claude: the tool_use id).
+        id: String,
+        /// Badge string: `"Claude"`, `"Codex"`, `"OpenCode"`.
+        source: String,
+        questions: Vec<UserQuestionItem>,
+        /// `{ [question text]: answer string }` — multi-select answers are
+        /// comma-joined labels, free-text answers pass through verbatim.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        answers: Option<Value>,
+        status: UserQuestionStatus,
+    },
+
     /// Inline file reference from the composer's @-mention picker.
     #[serde(rename = "file-mention", rename_all = "camelCase")]
     FileMention { id: String, path: String },
+
+    /// A span of the user's prompt that entered the composer as a pasted-text
+    /// tag badge. The text is still part of the prompt sent to the agent; the
+    /// renderer shows it as the same tag chip (hover previews the content)
+    /// instead of inlining the full paste.
+    #[serde(rename = "pasted-text", rename_all = "camelCase")]
+    PastedText { id: String, text: String },
 }
 
 impl MessagePart {
@@ -249,11 +274,66 @@ impl MessagePart {
             | Self::Workflow { id, .. }
             | Self::Image { id, .. }
             | Self::PromptSuggestion { id, .. }
-            | Self::FileMention { id, .. } => id,
+            | Self::FileMention { id, .. }
+            | Self::PastedText { id, .. } => id,
             Self::ToolCall { tool_call_id, .. } => tool_call_id,
             Self::PlanReview { tool_use_id, .. } => tool_use_id,
+            Self::UserQuestion { id, .. } => id,
         }
     }
+}
+
+/// One question inside a [`MessagePart::UserQuestion`] card.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserQuestionItem {
+    pub question: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+    #[serde(default)]
+    pub multi_select: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<UserQuestionOption>,
+    /// Whether the renderer offers a free-text "Other" input (always for
+    /// Claude/OpenCode; Codex's `isOther` flag).
+    #[serde(default = "default_true")]
+    pub allow_free_text: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserQuestionOption {
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UserQuestionStatus {
+    /// Asked, not yet answered (live streaming only).
+    Pending,
+    Answered,
+    Declined,
+    /// Turn aborted while the question was open.
+    Cancelled,
+}
+
+/// UTF-16 code-unit range of one pasted-text tag inside a user prompt, as
+/// computed by the composer (JS string offsets). Persisted on the
+/// `user_prompt` payload as `pastedTexts`; the adapter converts to byte
+/// offsets when splitting the prompt into parts.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PastedTextRange {
+    pub start: u64,
+    pub end: u64,
 }
 
 /// Image payload variants. `Base64` carries the raw blob (no `data:` URI

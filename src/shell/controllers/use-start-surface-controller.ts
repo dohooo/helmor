@@ -11,6 +11,10 @@ import type {
 	ComposerSubmitPayload,
 	PendingCreatedWorkspaceSubmit,
 } from "@/features/conversation";
+import {
+	buildTitleSeed,
+	seedSessionTitle,
+} from "@/features/conversation/hooks/seed-session-title";
 import { buildTerminalBootCommand } from "@/features/terminal/terminal-presets";
 import { setPendingBoot } from "@/features/terminal/terminal-session-store";
 import { createWorkspaceFromStartComposer } from "@/features/workspace-start/create-workspace";
@@ -21,8 +25,10 @@ import {
 	getRepoCurrentBranch,
 	listBranchesForWorkspacePicker,
 	moveLocalWorkspaceToWorktree,
+	prefetchRemoteRefs,
 	prewarmSlashCommandsForRepo,
 	type RepositoryCreateOption,
+	renameSession,
 	type ThreadMessageLike,
 	type WorkspaceBranchIntent,
 	type WorkspaceDetail,
@@ -429,8 +435,19 @@ export function useStartSurfaceController(
 	);
 
 	const refetchBranches = useCallback(() => {
+		// Show cached refs immediately, then sync the remote so freshly
+		// pushed branches appear without a restart. Mirrors the header
+		// target-branch picker; backend rate-limits the fetch to 10s.
 		void startBranchesQuery.refetch();
-	}, [startBranchesQuery]);
+		if (!startRepository) return;
+		void prefetchRemoteRefs({ repoId: startRepository.id })
+			.then((result) => {
+				if (result.fetched) {
+					void startBranchesQuery.refetch();
+				}
+			})
+			.catch(() => {});
+	}, [startBranchesQuery, startRepository]);
 
 	const moveLocalToWorktree = useCallback(
 		(workspaceId: string) => {
@@ -574,6 +591,19 @@ export function useStartSurfaceController(
 					if (payload.terminalMode) {
 						try {
 							await convertSessionToTerminal(sessionId, payload.model.provider);
+							// Layer 1 of the two-layer title (same as GUI): show a
+							// provisional title from the prompt immediately; the agent's
+							// UserPromptSubmit hook later triggers the AI rename (layer 2).
+							const titleSeed = buildTitleSeed(payload.prompt);
+							seedSessionTitle(
+								queryClient,
+								sessionId,
+								outcome.workspaceId,
+								titleSeed,
+							);
+							void renameSession(sessionId, titleSeed).catch((error) => {
+								console.warn("[start] failed to seed terminal title:", error);
+							});
 							const boot = buildTerminalBootCommand(payload.model.provider, {
 								prompt: payload.prompt,
 								modelId: payload.model.cliModel || null,
@@ -684,6 +714,9 @@ export function useStartSurfaceController(
 							: current,
 					);
 					requestSidebarReconcile(queryClient);
+					// `workspaceDetail` (initializing → ready) is refreshed by the
+					// backend's `WorkspaceChanged` event from finalize, so the
+					// Terminal panel's spawn gate opens without a manual tab switch.
 					return { shouldStream: false };
 				}
 

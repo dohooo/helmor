@@ -29,7 +29,6 @@ export function AppShell({
 	// threads into the data/chrome layers, so the P1-A header memo deps below
 	// see byte-identical values, just sourced from the router.
 	const selectedWorkspaceId = s.selectedWorkspaceId;
-	const selectedSessionId = s.selectedSessionId;
 	const inspectorCollapsed = sel.contextPanel.inspectorCollapsed;
 	const setInspectorCollapsed = sel.contextPanelActions.setInspectorCollapsed;
 
@@ -45,10 +44,7 @@ export function AppShell({
 			<WorkspaceHeaderLeading
 				appUpdateStatus={s.appUpdateStatus}
 				leftSidebarToggleShortcut={chrome.leftSidebarToggleShortcut}
-				miniModePending={chrome.miniModePending}
-				miniModeToggleShortcut={chrome.miniModeToggleShortcut}
 				showOnDesktop={panels.sidebarCollapsed}
-				onToggleMiniMode={chrome.handleToggleMiniMode}
 				onExpandSidebar={() => panels.setSidebarCollapsed(false)}
 			/>
 		),
@@ -56,9 +52,6 @@ export function AppShell({
 			panels.sidebarCollapsed,
 			s.appUpdateStatus,
 			chrome.leftSidebarToggleShortcut,
-			chrome.miniModePending,
-			chrome.miniModeToggleShortcut,
-			chrome.handleToggleMiniMode,
 		],
 	);
 	const headerActionsNode = useMemo(
@@ -66,7 +59,6 @@ export function AppShell({
 			selectedWorkspaceId ? (
 				<WorkspaceHeaderActions
 					workspaceId={selectedWorkspaceId}
-					sessionId={selectedSessionId}
 					installedEditors={chrome.installedEditors}
 					preferredEditor={chrome.preferredEditor}
 					openPreferredEditorShortcut={chrome.openPreferredEditorShortcut}
@@ -83,7 +75,6 @@ export function AppShell({
 			) : undefined,
 		[
 			selectedWorkspaceId,
-			selectedSessionId,
 			chrome.installedEditors,
 			chrome.preferredEditor,
 			chrome.openPreferredEditorShortcut,
@@ -121,14 +112,11 @@ export function AppShell({
 				leftSidebarToggleShortcut: chrome.leftSidebarToggleShortcut,
 				appUpdateStatus: s.appUpdateStatus,
 				appSettings: s.appSettings,
-				miniModePending: chrome.miniModePending,
-				miniModeToggleShortcut: chrome.miniModeToggleShortcut,
 				onSelectWorkspace: sel.handleSelectWorkspace,
 				onOpenNewWorkspace: s.handleOpenWorkspaceStart,
 				onAddRepositoryNeedsStart:
 					sel.startSurfaceActions.addRepositoryNeedsStart,
 				onMoveLocalToWorktree: sel.startSurfaceActions.moveLocalToWorktree,
-				onToggleMiniMode: chrome.handleToggleMiniMode,
 				onCollapseSidebar: () => panels.setSidebarCollapsed(true),
 				onOpenFeedback: () => s.setFeedbackOpen(true),
 				onOpenSettings: data.handleOpenSettings,
@@ -181,14 +169,17 @@ export function AppShell({
 				preferredEditor: chrome.preferredEditor,
 				onOpenEditorFile: data.editorSessionActions.openFile,
 				onCommitAction: data.handleCommitAction,
-				onReviewAction: () =>
-					data.handleInspectorReviewAction({
-						modelId:
-							s.appSettings.reviewModelId ?? s.appSettings.defaultModelId,
+				onReviewAction: () => {
+					const reviewModel =
+						s.appSettings.reviewModel ?? s.appSettings.defaultModel;
+					return data.handleInspectorReviewAction({
+						modelId: reviewModel?.modelId ?? null,
+						provider: reviewModel?.provider ?? null,
 						effort: s.appSettings.reviewEffort ?? s.appSettings.defaultEffort,
 						fastMode:
 							s.appSettings.reviewFastMode ?? s.appSettings.defaultFastMode,
-					}),
+					});
+				},
 				onQueuePendingPromptForSession: data.queuePendingPromptForSession,
 				commitButtonMode: data.commitButtonMode,
 				commitButtonState: data.commitButtonState,
@@ -210,6 +201,7 @@ export function AppShell({
 				quickSwitch: data.quickSwitch,
 				liveWorkspaceRowMap: data.liveWorkspaceRowMap,
 				closeConfirmDialog: data.closeConfirmDialog,
+				terminalResumeDialog: data.terminalResumeDialog,
 				editorDiscardConfirmDialog: data.editorDiscardConfirmDialog,
 				mergeConfirmDialogNode: data.mergeConfirmDialogNode,
 			}}

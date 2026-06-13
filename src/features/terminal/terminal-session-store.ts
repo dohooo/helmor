@@ -94,18 +94,36 @@ const TUI_START_RE = /\x1b\[\?(?:1049|1047|47|2026|1004)h/;
  * (a non-TUI command would otherwise render nothing at all). */
 const BOOT_GATE_TIMEOUT_MS = 3000;
 
+// Terminal protocol sequences (CSI / OSC / two-byte ESC) the shell emits
+// before the TUI marker — bracketed paste (?2004h), cursor hide (?25l), kitty
+// keyboard (>1u), etc. Their plain-text neighbours (prompt, boot echo) are
+// dropped, but swallowing the sequences too desyncs xterm's mode state, so we
+// replay them ahead of the visible region.
+const PRELUDE_SEQ_RE =
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI is ESC-framed.
+	/\x1b(?:\[[0-9;?>=]*[A-Za-z]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[=>78])/g;
+
 /** Stop gating: emit from `fromIndex` (the TUI start sequence itself must
- * reach xterm) — or everything on a timeout/exit fallback (fromIndex 0). */
+ * reach xterm) — or everything on a timeout/exit fallback (fromIndex 0). The
+ * dropped prefix's control sequences are still replayed so xterm's mode state
+ * stays in sync with the TUI. */
 function releaseGate(entry: Instance, fromIndex: number) {
 	const gate = entry.gate;
 	if (!gate) return;
 	clearTimeout(gate.timer);
 	entry.gate = null;
-	const visible = gate.buf.slice(fromIndex);
-	if (visible) deliver(entry, visible);
+	const prelude =
+		fromIndex > 0
+			? (gate.buf.slice(0, fromIndex).match(PRELUDE_SEQ_RE)?.join("") ?? "")
+			: "";
+	const payload = prelude + gate.buf.slice(fromIndex);
+	if (payload) deliver(entry, payload);
 }
 
-/** Spawn the PTY for a session if not already running. Idempotent. */
+/** Spawn the PTY for a session if not already running. Idempotent.
+ *
+ * `cols`/`rows` are the renderer's real size — an inline TUI paints its first
+ * frame against them, so callers spawn only once their xterm has fit. */
 export function ensureTerminal(
 	repoId: string,
 	workspaceId: string,
@@ -113,6 +131,8 @@ export function ensureTerminal(
 	bootCommand: string | null,
 	agentKind: string | null,
 	fastMode = false,
+	cols?: number | null,
+	rows?: number | null,
 ) {
 	if (instances.has(sessionId)) return;
 	const entry: Instance = {
@@ -196,6 +216,8 @@ export function ensureTerminal(
 		bootCommand,
 		agentKind,
 		fastMode,
+		cols,
+		rows,
 	).catch((err) => {
 		const current = instances.get(sessionId);
 		if (!current) return;
@@ -221,13 +243,13 @@ export function detach(sessionId: string) {
 export function writeStdin(sessionId: string, data: string) {
 	const entry = instances.get(sessionId);
 	if (!entry) return;
-	// NOTE: no ESC-keypress interrupt heuristic here. claude's ESC is
-	// overloaded (close menu / clear input / press-twice-to-interrupt), so
-	// keystroke sniffing misfires — and each misfire kicked an IPC +
-	// session-list invalidation whose re-render could break an in-flight IME
-	// composition (typing went dead until a session switch). Interrupts are
-	// hook-driven like ORCA: a real interrupt fires Stop (is_interrupt=true),
-	// which terminal-hook already maps to idle.
+	// NOTE: no ESC-keypress interrupt heuristic here, and don't re-add one.
+	// claude fires NO hook on a user interrupt (Stop is documented as not
+	// running then), so interrupt inference IS needed — but it lives in the
+	// backend off this same write (terminal::observe_stdin in src-tauri). A
+	// renderer-side heuristic was removed because each misfire kicked an IPC
+	// + session-list invalidation whose re-render could break an in-flight
+	// IME composition (typing went dead until a session switch).
 	void writeTerminalStdin(entry.repoId, entry.workspaceId, sessionId, data);
 }
 
