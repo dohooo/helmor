@@ -81,6 +81,7 @@ pub struct AgentLoginStatus {
     pub codex: bool,
     pub cursor: bool,
     pub opencode: bool,
+    pub mimo: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codex_provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -94,6 +95,7 @@ pub struct AgentVersions {
     pub claude: Option<String>,
     pub codex: Option<String>,
     pub opencode: Option<String>,
+    pub mimo: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -493,8 +495,9 @@ fn helmor_skills_status() -> anyhow::Result<HelmorSkillsStatus> {
             claude: claude_login_ready(),
             codex: codex_auth_status().ready,
             cursor: cursor_login_ready(),
-            // opencode readiness comes from the login-status path, not here.
+            // opencode/mimo readiness comes from the login-status path, not here.
             opencode: false,
+            mimo: false,
             codex_provider: None,
             codex_auth_method: None,
         },
@@ -634,8 +637,9 @@ pub async fn install_helmor_skills() -> CmdResult<HelmorSkillsStatus> {
             claude: claude_login_ready(),
             codex: codex_auth_status().ready,
             cursor: cursor_login_ready(),
-            // opencode readiness comes from the login-status path, not here.
+            // opencode/mimo readiness comes from the login-status path, not here.
             opencode: false,
+            mimo: false,
             codex_provider: None,
             codex_auth_method: None,
         };
@@ -842,6 +846,7 @@ fn run_components_check_inner(force: bool) -> ComponentsUpdateCheck {
         codex: codex_auth_status().ready,
         cursor: cursor_login_ready(),
         opencode: false,
+        mimo: false,
         codex_provider: None,
         codex_auth_method: None,
     };
@@ -1200,6 +1205,7 @@ pub async fn get_agent_login_status() -> CmdResult<AgentLoginStatus> {
             codex: codex.ready,
             cursor: cursor_login_ready(),
             opencode: opencode_login_ready(),
+            mimo: mimo_login_ready(),
             codex_provider: codex.provider,
             codex_auth_method: codex.auth_method.map(str::to_string),
         })
@@ -1214,6 +1220,7 @@ pub async fn get_agent_versions() -> CmdResult<AgentVersions> {
             claude: agent_cli_version("claude"),
             codex: agent_cli_version("codex"),
             opencode: agent_cli_version("opencode"),
+            mimo: agent_cli_version("mimo"),
         })
     })
     .await
@@ -1286,6 +1293,7 @@ fn resolve_agent_binary(provider: &str) -> PathBuf {
         "claude" => bundled.claude_bin,
         "codex" => bundled.codex_bin,
         "opencode" => bundled.opencode_bin,
+        "mimo" => bundled.mimo_bin,
         _ => None,
     };
     bundled_path.unwrap_or_else(|| crate::platform::executable::resolve_for_spawn(provider))
@@ -1293,11 +1301,19 @@ fn resolve_agent_binary(provider: &str) -> PathBuf {
 
 // Read from the sidecar-computed settings row, NOT `auth.json` (which misses env/config/Zen providers).
 fn opencode_login_ready() -> bool {
-    let raw = match crate::models::settings::load_setting_value("app.opencode_provider") {
+    slug_login_ready("app.opencode_provider")
+}
+
+fn mimo_login_ready() -> bool {
+    slug_login_ready("app.mimo_provider")
+}
+
+fn slug_login_ready(setting_key: &str) -> bool {
+    let raw = match crate::models::settings::load_setting_value(setting_key) {
         Ok(Some(value)) => value,
         Ok(None) => return false,
         Err(error) => {
-            tracing::debug!("Failed to read app.opencode_provider: {error}");
+            tracing::debug!("Failed to read {setting_key}: {error}");
             return false;
         }
     };
@@ -1428,6 +1444,7 @@ fn agent_login_command(provider: &str) -> anyhow::Result<String> {
         "claude" => "auth login",
         "codex" => "login",
         "opencode" => "auth login",
+        "mimo" => "auth login",
         _ => anyhow::bail!("Unknown agent provider: {provider}"),
     };
     // Quote the resolved binary path so spaces in `Helmor.app` survive

@@ -179,14 +179,17 @@ export function AppShell({
 				preferredEditor: chrome.preferredEditor,
 				onOpenEditorFile: data.editorSessionActions.openFile,
 				onCommitAction: data.handleCommitAction,
-				onReviewAction: () =>
-					data.handleInspectorReviewAction({
-						modelId:
-							s.appSettings.reviewModelId ?? s.appSettings.defaultModelId,
+				onReviewAction: () => {
+					const reviewModel =
+						s.appSettings.reviewModel ?? s.appSettings.defaultModel;
+					return data.handleInspectorReviewAction({
+						modelId: reviewModel?.modelId ?? null,
+						provider: reviewModel?.provider ?? null,
 						effort: s.appSettings.reviewEffort ?? s.appSettings.defaultEffort,
 						fastMode:
 							s.appSettings.reviewFastMode ?? s.appSettings.defaultFastMode,
-					}),
+					});
+				},
 				onQueuePendingPromptForSession: data.queuePendingPromptForSession,
 				commitButtonMode: data.commitButtonMode,
 				commitButtonState: data.commitButtonState,

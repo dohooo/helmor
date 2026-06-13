@@ -159,7 +159,7 @@ export type DataInfo = {
 	archiveRoot: string;
 };
 
-export type AgentProvider = "claude" | "codex" | "cursor" | "opencode";
+export type AgentProvider = "claude" | "codex" | "cursor" | "opencode" | "mimo";
 
 export type LocalLlmStatus = {
 	enabled: boolean;
@@ -947,13 +947,19 @@ export async function toggleMiniWindowMode(): Promise<boolean> {
 	return await invoke("toggle_mini_window_mode");
 }
 
-export type AgentLoginProvider = "claude" | "codex" | "cursor" | "opencode";
+export type AgentLoginProvider =
+	| "claude"
+	| "codex"
+	| "cursor"
+	| "opencode"
+	| "mimo";
 
 export type AgentLoginStatusResult = {
 	claude: boolean;
 	codex: boolean;
 	cursor: boolean;
 	opencode: boolean;
+	mimo: boolean;
 	codexProvider?: string | null;
 	codexAuthMethod?: "login" | "apiKey" | string | null;
 };
@@ -967,6 +973,7 @@ export type AgentVersionsResult = {
 	claude: string | null;
 	codex: string | null;
 	opencode: string | null;
+	mimo: string | null;
 };
 
 export async function getAgentVersions(): Promise<AgentVersionsResult> {
@@ -1195,6 +1202,17 @@ export const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities[] = [
 		supportsSlashCommands: true,
 		requiresApiKey: false,
 	},
+	// MiMo Code is an opencode-protocol fork — identical capability surface.
+	{
+		provider: "mimo",
+		displayName: "MiMo Code",
+		supportsPlanMode: true,
+		supportsActiveGoal: false,
+		supportsContextUsage: true,
+		supportsSteer: true,
+		supportsSlashCommands: true,
+		requiresApiKey: false,
+	},
 ];
 
 /** Look up a single provider's capabilities from a previously-fetched
@@ -1318,6 +1336,58 @@ export async function deleteOpencodeCustomProvider(id: string): Promise<void> {
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to delete opencode provider."),
+		);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// MiMo Code (opencode-protocol fork) — same shapes, its own config file.
+// ---------------------------------------------------------------------------
+
+// `forceReload` restarts the mimo server to pick up config changes.
+export async function listMimoModels(
+	forceReload = false,
+): Promise<OpencodeModelEntry[]> {
+	try {
+		return await invoke<OpencodeModelEntry[]>("list_mimo_models", {
+			forceReload,
+		});
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to list mimo models."));
+	}
+}
+
+export async function getMimoCustomProviders(): Promise<
+	OpencodeCustomProvider[]
+> {
+	try {
+		return await invoke<OpencodeCustomProvider[]>("get_mimo_custom_providers");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to read MiMo Code config."),
+		);
+	}
+}
+
+export async function upsertMimoCustomProvider(
+	provider: OpencodeCustomProvider,
+	preset: boolean,
+): Promise<void> {
+	try {
+		await invoke("upsert_mimo_custom_provider", { provider, preset });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to save MiMo Code provider."),
+		);
+	}
+}
+
+export async function deleteMimoCustomProvider(id: string): Promise<void> {
+	try {
+		await invoke("delete_mimo_custom_provider", { id });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to delete MiMo Code provider."),
 		);
 	}
 }
@@ -4141,7 +4211,7 @@ export async function createSession(
 		/** Pin the session row's `model` at creation. Inspector helpers
 		 *  (Create PR/MR, Review) push the user's configured model here so
 		 *  the composer reads it off the row instead of falling back to
-		 *  settings.defaultModelId. Leave null for the default flow. */
+		 *  settings.defaultModel. Leave null for the default flow. */
 		model?: string | null;
 		/** Pin `effort_level` at creation; null falls back to the user
 		 *  setting on the backend. */

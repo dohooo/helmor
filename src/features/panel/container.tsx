@@ -18,7 +18,7 @@ import {
 	workspaceDetailQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
-import { useSettings } from "@/lib/settings";
+import { type ModelRef, useSettings } from "@/lib/settings";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import type { ContextCard } from "@/lib/sources/types";
 import { resolveSessionDisplayProvider } from "@/lib/workspace-helpers";
@@ -53,7 +53,7 @@ type WorkspacePanelContainerProps = {
 	sending: boolean;
 	busySessionIds?: Set<string>;
 	interactionRequiredSessionIds?: Set<string>;
-	modelSelections?: Record<string, string>;
+	modelSelections?: Record<string, ModelRef>;
 	workspaceChangeRequest?: ChangeRequestInfo | null;
 	onSelectSession: (sessionId: string | null) => void;
 	onSelectWorkspace?: (workspaceId: string) => void;
@@ -335,13 +335,13 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 						session,
 						modelSelections,
 						modelSections,
-						settingsDefaultModelId: settings.defaultModelId,
+						settingsDefaultModel: settings.defaultModel,
 					});
 					return provider ? [session.id, provider] : null;
 				})
 				.filter((entry): entry is [string, AgentProvider] => entry !== null),
 		);
-	}, [modelSelections, queryClient, sessions, settings.defaultModelId]);
+	}, [modelSelections, queryClient, sessions, settings.defaultModel]);
 
 	// The router's session intent only applies once the workspace selection
 	// has converged onto the paint track. During a deferred flip / cold hold

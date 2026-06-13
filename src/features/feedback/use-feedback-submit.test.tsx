@@ -50,7 +50,12 @@ function setup({
 	const { result } = renderHook(() =>
 		useFeedbackSubmit({
 			queryClient,
-			appSettings: { ...DEFAULT_SETTINGS, defaultModelId },
+			appSettings: {
+				...DEFAULT_SETTINGS,
+				defaultModel: defaultModelId
+					? { provider: null, modelId: defaultModelId }
+					: null,
+			},
 			selectWorkspace,
 			selectSession,
 			setViewMode,

@@ -382,7 +382,9 @@ describe("WorkspaceComposerContainer", () => {
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreNonce={0}
-					modelSelections={{ "start:repo:repo-1": "gpt-5.4" }}
+					modelSelections={{
+						"start:repo:repo-1": { provider: "codex", modelId: "gpt-5.4" },
+					}}
 					effortLevels={{}}
 					permissionModes={{}}
 					fastModes={{}}
@@ -401,9 +403,12 @@ describe("WorkspaceComposerContainer", () => {
 
 		composerMockState.lastOnSelectModel?.("opus-1m");
 
+		// Provider rides along with the pick (derived here from the option since
+		// the mock omitted it) so the slug routes to the right section.
 		expect(handleSelectModel).toHaveBeenCalledWith(
 			"start:repo:repo-1",
 			"opus-1m",
+			"claude",
 		);
 	});
 
@@ -431,7 +436,9 @@ describe("WorkspaceComposerContainer", () => {
 					restoreImages={[]}
 					restoreFiles={[]}
 					restoreNonce={0}
-					modelSelections={{ "start:repo:repo-1": "gpt-5.4" }}
+					modelSelections={{
+						"start:repo:repo-1": { provider: "codex", modelId: "gpt-5.4" },
+					}}
 					effortLevels={{ "start:repo:repo-1": "low" }}
 					permissionModes={{ "start:repo:repo-1": "plan" }}
 					fastModes={{ "start:repo:repo-1": true }}
@@ -884,7 +891,7 @@ describe("WorkspaceComposerContainer", () => {
 				value={{
 					settings: {
 						...DEFAULT_SETTINGS,
-						defaultModelId: "gpt-5.4",
+						defaultModel: { provider: null, modelId: "gpt-5.4" },
 						defaultFastMode: true,
 					},
 					isLoaded: true,
@@ -1206,7 +1213,7 @@ describe("WorkspaceComposerContainer", () => {
 				name: "compact",
 				description: "Compact this conversation's context",
 				source: "builtin",
-				providers: ["opencode"],
+				providers: ["opencode", "mimo"],
 			});
 		});
 
@@ -1353,7 +1360,12 @@ describe("WorkspaceComposerContainer", () => {
 								restoreImages={[]}
 								restoreFiles={[]}
 								restoreNonce={0}
-								modelSelections={{ "session:session-2": "gpt-5.4" }}
+								modelSelections={{
+									"session:session-2": {
+										provider: "codex",
+										modelId: "gpt-5.4",
+									},
+								}}
 								effortLevels={{}}
 								permissionModes={{}}
 								fastModes={{}}

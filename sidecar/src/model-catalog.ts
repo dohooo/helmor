@@ -84,7 +84,7 @@ const MODEL_CATALOG: Record<Provider, readonly ProviderModelInfo[]> = {
 			supportsFastMode: true,
 		},
 	],
-	// Static seed; live set comes from `OpencodeSessionManager.listModels`.
+	// Static seed; live set comes from `OpencodeProtocolSessionManager.listModels`.
 	// MUST stay in sync with Rust `opencode_section()` in agents/catalog.rs.
 	// Ids are opencode's `provider/model` slug.
 	opencode: [
@@ -112,6 +112,33 @@ const MODEL_CATALOG: Record<Provider, readonly ProviderModelInfo[]> = {
 			id: "openai/gpt-5-codex",
 			label: "GPT-5-Codex",
 			cliModel: "openai/gpt-5-codex",
+		},
+	],
+	// Static seed; live set comes from the shared opencode-protocol
+	// `listModels` (provider.list against `mimo serve`). MUST stay in sync
+	// with Rust `mimo_section()` in agents/catalog.rs. Ids are the fork's
+	// `provider/model` slug; `xiaomi` is the official MiMo platform provider,
+	// `mimo` is the bundled MiMo Auto meta-provider.
+	mimo: [
+		{
+			id: "xiaomi/mimo-v2.5-pro",
+			label: "MiMo V2.5 Pro",
+			cliModel: "xiaomi/mimo-v2.5-pro",
+		},
+		{
+			id: "xiaomi/mimo-v2.5",
+			label: "MiMo V2.5",
+			cliModel: "xiaomi/mimo-v2.5",
+		},
+		{
+			id: "xiaomi/mimo-v2-flash",
+			label: "MiMo V2 Flash",
+			cliModel: "xiaomi/mimo-v2-flash",
+		},
+		{
+			id: "mimo/mimo-auto",
+			label: "MiMo Auto",
+			cliModel: "mimo/mimo-auto",
 		},
 	],
 	// Static fallback only — `CursorSessionManager.listModels` hits the live

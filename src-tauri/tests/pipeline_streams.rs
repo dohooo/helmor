@@ -273,7 +273,10 @@ fn stream_replay() {
             .and_then(|n| n.to_str())
             .unwrap_or_else(|| panic!("fixture {path:?} is missing a provider parent dir"));
         assert!(
-            matches!(provider, "claude" | "codex" | "cursor" | "opencode"),
+            matches!(
+                provider,
+                "claude" | "codex" | "cursor" | "opencode" | "mimo"
+            ),
             "fixture {path:?} is under unknown provider directory {provider:?}"
         );
 

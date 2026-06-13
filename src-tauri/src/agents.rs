@@ -12,6 +12,7 @@ mod builtin_claude_providers;
 mod catalog;
 pub(crate) mod claude_project_files;
 mod custom_providers;
+pub(crate) mod model_ref;
 pub(crate) mod opencode_config;
 mod persistence;
 pub mod provider_capabilities;
@@ -245,6 +246,15 @@ pub async fn list_opencode_models(
 ) -> CmdResult<Vec<queries::OpencodeModelEntry>> {
     // force_reload restarts the opencode server to pick up a just-written config.
     queries::fetch_opencode_models(sidecar.inner(), force_reload.unwrap_or(false))
+}
+
+#[tauri::command]
+pub async fn list_mimo_models(
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    force_reload: Option<bool>,
+) -> CmdResult<Vec<queries::OpencodeModelEntry>> {
+    // force_reload restarts the mimo server to pick up a just-written config.
+    queries::fetch_mimo_models(sidecar.inner(), force_reload.unwrap_or(false))
 }
 
 #[tauri::command]

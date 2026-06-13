@@ -1,6 +1,7 @@
 import {
 	ClaudeIcon,
 	CursorIcon,
+	MiMoCodeIcon,
 	OpenAIIcon,
 	OpenCodeIcon,
 } from "@/components/icons";
@@ -82,6 +83,9 @@ function SessionProviderIcon({
 	}
 	if (provider === "opencode") {
 		return <OpenCodeIcon className={className} />;
+	}
+	if (provider === "mimo") {
+		return <MiMoCodeIcon className={className} />;
 	}
 	return <ClaudeIcon className={className} />;
 }
