@@ -272,6 +272,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 		expect(apiMocks.createSession).toHaveBeenCalledWith("workspace-1", {
 			actionKind: "create-pr",
 			model: null,
+			agentType: null,
 			effortLevel: null,
 			fastMode: null,
 		});
@@ -1280,6 +1281,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 		expect(apiMocks.createSession).toHaveBeenCalledWith("workspace-1", {
 			actionKind: "review",
 			model: "review-model",
+			agentType: null,
 			effortLevel: null,
 			fastMode: null,
 		});
@@ -1327,6 +1329,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 		expect(apiMocks.createSession).toHaveBeenCalledWith("workspace-1", {
 			actionKind: "review",
 			model: null,
+			agentType: null,
 			effortLevel: null,
 			fastMode: null,
 		});
