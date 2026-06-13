@@ -18,6 +18,7 @@ import { CursorSessionManager } from "./cursor-session-manager.js";
 import { createSidecarEmitter } from "./emitter.js";
 import { resolveHostResponse, setHostWriter } from "./host-bridge.js";
 import { errorDetails, logger } from "./logger.js";
+import { MIMO_PROTOCOL_CONFIG } from "./opencode-protocol/mimo.js";
 import { OPENCODE_PROTOCOL_CONFIG } from "./opencode-protocol/opencode.js";
 import { OpencodeProtocolSessionManager } from "./opencode-protocol/session-manager.js";
 import {
@@ -47,11 +48,13 @@ const cursorManager = new CursorSessionManager();
 const opencodeManager = new OpencodeProtocolSessionManager(
 	OPENCODE_PROTOCOL_CONFIG,
 );
+const mimoManager = new OpencodeProtocolSessionManager(MIMO_PROTOCOL_CONFIG);
 const managers: Record<Provider, SessionManager> = {
 	claude: claudeManager,
 	codex: codexManager,
 	cursor: cursorManager,
 	opencode: opencodeManager,
+	mimo: mimoManager,
 };
 
 // `parentGone` flips to true only when stdin EOFs — that's the
@@ -259,7 +262,8 @@ function parseTitleAttempts(raw: unknown): TitleAttempt[] {
 				obj.provider === "claude" ||
 				obj.provider === "codex" ||
 				obj.provider === "cursor" ||
-				obj.provider === "opencode"
+				obj.provider === "opencode" ||
+				obj.provider === "mimo"
 					? obj.provider
 					: null;
 			if (!provider) continue;
@@ -643,11 +647,13 @@ for await (const line of rl) {
 				const message =
 					typeof params.message === "string" ? params.message : undefined;
 				logger.debug(`[${id}] permissionResponse`, { permissionId, behavior });
-				// Route by id prefix: `codex-`, `opencode-`, else Claude.
+				// Route by id prefix: `codex-`, `opencode-`, `mimo-`, else Claude.
 				if (permissionId.startsWith("codex-")) {
 					codexManager.resolvePermission(permissionId, behavior);
 				} else if (permissionId.startsWith("opencode-")) {
 					opencodeManager.resolvePermission(permissionId, behavior);
+				} else if (permissionId.startsWith("mimo-")) {
+					mimoManager.resolvePermission(permissionId, behavior);
 				} else {
 					claudeManager.resolvePermission(
 						permissionId,
@@ -689,7 +695,8 @@ for await (const line of rl) {
 				const claimed =
 					claudeManager.resolveUserInput(userInputId, resolution) ||
 					codexManager.resolveUserInput(userInputId, resolution) ||
-					opencodeManager.resolveUserInput(userInputId, resolution);
+					opencodeManager.resolveUserInput(userInputId, resolution) ||
+					mimoManager.resolveUserInput(userInputId, resolution);
 				if (!claimed) {
 					// No live waiter — the parked promise was lost (sidecar
 					// restart, session ended, or duplicate submit). Surface
