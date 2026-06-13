@@ -130,3 +130,70 @@ async fn health_is_public_and_rpc_requires_bearer() {
     state.shutdown().await;
     assert!(state.info().await.is_none());
 }
+
+/// `helmor serve` smoke test: `start_serve` binds the requested address with a
+/// caller-supplied capability token (no random dev token, no paired-device
+/// verifier), and the resulting surface gates RPC on exactly that token. This
+/// mirrors the container path (`0.0.0.0:$PORT` + `HELMOR_COMPANION_TOKEN`)
+/// without building a full windowless Wry app.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_binds_with_capability_token_and_gates_rpc() {
+    let app = tauri::test::mock_app();
+    let state = CompanionState::new();
+    let streamer: StreamStarter = Arc::new(|_cmd, _args, _tx| Ok(()));
+    // Serve rejects everything beyond the injected capability token.
+    let verifier: Verifier = Arc::new(|_bearer| false);
+    let dispatcher: Dispatcher = Arc::new(|cmd: String, _args: serde_json::Value| {
+        async move { Err(anyhow::anyhow!("Unknown companion command: {cmd}").into()) }.boxed()
+    });
+
+    let capability_token = "hlm_serve_capability".to_string();
+    // Bind 0.0.0.0:0 (the real container shape) and reach it over loopback.
+    let info = state
+        .start_serve(
+            app.handle().clone(),
+            "0.0.0.0",
+            0,
+            capability_token.clone(),
+            streamer,
+            dispatcher,
+            verifier,
+        )
+        .await
+        .expect("serve companion should start");
+    // The bound token is exactly what we injected — not a random dev token.
+    assert_eq!(info.token, capability_token);
+
+    let base = format!("http://127.0.0.1:{}", info.addr.port());
+    let client = reqwest::Client::new();
+
+    // Health stays public.
+    let health = client
+        .get(format!("{base}/v1/health"))
+        .send()
+        .await
+        .expect("health request");
+    assert_eq!(health.status(), 200);
+
+    // The injected capability token authenticates (reaches dispatch → 400 on
+    // the unknown command, proving it passed auth rather than 401).
+    let authed = client
+        .post(format!("{base}/rpc/__does_not_exist__"))
+        .bearer_auth(&capability_token)
+        .send()
+        .await
+        .expect("authed request");
+    assert_eq!(authed.status(), 400);
+
+    // Any other bearer is rejected (no dev-token fallback, verifier rejects).
+    let wrong = client
+        .post(format!("{base}/rpc/__does_not_exist__"))
+        .bearer_auth("hlm_not_the_token")
+        .send()
+        .await
+        .expect("wrong-token request");
+    assert_eq!(wrong.status(), 401);
+
+    state.shutdown().await;
+    assert!(state.info().await.is_none());
+}

@@ -122,9 +122,48 @@ impl CompanionState {
     /// returns the existing connection details. Generic over the Tauri runtime
     /// so tests can drive it with a mock app; the `streamer` is built from the
     /// concrete `AppHandle` by the caller (see [`build_agent_streamer`]).
+    /// Binds loopback with a freshly minted dev token — the desktop / mobile
+    /// companion path.
     pub async fn start<R: tauri::Runtime>(
         &self,
         app: tauri::AppHandle<R>,
+        streamer: StreamStarter,
+        dispatcher: Dispatcher,
+        verifier: Verifier,
+    ) -> Result<CompanionInfo> {
+        self.start_inner(app, "127.0.0.1", 0, None, streamer, dispatcher, verifier)
+            .await
+    }
+
+    /// Start the server for the headless `helmor serve` host: bind
+    /// `host:port` (typically `0.0.0.0:$PORT`) and accept the caller-supplied
+    /// capability `token` (injected via the environment in a container)
+    /// instead of a random dev token, so the CF Worker / reverse proxy can
+    /// authenticate against a known value.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn start_serve<R: tauri::Runtime>(
+        &self,
+        app: tauri::AppHandle<R>,
+        host: &str,
+        port: u16,
+        token: String,
+        streamer: StreamStarter,
+        dispatcher: Dispatcher,
+        verifier: Verifier,
+    ) -> Result<CompanionInfo> {
+        self.start_inner(app, host, port, Some(token), streamer, dispatcher, verifier)
+            .await
+    }
+
+    /// Shared startup: bind `host:port`, mount the router, and remember the
+    /// running server. When `token` is `None` a random dev token is minted.
+    #[allow(clippy::too_many_arguments)]
+    async fn start_inner<R: tauri::Runtime>(
+        &self,
+        app: tauri::AppHandle<R>,
+        host: &str,
+        port: u16,
+        token: Option<String>,
         streamer: StreamStarter,
         dispatcher: Dispatcher,
         verifier: Verifier,
@@ -137,7 +176,7 @@ impl CompanionState {
             });
         }
 
-        let token = generate_token();
+        let token = token.unwrap_or_else(generate_token);
         // Capture the asset resolver behind a type-erased closure so the HTTP
         // layer never names a Tauri runtime.
         let asset_app = app.clone();
@@ -157,7 +196,7 @@ impl CompanionState {
         };
         let router = server::router(state);
 
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+        let listener = tokio::net::TcpListener::bind((host, port)).await?;
         let addr = listener.local_addr()?;
 
         let (tx, rx) = oneshot::channel::<()>();
@@ -170,7 +209,7 @@ impl CompanionState {
             }
         });
 
-        tracing::info!(%addr, "companion server listening on loopback");
+        tracing::info!(%addr, "companion server listening");
         *guard = Some(Running {
             addr,
             token: token.clone(),

@@ -4,8 +4,9 @@ export type DarwinArch = "arm64" | "x64";
 export type ReleaseArch = "arm64" | "amd64";
 
 export interface TargetInfo {
-	/** Target OS — Windows changes archive formats, `.exe` suffixes, and naming. */
-	os: "darwin" | "windows";
+	/** Target OS — Windows changes archive formats, `.exe` suffixes, and naming;
+	 *  Linux is the headless serve container image (PR3, codex + gh only). */
+	os: "darwin" | "windows" | "linux";
 	arch: DarwinArch;
 	/** `@anthropic-ai/claude-code-darwin-<arch>` is the platform sub-package. */
 	claudeCodePkg: string;
@@ -133,6 +134,13 @@ export const NODE_SHA256: Readonly<{
 } as const;
 
 export function nodeArchivePlan(target: TargetInfo): ArchivePlan {
+	// The cursor worker's Node runtime is only vendored for the desktop
+	// (macOS / Windows) bundles; the Linux serve image doesn't stage it.
+	if (target.os === "linux") {
+		throw new Error(
+			"[stage-vendor] node runtime is not vendored for linux targets",
+		);
+	}
 	const platform = target.os === "windows" ? "win" : "darwin";
 	const ext = target.os === "windows" ? "zip" : "tar.gz";
 	const slug = `node-v${NODE_VERSION}-${platform}-${target.arch}`;
@@ -198,6 +206,46 @@ export function targetInfoForArch(arch: DarwinArch): TargetInfo {
 	return TARGETS[arch];
 }
 
+/** Linux targets for the headless `helmor serve` container image (PR3). Only
+ *  codex + gh are staged on Linux; the remaining fields are filled for type
+ *  completeness and parity with the platform sub-package names. The image
+ *  builds natively (no cross-compile), so staging trusts the codex binary bun
+ *  installed into node_modules and soft-verifies the gh release archive. */
+const LINUX_TARGETS: Readonly<Record<DarwinArch, TargetInfo>> = {
+	arm64: {
+		os: "linux",
+		arch: "arm64",
+		claudeCodePkg: "@anthropic-ai/claude-code-linux-arm64",
+		claudeCodeNpmSuffix: "linux-arm64",
+		codexPkg: "@openai/codex-linux-arm64",
+		codexTriple: "aarch64-unknown-linux-musl",
+		codexNpmSuffix: "linux-arm64",
+		opencodePkg: "opencode-linux-arm64",
+		opencodeNpmSuffix: "linux-arm64",
+		ghArch: "arm64",
+		glabArch: "arm64",
+		cloudflaredArch: "arm64",
+	},
+	x64: {
+		os: "linux",
+		arch: "x64",
+		claudeCodePkg: "@anthropic-ai/claude-code-linux-x64",
+		claudeCodeNpmSuffix: "linux-x64",
+		codexPkg: "@openai/codex-linux-x64",
+		codexTriple: "x86_64-unknown-linux-musl",
+		codexNpmSuffix: "linux-x64",
+		opencodePkg: "opencode-linux-x64",
+		opencodeNpmSuffix: "linux-x64",
+		ghArch: "amd64",
+		glabArch: "amd64",
+		cloudflaredArch: "amd64",
+	},
+};
+
+export function linuxTargetInfoForArch(arch: DarwinArch): TargetInfo {
+	return LINUX_TARGETS[arch];
+}
+
 export function resolveVendorTarget(options?: {
 	hostPlatform?: NodeJS.Platform;
 	hostArch?: string;
@@ -218,9 +266,18 @@ export function resolveVendorTarget(options?: {
 		return WINDOWS_X64_TARGET;
 	}
 
+	// Linux: the headless serve container image builds natively, so the host
+	// arch is the target. Only amd64 (CF Containers) / arm64 are supported.
+	if (hostPlatform === "linux") {
+		const hostArch = options?.hostArch ?? process.arch;
+		if (hostArch === "arm64") return linuxTargetInfoForArch("arm64");
+		if (hostArch === "x64") return linuxTargetInfoForArch("x64");
+		throw new Error(`[stage-vendor] unsupported Linux host arch: ${hostArch}`);
+	}
+
 	if (hostPlatform !== "darwin") {
 		throw new Error(
-			`[stage-vendor] Helmor only builds on macOS and Windows; host platform is ${hostPlatform}`,
+			`[stage-vendor] Helmor only builds on macOS, Windows, and Linux; host platform is ${hostPlatform}`,
 		);
 	}
 
@@ -241,9 +298,19 @@ export function resolveVendorTarget(options?: {
 
 export function ghArchivePlan(target: TargetInfo): ArchivePlan {
 	const arch = target.ghArch;
-	// gh ships macOS as `gh_<ver>_macOS_<arch>.zip` and Windows as
-	// `gh_<ver>_windows_<arch>.zip`; both nest `bin/gh[.exe]`. Windows has no
-	// pinned sha256 (soft-verify), so leave it empty.
+	// gh ships macOS as `gh_<ver>_macOS_<arch>.zip`, Windows as
+	// `gh_<ver>_windows_<arch>.zip`, and Linux as `gh_<ver>_linux_<arch>.tar.gz`;
+	// all nest `bin/gh[.exe]`. Windows + Linux carry no pinned sha256
+	// (soft-verify — the SHA table holds macOS only), so leave it empty.
+	if (target.os === "linux") {
+		const slug = `gh_${GH_VERSION}_linux_${arch}`;
+		return {
+			slug,
+			archiveName: `${slug}.tar.gz`,
+			url: `https://github.com/cli/cli/releases/download/v${GH_VERSION}/${slug}.tar.gz`,
+			sha256: "",
+		};
+	}
 	if (target.os === "windows") {
 		const slug = `gh_${GH_VERSION}_windows_${arch}`;
 		return {

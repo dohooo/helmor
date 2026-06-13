@@ -14,6 +14,7 @@ mod actions;
 mod active_streams;
 mod bridges;
 mod cleanup;
+mod cloud_autopush;
 pub(crate) mod codex_goal;
 pub(crate) mod context_usage;
 mod params;
@@ -751,6 +752,12 @@ pub(super) fn stream_via_sidecar(
                                             crate::ui_sync::UiMutationEvent::SessionTurnPersisted {
                                                 session_id: ctx.helmor_session_id.clone(),
                                             },
+                                        );
+                                        // Cloud serve mode only (env-gated):
+                                        // commit + push the turn's work so the
+                                        // ephemeral sandbox never loses code.
+                                        cloud_autopush::maybe_autopush_after_turn(
+                                            &turn_session.ctx.working_directory,
                                         );
                                     }
                                     Err(error) => {

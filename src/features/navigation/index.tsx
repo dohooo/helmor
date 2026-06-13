@@ -66,6 +66,7 @@ import {
 } from "./shared";
 import { repoIdFromGroupId } from "./sidebar-projection";
 import { SidebarViewPopover } from "./sidebar-view-popover";
+import { TeamModeSwitch } from "./team-mode-switch";
 
 // ---------------------------------------------------------------------------
 // Virtual list item types
@@ -326,7 +327,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		if (!activeDragWorkspaceId) return null;
 		for (const group of groups) {
 			const meta = group.stackMeta?.get(activeDragWorkspaceId);
-			if (!meta || meta.role !== "tip") continue;
+			if (meta?.role !== "tip") continue;
 			const members = group.rows
 				.filter((row) => group.stackMeta?.get(row.id)?.tipId === meta.tipId)
 				.sort(
@@ -1156,6 +1157,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				</h2>
 
 				<div className="flex items-center gap-1 text-muted-foreground">
+					<TeamModeSwitch />
+
 					<SidebarViewPopover
 						repositories={availableRepositories}
 						grouping={sidebarGrouping}

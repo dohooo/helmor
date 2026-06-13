@@ -1,0 +1,40 @@
+# Helmor Team Cloud Sandbox — Worker control plane (Phase 0, stateless thin
+# proxy). Deploy:  cd cloud && bun install && bunx wrangler deploy
+#
+# Secrets (set before first deploy):
+#   bunx wrangler secret put HELMOR_COMPANION_TOKEN   # capability token the
+#                                                     # container's serve accepts
+#   bunx wrangler secret put GITHUB_TOKEN             # PAT for PR6 clone/push
+#
+# Preview URLs (proxyToSandbox) need a custom domain with wildcard DNS in
+# production — add a [[routes]] block on your zone. For local dev, `wrangler dev`
+# fronts everything on localhost.
+name = "helmor-team"
+main = "src/index.ts"
+compatibility_date = "2026-06-09"
+compatibility_flags = ["nodejs_compat"]
+
+# Single sandbox for Phase 0 (one team → one sandbox). Image lives at the repo
+# root; its directory becomes the Docker build context (the stages `COPY . .`).
+# The image tag inside the Dockerfile (SANDBOX_VERSION) MUST match the
+# @cloudflare/sandbox version in package.json.
+[[containers]]
+class_name = "Sandbox"
+image = "../Dockerfile"
+instance_type = "standard"
+max_instances = 1
+
+[[durable_objects.bindings]]
+class_name = "Sandbox"
+name = "Sandbox"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Sandbox"]
+
+[vars]
+# Fixed sandbox id for Phase 0 (B2 single-backend model). Phase 1 derives it
+# from the team / token.
+HELMOR_SANDBOX_ID = "helmor-team-0"
+# Port the in-container companion server binds (matches HELMOR_SERVE_PORT).
+HELMOR_COMPANION_PORT = "8080"

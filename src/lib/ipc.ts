@@ -35,6 +35,7 @@ import {
 	type UnlistenFn,
 } from "@tauri-apps/api/event";
 import { isTauriRuntime } from "./platform";
+import { getTeamConfig, isTeamModeActive } from "./team-mode";
 
 export type { UnlistenFn };
 
@@ -69,6 +70,18 @@ export function isCompanionClient(): boolean {
 
 // Resolved once at module load; the runtime never switches mid-session.
 const COMPANION = isCompanionClient();
+
+// Team mode: the *desktop* Tauri app pointing its transport at a remote
+// companion (a CF Worker), chosen synchronously at boot from localStorage. Only
+// meaningful in the Tauri runtime — a browser served by the companion is
+// already remote (COMPANION above). Switching mode persists + reloads, so this
+// constant is stable for the whole session.
+const TEAM = isTauriRuntime() && isTeamModeActive();
+
+// Any remote HTTP transport (browser companion OR desktop team mode). The
+// pairing / cookie / browser-auth-gate side effects below stay keyed on
+// COMPANION (browser-only); only the request transport keys on REMOTE.
+const REMOTE = COMPANION || TEAM;
 
 // On first companion load, a pairing link may carry the token in the URL hash
 // (`#pair=<token>`). Persist it, then strip it so the secret doesn't linger in
@@ -199,12 +212,16 @@ function syncCompanionCookie(): void {
 }
 
 function baseUrl(): string {
+	// Team mode targets the configured Worker URL directly.
+	if (TEAM) return getTeamConfig()?.url ?? "";
 	const configured = companionConfig()?.base;
 	if (configured) return configured.replace(/\/$/, "");
 	return typeof location !== "undefined" ? location.origin : "";
 }
 
 function authToken(): string | null {
+	// Team mode authenticates with the manually entered team token.
+	if (TEAM) return getTeamConfig()?.token || null;
 	try {
 		if (typeof localStorage !== "undefined") {
 			const stored = localStorage.getItem(TOKEN_KEY);
@@ -322,7 +339,7 @@ export function closeChannel(channel: unknown): void {
 // Mirror Tauri's `Channel`, which is both a value (constructor) and a type.
 // `api.ts` uses both forms (`new Channel<T>()` and `channel: Channel<T>`).
 export type Channel<T = unknown> = TauriChannel<T>;
-export const Channel = (COMPANION
+export const Channel = (REMOTE
 	? CompanionChannel
 	: TauriChannel) as unknown as typeof TauriChannel;
 
@@ -338,7 +355,7 @@ export const Channel = (COMPANION
  * endpoint; until then these images just don't load.)
  */
 export function convertFileSrc(filePath: string, protocol?: string): string {
-	if (!COMPANION) return tauriConvertFileSrc(filePath, protocol);
+	if (!REMOTE) return tauriConvertFileSrc(filePath, protocol);
 	// Serve the file through the companion's restricted `/v1/asset` endpoint
 	// (avatar / generated-image / paste-cache dirs only). The PAT cookie set in
 	// `syncCompanionCookie` authenticates the `<img>` request. Files outside
@@ -356,7 +373,7 @@ export function invoke<T>(
 	args?: InvokeArgs,
 	options?: InvokeOptions,
 ): Promise<T> {
-	if (!COMPANION) {
+	if (!REMOTE) {
 		// Preserve the original call arity so tests asserting
 		// `invoke).toHaveBeenCalledWith("cmd")` (no trailing undefineds) keep
 		// matching.
@@ -407,7 +424,10 @@ async function companionInvoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
 		body: JSON.stringify(record ?? args ?? {}),
 	});
 	if (!res.ok) {
-		if (res.status === 401) setCompanionAuthState("unauthed");
+		// The browser "pair this device" gate is companion-only; a team-mode
+		// 401 surfaces as a normal error (the Settings health check is the
+		// place to validate the token), not the pairing screen.
+		if (res.status === 401 && COMPANION) setCompanionAuthState("unauthed");
 		throw await parseHttpError(res);
 	}
 	setCompanionAuthState("ok");
@@ -467,7 +487,7 @@ export function listen<T>(
 	handler: EventCallback<T>,
 	options?: ListenOptions,
 ): Promise<UnlistenFn> {
-	if (!COMPANION) return tauriListen<T>(event, handler, options);
+	if (!REMOTE) return tauriListen<T>(event, handler, options);
 	return companionListen(event, handler as CompanionEventHandler);
 }
 
@@ -510,7 +530,7 @@ async function runEventStream(): Promise<void> {
 				headers: authHeaders(),
 			});
 			if (!res.ok || !res.body) {
-				if (res.status === 401) setCompanionAuthState("unauthed");
+				if (res.status === 401 && COMPANION) setCompanionAuthState("unauthed");
 				throw new Error(`stream status ${res.status}`);
 			}
 			await pumpSse(res.body, dispatchEvent);

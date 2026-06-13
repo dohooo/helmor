@@ -1050,6 +1050,10 @@ function findNodeAddon(dir: string): string | null {
 // ---------------------------------------------------------------------------
 
 const target = resolveVendorTarget();
+// Linux (the headless serve container image) stages only codex + gh — the
+// other agents / forge CLIs aren't installed in that image (T3). On macOS /
+// Windows every component is staged as before.
+const IS_LINUX = target.os === "linux";
 
 console.log(
 	`[stage-vendor] host=${process.platform}/${process.arch} target=${target.os}/${target.arch} (${target.codexTriple})`,
@@ -1076,31 +1080,34 @@ function stageOptional(label: string, fn: () => void): void {
 rmSync(DIST_VENDOR, { recursive: true, force: true });
 mkdirSync(DIST_VENDOR, { recursive: true });
 
-// ----- Claude Code -----
-stageClaudeCodeBinary(target);
+// ----- Claude Code (desktop only — skipped in the Linux serve image) -----
+if (!IS_LINUX) stageClaudeCodeBinary(target);
 
-// ----- Codex -----
+// ----- Codex (staged on every target, including Linux) -----
 stageCodexBinary(target);
 
-// ----- opencode -----
-stageOptional("opencode", () => stageOpencodeBinary(target));
+// ----- opencode (desktop only) -----
+if (!IS_LINUX) stageOptional("opencode", () => stageOpencodeBinary(target));
 
 // ----- gh + glab (forge CLIs) -----
 // Wrapped in stageOptional so a missing/unpublished Windows artifact downgrades
-// to a warning; on macOS stageOptional re-throws, keeping staging strict.
+// to a warning; on macOS stageOptional re-throws, keeping staging strict. gh is
+// staged everywhere (PR6 boot clone / push needs it); glab stays desktop-only.
 stageOptional("gh", () => stageGhBinary(target));
-stageOptional("glab", () => stageGlabBinary(target));
+if (!IS_LINUX) stageOptional("glab", () => stageGlabBinary(target));
 
-// ----- cloudflared (mobile-companion tunnel) -----
-stageOptional("cloudflared", () => stageCloudflaredBinary(target));
+// ----- cloudflared (mobile-companion tunnel — desktop only) -----
+if (!IS_LINUX)
+	stageOptional("cloudflared", () => stageCloudflaredBinary(target));
 
-// ----- llama.cpp (local LLM server for auto-rename / Local AI) -----
-stageOptional("llama-cpp", () => stageLlamaCppBinaries(target));
+// ----- llama.cpp (local LLM server for auto-rename / Local AI — desktop only) -----
+if (!IS_LINUX) stageOptional("llama-cpp", () => stageLlamaCppBinaries(target));
 
 // ----- Cursor worker deps — release builds only (set by the `build` script).
 // Dev resolves @cursor/sdk from sidecar/node_modules, so `dev:prepare` skips
-// this ~minute-long install. Node runtime is staged separately (see CI). -----
-if (process.env.HELMOR_STAGE_CURSOR_WORKER === "1") {
+// this ~minute-long install. Node runtime is staged separately (see CI).
+// Desktop only — the Linux serve image doesn't ship the cursor worker. -----
+if (!IS_LINUX && process.env.HELMOR_STAGE_CURSOR_WORKER === "1") {
 	stageNodeRuntime(target);
 	stageCursorWorkerDeps(target);
 }

@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod bootstrap;
 pub mod cli;
 pub(crate) mod codex_config;
 pub(crate) mod commands;
@@ -23,6 +24,7 @@ pub(crate) mod platform;
 pub mod quick_panel;
 pub mod rate_limits;
 pub mod schema;
+pub mod serve;
 pub mod service;
 mod shell_env;
 pub mod sidecar;
@@ -91,9 +93,19 @@ pub fn schema_init(conn: &rusqlite::Connection) {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    system_limits::raise_nofile_soft_limit();
+/// Which host we're building: the interactive desktop GUI, or the headless
+/// `helmor serve` companion host (windowless Wry, validated by the S1 spike).
+#[derive(Clone, Copy, PartialEq)]
+enum AppMode {
+    Desktop,
+    Serve,
+}
 
+/// Build the Tauri app shared by both hosts. The plugin set, managed state,
+/// invoke handler, and embedded assets are identical; only the `setup` hook
+/// (the mode branch below) and the window configuration differ, so the desktop
+/// and serve hosts can never drift apart.
+fn build_app(mode: AppMode) -> tauri::App {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
@@ -182,7 +194,7 @@ pub fn run() {
     #[cfg(debug_assertions)]
     let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
 
-    let app = builder
+    let builder = builder
         .manage(sidecar::ManagedSidecar::new())
         .manage(agents::ActiveStreams::new())
         .manage(agents::SessionStreamHub::new())
@@ -203,40 +215,19 @@ pub fn run() {
         .manage(commands::forge_commands::ForgeAuthEdgeStore::default())
         .manage(companion::CompanionState::new())
         .manage(companion::TunnelState::new())
-        .setup(|app| {
-            // Ensure data directory structure exists
-            data_dir::ensure_directory_structure()?;
+        .setup(move |app| {
+            // Deterministic startup core: data dir, logging, DB schema, pools,
+            // and the synthetic chat repo name refresh. Shared verbatim with
+            // both the desktop and headless serve hosts (see `bootstrap::init_core`).
+            bootstrap::init_core()?;
 
-            // Initialize structured logging (must come before any tracing macro call).
-            // Logs live in `<data_dir>/logs/{rust,sidecar}.jsonl` with a `.1` backup;
-            // the size-ring appender bounds disk use without a cleanup pass.
-            let logs_dir = data_dir::logs_dir()?;
-            logging::init(&logs_dir)?;
-
-            // Initialize database schema. We apply the same PRAGMA init as
-            // the pools to get WAL mode persisted to the file before any
-            // pool connection opens.
-            let db_path = data_dir::db_path()?;
-            let connection = rusqlite::Connection::open(&db_path)?;
-            db::init_connection(&connection, true)?;
-            schema::ensure_schema(&connection)?;
-            drop(connection);
-
-            // Build read/write connection pools (must happen after schema).
-            db::init_pools()?;
-
-            // Refresh the synthetic chat repo's display name in case the
-            // canonical value moved between releases. No-op for installs
-            // that have never created a chat workspace (no row to update).
-            if let Err(error) = models::repos::refresh_system_chat_repo_name_if_exists() {
-                tracing::warn!(%error, "Failed to refresh chat repo name");
+            // Headless serve wires only the "functional trio" + companion
+            // server and returns early — none of the desktop-only background
+            // workers / GUI wiring below run in a container.
+            if mode == AppMode::Serve {
+                serve::setup(app)?;
+                return Ok(());
             }
-
-            tracing::info!(
-                mode = data_dir::data_mode_label(),
-                data = %db_path.display(),
-                "Helmor started"
-            );
 
             // Sweep `.trash-*` dirs left over from a prior run (worker killed
             // mid-cleanup, OS crash). Hands them to the global serial queue so
@@ -370,46 +361,10 @@ pub fn run() {
             updater::spawn_startup_check(app.handle().clone());
             updater::spawn_interval_worker(app.handle().clone());
 
-            // Install reverse-IPC dispatcher early to skip early-boot warnings; ordering isn't load-bearing.
-            let host_rx = app
-                .state::<sidecar::ManagedSidecar>()
-                .install_host_dispatcher();
-            let dispatcher_handle = app.handle().clone();
-            std::thread::Builder::new()
-                .name("sidecar-host-dispatcher".into())
-                .spawn(move || {
-                    while let Ok(env) = host_rx.recv() {
-                        let app_clone = dispatcher_handle.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let response = match sidecar_host::dispatch(
-                                app_clone.clone(),
-                                &env.method,
-                                env.params,
-                            )
-                            .await
-                            {
-                                Ok(value) => sidecar_host::HostResponse::success(
-                                    env.callback_id.clone(),
-                                    value,
-                                ),
-                                Err(error) => sidecar_host::HostResponse::failure(
-                                    env.callback_id.clone(),
-                                    format!("{error:#}"),
-                                ),
-                            };
-                            let sidecar_state = app_clone.state::<sidecar::ManagedSidecar>();
-                            if let Err(error) = sidecar_state.send_host_response(&response) {
-                                tracing::warn!(
-                                    error = %format!("{error:#}"),
-                                    method = %env.method,
-                                    "hostResponse write failed"
-                                );
-                            }
-                        });
-                    }
-                    tracing::debug!("host dispatcher channel closed");
-                })
-                .ok();
+            // Reverse-IPC dispatcher (sidecar hostRequest -> Rust hostResponse).
+            // Shared with the headless serve host. Installed early to skip
+            // early-boot warnings; ordering isn't load-bearing.
+            sidecar_host::spawn_host_dispatcher(app.handle().clone());
 
             // Per-version silent re-check of the Helmor CLI symlink and
             // the Helmor Skills package. Runs once per app version
@@ -805,9 +760,23 @@ pub fn run() {
             commands::companion_commands::companion_sign_in_cloudflare,
             commands::companion_commands::companion_allocate_stable_url,
             commands::companion_commands::companion_destroy_stable_url
-        ])
-        .build(tauri::generate_context!())
-        .expect("error while building tauri application");
+        ]);
+
+    let mut context = tauri::generate_context!();
+    // Serve is windowless: clearing the window configs means `build` creates no
+    // webview (S1 spike). The embedded SPA is still reachable through the
+    // companion asset resolver, so the browser/desktop client renders normally.
+    if mode == AppMode::Serve {
+        context.config_mut().app.windows.clear();
+    }
+    builder
+        .build(context)
+        .expect("error while building tauri application")
+}
+
+pub fn run() {
+    system_limits::raise_nofile_soft_limit();
+    let app = build_app(AppMode::Desktop);
 
     // App-exit paths are intercepted here. On macOS, closing the window
     // (red button, Cmd+W on the last tab, Cmd+Shift+W) does NOT quit the
@@ -903,6 +872,24 @@ pub fn run() {
         }
         _ => {}
     });
+}
+
+/// Headless `helmor serve` host: build the windowless app (whose serve-mode
+/// setup hook starts the companion server bound to `0.0.0.0:$PORT`) and park
+/// the main thread. The S1 spike proved the companion server, RPC dispatch, and
+/// DB access all work without pumping the Wry event loop, so we deliberately do
+/// not call `app.run()` — we just keep the process (and its spawned tasks)
+/// alive. In a container the boot script starts an Xvfb display first so the
+/// GTK/WebKit runtime the binary links against can initialise.
+pub fn serve() {
+    system_limits::raise_nofile_soft_limit();
+    // Held for the lifetime of the process; dropping it would tear down the
+    // managed state and the companion server.
+    let _app = build_app(AppMode::Serve);
+    tracing::info!("helmor serve: headless host up; parking main thread");
+    loop {
+        std::thread::park();
+    }
 }
 
 // Route a user-initiated exit through the frontend quit-confirm flow.
