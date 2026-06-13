@@ -807,7 +807,7 @@ mod tests {
         let _env = crate::testkit::TestEnv::new("resolve-model-infers-provider");
         let claude = resolve_model("default", None);
         assert_eq!(claude.provider, "claude");
-        assert_eq!(claude.cli_model, "default");
+        assert_eq!(claude.cli_model, "claude-opus-4-8");
 
         let codex = resolve_model("gpt-5.4", None);
         assert_eq!(codex.provider, "codex");

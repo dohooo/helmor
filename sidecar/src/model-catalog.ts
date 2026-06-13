@@ -19,16 +19,19 @@ const MODEL_CATALOG: Record<Provider, readonly ProviderModelInfo[]> = {
 			cliModel: "claude-fable-5[1m]",
 			effortLevels: ["low", "medium", "high", "xhigh", "max"],
 		},
-		// `default` resolves to the newest Opus the bundled claude-code knows
-		// about — in 2.1.170 that is Opus 4.8 (1M context, adaptive thinking,
-		// default high effort, fast mode at 2x rate / 2.5x speed). Kept as
-		// `default` (rather than pinned `claude-opus-4-8`) so it stays the
-		// auto-latest pick AND remains the app default selection (see
-		// `useEnsureDefaultModel`, which prefers id == "default").
+		// `default` is the app default selection (see `useEnsureDefaultModel`,
+		// which pins id == "default") and the picker's "latest Opus 1M" slot.
+		// `cliModel` is pinned to the explicit `claude-opus-4-8` wire id rather
+		// than the literal "default": the bundled claude-code's own default
+		// model drifted from Opus to Fable 5 in 2.1.17x, so a bare "default"
+		// (terminal strips it, emitting no `--model`; streaming forwards it)
+		// silently launched Fable 5, which Max plans can't access. Bump this
+		// pin when a newer Opus ships. MUST stay in sync with the Rust catalog
+		// (`official_claude_section`) and `resolve_model`'s `default` arm.
 		{
 			id: "default",
 			label: "Opus 4.8 1M",
-			cliModel: "default",
+			cliModel: "claude-opus-4-8",
 			effortLevels: ["low", "medium", "high", "xhigh", "max"],
 			supportsFastMode: true,
 		},
@@ -176,8 +179,14 @@ export function modelSupportsFastMode(
 	modelId: string | undefined | null,
 ): boolean {
 	if (!modelId) return false;
+	// The streaming path looks this up by the resolved `cliModel` (e.g.
+	// "claude-opus-4-8"), while the picker uses `id` (e.g. "default"). Match
+	// either so the `default` entry, whose id and cliModel differ, keeps fast
+	// mode.
 	return MODEL_CATALOG[provider].some(
-		(model) => model.id === modelId && model.supportsFastMode === true,
+		(model) =>
+			(model.id === modelId || model.cliModel === modelId) &&
+			model.supportsFastMode === true,
 	);
 }
 

@@ -85,19 +85,26 @@ fn official_claude_section() -> AgentModelSection {
                 &["low", "medium", "high", "xhigh", "max"],
                 false,
             ),
-            // `default` resolves to the newest Opus the bundled claude-code
-            // knows about — 2.1.170 maps it to Opus 4.8 (1M context, adaptive
-            // thinking, default high effort, fast mode at 2x rate / 2.5x
-            // speed). Kept as `default` so it stays the auto-latest pick and
-            // remains the app's default selection (see
-            // `useEnsureDefaultModel`, which prefers id == "default"). MUST
-            // stay in sync with `sidecar/src/model-catalog.ts`.
-            claude_model(
-                "default",
-                "Opus 4.8 1M",
-                &["low", "medium", "high", "xhigh", "max"],
-                true,
-            ),
+            // `default` is the app's default selection (see
+            // `useEnsureDefaultModel`, which pins id == "default") and the
+            // picker's "latest Opus 1M" slot. Its `cli_model` is pinned to the
+            // explicit `claude-opus-4-8` wire id rather than the literal
+            // "default": the bundled claude-code's own default model drifted
+            // from Opus to Fable 5 in 2.1.17x, so leaving it as "default" made
+            // the terminal (which strips "default", emitting no `--model`) and
+            // the streaming path silently launch Fable 5 — which Max plans
+            // can't access. Bump this pin when a newer Opus ships. MUST stay in
+            // sync with `sidecar/src/model-catalog.ts` and `resolve_model`'s
+            // `default` arm.
+            AgentModelOption {
+                cli_model: "claude-opus-4-8".to_string(),
+                ..claude_model(
+                    "default",
+                    "Opus 4.8 1M",
+                    &["low", "medium", "high", "xhigh", "max"],
+                    true,
+                )
+            },
             // Explicit 4.7 pin — this slot used to BE `default`; now that
             // `default` advanced to 4.8 we surface 4.7 as its own selectable
             // entry, above 4.6.
@@ -617,6 +624,13 @@ pub fn resolve_model(model_id: &str, provider_hint: Option<&str>) -> ResolvedMod
             .strip_prefix("cursor-")
             .unwrap_or(model_id)
             .to_string()
+    } else if provider == "claude" && model_id == "default" {
+        // Pin claude's `default` sentinel to the explicit latest-Opus wire id
+        // for the streaming/GUI path. The bundled claude-code's own default
+        // model drifted from Opus to Fable 5 in 2.1.17x; forwarding the literal
+        // "default" lets the CLI pick Fable 5, which Max plans can't access.
+        // Keep in sync with the `cli_model` pin in `official_claude_section`.
+        "claude-opus-4-8".to_string()
     } else {
         model_id.to_string()
     };
@@ -745,7 +759,7 @@ mod tests {
         let _env = crate::testkit::TestEnv::new("resolve-claude-model");
         let m = resolve_model("default", None);
         assert_eq!(m.provider, "claude");
-        assert_eq!(m.cli_model, "default");
+        assert_eq!(m.cli_model, "claude-opus-4-8");
         assert_eq!(m.id, "default");
         assert!(m.supports_effort);
     }
@@ -1050,7 +1064,7 @@ mod tests {
         // fast mode, and keeps the xhigh effort tier.
         let default = &claude.options[1];
         assert_eq!(default.label, "Opus 4.8 1M");
-        assert_eq!(default.cli_model, "default");
+        assert_eq!(default.cli_model, "claude-opus-4-8");
         assert!(default.supports_fast_mode, "Opus 4.8 supports fast mode");
         assert_eq!(
             default.effort_levels,
@@ -1082,7 +1096,7 @@ mod tests {
         // this is the regression the namespace prefix exists to prevent.
         let claude = resolve_model("default", None);
         assert_eq!(claude.provider, "claude");
-        assert_eq!(claude.cli_model, "default");
+        assert_eq!(claude.cli_model, "claude-opus-4-8");
 
         let cursor = resolve_model("cursor-default", None);
         assert_eq!(cursor.provider, "cursor");

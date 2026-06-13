@@ -1773,7 +1773,7 @@ describe("ClaudeSessionManager.listModels", () => {
 			{
 				id: "default",
 				label: "Opus 4.8 1M",
-				cliModel: "default",
+				cliModel: "claude-opus-4-8",
 				effortLevels: ["low", "medium", "high", "xhigh", "max"],
 				supportsFastMode: true,
 			},
