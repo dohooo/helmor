@@ -576,7 +576,7 @@ export class CodexAppServerManager implements SessionManager {
 		if (this.turns.isAbortRequested(sessionId)) {
 			ctx.server.kill();
 			this.sessions.delete(sessionId);
-			this.turns.end(sessionId);
+			this.turns.end(sessionId, requestId);
 			return;
 		}
 		// Codex usage notifications do not include a model id.
@@ -1043,7 +1043,7 @@ export class CodexAppServerManager implements SessionManager {
 			if (!this.turns.isAbortRequested(sessionId)) {
 				emitter.end(requestId);
 			}
-			this.turns.end(sessionId);
+			this.turns.end(sessionId, requestId);
 			if (ctx.activeRequestId === requestId) {
 				ctx.activeRequestId = null;
 				ctx.activeEmitter = null;

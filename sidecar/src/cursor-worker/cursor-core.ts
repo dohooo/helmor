@@ -184,7 +184,7 @@ export class CursorCore {
 		// Stop pressed during Agent.create — `requestStop` already emitted
 		// `aborted`. Keep the freshly-minted agent for reuse; just bail.
 		if (this.turns.isAbortRequested(params.sessionId)) {
-			this.turns.end(params.sessionId);
+			this.turns.end(params.sessionId, requestId);
 			return;
 		}
 
@@ -262,7 +262,7 @@ export class CursorCore {
 		// Stop pressed during agent.send — the run now exists, so cancel it.
 		if (this.turns.isAbortRequested(params.sessionId)) {
 			void run.cancel().catch(() => {});
-			this.turns.end(params.sessionId);
+			this.turns.end(params.sessionId, requestId);
 			return;
 		}
 
@@ -321,7 +321,7 @@ export class CursorCore {
 		if (!this.turns.isAbortRequested(params.sessionId)) {
 			emitter.end(requestId);
 		}
-		this.turns.end(params.sessionId);
+		this.turns.end(params.sessionId, requestId);
 	}
 
 	async generateTitle(

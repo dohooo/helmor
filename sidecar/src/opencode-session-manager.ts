@@ -460,7 +460,7 @@ export class OpencodeSessionManager implements SessionManager {
 				emitter.error(requestId, `opencode: ${errorMessage(error)}`);
 				emitter.end(requestId);
 			}
-			this.turns.end(params.sessionId);
+			this.turns.end(params.sessionId, requestId);
 			return;
 		}
 		const { client } = handle;
@@ -469,7 +469,7 @@ export class OpencodeSessionManager implements SessionManager {
 		// Stop pressed during server startup — `requestStop` already emitted
 		// `aborted`; clear the turn and bail before creating a session.
 		if (this.turns.isAbortRequested(params.sessionId)) {
-			this.turns.end(params.sessionId);
+			this.turns.end(params.sessionId, requestId);
 			return;
 		}
 
@@ -502,7 +502,7 @@ export class OpencodeSessionManager implements SessionManager {
 						emitter.error(requestId, `opencode: ${errorMessage(error)}`);
 						emitter.end(requestId);
 					}
-					this.turns.end(params.sessionId);
+					this.turns.end(params.sessionId, requestId);
 					return;
 				}
 			}
@@ -511,7 +511,7 @@ export class OpencodeSessionManager implements SessionManager {
 					emitter.error(requestId, "opencode: session.create returned no id");
 					emitter.end(requestId);
 				}
-				this.turns.end(params.sessionId);
+				this.turns.end(params.sessionId, requestId);
 				return;
 			}
 			ctx = {
@@ -548,7 +548,7 @@ export class OpencodeSessionManager implements SessionManager {
 		// Stop pressed during session create/resume — `requestStop` already
 		// emitted `aborted`; clear the turn and bail.
 		if (this.turns.isAbortRequested(params.sessionId)) {
-			this.turns.end(params.sessionId);
+			this.turns.end(params.sessionId, requestId);
 			return;
 		}
 
@@ -633,7 +633,7 @@ export class OpencodeSessionManager implements SessionManager {
 				emitter.error(requestId, `opencode: ${errorMessage(error)}`);
 				emitter.end(requestId);
 			}
-			this.turns.end(params.sessionId);
+			this.turns.end(params.sessionId, requestId);
 			return;
 		}
 
@@ -650,7 +650,7 @@ export class OpencodeSessionManager implements SessionManager {
 
 		// Stop pressed — `requestStop` already emitted the terminal `aborted`.
 		if (this.turns.isAbortRequested(params.sessionId)) {
-			this.turns.end(params.sessionId);
+			this.turns.end(params.sessionId, requestId);
 			return;
 		}
 
@@ -675,7 +675,7 @@ export class OpencodeSessionManager implements SessionManager {
 		if (!this.turns.isAbortRequested(params.sessionId)) {
 			emitter.end(requestId);
 		}
-		this.turns.end(params.sessionId);
+		this.turns.end(params.sessionId, requestId);
 	}
 
 	private ensureSessionPump(client: OpencodeClient, ctx: SessionCtx): void {
