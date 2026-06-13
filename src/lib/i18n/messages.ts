@@ -359,6 +359,8 @@ export const ZH_CN_MESSAGES = {
 	"Helmor preview": "Helmor 预览",
 	"Helmor Skills": "Helmor 技能",
 	"Helmor Skills (Beta)": "Helmor 技能（Beta）",
+	"Helmor now supports English and Simplified Chinese, with language pickers in Settings and onboarding.":
+		"Helmor 现在支持英文和简体中文，并可在设置和引导流程中切换语言。",
 	"Helmor uses your local Claude Code and Codex login sessions. You can log in now, or continue and log in later.":
 		"Helmor 使用你本地的 Claude Code 和 Codex 登录会话。你可以现在登录，也可以继续后稍后登录。",
 	"Helmor workspace preview": "Helmor 工作区预览",
@@ -519,6 +521,7 @@ export const ZH_CN_MESSAGES = {
 	"Open in Slack": "在 Slack 中打开",
 	"Open in T3 Chat": "在 T3 Chat 中打开",
 	"Open in v0": "在 v0 中打开",
+	"Open Appearance": "打开外观设置",
 	"Open Link": "打开链接",
 	"Open model picker": "打开模型选择器",
 	"Open PR in browser": "在浏览器中打开 PR",
