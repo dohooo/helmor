@@ -12,6 +12,11 @@ name: cloud-sandbox-image
 
 on:
   workflow_dispatch:
+  # workflow_dispatch can't be triggered on a non-default branch via the API,
+  # so during Phase 0 validation we drive CI by pushing to this feature branch.
+  # Narrow / remove before merging to the default branch.
+  push:
+    branches: [dohooo/team-cloud-sandbox]
 
 jobs:
   build-deploy:
