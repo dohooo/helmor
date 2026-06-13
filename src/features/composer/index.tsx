@@ -44,6 +44,7 @@ import { humanizeBranch } from "@/features/navigation/shared";
 import { normalizeShortcutEvent } from "@/features/shortcuts/format";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import type {
+	AgentModelOption,
 	AgentModelSection,
 	CandidateDirectory,
 	ProviderCapabilities,
@@ -135,12 +136,15 @@ type WorkspaceComposerProps = {
 	onStop?: () => void;
 	sending?: boolean;
 	selectedModelId: string | null;
+	/** Provider of the selected model — disambiguates the opencode/mimo shared
+	 *  slug namespace so the right section's option is matched. */
+	selectedModelProvider?: string | null;
 	modelSections: AgentModelSection[];
 	/** false → OpenCode picker shows an "Add custom model…" jump. */
 	hasOpencodeCustomProviders?: boolean;
 	hasMimoCustomProviders?: boolean;
 	modelsLoading?: boolean;
-	onSelectModel: (modelId: string) => void;
+	onSelectModel: (modelId: string, provider: string | null) => void;
 	provider?: string;
 	effortLevel: string;
 	onSelectEffort: (level: string) => void;
@@ -292,6 +296,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	onStop,
 	sending = false,
 	selectedModelId,
+	selectedModelProvider = null,
 	modelSections,
 	hasOpencodeCustomProviders = false,
 	hasMimoCustomProviders = false,
@@ -432,13 +437,19 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		return subscribeComposerPrefill(sessionId, apply);
 	}, [sessionId]);
 	const selectedModel = useMemo(() => {
+		let byIdOnly: AgentModelOption | null = null;
 		for (const section of modelSections) {
 			for (const option of section.options) {
-				if (option.id === selectedModelId) return option;
+				if (option.id !== selectedModelId) continue;
+				// Prefer an exact (id, provider) match — the same slug can appear
+				// under both opencode and mimo. Fall back to first-by-id.
+				if (!selectedModelProvider || option.provider === selectedModelProvider)
+					return option;
+				byIdOnly ??= option;
 			}
 		}
-		return null;
-	}, [modelSections, selectedModelId]);
+		return byIdOnly;
+	}, [modelSections, selectedModelId, selectedModelProvider]);
 	const hasConfiguredClaudeProviderModels = useMemo(
 		() =>
 			modelSections.some(
@@ -1048,10 +1059,11 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 														</DropdownMenuLabel>
 														{section.options.map((option) => (
 															<DropdownMenuItem
-																key={option.id}
+																// id alone collides across opencode/mimo — namespace by section.
+																key={`${section.id}:${option.id}`}
 																disabled={toolbarDisabled}
 																onClick={() => {
-																	onSelectModel(option.id);
+																	onSelectModel(option.id, option.provider);
 																}}
 																className="flex items-center justify-between gap-3"
 															>
@@ -1066,7 +1078,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 																		{option.label}
 																	</span>
 																</div>
-																{option.id === selectedModel?.id ? (
+																{option.id === selectedModel?.id &&
+																option.provider === selectedModel?.provider ? (
 																	<span className="text-mini text-foreground">
 																		✓
 																	</span>

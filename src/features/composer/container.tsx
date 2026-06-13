@@ -49,7 +49,7 @@ import {
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
 import { readSessionThread } from "@/lib/session-thread-cache";
-import { useSettings } from "@/lib/settings";
+import { type ModelRef, useSettings } from "@/lib/settings";
 import type { QueuedSubmit } from "@/lib/use-submit-queue";
 import { cn } from "@/lib/utils";
 import {
@@ -181,12 +181,16 @@ type WorkspaceComposerContainerProps = {
 	pendingPermission?: PendingPermission | null;
 	onPermissionResponse?: PermissionPanelProps["onResponse"];
 	hasPlanReview?: boolean;
-	modelSelections: Record<string, string>;
+	modelSelections: Record<string, ModelRef>;
 	effortLevels: Record<string, string>;
 	permissionModes: Record<string, string>;
 	fastModes: Record<string, boolean>;
 	activeFastPreludes?: Record<string, boolean>;
-	onSelectModel: (contextKey: string, modelId: string) => void;
+	onSelectModel: (
+		contextKey: string,
+		modelId: string,
+		provider: string | null,
+	) => void;
 	onSelectEffort: (contextKey: string, level: string) => void;
 	onChangePermissionMode: (contextKey: string, mode: string) => void;
 	onChangeFastMode: (contextKey: string, enabled: boolean) => void;
@@ -545,16 +549,21 @@ export const WorkspaceComposerContainer = memo(
 		const composerContextKey =
 			contextKeyOverride ??
 			getComposerContextKey(displayedWorkspaceId, displayedSessionId);
-		const selectedModelId = resolveSessionSelectedModelId({
+		const selectedRef = resolveSessionSelectedModelId({
 			session: currentSession,
 			modelSelections,
 			modelSections,
-			settingsDefaultModelId: settings.defaultModel?.modelId ?? null,
+			settingsDefaultModel: settings.defaultModel,
 			contextKey: composerContextKey,
 		});
 		const selectedModel = useMemo(
-			() => findModelOption(modelSections, selectedModelId),
-			[modelSections, selectedModelId],
+			() =>
+				findModelOption(
+					modelSections,
+					selectedRef?.modelId ?? null,
+					selectedRef?.provider,
+				),
+			[modelSections, selectedRef?.modelId, selectedRef?.provider],
 		);
 		const shortcutConflicts = useMemo(
 			() => getShortcutConflicts(settings.shortcuts),
@@ -584,7 +593,8 @@ export const WorkspaceComposerContainer = memo(
 			? null
 			: getShortcut(settings.shortcuts, "composer.toggleContextPanel");
 		const effectiveModel = selectedModel;
-		const effectiveSelectedModelId = effectiveModel?.id ?? selectedModelId;
+		const effectiveSelectedModelId =
+			effectiveModel?.id ?? selectedRef?.modelId ?? null;
 		const provider =
 			effectiveModel?.provider ?? currentSession?.agentType ?? "claude";
 		// "User-configured" = the session row carries an explicit model. Fresh
@@ -684,10 +694,15 @@ export const WorkspaceComposerContainer = memo(
 		]);
 
 		const handleModelSelect = useCallback(
-			async (modelId: string) => {
-				const newModel = findModelOption(modelSections, modelId);
+			async (modelId: string, pickedProvider: string | null) => {
 				const currentProvider = provider;
-				const newProvider = newModel?.provider;
+				// Provider comes straight from the picked option — opencode and
+				// mimo share a slug namespace, so re-deriving it from the id alone
+				// would resolve to the wrong section.
+				const newProvider =
+					pickedProvider ??
+					findModelOption(modelSections, modelId)?.provider ??
+					null;
 
 				// Only create a new session when provider changes AND the session
 				// already has messages. New/empty sessions just switch in-place.
@@ -723,14 +738,14 @@ export const WorkspaceComposerContainer = memo(
 							displayedWorkspaceId,
 							newSessionId,
 						);
-						onSelectModel(newContextKey, modelId);
+						onSelectModel(newContextKey, modelId, newProvider);
 						return;
 					} catch {
 						// Fall through to just update model
 					}
 				}
 
-				onSelectModel(composerContextKey, modelId);
+				onSelectModel(composerContextKey, modelId, newProvider);
 			},
 			[
 				modelSections,
@@ -1128,8 +1143,8 @@ export const WorkspaceComposerContainer = memo(
 		]);
 
 		const handleSelectModelInner = useCallback(
-			(modelId: string) => {
-				void handleModelSelect(modelId);
+			(modelId: string, provider: string | null) => {
+				void handleModelSelect(modelId, provider);
 			},
 			[handleModelSelect],
 		);
@@ -1329,6 +1344,7 @@ export const WorkspaceComposerContainer = memo(
 						onStop={onStop}
 						sending={sending}
 						selectedModelId={effectiveSelectedModelId}
+						selectedModelProvider={effectiveModel?.provider ?? null}
 						modelSections={modelSections}
 						hasOpencodeCustomProviders={hasOpencodeCustomProviders}
 						hasMimoCustomProviders={hasMimoCustomProviders}
