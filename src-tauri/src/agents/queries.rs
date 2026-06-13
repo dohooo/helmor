@@ -78,6 +78,7 @@ fn build_title_attempts() -> Vec<Value> {
         .into_iter()
         .next();
     let opencode_custom = first_opencode_custom_model();
+    let mimo_custom = first_mimo_custom_model();
     let mut attempts: Vec<Value> = Vec::new();
     for provider in detect_title_providers() {
         // A provider's custom model (if the user configured one) is tried
@@ -103,6 +104,14 @@ fn build_title_attempts() -> Vec<Value> {
                     }));
                 }
             }
+            "mimo" => {
+                if let Some(slug) = &mimo_custom {
+                    attempts.push(serde_json::json!({
+                        "provider": "mimo",
+                        "model": slug,
+                    }));
+                }
+            }
             _ => {}
         }
         // Provider's own fast/default model. For claude this is the
@@ -116,7 +125,17 @@ fn build_title_attempts() -> Vec<Value> {
 /// `provider/model` slug (e.g. `hundun/deepseek-v4-flash`). `None` when no
 /// custom opencode provider is set up.
 fn first_opencode_custom_model() -> Option<String> {
-    let providers = super::opencode_config::read_custom_providers().ok()?;
+    first_slug_custom_model(super::opencode_config::read_custom_providers().ok()?)
+}
+
+/// Same, for MiMo Code's `mimocode.json`.
+fn first_mimo_custom_model() -> Option<String> {
+    first_slug_custom_model(super::opencode_config::read_mimo_custom_providers().ok()?)
+}
+
+fn first_slug_custom_model(
+    providers: Vec<super::opencode_config::OpencodeCustomProvider>,
+) -> Option<String> {
     let provider = providers.into_iter().next()?;
     let model = provider.models.into_iter().next()?;
     Some(format!("{}/{}", provider.id, model.id))
@@ -1296,7 +1315,8 @@ fn parse_cursor_parameters(arr: &[Value]) -> Vec<CursorModelParameter> {
         .collect()
 }
 
-// opencode model list — proxied to the sidecar's `client.provider.list()`
+// opencode-protocol model list (opencode + mimo) — proxied to the sidecar's
+// `client.provider.list()`
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1315,11 +1335,26 @@ pub fn fetch_opencode_models(
     sidecar: &crate::sidecar::ManagedSidecar,
     force_reload: bool,
 ) -> CmdResult<Vec<OpencodeModelEntry>> {
+    fetch_slug_models(sidecar, "opencode", force_reload)
+}
+
+pub fn fetch_mimo_models(
+    sidecar: &crate::sidecar::ManagedSidecar,
+    force_reload: bool,
+) -> CmdResult<Vec<OpencodeModelEntry>> {
+    fetch_slug_models(sidecar, "mimo", force_reload)
+}
+
+fn fetch_slug_models(
+    sidecar: &crate::sidecar::ManagedSidecar,
+    provider: &str,
+    force_reload: bool,
+) -> CmdResult<Vec<OpencodeModelEntry>> {
     let request_id = Uuid::new_v4().to_string();
     let sidecar_req = crate::sidecar::SidecarRequest {
         id: request_id.clone(),
         method: "listModels".to_string(),
-        params: serde_json::json!({ "provider": "opencode", "forceReload": force_reload }),
+        params: serde_json::json!({ "provider": provider, "forceReload": force_reload }),
     };
 
     let rx = sidecar.subscribe(&request_id);
@@ -1378,13 +1413,13 @@ pub fn fetch_opencode_models(
             },
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 error = Some(format!(
-                    "opencode model list timed out after {}s",
+                    "{provider} model list timed out after {}s",
                     LIST_OPENCODE_MODELS_TIMEOUT.as_secs()
                 ));
                 break;
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                error = Some("Sidecar disconnected during opencode model list".to_string());
+                error = Some(format!("Sidecar disconnected during {provider} model list"));
                 break;
             }
         }

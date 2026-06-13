@@ -248,6 +248,15 @@ pub async fn list_opencode_models(
 }
 
 #[tauri::command]
+pub async fn list_mimo_models(
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    force_reload: Option<bool>,
+) -> CmdResult<Vec<queries::OpencodeModelEntry>> {
+    // force_reload restarts the mimo server to pick up a just-written config.
+    queries::fetch_mimo_models(sidecar.inner(), force_reload.unwrap_or(false))
+}
+
+#[tauri::command]
 pub async fn send_agent_message_stream(
     app: AppHandle,
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
