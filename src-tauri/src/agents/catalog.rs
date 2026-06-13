@@ -42,6 +42,7 @@ pub fn static_model_sections() -> Vec<AgentModelSection> {
         super::custom_providers::configured_models(),
         load_cursor_prefs(),
         load_opencode_prefs(),
+        load_mimo_prefs(),
     )
 }
 
@@ -51,6 +52,7 @@ fn model_sections_for_inputs(
     custom: Vec<super::custom_providers::ClaudeProviderModel>,
     cursor_prefs: Option<CursorPrefs>,
     opencode_prefs: Option<OpencodePrefs>,
+    mimo_prefs: Option<OpencodePrefs>,
 ) -> Vec<AgentModelSection> {
     let mut claude_section = official_claude_section();
     claude_section
@@ -59,6 +61,7 @@ fn model_sections_for_inputs(
     let mut sections = vec![claude_section];
     sections.push(codex_section());
     sections.push(opencode_section_from_prefs(opencode_prefs));
+    sections.push(mimo_section_from_prefs(mimo_prefs));
     if let Some(cursor) = cursor_section_from_prefs(cursor_prefs) {
         sections.push(cursor);
     }
@@ -131,21 +134,36 @@ fn codex_section() -> AgentModelSection {
 
 // Fully dynamic from `app.opencode_provider`; no static seed. Empty `connected` → Unavailable.
 fn opencode_section_from_prefs(prefs: Option<OpencodePrefs>) -> AgentModelSection {
+    slug_section_from_prefs(prefs, "opencode", "OpenCode")
+}
+
+// MiMo Code (opencode fork) — same shape, driven by `app.mimo_provider`.
+fn mimo_section_from_prefs(prefs: Option<OpencodePrefs>) -> AgentModelSection {
+    slug_section_from_prefs(prefs, "mimo", "MiMo Code")
+}
+
+fn slug_section_from_prefs(
+    prefs: Option<OpencodePrefs>,
+    provider: &str,
+    label: &str,
+) -> AgentModelSection {
     let (status, options) = match prefs {
         Some(prefs) if !prefs.connected.is_empty() => (
             AgentModelSectionStatus::Ready,
-            expand_opencode_options(prefs),
+            expand_slug_options(provider, prefs),
         ),
         _ => (AgentModelSectionStatus::Unavailable, Vec::new()),
     };
     AgentModelSection {
-        id: "opencode".to_string(),
-        label: "OpenCode".to_string(),
+        id: provider.to_string(),
+        label: label.to_string(),
         status,
         options,
     }
 }
 
+/// Prefs shape shared by the opencode-protocol providers (opencode + mimo);
+/// both persist the same JSON under their own settings key.
 #[derive(Debug, Clone)]
 struct OpencodePrefs {
     connected: Vec<String>,
@@ -162,7 +180,15 @@ struct OpencodeCachedModelEntry {
 }
 
 fn load_opencode_prefs() -> Option<OpencodePrefs> {
-    let raw = crate::models::settings::load_setting_value("app.opencode_provider")
+    load_slug_prefs("app.opencode_provider")
+}
+
+fn load_mimo_prefs() -> Option<OpencodePrefs> {
+    load_slug_prefs("app.mimo_provider")
+}
+
+fn load_slug_prefs(setting_key: &str) -> Option<OpencodePrefs> {
+    let raw = crate::models::settings::load_setting_value(setting_key)
         .ok()
         .flatten()?;
     let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
@@ -222,12 +248,19 @@ fn load_opencode_prefs() -> Option<OpencodePrefs> {
 }
 
 // `enabledModelIds == null` → default-all cached models; explicit empty list → no options.
-fn expand_opencode_options(prefs: OpencodePrefs) -> Vec<AgentModelOption> {
+fn expand_slug_options(provider: &str, prefs: OpencodePrefs) -> Vec<AgentModelOption> {
     let cache = prefs.cached_models.unwrap_or_default();
     match prefs.enabled_ids {
         None => cache
             .iter()
-            .map(|entry| opencode_model(&entry.slug, &entry.label, entry.effort_levels.clone()))
+            .map(|entry| {
+                slug_model(
+                    provider,
+                    &entry.slug,
+                    &entry.label,
+                    entry.effort_levels.clone(),
+                )
+            })
             .collect(),
         Some(enabled) => enabled
             .iter()
@@ -237,7 +270,7 @@ fn expand_opencode_options(prefs: OpencodePrefs) -> Vec<AgentModelOption> {
                     .map(|e| e.label.clone())
                     .unwrap_or_else(|| slug.clone());
                 let effort_levels = entry.map(|e| e.effort_levels.clone()).unwrap_or_default();
-                opencode_model(slug, &label, effort_levels)
+                slug_model(provider, slug, &label, effort_levels)
             })
             .collect(),
     }
@@ -474,10 +507,15 @@ fn codex_model(id: &str, label: &str) -> AgentModelOption {
 }
 
 // `id`/`cli_model` are both the `provider/model` slug; `effort_levels` map to opencode `variants`.
-fn opencode_model(slug: &str, label: &str, effort_levels: Vec<String>) -> AgentModelOption {
+fn slug_model(
+    provider: &str,
+    slug: &str,
+    label: &str,
+    effort_levels: Vec<String>,
+) -> AgentModelOption {
     AgentModelOption {
         id: slug.to_string(),
-        provider: "opencode".to_string(),
+        provider: provider.to_string(),
         label: label.to_string(),
         cli_model: slug.to_string(),
         provider_key: None,
@@ -561,9 +599,13 @@ pub fn resolve_model(model_id: &str, provider_hint: Option<&str>) -> ResolvedMod
         Some("codex") => "codex",
         Some("claude") => "claude",
         Some("opencode") => "opencode",
+        Some("mimo") => "mimo",
         _ if model_id.starts_with("cursor-") => "cursor",
         _ if model_id.starts_with("composer-") => "cursor",
-        // `/` is unique to opencode slugs (claude uses `|`, codex/cursor have none).
+        // `/` marks an opencode-protocol slug (claude uses `|`, codex/cursor
+        // have none). Hint-less `/` ids default to opencode — mimo sessions
+        // always carry the provider hint, so this fallback never fires for
+        // them in practice.
         _ if model_id.contains('/') => "opencode",
         _ if model_id.starts_with("gpt-") => "codex",
         _ => "claude",
@@ -596,9 +638,9 @@ mod tests {
     #[test]
     fn static_model_sections_returns_hardcoded_catalog() {
         // `None` cursor_prefs (no API key) → cursor section omitted entirely.
-        let sections = model_sections_for_inputs(Vec::new(), None, None);
+        let sections = model_sections_for_inputs(Vec::new(), None, None, None);
 
-        assert_eq!(sections.len(), 3);
+        assert_eq!(sections.len(), 4);
         assert_eq!(sections[0].id, "claude");
         assert_eq!(sections[0].status, AgentModelSectionStatus::Ready);
         assert_eq!(
@@ -641,6 +683,12 @@ mod tests {
         assert_eq!(sections[2].status, AgentModelSectionStatus::Unavailable);
         assert!(sections[2].options.is_empty());
 
+        // No mimo prefs row → Unavailable, no options.
+        assert_eq!(sections[3].id, "mimo");
+        assert_eq!(sections[3].label, "MiMo Code");
+        assert_eq!(sections[3].status, AgentModelSectionStatus::Unavailable);
+        assert!(sections[3].options.is_empty());
+
         // No `app.cursor_provider` row → no API key → no Cursor section.
         assert!(sections.iter().all(|s| s.id != "cursor"));
     }
@@ -658,9 +706,10 @@ mod tests {
             }],
             None,
             None,
+            None,
         );
 
-        assert_eq!(sections.len(), 3);
+        assert_eq!(sections.len(), 4);
         assert_eq!(sections[0].id, "claude");
         assert_eq!(sections[0].label, "Claude Code");
         assert_eq!(
@@ -752,6 +801,40 @@ mod tests {
         assert_eq!(m.cli_model, "openai/gpt-5-codex");
     }
 
+    #[test]
+    fn resolve_mimo_hint_routes_to_mimo() {
+        let _env = crate::testkit::TestEnv::new("resolve-mimo-hint-routes-to-mimo");
+        let m = resolve_model("xiaomi/mimo-v2.5-pro", Some("mimo"));
+        assert_eq!(m.provider, "mimo");
+        assert_eq!(m.cli_model, "xiaomi/mimo-v2.5-pro");
+        assert_eq!(m.id, "xiaomi/mimo-v2.5-pro");
+        // Hint-less `/` slug falls back to opencode by design — mimo sessions
+        // always carry the hint (see resolve_model comment).
+        let m = resolve_model("xiaomi/mimo-v2.5-pro", None);
+        assert_eq!(m.provider, "opencode");
+    }
+
+    #[test]
+    fn mimo_section_emits_cached_models_when_connected() {
+        let prefs = OpencodePrefs {
+            connected: vec!["xiaomi".to_string()],
+            enabled_ids: None,
+            cached_models: Some(vec![opencode_cache(
+                "xiaomi/mimo-v2.5-pro",
+                "Xiaomi · MiMo V2.5 Pro",
+            )]),
+        };
+        let sections = model_sections_for_inputs(Vec::new(), None, None, Some(prefs));
+        let mimo = sections.iter().find(|s| s.id == "mimo").unwrap();
+        assert_eq!(mimo.label, "MiMo Code");
+        assert_eq!(mimo.status, AgentModelSectionStatus::Ready);
+        let first = &mimo.options[0];
+        assert_eq!(first.provider, "mimo");
+        assert_eq!(first.cli_model, "xiaomi/mimo-v2.5-pro");
+        assert_eq!(first.label, "Xiaomi · MiMo V2.5 Pro");
+        assert!(first.supports_context_usage);
+    }
+
     fn opencode_cache(slug: &str, label: &str) -> OpencodeCachedModelEntry {
         OpencodeCachedModelEntry {
             slug: slug.to_string(),
@@ -782,7 +865,7 @@ mod tests {
                 opencode_cache("hundun/deepseek-v4-pro", "Hundun · DeepSeek V4 Pro"),
             ]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs));
+        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs), None);
         let opencode = sections.iter().find(|s| s.id == "opencode").unwrap();
         assert_eq!(opencode.status, AgentModelSectionStatus::Ready);
         assert_eq!(
@@ -816,7 +899,7 @@ mod tests {
                 ),
             ]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs));
+        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs), None);
         let opencode = sections.iter().find(|s| s.id == "opencode").unwrap();
         let zen = opencode
             .options
@@ -845,7 +928,7 @@ mod tests {
                 opencode_cache("hundun/deepseek-v4-pro", "Hundun · DeepSeek V4 Pro"),
             ]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs));
+        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs), None);
         let opencode = sections.iter().find(|s| s.id == "opencode").unwrap();
         assert_eq!(opencode.status, AgentModelSectionStatus::Ready);
         assert_eq!(opencode.options.len(), 1);
@@ -863,7 +946,7 @@ mod tests {
                 "OpenCode Zen · Big Pickle",
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs));
+        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs), None);
         let opencode = sections.iter().find(|s| s.id == "opencode").unwrap();
         assert_eq!(opencode.status, AgentModelSectionStatus::Ready);
         assert!(opencode.options.is_empty());
@@ -879,7 +962,7 @@ mod tests {
                 "OpenCode Zen · Big Pickle",
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs));
+        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs), None);
         let opencode = sections.iter().find(|s| s.id == "opencode").unwrap();
         assert_eq!(opencode.status, AgentModelSectionStatus::Unavailable);
         assert!(opencode.options.is_empty());
@@ -892,7 +975,7 @@ mod tests {
             enabled_ids: Some(vec!["mystery/model".to_string()]),
             cached_models: Some(Vec::new()),
         };
-        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs));
+        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs), None);
         let opencode = sections.iter().find(|s| s.id == "opencode").unwrap();
         assert_eq!(opencode.options.len(), 1);
         assert_eq!(opencode.options[0].id, "mystery/model");
@@ -936,7 +1019,7 @@ mod tests {
 
     #[test]
     fn official_claude_section_surfaces_fable_5_above_opus_lineage() {
-        let sections = model_sections_for_inputs(Vec::new(), None, None);
+        let sections = model_sections_for_inputs(Vec::new(), None, None, None);
         let claude = sections.iter().find(|s| s.id == "claude").unwrap();
         let ids: Vec<&str> = claude.options.iter().map(|o| o.id.as_str()).collect();
         // User-facing ordering: Fable 5 on top, then 4.8 (default), 4.7, 4.6.
@@ -1036,7 +1119,7 @@ mod tests {
             enabled_ids: Some(vec!["gpt-5.3-codex".to_string()]),
             cached_models: Some(vec![cursor_cache("gpt-5.3-codex", "Codex 5.3", None)]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
         assert!(sections.iter().all(|s| s.id != "cursor"));
     }
 
@@ -1049,7 +1132,7 @@ mod tests {
             enabled_ids: Some(Vec::new()),
             cached_models: Some(vec![cursor_cache("gpt-5.3-codex", "Codex 5.3", None)]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
         assert!(sections.iter().all(|s| s.id != "cursor"));
     }
 
@@ -1067,7 +1150,7 @@ mod tests {
                 Some(vec![cursor_param("reasoning", &["low", "medium", "high"])]),
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
         let cursor = sections.iter().find(|s| s.id == "cursor").unwrap();
         assert_eq!(cursor.options.len(), 1);
         let opt = &cursor.options[0];
@@ -1090,7 +1173,7 @@ mod tests {
                 Some(vec![cursor_param("fast", &["true", "false"])]),
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
         let cursor = sections.iter().find(|s| s.id == "cursor").unwrap();
         let opt = &cursor.options[0];
         assert!(opt.effort_levels.is_empty());
@@ -1112,7 +1195,7 @@ mod tests {
                 Some(vec![cursor_param("thinking", &["false", "true"])]),
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
         let opt = &sections.iter().find(|s| s.id == "cursor").unwrap().options[0];
         assert!(opt.effort_levels.is_empty());
         assert!(!opt.supports_fast_mode);
@@ -1136,7 +1219,7 @@ mod tests {
                 ]),
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
         let opt = &sections.iter().find(|s| s.id == "cursor").unwrap().options[0];
         assert_eq!(opt.effort_levels, vec!["low", "medium", "high", "max"]);
         assert!(opt.supports_fast_mode);
@@ -1158,7 +1241,7 @@ mod tests {
                 ]),
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
         let opt = &sections.iter().find(|s| s.id == "cursor").unwrap().options[0];
         assert_eq!(opt.effort_levels, vec!["max"]);
     }
@@ -1177,7 +1260,7 @@ mod tests {
                 ]),
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
         let opt = &sections.iter().find(|s| s.id == "cursor").unwrap().options[0];
         assert_eq!(opt.effort_levels, vec!["low", "medium", "high"]);
         assert!(opt.supports_fast_mode);
@@ -1194,7 +1277,7 @@ mod tests {
             enabled_ids: Some(vec!["legacy".to_string()]),
             cached_models: Some(vec![cursor_cache("legacy", "Legacy Cached", None)]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
         let opt = &sections.iter().find(|s| s.id == "cursor").unwrap().options[0];
         assert!(opt.effort_levels.is_empty());
         assert!(!opt.supports_fast_mode);
@@ -1210,7 +1293,7 @@ mod tests {
             enabled_ids: Some(vec!["mystery-model".to_string()]),
             cached_models: Some(Vec::new()),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
         let opt = &sections.iter().find(|s| s.id == "cursor").unwrap().options[0];
         assert_eq!(opt.cli_model, "mystery-model");
         assert_eq!(opt.label, "mystery-model");
@@ -1254,7 +1337,7 @@ mod tests {
             enabled_ids: Some(pick.iter().map(|s| s.to_string()).collect()),
             cached_models: Some(cached_models),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
         let cursor = sections.iter().find(|s| s.id == "cursor").unwrap();
         let by_wire: std::collections::HashMap<String, &AgentModelOption> = cursor
             .options

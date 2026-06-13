@@ -1,6 +1,8 @@
-//! Read/write opencode custom providers in the GLOBAL opencode config file
-//! (single source of truth). Writes go through the jsonc CST to preserve
-//! comments/formatting outside the edited `provider.<id>` block.
+//! Read/write custom providers in the GLOBAL config file of an
+//! opencode-protocol provider (opencode itself, or the MiMo Code fork —
+//! same JSON schema, different config dir/filenames). Single source of
+//! truth; writes go through the jsonc CST to preserve comments/formatting
+//! outside the edited `provider.<id>` block.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -10,8 +12,31 @@ use jsonc_parser::cst::{CstInputValue, CstObject, CstRootNode};
 use jsonc_parser::ParseOptions;
 use serde::{Deserialize, Serialize};
 
+// MiMo Code's binary still declares opencode's schema URL — verified against
+// @mimo-ai/cli 0.1.0 — so both families share it.
 const SCHEMA_URL: &str = "https://opencode.ai/config.json";
 const DEFAULT_NPM: &str = "@ai-sdk/openai-compatible";
+
+/// Filesystem layout of one opencode-protocol family's global config.
+/// `file_candidates` is the provider's own lookup precedence; index 0 is
+/// the default filename when none exists yet.
+struct FamilyConfig {
+    /// Subdir under `$XDG_CONFIG_HOME` / `~/.config`.
+    xdg_dir: &'static str,
+    file_candidates: [&'static str; 3],
+}
+
+const OPENCODE_FAMILY: FamilyConfig = FamilyConfig {
+    xdg_dir: "opencode",
+    file_candidates: ["opencode.jsonc", "opencode.json", "config.json"],
+};
+
+// mimo's own lookup checks `mimocode.json` BEFORE `mimocode.jsonc`
+// (verified against the 0.1.0 binary), so mirror that order.
+const MIMO_FAMILY: FamilyConfig = FamilyConfig {
+    xdg_dir: "mimocode",
+    file_candidates: ["mimocode.json", "mimocode.jsonc", "config.json"],
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -46,43 +71,63 @@ fn default_npm() -> String {
     DEFAULT_NPM.to_string()
 }
 
-// `$XDG_CONFIG_HOME/opencode` or `~/.config/opencode`.
-fn config_dir() -> Result<PathBuf> {
+// `$XDG_CONFIG_HOME/<dir>` or `~/.config/<dir>`.
+fn config_dir(family: &FamilyConfig) -> Result<PathBuf> {
     if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
         if !xdg.is_empty() {
-            return Ok(PathBuf::from(xdg).join("opencode"));
+            return Ok(PathBuf::from(xdg).join(family.xdg_dir));
         }
     }
-    crate::platform::paths::xdg_config_dir("opencode").context("HOME is not set")
+    crate::platform::paths::xdg_config_dir(family.xdg_dir).context("HOME is not set")
 }
 
-// Precedence: `opencode.jsonc` > `opencode.json` > `config.json`; default to `opencode.jsonc`.
-fn config_file_path() -> Result<PathBuf> {
-    let dir = config_dir()?;
-    for name in ["opencode.jsonc", "opencode.json", "config.json"] {
+// First existing candidate wins; default to candidate 0 when none exists.
+fn config_file_path(family: &FamilyConfig) -> Result<PathBuf> {
+    let dir = config_dir(family)?;
+    for name in family.file_candidates {
         let candidate = dir.join(name);
         if candidate.exists() {
             return Ok(candidate);
         }
     }
-    Ok(dir.join("opencode.jsonc"))
+    Ok(dir.join(family.file_candidates[0]))
 }
 
 pub fn read_custom_providers() -> Result<Vec<OpencodeCustomProvider>> {
-    read_custom_providers_at(&config_file_path()?)
+    read_custom_providers_at(&config_file_path(&OPENCODE_FAMILY)?)
 }
 
 pub fn upsert_custom_provider(provider: &OpencodeCustomProvider, preset: bool) -> Result<()> {
-    let path = config_file_path()?;
+    upsert_for_family(&OPENCODE_FAMILY, provider, preset)
+}
+
+pub fn delete_custom_provider(id: &str) -> Result<()> {
+    delete_custom_provider_at(&config_file_path(&OPENCODE_FAMILY)?, id)
+}
+
+pub fn read_mimo_custom_providers() -> Result<Vec<OpencodeCustomProvider>> {
+    read_custom_providers_at(&config_file_path(&MIMO_FAMILY)?)
+}
+
+pub fn upsert_mimo_custom_provider(provider: &OpencodeCustomProvider, preset: bool) -> Result<()> {
+    upsert_for_family(&MIMO_FAMILY, provider, preset)
+}
+
+pub fn delete_mimo_custom_provider(id: &str) -> Result<()> {
+    delete_custom_provider_at(&config_file_path(&MIMO_FAMILY)?, id)
+}
+
+fn upsert_for_family(
+    family: &FamilyConfig,
+    provider: &OpencodeCustomProvider,
+    preset: bool,
+) -> Result<()> {
+    let path = config_file_path(family)?;
     if preset {
         upsert_preset_key_at(&path, &provider.id, &provider.api_key)
     } else {
         upsert_custom_provider_at(&path, provider)
     }
-}
-
-pub fn delete_custom_provider(id: &str) -> Result<()> {
-    delete_custom_provider_at(&config_file_path()?, id)
 }
 
 fn read_custom_providers_at(path: &Path) -> Result<Vec<OpencodeCustomProvider>> {

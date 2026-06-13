@@ -61,13 +61,16 @@ const MODEL_SECTIONS: AgentModelSection[] = [
 ];
 
 describe("inferDefaultModelId", () => {
-	it("returns session model when session has history", () => {
+	it("returns session model (provider from agent_type) when session has history", () => {
 		const session = {
 			model: "opus",
 			agentType: "claude",
 			lastUserMessageAt: "2026-04-15T00:00:00Z",
 		} as WorkspaceSessionSummary;
-		expect(inferDefaultModelId(session, MODEL_SECTIONS)).toBe("opus");
+		expect(inferDefaultModelId(session, MODEL_SECTIONS)).toEqual({
+			provider: "claude",
+			modelId: "opus",
+		});
 	});
 
 	it("returns settings default for new session", () => {
@@ -76,23 +79,34 @@ describe("inferDefaultModelId", () => {
 			agentType: null,
 			lastUserMessageAt: null,
 		} as unknown as WorkspaceSessionSummary;
-		expect(inferDefaultModelId(session, MODEL_SECTIONS, "gpt-4o")).toBe(
-			"gpt-4o",
-		);
+		expect(
+			inferDefaultModelId(session, MODEL_SECTIONS, {
+				provider: "codex",
+				modelId: "gpt-4o",
+			}),
+		).toEqual({ provider: "codex", modelId: "gpt-4o" });
 	});
 
 	it("falls back to the first catalog model when no settings default is provided", () => {
-		expect(inferDefaultModelId(null, MODEL_SECTIONS)).toBe("default");
+		expect(inferDefaultModelId(null, MODEL_SECTIONS)).toEqual({
+			provider: "claude",
+			modelId: "default",
+		});
 	});
 
 	it("falls back to the first catalog model when the settings model ID is invalid", () => {
-		expect(inferDefaultModelId(null, MODEL_SECTIONS, "nonexistent")).toBe(
-			"default",
-		);
+		expect(
+			inferDefaultModelId(null, MODEL_SECTIONS, {
+				provider: "claude",
+				modelId: "nonexistent",
+			}),
+		).toEqual({ provider: "claude", modelId: "default" });
 	});
 
 	it("returns null when model sections are empty", () => {
-		expect(inferDefaultModelId(null, [], "default")).toBeNull();
+		expect(
+			inferDefaultModelId(null, [], { provider: "claude", modelId: "default" }),
+		).toBeNull();
 	});
 });
 
@@ -790,6 +804,45 @@ describe("findModelOption", () => {
 	it("returns null for null modelId", () => {
 		expect(findModelOption(MODEL_SECTIONS, null)).toBeNull();
 	});
+
+	it("disambiguates a slug shared by opencode and mimo via provider", () => {
+		// Same `anthropic/x` slug configured under both forks — id alone is
+		// ambiguous; the provider picks the right section.
+		const sections: AgentModelSection[] = [
+			{
+				id: "opencode",
+				label: "OpenCode",
+				options: [
+					{
+						id: "anthropic/x",
+						provider: "opencode",
+						label: "OC",
+						cliModel: "anthropic/x",
+					},
+				],
+			},
+			{
+				id: "mimo",
+				label: "MiMo Code",
+				options: [
+					{
+						id: "anthropic/x",
+						provider: "mimo",
+						label: "MiMo",
+						cliModel: "anthropic/x",
+					},
+				],
+			},
+		];
+		expect(findModelOption(sections, "anthropic/x", "mimo")?.provider).toBe(
+			"mimo",
+		);
+		expect(findModelOption(sections, "anthropic/x", "opencode")?.provider).toBe(
+			"opencode",
+		);
+		// No provider → first section wins (opencode), the pre-fix behavior.
+		expect(findModelOption(sections, "anthropic/x")?.provider).toBe("opencode");
+	});
 });
 
 describe("resolveSessionSelectedModelId", () => {
@@ -803,11 +856,11 @@ describe("resolveSessionSelectedModelId", () => {
 					lastUserMessageAt: null,
 				},
 				modelSelections: {
-					"session:session-1": "gpt-4o",
+					"session:session-1": { provider: "codex", modelId: "gpt-4o" },
 				},
 				modelSections: MODEL_SECTIONS,
 			}),
-		).toBe("gpt-4o");
+		).toEqual({ provider: "codex", modelId: "gpt-4o" });
 	});
 
 	it("prefers the composer-selected model for a custom context key", () => {
@@ -815,13 +868,13 @@ describe("resolveSessionSelectedModelId", () => {
 			resolveSessionSelectedModelId({
 				session: null,
 				modelSelections: {
-					"start:repo:repo-1": "gpt-4o",
+					"start:repo:repo-1": { provider: "codex", modelId: "gpt-4o" },
 				},
 				modelSections: MODEL_SECTIONS,
-				settingsDefaultModelId: "default",
+				settingsDefaultModel: { provider: "claude", modelId: "default" },
 				contextKey: "start:repo:repo-1",
 			}),
-		).toBe("gpt-4o");
+		).toEqual({ provider: "codex", modelId: "gpt-4o" });
 	});
 
 	it("falls back to the persisted session model", () => {
@@ -835,7 +888,7 @@ describe("resolveSessionSelectedModelId", () => {
 				},
 				modelSelections: {},
 				modelSections: MODEL_SECTIONS,
-			}),
+			})?.modelId,
 		).toBe("default");
 	});
 
@@ -850,9 +903,9 @@ describe("resolveSessionSelectedModelId", () => {
 				},
 				modelSelections: {},
 				modelSections: MODEL_SECTIONS,
-				settingsDefaultModelId: "gpt-4o",
+				settingsDefaultModel: { provider: "codex", modelId: "gpt-4o" },
 			}),
-		).toBe("gpt-4o");
+		).toEqual({ provider: "codex", modelId: "gpt-4o" });
 	});
 
 	it("drops a persisted pick that's no longer in the catalog", () => {
@@ -867,11 +920,14 @@ describe("resolveSessionSelectedModelId", () => {
 					lastUserMessageAt: null,
 				},
 				modelSelections: {
-					"session:session-5": "cursor-removed-model",
+					"session:session-5": {
+						provider: "cursor",
+						modelId: "cursor-removed-model",
+					},
 				},
 				modelSections: MODEL_SECTIONS,
-				settingsDefaultModelId: "opus",
-			}),
+				settingsDefaultModel: { provider: "claude", modelId: "opus" },
+			})?.modelId,
 		).toBe("opus");
 	});
 
@@ -885,10 +941,13 @@ describe("resolveSessionSelectedModelId", () => {
 					lastUserMessageAt: null,
 				},
 				modelSelections: {
-					"session:session-6": "cursor-removed-model",
+					"session:session-6": {
+						provider: "cursor",
+						modelId: "cursor-removed-model",
+					},
 				},
 				modelSections: [],
-			}),
+			})?.modelId,
 		).toBe("cursor-removed-model");
 	});
 
@@ -903,8 +962,8 @@ describe("resolveSessionSelectedModelId", () => {
 				},
 				modelSelections: {},
 				modelSections: MODEL_SECTIONS,
-				settingsDefaultModelId: null,
-			}),
+				settingsDefaultModel: null,
+			})?.modelId,
 		).toBe("default");
 	});
 });
@@ -920,7 +979,7 @@ describe("resolveSessionDisplayProvider", () => {
 					lastUserMessageAt: null,
 				},
 				modelSelections: {
-					"session:session-1": "gpt-4o",
+					"session:session-1": { provider: "codex", modelId: "gpt-4o" },
 				},
 				modelSections: MODEL_SECTIONS,
 			}),
@@ -937,11 +996,28 @@ describe("resolveSessionDisplayProvider", () => {
 					lastUserMessageAt: null,
 				},
 				modelSelections: {
-					"session:session-2": "gpt-4o",
+					"session:session-2": { provider: "codex", modelId: "gpt-4o" },
 				},
 				modelSections: MODEL_SECTIONS,
 			}),
 		).toBe("opencode");
+	});
+
+	it("keeps the mimo icon regardless of the selected sub-provider model", () => {
+		expect(
+			resolveSessionDisplayProvider({
+				session: {
+					id: "session-2",
+					agentType: "mimo",
+					model: null,
+					lastUserMessageAt: null,
+				},
+				modelSelections: {
+					"session:session-2": { provider: "codex", modelId: "gpt-4o" },
+				},
+				modelSections: MODEL_SECTIONS,
+			}),
+		).toBe("mimo");
 	});
 
 	it("falls back to the selected model's provider when the session has no agent", () => {
@@ -954,7 +1030,7 @@ describe("resolveSessionDisplayProvider", () => {
 					lastUserMessageAt: null,
 				},
 				modelSelections: {
-					"session:session-3": "gpt-4o",
+					"session:session-3": { provider: "codex", modelId: "gpt-4o" },
 				},
 				modelSections: MODEL_SECTIONS,
 			}),

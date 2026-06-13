@@ -311,12 +311,14 @@ pub fn workspace_id_for_session(session_id: &str) -> Result<Option<String>> {
     Ok(workspace_id)
 }
 
-/// Convert a freshly-prepared GUI session into a Terminal session in place.
-/// Used by the start-surface terminal flow: the workspace-create pipeline
-/// mints a GUI session, and converting it (before it's ever used) avoids a
-/// throwaway placeholder. The message-less invariant is enforced by the
-/// UPDATE itself — a session with history (or an unknown id) errors instead
-/// of silently rewriting kind/agent/title.
+/// Convert a freshly-prepared (message-less) GUI session into a Terminal
+/// session in place. Used by the terminal start flows where the pipeline mints
+/// an empty GUI session and converting it (before it's ever used) avoids a
+/// throwaway placeholder. A session that already has history is NOT converted
+/// here — that path opens a SEPARATE Terminal session that resumes the
+/// conversation instead (see the composer terminal flow). The message-less
+/// invariant is enforced by the UPDATE itself — a session with history (or an
+/// unknown id) errors instead of silently rewriting kind/agent/title.
 pub fn convert_session_to_terminal(session_id: &str, agent_type: &str) -> Result<()> {
     let connection = db::write_conn()?;
     // Leave `title` untouched ("Untitled" from prepare) so the prompt-captured
@@ -1425,7 +1427,8 @@ mod tests {
             assert_eq!(title, "Test Session");
         }
 
-        // A session with history must be refused, untouched.
+        // A session with history must be refused, untouched — those go through
+        // the resume-into-a-new-terminal flow instead.
         {
             let conn = db::write_conn().unwrap();
             conn.execute(

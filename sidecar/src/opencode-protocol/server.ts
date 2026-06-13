@@ -1,7 +1,9 @@
-// Owns ONE long-lived `opencode serve` child + its SDK client (HTTP/SSE).
-// Shared across all opencode sessions; the global SSE stream is demuxed by
-// `sessionID` in the manager. Spawned ourselves (not the SDK helper) so we own
-// the process group for tree kill.
+// Owns ONE long-lived `<bin> serve` child + its SDK client (HTTP/SSE) for an
+// opencode-protocol provider (opencode itself, or a fork like MiMo Code that
+// keeps the same server/SDK protocol). Shared across all of that provider's
+// sessions; the global SSE stream is demuxed by `sessionID` in the manager.
+// Spawned ourselves (not the SDK helper) so we own the process group for tree
+// kill.
 
 import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -12,13 +14,37 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2";
-import { errorDetails, logger } from "./logger.js";
+import { errorDetails, logger } from "../logger.js";
 
 const execFileAsync = promisify(execFile);
 
-const READY_PREFIX = "opencode server listening";
 const STARTUP_TIMEOUT_MS = 20_000;
 const HOSTNAME = "127.0.0.1";
+
+/** Everything that differs between opencode and a protocol-compatible fork
+ *  at the server-process layer. See `opencode.ts` / `mimo.ts` for instances. */
+export interface ProtocolServerConfig {
+	/** Provider id — log prefix and session-DB subdir (`<id>/<id>.db`). */
+	readonly id: string;
+	/** stdout line prefix that signals the server is ready
+	 *  (e.g. "opencode server listening"). */
+	readonly readyPrefix: string;
+	/** Release env var holding the bundled binary path
+	 *  (e.g. HELMOR_OPENCODE_BIN_PATH). */
+	readonly binEnvVar: string;
+	/** npm platform sub-package for a `darwin-arm64`-style suffix
+	 *  (e.g. s => `opencode-${s}`). */
+	readonly platformPkg: (platformShort: string) => string;
+	/** Binary basename inside the platform package and on PATH. */
+	readonly binName: string;
+	/** Env var the server reads its API password from. */
+	readonly passwordEnvVar: string;
+	/** Env var overriding the server's session-DB path. */
+	readonly dbEnvVar: string;
+	/** Basic-auth username the server expects
+	 *  (opencode: "opencode", mimo: "mimocode"). */
+	readonly authUsername: string;
+}
 
 function platformShort(): string {
 	const arch = process.arch === "x64" ? "x64" : "arm64";
@@ -28,34 +54,34 @@ function platformShort(): string {
 	return "";
 }
 
-// Resolution order: HELMOR_OPENCODE_BIN_PATH (release) → node_modules platform
-// sub-package (dev/test) → "opencode" on PATH.
-function resolveOpencodeBinPath(): string {
-	const override = process.env.HELMOR_OPENCODE_BIN_PATH;
+// Resolution order: `config.binEnvVar` (release) → node_modules platform
+// sub-package (dev/test) → `config.binName` on PATH.
+export function resolveBinPath(config: ProtocolServerConfig): string {
+	const override = process.env[config.binEnvVar];
 	if (override) return override;
-	const platformPkg = `opencode-${platformShort()}`;
+	const platformPkg = config.platformPkg(platformShort());
 	try {
 		const require = createRequire(import.meta.url);
 		const pkgJson = require.resolve(`${platformPkg}/package.json`);
-		const binName = process.platform === "win32" ? "opencode.exe" : "opencode";
+		const binName =
+			process.platform === "win32" ? `${config.binName}.exe` : config.binName;
 		const candidate = join(dirname(pkgJson), "bin", binName);
 		if (existsSync(candidate)) return candidate;
 	} catch {
 		// Platform sub-package missing — fall through.
 	}
-	return "opencode";
+	return config.binName;
 }
 
-export const OPENCODE_BIN_PATH = resolveOpencodeBinPath();
-
-// Session DB MUST be isolated from the user's global opencode: its schema
+// Session DB MUST be isolated from the user's global install: its schema
 // migrates forward and a newer-written DB is unwritable by our bundled binary.
-// (auth.json + opencode.jsonc stay shared.) Parent of HELMOR_LOG_DIR is the
-// Helmor data dir; fall back to home for standalone/test runs.
-function resolveOpencodeDbPath(): string {
+// (auth.json + the provider's jsonc config stay shared.) Parent of
+// HELMOR_LOG_DIR is the Helmor data dir; fall back to home for
+// standalone/test runs.
+function resolveDbPath(id: string): string {
 	const logDir = process.env.HELMOR_LOG_DIR;
 	const base = logDir ? dirname(logDir) : join(homedir(), ".helmor");
-	return join(base, "opencode", "opencode.db");
+	return join(base, id, `${id}.db`);
 }
 
 function findFreePort(): Promise<number> {
@@ -71,9 +97,12 @@ function findFreePort(): Promise<number> {
 	});
 }
 
-function parseServerUrl(buffer: string): string | null {
+export function parseServerUrl(
+	buffer: string,
+	readyPrefix: string,
+): string | null {
 	for (const line of buffer.split("\n")) {
-		if (!line.startsWith(READY_PREFIX)) continue;
+		if (!line.startsWith(readyPrefix)) continue;
 		const match = line.match(/on\s+(https?:\/\/[^\s]+)/);
 		if (match?.[1]) return match[1];
 	}
@@ -81,10 +110,10 @@ function parseServerUrl(buffer: string): string | null {
 }
 
 // ── Reaper ───────────────────────────────────────────────────────────────────
-// `opencode serve` can re-exec out of the process group we spawn it in, so
+// `<bin> serve` can re-exec out of the process group we spawn it in, so
 // `process.kill(-pid)` alone sometimes misses the real server. A `ps`-scan
 // catches it. Two matchers, each with a discriminator that CANNOT hit a serve
-// Helmor didn't start (so we never kill the user's own opencode):
+// Helmor didn't start (so we never kill the user's own install):
 //   • teardown: the exact ephemeral `--port` we just bound (unique system-wide)
 //   • startup:  our full binary path AND ppid==1 (orphaned → parent already dead,
 //               so never a live sibling Helmor's server)
@@ -95,14 +124,14 @@ interface ServeProcess {
 	readonly command: string;
 }
 
-/** `opencode`-ish processes via `ps`. Unix-only; [] on Windows or any failure. */
+/** serve-ish processes via `ps`. Unix-only; [] on Windows or any failure. */
 async function listProcesses(): Promise<ReadonlyArray<ServeProcess>> {
 	if (process.platform === "win32") return [];
 	try {
 		const { stdout } = await execFileAsync(
 			"ps",
 			["-axo", "pid=,ppid=,command="],
-			// Bounded so a wedged `ps` can't stall opencode startup; on timeout
+			// Bounded so a wedged `ps` can't stall server startup; on timeout
 			// the reject is swallowed below and we just skip reaping.
 			{ maxBuffer: 8 * 1024 * 1024, timeout: 2_000 },
 		);
@@ -142,9 +171,9 @@ export function matchesServeOnPort(input: {
 }
 
 /** An ORPHANED serve (ppid==1) launched from OUR exact binary path. Full path
- *  rules out a user's separate opencode install; ppid==1 rules out a live
- *  sibling Helmor (whose server still has a live sidecar parent). Returns false
- *  for a bare (path-less) binary, where we can't tell ours apart — caller skips. */
+ *  rules out a user's separate install; ppid==1 rules out a live sibling
+ *  Helmor (whose server still has a live sidecar parent). Returns false for a
+ *  bare (path-less) binary, where we can't tell ours apart — caller skips. */
 export function matchesOrphanedServe(input: {
 	command: string;
 	ppid: number;
@@ -178,15 +207,17 @@ async function signalProcesses(
 	return count;
 }
 
-export interface OpencodeServerHandle {
+export interface ProtocolServerHandle {
 	readonly client: OpencodeClient;
 	readonly url: string;
 }
 
-/** One opencode `serve` process + its SDK client. Memoized start. */
-export class OpencodeServer {
+/** One `<bin> serve` process + its SDK client. Memoized start. */
+export class OpencodeProtocolServer {
+	/** Resolved once per instance; release env override wins. */
+	readonly binPath: string;
 	private proc: ChildProcess | null = null;
-	private handle: Promise<OpencodeServerHandle> | null = null;
+	private handle: Promise<ProtocolServerHandle> | null = null;
 	private proxyUrl: string | null = null;
 	/** Port the live server bound; lets `kill()` reap a serve that escaped the group. */
 	private lastPort: number | null = null;
@@ -199,14 +230,19 @@ export class OpencodeServer {
 	 *   bound to a now-dead server instead of waiting on an SSE event that
 	 *   will never arrive.
 	 */
-	constructor(private readonly onProcessExit?: () => void) {}
+	constructor(
+		private readonly config: ProtocolServerConfig,
+		private readonly onProcessExit?: () => void,
+	) {
+		this.binPath = resolveBinPath(config);
+	}
 
 	/** Idempotent. Restarts if the proxy in `env` changed. Only called at turn
 	 *  start, so it never interrupts an in-flight stream. */
-	start(env: NodeJS.ProcessEnv): Promise<OpencodeServerHandle> {
+	start(env: NodeJS.ProcessEnv): Promise<ProtocolServerHandle> {
 		const proxyUrl = env.HTTPS_PROXY ?? env.HTTP_PROXY ?? env.ALL_PROXY ?? null;
 		if (this.handle && proxyUrl !== this.proxyUrl) {
-			logger.info("opencode proxy changed — restarting server", {
+			logger.info(`${this.config.id} proxy changed — restarting server`, {
 				proxy: proxyUrl ?? "(none)",
 			});
 			void this.kill();
@@ -223,28 +259,28 @@ export class OpencodeServer {
 
 	private async spawnAndConnect(
 		env: NodeJS.ProcessEnv,
-	): Promise<OpencodeServerHandle> {
+	): Promise<ProtocolServerHandle> {
 		await this.reapOrphans();
 		const port = await findFreePort();
 		this.lastPort = port;
 		const password = randomBytes(24).toString("hex");
-		const dbPath = resolveOpencodeDbPath();
+		const dbPath = resolveDbPath(this.config.id);
 		try {
 			mkdirSync(dirname(dbPath), { recursive: true });
 		} catch (err) {
-			logger.debug("opencode db dir create failed", errorDetails(err));
+			logger.debug(`${this.config.id} db dir create failed`, errorDetails(err));
 		}
 		const child = spawn(
-			OPENCODE_BIN_PATH,
+			this.binPath,
 			["serve", `--hostname=${HOSTNAME}`, `--port=${port}`],
 			{
 				stdio: ["ignore", "pipe", "pipe"],
 				detached: process.platform !== "win32",
 				env: {
 					...env,
-					OPENCODE_SERVER_PASSWORD: password,
-					// Isolated DB — see resolveOpencodeDbPath.
-					OPENCODE_DB: dbPath,
+					[this.config.passwordEnvVar]: password,
+					// Isolated DB — see resolveDbPath.
+					[this.config.dbEnvVar]: dbPath,
 				},
 			},
 		);
@@ -259,7 +295,7 @@ export class OpencodeServer {
 				settled = true;
 				reject(
 					new Error(
-						`opencode server did not start within ${STARTUP_TIMEOUT_MS}ms`,
+						`${this.config.id} server did not start within ${STARTUP_TIMEOUT_MS}ms`,
 					),
 				);
 			}, STARTUP_TIMEOUT_MS);
@@ -267,7 +303,7 @@ export class OpencodeServer {
 
 			const onStdout = (chunk: Buffer): void => {
 				stdout += chunk.toString();
-				const parsed = parseServerUrl(stdout);
+				const parsed = parseServerUrl(stdout, this.config.readyPrefix);
 				if (parsed && !settled) {
 					settled = true;
 					clearTimeout(timer);
@@ -290,7 +326,7 @@ export class OpencodeServer {
 				clearTimeout(timer);
 				reject(
 					new Error(
-						`opencode server exited before ready (code=${code} signal=${signal})\n${stderr.trim()}`,
+						`${this.config.id} server exited before ready (code=${code} signal=${signal})\n${stderr.trim()}`,
 					),
 				);
 			});
@@ -303,7 +339,7 @@ export class OpencodeServer {
 			baseUrl: url,
 			throwOnError: true,
 			headers: {
-				Authorization: `Basic ${Buffer.from(`opencode:${password}`, "utf8").toString("base64")}`,
+				Authorization: `Basic ${Buffer.from(`${this.config.authUsername}:${password}`, "utf8").toString("base64")}`,
 			},
 		});
 
@@ -320,7 +356,7 @@ export class OpencodeServer {
 			this.onProcessExit?.();
 		});
 
-		logger.info(`opencode server ready at ${url}`);
+		logger.info(`${this.config.id} server ready at ${url}`);
 		return { client, url };
 	}
 
@@ -335,7 +371,7 @@ export class OpencodeServer {
 	}
 
 	/**
-	 * SIGTERM then (1s later) SIGKILL. Three targets, since `opencode serve` can
+	 * SIGTERM then (1s later) SIGKILL. Three targets, since `<bin> serve` can
 	 * re-exec out of the spawned group: the process group, the direct child, and
 	 * any serve still bound to our exact port. Safe to call repeatedly. The
 	 * promise resolves after the SIGTERM pass; SIGKILL escalates in the background.
@@ -363,7 +399,10 @@ export class OpencodeServer {
 						process.kill(-child.pid, signal);
 					}
 				} catch (err) {
-					logger.debug("opencode server kill failed", errorDetails(err));
+					logger.debug(
+						`${this.config.id} server kill failed`,
+						errorDetails(err),
+					);
 				}
 				// Direct handle too, in case the group kill missed.
 				try {
@@ -378,7 +417,7 @@ export class OpencodeServer {
 					(p) =>
 						matchesServeOnPort({
 							command: p.command,
-							binaryPath: OPENCODE_BIN_PATH,
+							binaryPath: this.binPath,
 							hostname: HOSTNAME,
 							port,
 						}),
@@ -396,7 +435,7 @@ export class OpencodeServer {
 	/** One-shot at first spawn: SIGTERM/SIGKILL serve processes orphaned by a
 	 *  prior Helmor that died without a clean shutdown (dev rebuild, crash,
 	 *  force-quit). Matches only our binary path + ppid==1, so it never hits a
-	 *  user's own opencode or a live sibling Helmor's server. */
+	 *  user's own install or a live sibling Helmor's server. */
 	private async reapOrphans(): Promise<void> {
 		if (this.orphanReapDone || process.platform === "win32") return;
 		this.orphanReapDone = true;
@@ -404,12 +443,12 @@ export class OpencodeServer {
 			matchesOrphanedServe({
 				command: p.command,
 				ppid: p.ppid,
-				binaryPath: OPENCODE_BIN_PATH,
+				binaryPath: this.binPath,
 			});
 		const signaled = await signalProcesses(match, "SIGTERM");
 		if (signaled > 0) {
 			logger.info(
-				`opencode reaper: SIGTERM ${signaled} orphaned serve process(es) from a prior run`,
+				`${this.config.id} reaper: SIGTERM ${signaled} orphaned serve process(es) from a prior run`,
 			);
 			const timer = setTimeout(
 				() => void signalProcesses(match, "SIGKILL"),

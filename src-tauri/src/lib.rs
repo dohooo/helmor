@@ -521,6 +521,7 @@ fn build_app(mode: AppMode) -> tauri::App {
             agents::list_agent_model_sections,
             agents::list_cursor_models,
             agents::list_opencode_models,
+            agents::list_mimo_models,
             agents::list_provider_capabilities,
             agents::send_agent_message_stream,
             agents::subscribe_session_stream,
@@ -548,6 +549,9 @@ fn build_app(mode: AppMode) -> tauri::App {
             commands::opencode_config_commands::get_opencode_custom_providers,
             commands::opencode_config_commands::upsert_opencode_custom_provider,
             commands::opencode_config_commands::delete_opencode_custom_provider,
+            commands::mimo_config_commands::get_mimo_custom_providers,
+            commands::mimo_config_commands::upsert_mimo_custom_provider,
+            commands::mimo_config_commands::delete_mimo_custom_provider,
             commands::settings_commands::get_claude_rate_limits,
             commands::settings_commands::get_codex_rate_limits,
             commands::local_llm_commands::detect_local_llm_hardware,
@@ -900,8 +904,12 @@ fn emit_quit_requested(app_handle: &tauri::AppHandle) {
     if let Err(e) = app_handle.emit("helmor://quit-requested", ()) {
         tracing::warn!(
             error = %e,
-            "Failed to emit quit-requested event; exiting directly",
+            "Failed to emit quit-requested event; cleaning up before exit",
         );
+        // force = false: the webview is already gone, so there are no live
+        // streams worth draining gracefully — run the fast teardown. The
+        // sidecar shutdown inside still kills any in-flight work on the way out.
+        commands::system_commands::cleanup_before_exit(app_handle, false);
         app_handle.exit(0);
     }
 }

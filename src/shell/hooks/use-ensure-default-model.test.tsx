@@ -32,7 +32,9 @@ function renderUseEnsureDefaultModel(args: {
 				value={{
 					settings: {
 						...DEFAULT_SETTINGS,
-						defaultModelId: args.defaultModelId,
+						defaultModel: args.defaultModelId
+							? { provider: null, modelId: args.defaultModelId }
+							: null,
 						...args.settingsOverrides,
 					},
 					isLoaded: true,
@@ -77,10 +79,11 @@ describe("useEnsureDefaultModel", () => {
 
 		// Materializes review/pr fields alongside the default so a fresh
 		// install doesn't depend on the next cold-start migration.
+		const opus = { provider: "claude", modelId: "opus-1m" };
 		expect(updateSettings).toHaveBeenCalledWith({
-			defaultModelId: "opus-1m",
-			reviewModelId: "opus-1m",
-			prModelId: "opus-1m",
+			defaultModel: opus,
+			reviewModel: opus,
+			prModel: opus,
 			reviewEffort: DEFAULT_SETTINGS.defaultEffort,
 			prEffort: DEFAULT_SETTINGS.defaultEffort,
 			reviewFastMode: DEFAULT_SETTINGS.defaultFastMode,
@@ -108,16 +111,16 @@ describe("useEnsureDefaultModel", () => {
 				{ id: "codex", label: "Codex", status: "unavailable", options: [] },
 			],
 			settingsOverrides: {
-				reviewModelId: "opus-1m",
+				reviewModel: { provider: "claude", modelId: "opus-1m" },
 				reviewEffort: "low",
 				prFastMode: true,
 			},
 		});
 
 		expect(updateSettings).toHaveBeenCalledWith({
-			defaultModelId: "opus-1m",
-			// reviewModelId / reviewEffort / prFastMode preserved (already set).
-			prModelId: "opus-1m",
+			defaultModel: { provider: "claude", modelId: "opus-1m" },
+			// reviewModel / reviewEffort / prFastMode preserved (already set).
+			prModel: { provider: "claude", modelId: "opus-1m" },
 			prEffort: DEFAULT_SETTINGS.defaultEffort,
 			reviewFastMode: DEFAULT_SETTINGS.defaultFastMode,
 		});
@@ -155,16 +158,16 @@ describe("useEnsureDefaultModel", () => {
 				},
 			],
 			settingsOverrides: {
-				reviewModelId: "gpt-5.2",
-				prModelId: "gpt-5.3-codex",
+				reviewModel: { provider: null, modelId: "gpt-5.2" },
+				prModel: { provider: null, modelId: "gpt-5.3-codex" },
 			},
 		});
 
 		// Default is valid, so only the delisted review/pr picks are reset to
 		// null (→ fall back to the default at consumption time).
 		expect(updateSettings).toHaveBeenCalledWith({
-			reviewModelId: null,
-			prModelId: null,
+			reviewModel: null,
+			prModel: null,
 		});
 	});
 
@@ -198,7 +201,9 @@ describe("useEnsureDefaultModel", () => {
 		});
 
 		expect(updateSettings).toHaveBeenCalledWith(
-			expect.objectContaining({ defaultModelId: "default" }),
+			expect.objectContaining({
+				defaultModel: { provider: "claude", modelId: "default" },
+			}),
 		);
 	});
 

@@ -50,8 +50,9 @@ export type ShellEvent =
 			fastMode: boolean;
 			/** Explicit target; null = the currently selected workspace. */
 			workspaceId: string | null;
-			/** The composer's current session — converted in place when it has no
-			 *  messages yet, instead of creating a new terminal session. */
+			/** The composer's current session — always converted in place (one-way);
+			 *  a session that already ran a turn resumes its conversation in the TUI.
+			 *  null only when there is no current session to convert. */
 			sessionId: string | null;
 	  };
 

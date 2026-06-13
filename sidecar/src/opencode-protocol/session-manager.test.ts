@@ -16,7 +16,7 @@ import {
 	planMessageId,
 	reapplySessionPermission,
 	resetPlanCapture,
-} from "./opencode-session-manager.js";
+} from "./session-manager.js";
 
 type ReapplyClient = Parameters<typeof reapplySessionPermission>[0];
 
