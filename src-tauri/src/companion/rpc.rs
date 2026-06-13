@@ -46,7 +46,7 @@ async fn dispatch(
             to_value(settings)
         }
         // ============ generated: data + control commands ============
-        "add_repository_from_local_path" => to_value(crate::commands::repository_commands::add_repository_from_local_path(arg_string(&args, "folderPath")?).await?),
+        "add_repository_from_local_path" => to_value(crate::commands::repository_commands::add_repository_from_local_path(arg_string(&args, "folderPath")?, arg_opt_bool(&args, "allowNonGitDirectory")).await?),
         "backfill_forge_repo_bindings" => to_value(crate::commands::forge_commands::backfill_forge_repo_bindings(app.clone()).await?),
         "cache_forge_avatar" => to_value(crate::commands::forge_commands::cache_forge_avatar(arg_string(&args, "url")?).await?),
         "check_for_app_update" => to_value(crate::commands::updater_commands::check_for_app_update(app.clone(), arg_opt_bool(&args, "force")).await?),

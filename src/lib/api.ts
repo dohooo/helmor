@@ -3367,9 +3367,11 @@ export async function completeWorkspaceSetup(
 
 export async function addRepositoryFromLocalPath(
 	folderPath: string,
+	options?: { allowNonGitDirectory?: boolean },
 ): Promise<AddRepositoryResponse> {
 	return invoke<AddRepositoryResponse>("add_repository_from_local_path", {
 		folderPath,
+		allowNonGitDirectory: options?.allowNonGitDirectory ?? false,
 	});
 }
 

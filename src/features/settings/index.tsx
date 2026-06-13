@@ -390,6 +390,17 @@ export const SettingsDialog = memo(function SettingsDialog({
 										/>
 									</SettingsRow>
 									<SettingsRow
+										title="Non-git directories"
+										description="Allow Open project to attach sessions to local folders that are not git repositories."
+									>
+										<Switch
+											checked={settings.allowNonGitDirectories}
+											onCheckedChange={(checked) =>
+												updateSettings({ allowNonGitDirectories: checked })
+											}
+										/>
+									</SettingsRow>
+									<SettingsRow
 										title="Follow-up behavior"
 										description={
 											<>

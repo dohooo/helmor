@@ -133,6 +133,86 @@ fn add_repository_from_local_path_rejects_non_git_directory_without_side_effects
 }
 
 #[test]
+fn add_repository_from_local_path_can_attach_non_git_directory_when_enabled() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let plain_dir = harness.root.join("notes");
+    fs::create_dir_all(&plain_dir).unwrap();
+    fs::write(plain_dir.join("todo.txt"), "ship it\n").unwrap();
+
+    let response =
+        repos::add_repository_from_local_path_with_options(plain_dir.to_str().unwrap(), true)
+            .unwrap();
+    assert!(response.created_repository);
+
+    let repo = repos::load_repository_by_id(&response.repository_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(repo.name, "notes");
+    assert_eq!(repo.default_branch, None);
+    assert_eq!(repo.remote, None);
+
+    let prepared = workspaces::prepare_local_workspace_impl(
+        &response.repository_id,
+        None,
+        crate::workspace_status::WorkspaceStatus::InProgress,
+        None,
+    )
+    .unwrap();
+    // Compare canonicalized paths: the prepared working directory is
+    // canonicalized, and on macOS the temp dir under /var symlinks to
+    // /private/var, so a raw string compare would spuriously differ.
+    assert_eq!(
+        prepared
+            .working_directory
+            .as_deref()
+            .map(|p| fs::canonicalize(p).unwrap()),
+        Some(fs::canonicalize(&plain_dir).unwrap()),
+    );
+    assert_eq!(prepared.branch, "Files");
+    assert_eq!(prepared.state, WorkspaceState::Ready);
+}
+
+#[test]
+fn add_repository_from_local_path_with_non_git_enabled_still_rejects_git_repo_without_remote() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let local_git_repo = harness.root.join("local-git-no-remote");
+    fs::create_dir_all(&local_git_repo).unwrap();
+    let root = local_git_repo.to_str().unwrap();
+    git_ops::run_git(["init", "-b", "main", root], None).unwrap();
+    fs::write(local_git_repo.join("tracked.txt"), "main").unwrap();
+    git_ops::run_git(["-C", root, "add", "tracked.txt"], None).unwrap();
+    git_ops::run_git(
+        [
+            "-C",
+            root,
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "user.name=Helmor",
+            "-c",
+            "user.email=helmor@example.com",
+            "commit",
+            "-m",
+            "initial",
+        ],
+        None,
+    )
+    .unwrap();
+
+    let error = repos::add_repository_from_local_path_with_options(root, true).unwrap_err();
+    assert!(
+        error.to_string().contains("Local-only repositories"),
+        "expected local-only git repo validation to survive toggle, got: {error}"
+    );
+}
+
+#[test]
 fn update_repository_default_branch_persists_new_value() {
     let _guard = TEST_LOCK
         .lock()

@@ -168,6 +168,13 @@ export function useStartSurfaceController(
 
 	// Pickers read from settings; writes go through `updateSettings`.
 	const prefs = appSettings.startSurfacePreferences;
+	const startRepository =
+		repositories.find((repository) => repository.id === startRepositoryId) ??
+		repositories[0] ??
+		null;
+	const startRepositoryIsPlainDirectory = Boolean(
+		startRepository && !startRepository.defaultBranch,
+	);
 	// Chat is a top-level toggle (independent of repo). When off, the start
 	// surface falls back to the selected repo's stored work mode.
 	const repoWorkMode = readRepoPreference(
@@ -182,8 +189,10 @@ export function useStartSurfaceController(
 	const startMode: WorkspaceMode =
 		repositories.length === 0
 			? "chat"
-			: (transientModeOverride ??
-				(prefs.chatModeActive ? "chat" : repoWorkMode));
+			: startRepositoryIsPlainDirectory
+				? "local"
+				: (transientModeOverride ??
+					(prefs.chatModeActive ? "chat" : repoWorkMode));
 	const startBranchIntent = readRepoPreference(
 		prefs.branchIntentByRepoId,
 		startRepositoryId,
@@ -206,11 +215,6 @@ export function useStartSurfaceController(
 		deps.setPendingCreatedWorkspaceSubmit,
 	);
 	const pushToastRef = useLatestRef(deps.pushToast);
-
-	const startRepository =
-		repositories.find((repository) => repository.id === startRepositoryId) ??
-		repositories[0] ??
-		null;
 
 	// Default repo selection: prefer the persisted `repoId`, fall back to
 	// the first repo. Re-runs when the persisted value resolves or the
@@ -275,7 +279,7 @@ export function useStartSurfaceController(
 			if (!startRepository) throw new Error("no repo");
 			return getRepoCurrentBranch(startRepository.id);
 		},
-		enabled: Boolean(startRepository?.id),
+		enabled: Boolean(startRepository?.id) && !startRepositoryIsPlainDirectory,
 	});
 	// Local: live HEAD wins (the worktree's persisted override must not leak in).
 	// Worktree: pendingNewBranch > per-repo override > default.
@@ -285,7 +289,7 @@ export function useStartSurfaceController(
 				startLocalBranchSelection ??
 				startLocalCurrentBranchQuery.data ??
 				startRepository?.defaultBranch ??
-				"main")
+				"Files")
 			: (startPendingNewBranch ??
 				startSourceBranchOverride ??
 				startRepository?.defaultBranch ??
@@ -300,7 +304,7 @@ export function useStartSurfaceController(
 			if (!startRepository) throw new Error("no repo");
 			return listBranchesForWorkspacePicker(startRepository.id);
 		},
-		enabled: Boolean(startRepository?.id),
+		enabled: Boolean(startRepository?.id) && !startRepositoryIsPlainDirectory,
 	});
 
 	const selectRepository = useCallback(
@@ -501,7 +505,12 @@ export function useStartSurfaceController(
 			}
 
 			try {
-				if (startMode !== "chat" && startPendingNewBranch && startRepository) {
+				if (
+					startMode !== "chat" &&
+					!startRepositoryIsPlainDirectory &&
+					startPendingNewBranch &&
+					startRepository
+				) {
 					await createAndCheckoutBranch(
 						startRepository.id,
 						startPendingNewBranch,
@@ -518,7 +527,10 @@ export function useStartSurfaceController(
 					// Chat mode ignores repoId/sourceBranch — pass empty
 					// strings so the function signature stays the same.
 					repoId: startRepository?.id ?? "",
-					sourceBranch: startMode === "chat" ? "" : startSourceBranch,
+					sourceBranch:
+						startMode === "chat" || startRepositoryIsPlainDirectory
+							? ""
+							: startSourceBranch,
 					mode: startMode,
 					// Only worktree mode honors branchIntent.
 					branchIntent:
@@ -745,6 +757,7 @@ export function useStartSurfaceController(
 			startMode,
 			startPendingLinkedDirectories,
 			startPendingNewBranch,
+			startRepositoryIsPlainDirectory,
 			startRepository?.id,
 			startSourceBranch,
 		],

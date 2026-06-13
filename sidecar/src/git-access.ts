@@ -1,5 +1,5 @@
 import { readFile, stat } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join, resolve, win32 } from "node:path";
 
 async function existingDirectory(path: string): Promise<string | null> {
 	try {
@@ -17,7 +17,7 @@ async function readWorktreeGitdir(cwd: string): Promise<string | null> {
 		if (!match?.[1]) {
 			return null;
 		}
-		return resolve(cwd, match[1].trim());
+		return resolveGitPath(cwd, match[1].trim());
 	} catch {
 		return null;
 	}
@@ -26,10 +26,20 @@ async function readWorktreeGitdir(cwd: string): Promise<string | null> {
 async function readCommonDir(gitDir: string): Promise<string | null> {
 	try {
 		const pointer = await readFile(join(gitDir, "commondir"), "utf-8");
-		return resolve(gitDir, pointer.trim());
+		return resolveGitPath(gitDir, pointer.trim());
 	} catch {
 		return null;
 	}
+}
+
+function resolveGitPath(base: string, path: string): string {
+	if (isWindowsAbsolutePath(path)) return win32.normalize(path);
+	if (isWindowsAbsolutePath(base)) return win32.resolve(base, path);
+	return resolve(base, path);
+}
+
+function isWindowsAbsolutePath(path: string): boolean {
+	return /^[a-zA-Z]:[\\/]/.test(path) || /^\\\\/.test(path);
 }
 
 /**

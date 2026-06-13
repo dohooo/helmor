@@ -119,6 +119,9 @@ export function WorkspaceStartPage({
 	children,
 }: WorkspaceStartPageProps) {
 	const [createBranchOpen, setCreateBranchOpen] = useState(false);
+	const selectedRepositoryIsPlainDirectory = Boolean(
+		selectedRepository && !selectedRepository.defaultBranch,
+	);
 
 	// Local mode mirrors git DWIM (local-first) for icon resolution; UseBranch
 	// has the same shape. Worktree mode follows the user-picked intent.
@@ -575,6 +578,15 @@ export function WorkspaceStartPage({
 											) : null}
 										</DropdownMenuItem>
 									</>
+								) : selectedRepositoryIsPlainDirectory ? (
+									<DropdownMenuItem
+										onClick={() => onModeChange("local")}
+										className="gap-2 pr-3"
+										data-checked="true"
+									>
+										<Laptop className="size-3.5" strokeWidth={1.8} />
+										<span>Work locally</span>
+									</DropdownMenuItem>
 								) : (
 									<>
 										<DropdownMenuItem
@@ -612,7 +624,7 @@ export function WorkspaceStartPage({
 							</DropdownMenuContent>
 						</DropdownMenu>
 						{/* Branch intent picker. Worktree mode only. */}
-						{mode === "worktree" ? (
+						{mode === "worktree" && !selectedRepositoryIsPlainDirectory ? (
 							<DropdownMenu>
 								<Tooltip>
 									<TooltipTrigger asChild>
@@ -695,7 +707,7 @@ export function WorkspaceStartPage({
 							</DropdownMenu>
 						) : null}
 						{/* Branch picker: hidden in chat mode (no branches). */}
-						{mode !== "chat" ? (
+						{mode !== "chat" && !selectedRepositoryIsPlainDirectory ? (
 							<>
 								<Tooltip>
 									<BranchPickerPopover

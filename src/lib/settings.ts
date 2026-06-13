@@ -324,6 +324,10 @@ export type AppSettings = {
 	 *  exactly once at the merged-edge; skipped if the workspace has an
 	 *  active agent session or fails archive validation. */
 	autoArchiveOnMerge: boolean;
+	/** Opt-in: allow adding plain local directories that are not git
+	 *  repositories. These run as local-mode sessions with no branch/worktree
+	 *  actions. */
+	allowNonGitDirectories: boolean;
 	onboardingCompleted: boolean;
 	shortcuts: ShortcutOverrides;
 	claudeCustomProviders: ClaudeCustomProviderSettings;
@@ -420,6 +424,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	alwaysShowContextUsage: true,
 	showUsageStats: true,
 	autoArchiveOnMerge: false,
+	allowNonGitDirectories: false,
 	onboardingCompleted: false,
 	shortcuts: {},
 	claudeCustomProviders: {
@@ -605,6 +610,7 @@ const SETTINGS_KEY_MAP: Record<
 	alwaysShowContextUsage: "app.always_show_context_usage",
 	showUsageStats: "app.show_usage_stats",
 	autoArchiveOnMerge: "app.auto_archive_on_merge",
+	allowNonGitDirectories: "app.allow_non_git_directories",
 	onboardingCompleted: "app.onboarding_completed",
 	shortcuts: "app.shortcuts",
 	claudeCustomProviders: "app.claude_custom_providers",
@@ -1350,6 +1356,10 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.autoArchiveOnMerge] !== undefined
 					? raw[SETTINGS_KEY_MAP.autoArchiveOnMerge] === "true"
 					: DEFAULT_SETTINGS.autoArchiveOnMerge,
+			allowNonGitDirectories:
+				raw[SETTINGS_KEY_MAP.allowNonGitDirectories] !== undefined
+					? raw[SETTINGS_KEY_MAP.allowNonGitDirectories] === "true"
+					: DEFAULT_SETTINGS.allowNonGitDirectories,
 			onboardingCompleted:
 				raw[SETTINGS_KEY_MAP.onboardingCompleted] !== undefined
 					? raw[SETTINGS_KEY_MAP.onboardingCompleted] === "true"
