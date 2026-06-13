@@ -1,4 +1,6 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ThreadMessageLike } from "@/lib/api";
 import { consumeAnchoredToggle, resetAnchoredToggle } from "./anchored-toggle";
@@ -229,5 +231,63 @@ describe("ChatUserMessage line clamp", () => {
 			delete (HTMLElement.prototype as { getBoundingClientRect?: unknown })
 				.getBoundingClientRect;
 		}
+	});
+});
+
+describe("ChatUserMessage author avatar (team room)", () => {
+	// CachedAvatar pulls through React Query; the author-less single-user
+	// path never mounts it, so only these author cases need a provider.
+	function renderWithQuery(ui: ReactElement) {
+		return render(
+			<QueryClientProvider client={new QueryClient()}>
+				{ui}
+			</QueryClientProvider>,
+		);
+	}
+
+	it("shows the author avatar (initials + name title) when author is present", () => {
+		renderWithQuery(
+			<ChatUserMessage
+				message={{
+					id: "u-author-1",
+					role: "user",
+					content: [{ type: "text", id: "t0", text: "hi team" }],
+					author: { id: "alice-1", displayName: "Ada Lovelace" },
+				}}
+			/>,
+		);
+		expect(screen.getByText("hi team")).toBeInTheDocument();
+		expect(screen.getByTestId("author-avatar")).toBeInTheDocument();
+		expect(screen.getByTitle("Ada Lovelace")).toBeInTheDocument();
+		expect(screen.getByText("AL")).toBeInTheDocument();
+	});
+
+	it("renders no author avatar in single-user mode (author absent)", () => {
+		renderWithQuery(
+			<ChatUserMessage
+				message={{
+					id: "u-author-2",
+					role: "user",
+					content: [{ type: "text", id: "t0", text: "solo prompt" }],
+				}}
+			/>,
+		);
+		expect(screen.getByText("solo prompt")).toBeInTheDocument();
+		expect(screen.queryByTestId("author-avatar")).toBeNull();
+	});
+
+	it("falls back to author-id initials when there is no display name", () => {
+		renderWithQuery(
+			<ChatUserMessage
+				message={{
+					id: "u-author-3",
+					role: "user",
+					content: [{ type: "text", id: "t0", text: "x" }],
+					author: { id: "zoe" },
+				}}
+			/>,
+		);
+		expect(screen.getByTestId("author-avatar")).toBeInTheDocument();
+		expect(screen.getByText("ZO")).toBeInTheDocument();
 	});
 });

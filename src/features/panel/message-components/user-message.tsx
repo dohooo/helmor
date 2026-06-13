@@ -1,8 +1,9 @@
 import { ChevronDown, Tag } from "lucide-react";
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { CachedAvatar } from "@/components/cached-avatar";
 import { FileMentionBadge } from "@/components/file-mention-badge";
 import { InlineBadge } from "@/components/inline-badge";
-import type { MessagePart } from "@/lib/api";
+import type { MessageAuthor, MessagePart } from "@/lib/api";
 import {
 	buildComposerPreviewLabel,
 	type ComposerPreviewPayload,
@@ -46,6 +47,16 @@ function PastedTextBadge({ text }: { text: string }) {
 			nonSelectable={false}
 		/>
 	);
+}
+
+/** Two-letter initials for the message author's avatar fallback. */
+function authorInitials(author: MessageAuthor): string {
+	const name = author.displayName?.trim() || author.id;
+	const words = name.split(/\s+/).filter(Boolean);
+	if (words.length >= 2) {
+		return (words[0][0] + words[1][0]).toUpperCase();
+	}
+	return name.slice(0, 2).toUpperCase();
 }
 
 export function ChatUserMessage({ message }: { message: RenderedMessage }) {
@@ -149,7 +160,7 @@ export function ChatUserMessage({ message }: { message: RenderedMessage }) {
 		<div
 			data-message-id={message.id}
 			data-message-role="user"
-			className="group/user flex min-w-0 justify-end"
+			className="group/user flex min-w-0 items-start justify-end gap-2"
 		>
 			<div className="relative flex max-w-[75%] min-w-0 flex-col items-end pb-5">
 				<div
@@ -206,6 +217,17 @@ export function ChatUserMessage({ message }: { message: RenderedMessage }) {
 					/>
 				</div>
 			</div>
+			{message.author ? (
+				<CachedAvatar
+					data-testid="author-avatar"
+					src={message.author.avatarUrl}
+					alt={message.author.displayName ?? message.author.id}
+					title={message.author.displayName ?? message.author.id}
+					size="sm"
+					fallback={authorInitials(message.author)}
+					className="mt-1 shrink-0"
+				/>
+			) : null}
 		</div>
 	);
 }
