@@ -140,8 +140,7 @@ pub fn capabilities_for_provider(provider: &str) -> ProviderCapabilities {
 /// Convenience: list every provider Helmor ships today. Frontends use
 /// this to render the capability table in settings (eventually), and
 /// tests use it to assert there are no holes in the matrix.
-pub const KNOWN_PROVIDERS: &[&str] =
-    &["claude", "codex", "cursor", "opencode", "mimo", "kimi"];
+pub const KNOWN_PROVIDERS: &[&str] = &["claude", "codex", "cursor", "opencode", "mimo", "kimi"];
 
 #[cfg(test)]
 mod tests {

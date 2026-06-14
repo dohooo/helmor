@@ -993,8 +993,7 @@ mod tests {
     #[test]
     fn static_model_sections_returns_hardcoded_catalog() {
         // `None` cursor_prefs (no API key) → cursor section omitted entirely.
-        let sections =
-            model_sections_for_inputs(Vec::new(), Vec::new(), None, None, None, None);
+        let sections = model_sections_for_inputs(Vec::new(), Vec::new(), None, None, None, None);
 
         assert_eq!(sections.len(), 5);
         assert_eq!(sections[0].id, "claude");
@@ -1239,8 +1238,7 @@ mod tests {
 
     #[test]
     fn official_filter_keeps_enabled_subset() {
-        let base =
-            model_sections_for_inputs(Vec::new(), Vec::new(), None, None, None, None);
+        let base = model_sections_for_inputs(Vec::new(), Vec::new(), None, None, None, None);
         let filtered = apply_official_enabled_filter(base, None, Some(&["gpt-5.5".to_string()]));
         let codex = filtered.iter().find(|s| s.id == "codex").unwrap();
         assert_eq!(
@@ -1257,8 +1255,7 @@ mod tests {
 
     #[test]
     fn official_filter_empty_list_empties_options() {
-        let base =
-            model_sections_for_inputs(Vec::new(), Vec::new(), None, None, None, None);
+        let base = model_sections_for_inputs(Vec::new(), Vec::new(), None, None, None, None);
         let filtered = apply_official_enabled_filter(base, Some(&[]), None);
         // The filter only empties options; hiding the now-empty section is
         // `drop_empty_sections`' job (tested separately).
@@ -1647,8 +1644,7 @@ mod tests {
 
     #[test]
     fn official_claude_section_surfaces_fable_5_above_opus_lineage() {
-        let sections =
-            model_sections_for_inputs(Vec::new(), Vec::new(), None, None, None, None);
+        let sections = model_sections_for_inputs(Vec::new(), Vec::new(), None, None, None, None);
         let claude = sections.iter().find(|s| s.id == "claude").unwrap();
         let ids: Vec<&str> = claude.options.iter().map(|o| o.id.as_str()).collect();
         // User-facing ordering: Fable 5 on top, then 4.8 (default), 4.7, 4.6.
