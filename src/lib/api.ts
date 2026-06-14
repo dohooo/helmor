@@ -993,6 +993,39 @@ export async function getAgentLoginStatus(): Promise<AgentLoginStatusResult> {
 	return await invoke<AgentLoginStatusResult>("get_agent_login_status");
 }
 
+/** Result of authorizing a cloud Codex subscription identity. Carries NO token
+ *  material — only the non-sensitive identity facts the panel renders. */
+export interface CloudCodexAuthResult {
+	accountId: string | null;
+	changed: boolean;
+}
+
+/**
+ * Authorize a Codex **subscription** identity for the team's cloud sandbox.
+ * Runs an interactive `codex login` locally against a throwaway 0700
+ * `CODEX_HOME`, reads the OAuth `refresh_token` + `id_token`, and PUTs them to
+ * the team Worker authenticated with the team bearer. The `refresh_token`
+ * NEVER enters the webview — only `{accountId, changed}` is returned.
+ *
+ * `workerUrl` + `teamToken` come from the frontend's saved team config
+ * (`getTeamConfig()` in `src/lib/team-mode.ts`) — the Rust backend can't read
+ * the webview's `localStorage`, so the caller forwards them. Maps to Rust
+ * `authorize_cloud_codex_identity(worker_url, team_token)` (serde camelCase).
+ */
+export async function authorizeCloudCodexIdentity(
+	workerUrl: string,
+	teamToken: string,
+): Promise<CloudCodexAuthResult> {
+	return await invoke<CloudCodexAuthResult>("authorize_cloud_codex_identity", {
+		workerUrl,
+		teamToken,
+	});
+}
+
+// Cloud Codex identity STATUS is read directly from the Worker by the frontend
+// (`team-api.getCloudCodexIdentityStatus`, a plain fetch) — there is no Rust
+// status command / invoke wrapper.
+
 // Cursor is an SDK (no versioned CLI), so it has no entry.
 export type AgentVersionsResult = {
 	claude: string | null;

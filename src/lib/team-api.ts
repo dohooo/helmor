@@ -164,3 +164,46 @@ export async function listTeamWorkspaces(
 	const body = (await res.json()) as { workspaces?: TeamWorkspace[] };
 	return body.workspaces ?? [];
 }
+
+/**
+ * The team's cloud Codex identity status, as returned by the Worker's
+ * `GET /team/cloud-identity` → the bound member's `CodexIdentity` DO
+ * `status()`. The Worker emits these camelCase fields verbatim. NEVER carries
+ * the `refresh_token` or the `access_token` — metadata only.
+ */
+export interface CloudCodexIdentityStatus {
+	/** Whether the DO currently holds a refresh token for this team. */
+	hasToken: boolean;
+	/** Bound ChatGPT account id (from the id_token claim), if any. */
+	accountId: string | null;
+	/** Cached access-token expiry as a unix epoch in SECONDS (the JWT `exp`
+	 *  claim), or null when no token is cached. */
+	accessExp: number | null;
+	/** True once the DO marked the identity unrecoverable (persist failure /
+	 *  revoked RT) and a fresh authorization is required. */
+	bricked: boolean;
+}
+
+/**
+ * `GET /team/cloud-identity` — the team's cloud Codex identity status (the
+ * member's `CodexIdentity` DO `status()`). Mirrors {@link listTeamMembers}:
+ * bearer auth, throws on non-2xx so React Query surfaces an error state.
+ */
+export async function getCloudCodexIdentityStatus(
+	cfg: TeamConfig,
+): Promise<CloudCodexIdentityStatus> {
+	const base = normalizeUrl(cfg.url);
+	const res = await fetch(`${base}/team/cloud-identity`, {
+		headers: authHeaders(cfg),
+	});
+	if (!res.ok) {
+		throw new Error(`Failed to load cloud identity (HTTP ${res.status})`);
+	}
+	const body = (await res.json()) as Partial<CloudCodexIdentityStatus>;
+	return {
+		hasToken: body.hasToken ?? false,
+		accountId: body.accountId ?? null,
+		accessExp: body.accessExp ?? null,
+		bricked: body.bricked ?? false,
+	};
+}

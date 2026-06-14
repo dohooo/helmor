@@ -119,6 +119,10 @@ export async function handleTeamRoute(
 			return listMembers(request, env);
 		case "GET /team/workspaces":
 			return listWorkspaces(request, env);
+		case "PUT /team/cloud-identity":
+			return putCloudIdentity(request, env);
+		case "GET /team/cloud-identity":
+			return getCloudIdentity(request, env);
 		default:
 			return json({ code: "NotFound", message: `no route ${route}` }, 404);
 	}
@@ -240,6 +244,101 @@ async function listWorkspaces(request: Request, env: Env): Promise<Response> {
 		.bind(TEAM_ID)
 		.all();
 	return json({ workspaces: results });
+}
+
+/**
+ * PUT /team/cloud-identity (AUTHENTICATED MEMBER) — store the member's Codex
+ * subscription OAuth tokens in their own `CodexIdentity` Durable Object.
+ *
+ * SECURITY (the trust boundary): the member id is derived SOLELY from the
+ * `Authorization: Bearer <invite-token>` → `invites.member_id` mapping. A
+ * client-supplied `X-Helmor-Member-Id` is NEVER trusted (and is stripped on the
+ * proxy path in index.ts regardless). The admin/shared token carries no member
+ * identity, so it cannot write a cloud identity — only a real member can write
+ * their OWN. An unauthenticated / unknown token is rejected with 401.
+ *
+ * The body is `{ refreshToken, idToken }`. The refresh_token is handed straight
+ * to the DO (encrypted at rest there) and is NEVER logged, NEVER echoed back —
+ * the response is `{ accountId, changed }` only.
+ */
+async function putCloudIdentity(request: Request, env: Env): Promise<Response> {
+	// Derive the member id from the bearer alone — never from a client header.
+	const bearer = readBearer(request);
+	const memberId = bearer ? await lookupMemberId(env, bearer) : null;
+	if (!memberId) {
+		return json({ code: "Unauthorized" }, 401);
+	}
+
+	const body = await readJsonBody(request);
+	const refreshToken =
+		typeof body.refreshToken === "string" ? body.refreshToken : "";
+	const idToken = typeof body.idToken === "string" ? body.idToken : "";
+	if (!refreshToken || !idToken) {
+		// NB: never include the (absent/empty) token values in the error.
+		return json(
+			{ code: "BadRequest", message: "refreshToken, idToken required" },
+			400,
+		);
+	}
+
+	const stub = env.CODEX_IDENTITY.get(env.CODEX_IDENTITY.idFromName(memberId));
+	const result = await stub.putRefreshToken(refreshToken, idToken);
+
+	// Bind this team's cloud run identity to the authorizing member (v1: one
+	// team -> one identity; last writer wins). Upsert the single team row so a
+	// member can authorize before any explicit bootstrap.
+	await env.DB.prepare(
+		`INSERT INTO teams (id, sandbox_id, cloud_identity_member_id) VALUES (?1, ?2, ?3)
+		 ON CONFLICT(id) DO UPDATE SET cloud_identity_member_id = excluded.cloud_identity_member_id`,
+	)
+		.bind(TEAM_ID, env.HELMOR_SANDBOX_ID, memberId)
+		.run();
+
+	return json({ accountId: result.accountId, changed: result.changed });
+}
+
+/**
+ * GET /team/cloud-identity (member-or-admin) — read the team's cloud Codex
+ * identity status from its `CodexIdentity` DO. Returns metadata only
+ * (`{ hasToken, accountId, accessExp, bricked }`) — NEVER any token material.
+ *
+ * For v1 (one team -> one identity) the queried DO is the team's bound
+ * `cloud_identity_member_id`. A no-identity team (none bound yet) reports
+ * `hasToken: false` without touching a DO.
+ */
+async function getCloudIdentity(request: Request, env: Env): Promise<Response> {
+	if ((await classifyCaller(request, env)) === "unauthorized") {
+		return json({ code: "Unauthorized" }, 401);
+	}
+
+	const memberId = await readCloudIdentityMemberId(env);
+	if (!memberId) {
+		return json({
+			hasToken: false,
+			accountId: null,
+			accessExp: null,
+			bricked: false,
+		});
+	}
+
+	const stub = env.CODEX_IDENTITY.get(env.CODEX_IDENTITY.idFromName(memberId));
+	const status = await stub.status();
+	return json(status);
+}
+
+/** Read the team's bound cloud-identity member id (the member whose
+ *  `CodexIdentity` DO backs the team's cloud run identity), or null if none.
+ *  Exported so the cold-start mint hook in index.ts can resolve which DO to
+ *  mint the container's auth.json from. */
+export async function readCloudIdentityMemberId(
+	env: Env,
+): Promise<string | null> {
+	const row = await env.DB.prepare(
+		"SELECT cloud_identity_member_id FROM teams WHERE id = ?1",
+	)
+		.bind(TEAM_ID)
+		.first<{ cloud_identity_member_id: string | null }>();
+	return row?.cloud_identity_member_id ?? null;
 }
 
 /** Best-effort JSON body parse — an empty/invalid body yields `{}`. */

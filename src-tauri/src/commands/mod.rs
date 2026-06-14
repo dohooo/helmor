@@ -1,3 +1,4 @@
+pub(crate) mod cloud_identity;
 mod common;
 pub(crate) mod companion_commands;
 pub(crate) mod conductor_commands;

@@ -2171,6 +2171,7 @@ dependencies = [
  "winreg 0.52.0",
  "wreq",
  "wreq-util",
+ "zeroize",
 ]
 
 [[package]]

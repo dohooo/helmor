@@ -763,7 +763,8 @@ fn build_app(mode: AppMode) -> tauri::App {
             commands::companion_commands::companion_revoke_device,
             commands::companion_commands::companion_sign_in_cloudflare,
             commands::companion_commands::companion_allocate_stable_url,
-            commands::companion_commands::companion_destroy_stable_url
+            commands::companion_commands::companion_destroy_stable_url,
+            commands::cloud_identity::authorize_cloud_codex_identity
         ]);
 
     let mut context = tauri::generate_context!();

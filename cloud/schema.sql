@@ -21,11 +21,14 @@ CREATE TABLE IF NOT EXISTS members (
 
 -- One row per team. `sandbox_id` is the Worker's routing key (Phase 0/1: one
 -- team -> one sandbox). `backup_handle` is reserved for Phase 2b (R2 sleep
--- persistence) and stays unused here.
+-- persistence). `cloud_identity_member_id` (Phase 1) is the GitHub numeric id
+-- of the member whose `CodexIdentity` Durable Object backs this team's cloud
+-- run identity (v1: one team -> one identity); NULL until a member authorizes.
 CREATE TABLE IF NOT EXISTS teams (
-  id            TEXT PRIMARY KEY,
-  sandbox_id    TEXT NOT NULL,
-  backup_handle TEXT
+  id                       TEXT PRIMARY KEY,
+  sandbox_id               TEXT NOT NULL,
+  backup_handle            TEXT,
+  cloud_identity_member_id TEXT
 );
 
 -- Denormalized, read-only mirror of the sandbox's workspaces (fed by a sync
@@ -52,3 +55,17 @@ CREATE TABLE IF NOT EXISTS invites (
 
 CREATE INDEX IF NOT EXISTS idx_invites_member ON invites(member_id);
 CREATE INDEX IF NOT EXISTS idx_workspaces_team ON workspaces(team_id);
+
+-- ── One-time migrations for PRE-EXISTING databases ───────────────────────────
+-- The CREATE TABLE statements above only add new columns to FRESH databases
+-- (a `CREATE TABLE IF NOT EXISTS` no-ops if the table already exists, so it
+-- never backfills a column onto an already-bootstrapped table). D1/SQLite has
+-- NO `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, and a bare `ALTER` here would
+-- abort this whole re-runnable file on fresh/re-run (the column would already
+-- exist). So the ALTER is documented — NOT executed — here; the orchestrator
+-- runs it ONCE against the live D1 at deploy. It errors harmlessly ("duplicate
+-- column name") if the column already exists, which is the expected outcome on
+-- a DB created from the CREATE TABLE above.
+--
+-- Phase 1 (cloud_identity_member_id): for a team D1 that predates Phase 1, run:
+--   wrangler d1 execute helmor-team --remote --command "ALTER TABLE teams ADD COLUMN cloud_identity_member_id TEXT"

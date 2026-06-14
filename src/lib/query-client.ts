@@ -171,6 +171,7 @@ export const helmorQueryKeys = {
 	// backends doesn't serve a stale roster.
 	teamMembers: (url: string) => ["teamMembers", url] as const,
 	teamWorkspaces: (url: string) => ["teamWorkspaces", url] as const,
+	cloudCodexIdentity: (url: string) => ["cloudCodexIdentity", url] as const,
 };
 
 /** Persistence is opt-in per `queryOptions` via `meta: { persist: true }`.

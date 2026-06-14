@@ -12,10 +12,14 @@ import {
 	handleTeamRoute,
 	lookupMemberId,
 	readBackupHandle,
+	readCloudIdentityMemberId,
 	writeBackupHandle,
 } from "./team";
 
 export { Sandbox } from "@cloudflare/sandbox";
+// Re-export so workerd registers the Durable Object class named in
+// wrangler.toml's `CODEX_IDENTITY` binding (Phase 1 Codex token broker).
+export { CodexIdentity } from "./codex-identity";
 
 export interface Env {
 	Sandbox: DurableObjectNamespace<Sandbox>;
@@ -29,11 +33,22 @@ export interface Env {
 	HELMOR_COMPANION_TOKEN: string;
 	/** PAT for PR6 clone / push, injected into the serve process env (secret). */
 	GITHUB_TOKEN?: string;
-	/** Cloud run identity: ChatGPT auth.json (the user's subscription), written to
-	 *  the container's ~/.codex/auth.json so the agent authenticates as that
-	 *  subscription. Phase-0 passes the whole credential through; Phase-1 will have
-	 *  the control-plane broker mint a per-turn short-lived token instead. */
-	CODEX_AUTH_JSON?: string;
+	/** Cloud run identity broker (Phase 1): per-member Durable Object that holds
+	 *  the ChatGPT subscription refresh_token encrypted at rest and mints the
+	 *  short-lived, empty-RT ChatgptAuthTokens auth.json injected at cold start.
+	 *  REPLACES the Phase-0 static `CODEX_AUTH_JSON` secret — the container's
+	 *  auth.json is now computed per cold start from `mintAuthJson()`, never a
+	 *  static binding that would replay a stale token on wake (design §3.3). */
+	CODEX_IDENTITY: DurableObjectNamespace<
+		import("./codex-identity").CodexIdentity
+	>;
+	/** Base64-encoded 32-byte AES-256-GCM key the `CodexIdentity` DO derives its
+	 *  at-rest encryption key from (Worker secret). NEVER enters the container,
+	 *  D1, or the frontend. */
+	BROKER_ENC_KEY: string;
+	/** Override the OAuth token endpoint the broker refreshes against (tests /
+	 *  spike). Falls back to the hard-coded OpenAI endpoint inside the DO. */
+	CODEX_REFRESH_TOKEN_URL_OVERRIDE?: string;
 	/** R2 bucket for Sandbox backups (Phase 2b). Bound so the Sandbox DO can
 	 *  resolve BACKUP_BUCKET for localBucket-mode createBackup/restoreBackup. */
 	BACKUP_BUCKET?: R2Bucket;
@@ -253,6 +268,15 @@ async function ensureServe(
 		console.error("Phase 2b restore failed (cold-starting empty)", error);
 	}
 
+	// Phase 1 Codex token broker: mint a fresh, short-lived ChatgptAuthTokens
+	// auth.json from the team's identity DO and inject it as CODEX_AUTH_JSON for
+	// THIS cold start (design §3.3). Computed per startProcess — never a static
+	// binding — so a sandbox wake never replays a stale token. A missing
+	// identity or a brick/refresh failure starts serve WITHOUT Codex auth (the
+	// container runs un-authenticated for Codex until the user re-authorizes);
+	// we log only a NON-SENSITIVE marker, never the auth.json or any token.
+	const codexAuthJson = await mintCodexAuthJson(env);
+
 	await sandbox.startProcess(SERVE_START_CMD, {
 		env: {
 			HELMOR_COMPANION_TOKEN: env.HELMOR_COMPANION_TOKEN,
@@ -262,7 +286,7 @@ async function ensureServe(
 			// /workspace|/home|/tmp|/var/tmp|/app).
 			HELMOR_DATA_DIR: "/home/helmor",
 			...(env.GITHUB_TOKEN ? { GITHUB_TOKEN: env.GITHUB_TOKEN } : {}),
-			...(env.CODEX_AUTH_JSON ? { CODEX_AUTH_JSON: env.CODEX_AUTH_JSON } : {}),
+			...(codexAuthJson ? { CODEX_AUTH_JSON: codexAuthJson } : {}),
 		},
 	});
 
@@ -284,5 +308,41 @@ async function healthOk(sandbox: Sandbox, port: number): Promise<boolean> {
 		return res.ok;
 	} catch {
 		return false;
+	}
+}
+
+/**
+ * Mint the container's Codex auth.json from the team's identity DO at cold
+ * start (Phase 1 broker, design §3.3). Resolves the team's bound
+ * `cloud_identity_member_id`, gets that member's `CodexIdentity` DO, and calls
+ * `mintAuthJson()` (Workers RPC). Returns the serialized ChatgptAuthTokens
+ * auth.json (empty RT) to inject, or `null` to start serve WITHOUT Codex auth.
+ *
+ * SECURITY: only ever logs a NON-SENSITIVE marker — never the auth.json, the
+ * minted access_token, or any token material. A `{ error }` result (no
+ * identity / bricked / refresh failed) is a clean skip; cloud Codex runs fail
+ * until the user re-authorizes (Phase 5 reconnect semantics).
+ */
+async function mintCodexAuthJson(env: Env): Promise<string | null> {
+	const memberId = await readCloudIdentityMemberId(env);
+	if (!memberId) return null; // No cloud identity configured for this team.
+
+	try {
+		const stub = env.CODEX_IDENTITY.get(
+			env.CODEX_IDENTITY.idFromName(memberId),
+		);
+		const mint = await stub.mintAuthJson();
+		if ("authJson" in mint) {
+			return JSON.stringify(mint.authJson);
+		}
+		// Non-sensitive marker only (the `error` discriminant, never a value).
+		console.error(`Phase 1 codex mint skipped: ${mint.error}`);
+		return null;
+	} catch (error) {
+		console.error(
+			"Phase 1 codex mint failed",
+			error instanceof Error ? error.message : "unknown",
+		);
+		return null;
 	}
 }

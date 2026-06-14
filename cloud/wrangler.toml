@@ -28,9 +28,21 @@ max_instances = 1
 class_name = "Sandbox"
 name = "Sandbox"
 
+# Per-member Codex token broker (Phase 1). Holds the user's ChatGPT
+# subscription OAuth refresh_token encrypted at rest and mints short-lived,
+# empty-RT ChatgptAuthTokens auth.json for container cold start. Keyed by the
+# member's GitHub numeric id (idFromName(memberId)).
+[[durable_objects.bindings]]
+class_name = "CodexIdentity"
+name = "CODEX_IDENTITY"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Sandbox"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["CodexIdentity"]
 
 # D1 control-plane registry (Phase 3 / action item ①): members / workspaces /
 # invites / teams. Additive — the Phase 0 stateless proxy is untouched. Schema
