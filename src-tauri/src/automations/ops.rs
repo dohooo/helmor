@@ -113,6 +113,13 @@ pub fn set_status(id: &str, status: &str) -> Result<AutomationRecord> {
     match status {
         STATUS_PAUSED => automations::set_automation_status(id, STATUS_PAUSED, None)?,
         STATUS_ACTIVE => {
+            // Re-validate the binding: resuming onto a session/workspace that
+            // was deleted while paused would just dispatch-fail and re-pause.
+            validate_target(
+                &record.runs_in,
+                record.session_id.as_deref(),
+                record.workspace_id.as_deref(),
+            )?;
             let schedule: Schedule = serde_json::from_value(record.schedule.clone())
                 .context("Automation has an unparseable schedule")?;
             let next_run_at = format_utc(next_run_after(&schedule, Utc::now())?);
@@ -275,5 +282,109 @@ mod tests {
         .unwrap();
         assert_ne!(rescheduled.next_run_at, original_next);
         assert_eq!(rescheduled.schedule["kind"], "every");
+    }
+
+    #[test]
+    fn resume_revalidates_missing_target() {
+        let _env = crate::testkit::TestEnv::new("automation-ops-resume-validate");
+        // A paused chat automation pointing at a session that doesn't exist
+        // (target deleted via some path). Resume must refuse rather than
+        // reactivate a guaranteed-to-dispatch-fail automation.
+        let record = automations::insert_automation(&NewAutomation {
+            title: "orphan",
+            prompt: "check",
+            runs_in: RUNS_IN_CHAT,
+            session_id: Some("ghost-session"),
+            workspace_id: None,
+            schedule: &serde_json::json!({"kind": "hourly"}),
+            next_run_at: "2026-01-01T00:00:00.000Z",
+        })
+        .unwrap();
+        automations::set_automation_status(&record.id, STATUS_PAUSED, None).unwrap();
+
+        assert!(set_status(&record.id, STATUS_ACTIVE).is_err());
+    }
+
+    #[test]
+    fn delete_session_cascades_chat_automation() {
+        let _env = crate::testkit::TestEnv::new("automation-ops-cascade-session");
+        let (_ws, session) = workspace_fixture();
+        let record = create_automation(chat_input(&session)).unwrap();
+
+        crate::models::sessions::delete_session(&session).unwrap();
+        assert!(automations::get_automation(&record.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_workspace_cascades_automations() {
+        let _env = crate::testkit::TestEnv::new("automation-ops-cascade-workspace");
+        let (ws, session) = workspace_fixture();
+        // One workspace-mode row + one chat row whose session lives in the
+        // workspace; both must be cascaded. Inserted directly to bypass the
+        // create-time target validation (irrelevant to the cascade).
+        let ws_auto = automations::insert_automation(&NewAutomation {
+            title: "ws monitor",
+            prompt: "check",
+            runs_in: RUNS_IN_WORKSPACE,
+            session_id: None,
+            workspace_id: Some(&ws),
+            schedule: &serde_json::json!({"kind": "hourly"}),
+            next_run_at: "2026-01-01T00:00:00.000Z",
+        })
+        .unwrap();
+        let chat_auto = automations::insert_automation(&NewAutomation {
+            title: "chat monitor",
+            prompt: "check",
+            runs_in: RUNS_IN_CHAT,
+            session_id: Some(&session),
+            workspace_id: None,
+            schedule: &serde_json::json!({"kind": "hourly"}),
+            next_run_at: "2026-01-01T00:00:00.000Z",
+        })
+        .unwrap();
+
+        crate::models::workspaces::delete_workspace_and_session_rows(&ws).unwrap();
+        assert!(automations::get_automation(&ws_auto.id).unwrap().is_none());
+        assert!(automations::get_automation(&chat_auto.id)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn workspace_run_session_does_not_steal_active_session() {
+        let _env = crate::testkit::TestEnv::new("automation-skip-active");
+        let (ws, session) = workspace_fixture();
+        // Pin `session` as the workspace's active selection.
+        crate::models::db::write_conn()
+            .unwrap()
+            .execute(
+                "UPDATE workspaces SET active_session_id = ?1 WHERE id = ?2",
+                [session.as_str(), ws.as_str()],
+            )
+            .unwrap();
+
+        // A skip-active create (what automation workspace runs use) must leave
+        // the active selection where the user left it.
+        let created = crate::models::sessions::create_session(
+            &ws,
+            None,
+            None,
+            crate::models::sessions::CreateSessionOverrides {
+                skip_active_session: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_ne!(created.session_id, session);
+
+        let active: Option<String> = crate::models::db::read_conn()
+            .unwrap()
+            .query_row(
+                "SELECT active_session_id FROM workspaces WHERE id = ?1",
+                [ws.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(active.as_deref(), Some(session.as_str()));
     }
 }

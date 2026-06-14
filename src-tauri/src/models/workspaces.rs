@@ -572,6 +572,9 @@ pub(crate) fn delete_workspace_and_session_rows(workspace_id: &str) -> Result<()
             [workspace_id],
         )
         .context("Failed to delete create-flow session plan state")?;
+    // Cascade automations before sessions (the cascade subquery reads them).
+    crate::models::automations::delete_automations_for_workspace(&transaction, workspace_id)
+        .context("Failed to delete create-flow workspace automations")?;
     transaction
         .execute(
             "DELETE FROM sessions WHERE workspace_id = ?1",

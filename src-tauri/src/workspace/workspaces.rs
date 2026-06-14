@@ -1601,6 +1601,9 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
             [workspace_id],
         )
         .context("Failed to delete workspace session plan state")?;
+    // Cascade automations before sessions (the cascade subquery reads them).
+    crate::models::automations::delete_automations_for_workspace(&transaction, workspace_id)
+        .context("Failed to delete workspace automations")?;
     transaction
         .execute(
             "DELETE FROM sessions WHERE workspace_id = ?1",

@@ -31,88 +31,56 @@ pub enum RunError {
 
 /// Resolve the automation's target session and start a background turn with
 /// its prompt. Returns once the sidecar accepted the turn (streaming
-/// continues on the event-loop thread).
+/// continues on the event-loop thread). `chat` mode targets the bound session;
+/// `workspace` mode validates the workspace first, then creates a fresh
+/// session for this run (without stealing the workspace's active selection).
 pub fn run_automation_now(
     app: &AppHandle,
     automation: &AutomationRecord,
 ) -> Result<StartedRun, RunError> {
-    let (session_id, workspace_id, permission_mode) = resolve_target(automation)?;
-
-    let workspace = crate::workspaces::get_workspace(&workspace_id)
-        .map_err(|error| RunError::TargetMissing(format!("workspace {workspace_id}: {error:#}")))?;
-    let root_path = workspace.root_path.ok_or_else(|| {
-        RunError::TargetMissing(format!("workspace {workspace_id} has no root_path"))
-    })?;
-
-    // Model: session row > "default", with the session's agent_type as the
-    // provider hint — same resolution as `helmor send` (service.rs).
-    let (session_model, session_provider) =
-        sessions::get_session_model_and_provider(&session_id).unwrap_or((None, None));
-    let model_id = session_model.unwrap_or_else(|| "default".to_string());
-    let model = crate::agents::resolve_model(&model_id, session_provider.as_deref());
-
-    let request = AgentSendRequest {
-        provider: model.provider.to_string(),
-        model_id: model.id.to_string(),
-        prompt: automation.prompt.clone(),
-        prompt_prefix: None,
-        session_id: None,
-        helmor_session_id: Some(session_id.clone()),
-        working_directory: Some(root_path),
-        effort_level: None,
-        permission_mode,
-        fast_mode: None,
-        user_message_id: None,
-        files: None,
-        images: None,
-        source: Some("automation".to_string()),
-        pasted_texts: None,
-    };
-
-    crate::agents::start_background_turn(app, request).map_err(|error| {
-        // CommandError exposes the chain via Debug; the busy rejection is the
-        // one failure we must distinguish (roll back + retry next tick).
-        let message = format!("{error:?}");
-        if message.contains("still running for this session") {
-            RunError::SessionBusy
-        } else {
-            RunError::Other(anyhow!(message))
-        }
-    })?;
-
-    Ok(StartedRun { session_id })
-}
-
-/// (session_id, workspace_id, permission_mode override) for this run.
-/// `chat` mode targets the bound session; `workspace` mode creates a fresh
-/// session named after the automation.
-fn resolve_target(
-    automation: &AutomationRecord,
-) -> Result<(String, String, Option<String>), RunError> {
     match automation.runs_in.as_str() {
         RUNS_IN_CHAT => {
             let session_id = automation.session_id.clone().ok_or_else(|| {
                 RunError::TargetMissing("chat automation has no bound session".to_string())
             })?;
-            let row = sessions::get_session_workspace_and_permission(&session_id)
-                .map_err(RunError::Other)?
-                .ok_or_else(|| {
-                    RunError::TargetMissing(format!("bound session {session_id} no longer exists"))
-                })?;
-            let workspace_id = row.0.ok_or_else(|| {
+            let (workspace_id, permission) =
+                sessions::get_session_workspace_and_permission(&session_id)
+                    .map_err(RunError::Other)?
+                    .ok_or_else(|| {
+                        RunError::TargetMissing(format!(
+                            "bound session {session_id} no longer exists"
+                        ))
+                    })?;
+            let workspace_id = workspace_id.ok_or_else(|| {
                 RunError::TargetMissing(format!("session {session_id} has no workspace"))
             })?;
-            Ok((session_id, workspace_id, Some(row.1)))
+            let root_path = resolve_root_path(&workspace_id)?;
+            dispatch_turn(
+                app,
+                automation,
+                &session_id,
+                root_path,
+                Some(permission),
+                false,
+            )
         }
         RUNS_IN_WORKSPACE => {
             let workspace_id = automation.workspace_id.clone().ok_or_else(|| {
                 RunError::TargetMissing("workspace automation has no bound workspace".to_string())
             })?;
+            // Validate the workspace (and read its cwd) BEFORE creating the
+            // session, so a missing target never leaves an empty orphan behind.
+            let root_path = resolve_root_path(&workspace_id)?;
             let created = sessions::create_session(
                 &workspace_id,
                 None,
                 None,
-                sessions::CreateSessionOverrides::default(),
+                sessions::CreateSessionOverrides {
+                    // A scheduled run must not yank the workspace's active
+                    // session away from whatever the user is looking at.
+                    skip_active_session: true,
+                    ..Default::default()
+                },
             )
             .map_err(RunError::Other)?;
             // Best-effort: name the fresh session after the automation so the
@@ -124,10 +92,81 @@ fn resolve_target(
                     "automations: failed to title run session"
                 );
             }
-            Ok((created.session_id, workspace_id, None))
+            dispatch_turn(app, automation, &created.session_id, root_path, None, true)
         }
         other => Err(RunError::TargetMissing(format!(
             "unknown runs_in value {other:?}"
         ))),
     }
+}
+
+/// Resolve a workspace to its on-disk cwd. Every failure maps to
+/// `TargetMissing` so the scheduler pauses the automation rather than retrying.
+fn resolve_root_path(workspace_id: &str) -> Result<String, RunError> {
+    let workspace = crate::workspaces::get_workspace(workspace_id)
+        .map_err(|error| RunError::TargetMissing(format!("workspace {workspace_id}: {error:#}")))?;
+    workspace.root_path.ok_or_else(|| {
+        RunError::TargetMissing(format!("workspace {workspace_id} has no root_path"))
+    })
+}
+
+/// Build the request and start the background turn. `created_fresh` marks a
+/// throwaway `workspace`-mode session that must be cleaned up if dispatch fails
+/// so failed runs don't litter the sidebar.
+fn dispatch_turn(
+    app: &AppHandle,
+    automation: &AutomationRecord,
+    session_id: &str,
+    root_path: String,
+    permission_mode: Option<String>,
+    created_fresh: bool,
+) -> Result<StartedRun, RunError> {
+    // Model: session row > "default", with the session's agent_type as the
+    // provider hint — same resolution as `helmor send` (service.rs).
+    let (session_model, session_provider) =
+        sessions::get_session_model_and_provider(session_id).unwrap_or((None, None));
+    let model_id = session_model.unwrap_or_else(|| "default".to_string());
+    let model = crate::agents::resolve_model(&model_id, session_provider.as_deref());
+
+    let request = AgentSendRequest {
+        provider: model.provider.to_string(),
+        model_id: model.id.to_string(),
+        prompt: automation.prompt.clone(),
+        prompt_prefix: None,
+        session_id: None,
+        helmor_session_id: Some(session_id.to_string()),
+        working_directory: Some(root_path),
+        effort_level: None,
+        permission_mode,
+        fast_mode: None,
+        user_message_id: None,
+        files: None,
+        images: None,
+        source: Some("automation".to_string()),
+        pasted_texts: None,
+    };
+
+    if let Err(error) = crate::agents::start_background_turn(app, request) {
+        if created_fresh {
+            if let Err(cleanup) = sessions::delete_session(session_id) {
+                tracing::warn!(
+                    session_id,
+                    error = %format!("{cleanup:#}"),
+                    "automations: failed to clean up empty run session after dispatch failure"
+                );
+            }
+        }
+        // CommandError exposes the chain via Debug; the busy rejection is the
+        // one failure we must distinguish (roll back + retry next tick).
+        let message = format!("{error:?}");
+        return Err(if message.contains(crate::agents::SESSION_BUSY_MARKER) {
+            RunError::SessionBusy
+        } else {
+            RunError::Other(anyhow!(message))
+        });
+    }
+
+    Ok(StartedRun {
+        session_id: session_id.to_string(),
+    })
 }

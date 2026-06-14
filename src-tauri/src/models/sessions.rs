@@ -549,6 +549,10 @@ pub struct CreateSessionOverrides<'a> {
     /// Pin `agent_type` at creation. Terminal sessions store their preset CLI
     /// here; GUI sessions leave it null until the first send sets it.
     pub agent_type: Option<&'a str>,
+    /// Skip repointing the workspace's `active_session_id` to the new session.
+    /// Background creators (automation `workspace`-mode runs) set this so a
+    /// scheduled run never steals the focus the user left on another session.
+    pub skip_active_session: bool,
 }
 
 pub fn create_session(
@@ -623,16 +627,21 @@ pub fn create_session(
         )
         .context("Failed to create session")?;
 
-    // Set as active session on the workspace
-    let updated_rows = transaction
-        .execute(
-            "UPDATE workspaces SET active_session_id = ?1 WHERE id = ?2",
-            (&session_id, workspace_id),
-        )
-        .context("Failed to set active session")?;
+    // Set as active session on the workspace — unless the caller opted out
+    // (background automation runs keep the user's current selection).
+    if !overrides.skip_active_session {
+        let updated_rows = transaction
+            .execute(
+                "UPDATE workspaces SET active_session_id = ?1 WHERE id = ?2",
+                (&session_id, workspace_id),
+            )
+            .context("Failed to set active session")?;
 
-    if updated_rows != 1 {
-        bail!("Active session update affected {updated_rows} rows for workspace {workspace_id}");
+        if updated_rows != 1 {
+            bail!(
+                "Active session update affected {updated_rows} rows for workspace {workspace_id}"
+            );
+        }
     }
 
     transaction
@@ -928,6 +937,10 @@ pub fn delete_session(session_id: &str) -> Result<()> {
             [session_id],
         )
         .context("Failed to delete session plan state")?;
+    // Drop chat automations bound to this session (no FK; single-writer pool
+    // means we cascade inline within this transaction).
+    crate::models::automations::delete_automations_for_session(&transaction, session_id)
+        .context("Failed to delete session automations")?;
     transaction
         .execute("DELETE FROM sessions WHERE id = ?1", [session_id])
         .context("Failed to delete session")?;

@@ -25,10 +25,13 @@ const MONTH_NAMES = [
 	"Dec",
 ] as const;
 
+/** Wall-clock time used whenever a daily/weekly schedule needs a default. */
+export const DEFAULT_TIME = "09:00";
+
 /** Default interval for newly created automations: "Daily at 9:00 AM". */
 export const DEFAULT_SCHEDULE: AutomationSchedule = {
 	kind: "daily",
-	time: "09:00",
+	time: DEFAULT_TIME,
 };
 
 /** "Hourly" / "Daily at 09:00" / "Weekly on Monday at 09:00" / "Every 15m". */

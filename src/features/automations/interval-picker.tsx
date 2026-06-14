@@ -1,5 +1,5 @@
 import { Check, ChevronDown } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
@@ -16,11 +16,48 @@ import {
 } from "@/components/ui/popover";
 import type { AutomationSchedule } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { scheduleSummary, WEEKDAY_NAMES } from "./schedule";
+import { DEFAULT_TIME, scheduleSummary, WEEKDAY_NAMES } from "./schedule";
 
 function timeOf(value: AutomationSchedule): string {
 	if (value.kind === "daily" || value.kind === "weekly") return value.time;
-	return "09:00";
+	return DEFAULT_TIME;
+}
+
+/** Number field for the "Every N" amount. Holds a local string draft so the
+ *  user can clear it and retype mid-edit; commits a valid amount live and
+ *  clamps empty/invalid input up to 1 on blur (a plain controlled input would
+ *  snap back to the old value and feel frozen). */
+function AmountInput({
+	amount,
+	onCommit,
+}: {
+	amount: number;
+	onCommit: (amount: number) => void;
+}) {
+	const [draft, setDraft] = useState(String(amount));
+	useEffect(() => {
+		setDraft(String(amount));
+	}, [amount]);
+	return (
+		<Input
+			type="number"
+			min={1}
+			aria-label="Interval amount"
+			value={draft}
+			onChange={(event) => {
+				setDraft(event.target.value);
+				const parsed = Number.parseInt(event.target.value, 10);
+				if (Number.isFinite(parsed) && parsed >= 1) onCommit(parsed);
+			}}
+			onBlur={() => {
+				const parsed = Number.parseInt(draft, 10);
+				const clamped = Number.isFinite(parsed) && parsed >= 1 ? parsed : 1;
+				setDraft(String(clamped));
+				onCommit(clamped);
+			}}
+			className="h-6 w-14 rounded-md px-1.5 text-small"
+		/>
+	);
 }
 
 /** Compact dropdown control inside the picker (weekday / unit). */
@@ -219,18 +256,9 @@ export function IntervalPicker({
 				>
 					{value.kind === "every" ? (
 						<>
-							<Input
-								type="number"
-								min={1}
-								aria-label="Interval amount"
-								value={value.amount}
-								onChange={(event) => {
-									const amount = Number.parseInt(event.target.value, 10);
-									if (Number.isFinite(amount) && amount >= 1) {
-										onChange({ ...value, amount });
-									}
-								}}
-								className="h-6 w-14 rounded-md px-1.5 text-small"
+							<AmountInput
+								amount={value.amount}
+								onCommit={(amount) => onChange({ ...value, amount })}
 							/>
 							<InlineSelect
 								value={value.unit}

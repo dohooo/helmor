@@ -162,7 +162,7 @@ export function CreateAutomationDialog({
 							{ value: "workspace", label: "Workspace" },
 						]}
 						onChange={(value) => {
-							setRunsIn(value as AutomationRunsIn);
+							setRunsIn(value === "workspace" ? "workspace" : "chat");
 							setSessionId(null);
 						}}
 					/>

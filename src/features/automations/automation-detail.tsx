@@ -1,5 +1,6 @@
 import { ChevronRight, Pause, Play, Trash2 } from "lucide-react";
 import { type ReactNode, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Textarea } from "@/components/ui/textarea";
@@ -91,14 +92,20 @@ export function AutomationDetail({
 
 	const savePrompt = () => {
 		if (!promptDirty || promptDraft.trim() === "") return;
-		update.mutate({ id: automation.id, prompt: promptDraft });
+		update.mutate({ id: automation.id, prompt: promptDraft.trim() });
 	};
 
 	const handleRunNow = () => {
 		runNow.mutate(automation.id, {
 			onSuccess: (sessionId) => {
+				// Workspace-mode runs land in a fresh session we can jump to;
+				// chat-mode runs append to a chat elsewhere, so just confirm.
 				if (automation.workspaceId) {
 					onOpenSession(automation.workspaceId, sessionId);
+				} else {
+					toast.success("Automation started", {
+						description: "Running in its chat.",
+					});
 				}
 			},
 		});

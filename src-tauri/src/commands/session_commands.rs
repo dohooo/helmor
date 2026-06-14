@@ -64,6 +64,7 @@ pub async fn create_session(
                 seed_session_id: seed_session_id.as_deref(),
                 session_kind: session_kind.as_deref(),
                 agent_type: agent_type.as_deref(),
+                ..Default::default()
             },
         )
     })
@@ -86,8 +87,11 @@ pub async fn unhide_session(session_id: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
-pub async fn delete_session(session_id: String) -> CmdResult<()> {
-    run_blocking(move || sessions::delete_session(&session_id)).await
+pub async fn delete_session(app: tauri::AppHandle, session_id: String) -> CmdResult<()> {
+    run_blocking(move || sessions::delete_session(&session_id)).await?;
+    // The session delete cascades to its chat automations; refresh that view.
+    crate::ui_sync::publish(&app, crate::ui_sync::UiMutationEvent::AutomationsChanged);
+    Ok(())
 }
 
 #[tauri::command]

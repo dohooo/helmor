@@ -87,7 +87,7 @@ async fn dispatch(
             Ok(Value::Null)
         }
         "delete_session" => {
-            crate::commands::session_commands::delete_session(arg_string(&args, "sessionId")?).await?;
+            crate::commands::session_commands::delete_session(app.clone(), arg_string(&args, "sessionId")?).await?;
             Ok(Value::Null)
         }
         "detect_installed_editors" => to_value(crate::commands::editors::detect_installed_editors().await?),

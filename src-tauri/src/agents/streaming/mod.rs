@@ -10,6 +10,12 @@ use std::time::{Duration, Instant};
 /// regardless of what the AI is doing.
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(45);
 
+/// Substring stamped into the "another stream is active for this session"
+/// rejection. Callers that must react to a busy session (the automations
+/// scheduler rolls its claim back and retries) match on this instead of the
+/// full sentence, so wording tweaks don't silently break detection.
+pub const SESSION_BUSY_MARKER: &str = "still running for this session";
+
 mod actions;
 mod active_streams;
 mod bridges;
@@ -227,7 +233,7 @@ pub(super) fn stream_via_sidecar(
             "Rejecting send: another stream is already active for this session"
         );
         return Err(anyhow::anyhow!(
-            "A previous send is still running for this session. Wait for it to finish or stop it first."
+            "A previous send is {SESSION_BUSY_MARKER}. Wait for it to finish or stop it first."
         )
         .into());
     }

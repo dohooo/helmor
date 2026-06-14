@@ -1255,15 +1255,17 @@ CREATE TABLE IF NOT EXISTS automations (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     prompt TEXT NOT NULL,
-    runs_in TEXT NOT NULL,
+    runs_in TEXT NOT NULL CHECK (runs_in IN ('chat', 'workspace')),
     session_id TEXT,
     workspace_id TEXT,
     schedule TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'active',
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused')),
     next_run_at TEXT NOT NULL,
     last_run_at TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    -- DEFAULTs match db::current_timestamp() (RFC3339 UTC millis) so a row that
+    -- ever relied on them still string-orders with app-written timestamps.
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
 -- Indexes

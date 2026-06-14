@@ -209,6 +209,35 @@ pub fn delete_automation(id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Cascade-delete automations bound to a session. Runs on the caller's
+/// connection/transaction (the writer pool is single-slot, so a session-delete
+/// transaction must drop its automations inline, not via a nested `write_conn`).
+/// `automations` has no FK because `foreign_keys` is OFF app-wide.
+pub fn delete_automations_for_session(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        "DELETE FROM automations WHERE session_id = ?1",
+        params![session_id],
+    )
+}
+
+/// Cascade-delete automations bound to a workspace — both `workspace`-mode rows
+/// and `chat`-mode rows whose session lives in that workspace. Must run BEFORE
+/// the workspace's `sessions` rows are deleted (the subquery needs them).
+pub fn delete_automations_for_workspace(
+    conn: &rusqlite::Connection,
+    workspace_id: &str,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        "DELETE FROM automations \
+         WHERE workspace_id = ?1 \
+            OR session_id IN (SELECT id FROM sessions WHERE workspace_id = ?1)",
+        params![workspace_id],
+    )
+}
+
 // ── Scheduler primitives ────────────────────────────────────────────────────
 
 /// Active automations whose `next_run_at` is due at `now`, oldest first.

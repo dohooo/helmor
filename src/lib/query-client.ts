@@ -4,6 +4,7 @@ import type { ThreadMessageLike } from "./api";
 import {
 	type ActionKind,
 	type AgentProvider,
+	type Automation,
 	type ChangeRequestInfo,
 	DEFAULT_PROVIDER_CAPABILITIES,
 	DEFAULT_WORKSPACE_GROUPS,
@@ -23,6 +24,7 @@ import {
 	getWorkspaceAccountProfile,
 	getWorkspaceForge,
 	listActiveStreams,
+	listAutomations,
 	listForgeAccounts,
 	listForgeLabels,
 	listInboxKindLabels,
@@ -327,6 +329,14 @@ export function workspaceGroupsQueryOptions() {
 		initialDataUpdatedAt: 0,
 		staleTime: 0,
 		meta: PERSIST_META,
+	});
+}
+
+export function automationsQueryOptions() {
+	return queryOptions<Automation[]>({
+		queryKey: helmorQueryKeys.automations,
+		queryFn: listAutomations,
+		staleTime: 0,
 	});
 }
 

@@ -34,7 +34,7 @@ pub use self::streaming::{
     abort_all_active_streams_blocking, bridge_aborted_event, bridge_done_event, bridge_error_event,
     bridge_permission_request_event, bridge_user_input_request_event, build_send_message_params,
     lookup_workspace_linked_directories, ActiveStreamSummary, ActiveStreams,
-    BuildSendMessageParamsInput, SessionStreamHub,
+    BuildSendMessageParamsInput, SessionStreamHub, SESSION_BUSY_MARKER,
 };
 
 use self::persistence::{

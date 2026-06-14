@@ -9,6 +9,7 @@ import {
 	Trash2,
 } from "lucide-react";
 import { type ReactElement, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -19,8 +20,8 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { type Automation, listAutomations } from "@/lib/api";
-import { helmorQueryKeys } from "@/lib/query-client";
+import type { Automation } from "@/lib/api";
+import { automationsQueryOptions } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
 import { AutomationDetail } from "./automation-detail";
 import { CreateAutomationDialog } from "./create-automation-dialog";
@@ -182,19 +183,21 @@ export function AutomationsSurface({
 	const [createOpen, setCreateOpen] = useState(false);
 	const [pendingDelete, setPendingDelete] = useState<Automation | null>(null);
 
-	const automationsQuery = useQuery({
-		queryKey: helmorQueryKeys.automations,
-		queryFn: listAutomations,
-		staleTime: 0,
-	});
+	const automationsQuery = useQuery(automationsQueryOptions());
 	const automations = automationsQuery.data ?? [];
 	const { remove, setStatus, runNow } = useAutomationMutations();
 
 	const runAndOpen = (automation: Automation) => {
 		runNow.mutate(automation.id, {
 			onSuccess: (sessionId) => {
+				// Workspace-mode runs open the fresh session; chat-mode runs
+				// append to a chat elsewhere, so confirm instead of jumping.
 				if (automation.workspaceId) {
 					onOpenSession(automation.workspaceId, sessionId);
+				} else {
+					toast.success("Automation started", {
+						description: "Running in its chat.",
+					});
 				}
 			},
 		});
