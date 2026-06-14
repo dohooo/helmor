@@ -56,6 +56,7 @@ import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import {
 	type AgentProvider,
 	type ChangeRequestInfo,
+	isCodexProvider,
 	listRemoteBranches,
 	prefetchRemoteRefs,
 	updateIntendedTargetBranch,
@@ -860,7 +861,7 @@ function SessionProviderIcon({
 	if (active) {
 		return <HelmorThinkingIndicator size={14} />;
 	}
-	if (agentType === "codex") {
+	if (isCodexProvider(agentType)) {
 		return <OpenAIIcon className="size-3 shrink-0 text-muted-foreground" />;
 	}
 	if (agentType === "cursor") {

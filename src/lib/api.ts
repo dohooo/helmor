@@ -5,7 +5,14 @@ import { type ErrorCode, extractError } from "./errors";
 // frontend works in the desktop Tauri webview AND when served to a phone
 // browser by the companion server. See `src/lib/ipc.ts`.
 import { Channel, closeChannel, invoke, listen, type UnlistenFn } from "./ipc";
+import type {
+	CustomProvider,
+	CustomProviderModel,
+	ProviderFamily,
+} from "./provider-config";
 import { setSessionThreadPaginationState } from "./session-thread-pagination";
+
+export type { CustomProvider, CustomProviderModel, ProviderFamily };
 
 export type GroupTone =
 	| "pinned"
@@ -159,7 +166,20 @@ export type DataInfo = {
 	archiveRoot: string;
 };
 
-export type AgentProvider = "claude" | "codex" | "cursor" | "opencode" | "mimo";
+export type AgentProvider =
+	| "claude"
+	| "codex"
+	| "cursor"
+	| "opencode"
+	| "mimo"
+	// Custom Codex providers: `codex:<id>` per instance.
+	| `codex:${string}`;
+
+// True for official Codex AND any custom `codex:<id>` provider. Official-only
+// behaviour (e.g. ChatGPT rate limits) must keep the exact `=== "codex"` check.
+export function isCodexProvider(provider: string | null | undefined): boolean {
+	return provider === "codex" || (provider?.startsWith("codex:") ?? false);
+}
 
 export type LocalLlmStatus = {
 	enabled: boolean;
@@ -1142,6 +1162,70 @@ export async function loadAgentModelSections(): Promise<AgentModelSection[]> {
 	}
 }
 
+// Full unfiltered catalog (ignores model selection) for the Settings multi-selects.
+export async function loadAllAgentModelSections(): Promise<
+	AgentModelSection[]
+> {
+	try {
+		return await invoke<AgentModelSection[]>("list_all_agent_model_sections");
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to load agent models."));
+	}
+}
+
+// Unified custom-provider config surface (all families).
+
+export async function listCustomProviders(
+	family: ProviderFamily,
+): Promise<CustomProvider[]> {
+	try {
+		return await invoke<CustomProvider[]>("list_custom_providers", { family });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load custom providers."),
+		);
+	}
+}
+
+export async function upsertCustomProvider(
+	family: ProviderFamily,
+	provider: CustomProvider,
+): Promise<void> {
+	try {
+		await invoke("upsert_custom_provider", { family, provider });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to save custom provider."),
+		);
+	}
+}
+
+export async function removeCustomProvider(
+	family: ProviderFamily,
+	id: string,
+): Promise<void> {
+	try {
+		await invoke("remove_custom_provider", { family, id });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to remove custom provider."),
+		);
+	}
+}
+
+// Fetch a provider's models from its `/v1/models`; throws on failure.
+export async function fetchProviderModels(
+	family: ProviderFamily,
+	baseUrl: string,
+	apiKey: string,
+): Promise<CustomProviderModel[]> {
+	return await invoke<CustomProviderModel[]>("fetch_provider_models", {
+		family,
+		baseUrl,
+		apiKey,
+	});
+}
+
 /** Static provider-capability table. Backed by the Rust source of truth
  *  in `agents::provider_capabilities`; callers cache the result for the
  *  lifetime of the app and look up rows by `provider`. */
@@ -1223,7 +1307,9 @@ export function findProviderCapabilities(
 	table: readonly ProviderCapabilities[],
 	provider: string,
 ): ProviderCapabilities | null {
-	return table.find((caps) => caps.provider === provider) ?? null;
+	// Custom Codex providers (`codex:<id>`) share the official Codex caps.
+	const normalized = isCodexProvider(provider) ? "codex" : provider;
+	return table.find((caps) => caps.provider === normalized) ?? null;
 }
 
 export type CursorModelParameterValue = {
@@ -1283,65 +1369,8 @@ export async function listOpencodeModels(
 	}
 }
 
-export type OpencodeCustomModel = {
-	id: string;
-	name: string;
-	// Only set true when the upstream endpoint accepts a reasoning effort.
-	reasoning: boolean;
-};
-
-export type OpencodeCustomProvider = {
-	id: string;
-	name: string;
-	// `@ai-sdk/openai-compatible` (/v1/chat/completions) or `@ai-sdk/openai` (/v1/responses).
-	npm: string;
-	baseUrl: string;
-	apiKey: string;
-	headers: Record<string, string>;
-	models: OpencodeCustomModel[];
-};
-
-export async function getOpencodeCustomProviders(): Promise<
-	OpencodeCustomProvider[]
-> {
-	try {
-		return await invoke<OpencodeCustomProvider[]>(
-			"get_opencode_custom_providers",
-		);
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to read opencode config."),
-		);
-	}
-}
-
-// `preset` sets only `options.apiKey` (opencode fills npm/baseURL/models);
-// non-preset writes the full custom block.
-export async function upsertOpencodeCustomProvider(
-	provider: OpencodeCustomProvider,
-	preset: boolean,
-): Promise<void> {
-	try {
-		await invoke("upsert_opencode_custom_provider", { provider, preset });
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to save opencode provider."),
-		);
-	}
-}
-
-export async function deleteOpencodeCustomProvider(id: string): Promise<void> {
-	try {
-		await invoke("delete_opencode_custom_provider", { id });
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to delete opencode provider."),
-		);
-	}
-}
-
 // ---------------------------------------------------------------------------
-// MiMo Code (opencode-protocol fork) — same shapes, its own config file.
+// MiMo Code (opencode-protocol fork) — server-side model listing.
 // ---------------------------------------------------------------------------
 
 // `forceReload` restarts the mimo server to pick up config changes.
@@ -1354,41 +1383,6 @@ export async function listMimoModels(
 		});
 	} catch (error) {
 		throw new Error(describeInvokeError(error, "Unable to list mimo models."));
-	}
-}
-
-export async function getMimoCustomProviders(): Promise<
-	OpencodeCustomProvider[]
-> {
-	try {
-		return await invoke<OpencodeCustomProvider[]>("get_mimo_custom_providers");
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to read MiMo Code config."),
-		);
-	}
-}
-
-export async function upsertMimoCustomProvider(
-	provider: OpencodeCustomProvider,
-	preset: boolean,
-): Promise<void> {
-	try {
-		await invoke("upsert_mimo_custom_provider", { provider, preset });
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to save MiMo Code provider."),
-		);
-	}
-}
-
-export async function deleteMimoCustomProvider(id: string): Promise<void> {
-	try {
-		await invoke("delete_mimo_custom_provider", { id });
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to delete MiMo Code provider."),
-		);
 	}
 }
 

@@ -14,19 +14,17 @@ import {
 	getShortcutConflicts,
 } from "@/features/shortcuts/registry";
 import { findTerminalAgent } from "@/features/terminal/terminal-presets";
-import type {
-	AgentModelOption,
-	AgentModelSection,
-	AgentProvider,
-	CandidateDirectory,
-	SlashCommandEntry,
-} from "@/lib/api";
 import {
+	type AgentModelOption,
+	type AgentModelSection,
+	type AgentProvider,
+	type CandidateDirectory,
 	createSession,
 	findProviderCapabilities,
-	getMimoCustomProviders,
-	getOpencodeCustomProviders,
+	isCodexProvider,
+	listCustomProviders,
 	mutateCodexGoal,
+	type SlashCommandEntry,
 	saveAutoCloseActionKinds,
 	setWorkspaceLinkedDirectories,
 } from "@/lib/api";
@@ -527,8 +525,8 @@ export const WorkspaceComposerContainer = memo(
 			(s) => s.id === "opencode",
 		);
 		const opencodeCustomProvidersQuery = useQuery({
-			queryKey: helmorQueryKeys.opencodeCustomProviders,
-			queryFn: getOpencodeCustomProviders,
+			queryKey: helmorQueryKeys.customProviders("opencode"),
+			queryFn: () => listCustomProviders("opencode"),
 			enabled: opencodeSectionPresent,
 		});
 		const hasOpencodeCustomProviders =
@@ -536,8 +534,8 @@ export const WorkspaceComposerContainer = memo(
 		// Same jump for the MiMo Code section.
 		const mimoSectionPresent = modelSections.some((s) => s.id === "mimo");
 		const mimoCustomProvidersQuery = useQuery({
-			queryKey: helmorQueryKeys.mimoCustomProviders,
-			queryFn: getMimoCustomProviders,
+			queryKey: helmorQueryKeys.customProviders("mimo"),
+			queryFn: () => listCustomProviders("mimo"),
 			enabled: mimoSectionPresent,
 		});
 		const hasMimoCustomProviders =
@@ -773,11 +771,10 @@ export const WorkspaceComposerContainer = memo(
 		// collapsed everything except codex into claude, which masked
 		// cursor sessions as claude — the Rust cache then served cached
 		// claude skills back to the cursor popup. Keep cursor explicit.
-		const slashProvider: AgentProvider =
-			provider === "codex" ||
-			provider === "cursor" ||
-			provider === "opencode" ||
-			provider === "mimo"
+		// Custom Codex providers (`codex:<id>`) collapse to "codex".
+		const slashProvider: AgentProvider = isCodexProvider(provider)
+			? "codex"
+			: provider === "cursor" || provider === "opencode" || provider === "mimo"
 				? provider
 				: "claude";
 		// Prefer the repoId from a real workspace; on the start page there's no
@@ -1319,17 +1316,7 @@ export const WorkspaceComposerContainer = memo(
 						sessionId={displayedSessionId}
 						placeholder={placeholder}
 						providerSessionId={currentSession?.providerSessionId ?? null}
-						agentType={
-							effectiveModel?.provider === "codex"
-								? "codex"
-								: effectiveModel?.provider === "cursor"
-									? "cursor"
-									: effectiveModel?.provider === "opencode"
-										? "opencode"
-										: effectiveModel?.provider === "mimo"
-											? "mimo"
-											: "claude"
-						}
+						agentType={effectiveModel?.provider ?? "claude"}
 						focusShortcut={focusShortcut}
 						togglePlanShortcut={togglePlanShortcut}
 						toggleTerminalShortcut={toggleTerminalShortcut}

@@ -767,7 +767,10 @@ function agentTypeToProvider(agentType?: string | null): AgentProvider | null {
 		case "mimo":
 			return agentType;
 		default:
-			return null;
+			// Custom Codex providers persist as `codex:<id>`.
+			return agentType?.startsWith("codex:")
+				? (agentType as AgentProvider)
+				: null;
 	}
 }
 
