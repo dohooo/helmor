@@ -33,6 +33,7 @@ import {
 	listWorkspaceFiles,
 	listWorkspaceLinkedDirectories,
 	loadAgentModelSections,
+	loadAllAgentModelSections,
 	loadArchivedWorkspaces,
 	loadAutoCloseActionKinds,
 	loadAutoCloseOptInAsked,
@@ -70,9 +71,9 @@ export const helmorQueryKeys = {
 	archivedWorkspaces: ["archivedWorkspaces"] as const,
 	repositories: ["repositories"] as const,
 	agentModelSections: ["agentModelSections"] as const,
-	opencodeCustomProviders: ["opencodeCustomProviders"] as const,
+	allAgentModelSections: ["allAgentModelSections"] as const,
+	customProviders: (family: string) => ["customProviders", family] as const,
 	kimiProviderConfig: ["kimiProviderConfig"] as const,
-	mimoCustomProviders: ["mimoCustomProviders"] as const,
 	agentLoginStatus: ["agentLoginStatus"] as const,
 	agentVersions: ["agentVersions"] as const,
 	providerCapabilities: ["providerCapabilities"] as const,
@@ -423,6 +424,18 @@ export function agentModelSectionsQueryOptions() {
 		// id namespacing) — a long staleTime + on-disk persistence
 		// previously stuck users on a pre-upgrade shape until they
 		// happened to invalidate the query manually.
+		staleTime: 0,
+		refetchOnWindowFocus: false,
+		retry: false,
+		meta: PERSIST_META,
+	});
+}
+
+/** Full, unfiltered catalog for the Settings "Models" multi-selects. */
+export function allAgentModelSectionsQueryOptions() {
+	return queryOptions({
+		queryKey: helmorQueryKeys.allAgentModelSections,
+		queryFn: loadAllAgentModelSections,
 		staleTime: 0,
 		refetchOnWindowFocus: false,
 		retry: false,

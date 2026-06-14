@@ -13,16 +13,24 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { getAgentLoginStatus, getAgentVersions } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { SettingsGroup } from "../components/settings-row";
-import { AgentProxyPanel, ClaudeCustomProvidersPanel } from "./model-providers";
+import { AgentProxyPanel } from "./model-providers";
+import {
+	CLAUDE_ADAPTER,
+	CODEX_ADAPTER,
+	MIMO_CONFIG_ADAPTER,
+	OPENCODE_CONFIG_ADAPTER,
+} from "./providers/adapters";
 import { CursorCardBody } from "./providers/cursor-card-body";
+import { CustomProvidersList } from "./providers/custom-providers-list";
 import { KimiCustomProvidersPanel } from "./providers/kimi-custom-providers";
 import { KimiModels } from "./providers/kimi-models";
-import { SlugProviderCustomProvidersPanel } from "./providers/opencode-custom-providers";
 import {
 	SlugProviderModels,
 	type SlugProviderModelsHandle,
 } from "./providers/opencode-models";
+import type { ProviderConfigAdapter } from "./providers/provider-config";
 import { ProviderConfigRow, ProviderRow } from "./providers/provider-row";
+import { ProviderConfigSection } from "./providers/provider-section";
 import {
 	MIMO_ADAPTER,
 	OPENCODE_ADAPTER,
@@ -64,6 +72,7 @@ export function ProvidersPanel() {
 			<SettingsGroup>
 				<SlugProviderRow
 					adapter={OPENCODE_ADAPTER}
+					configAdapter={OPENCODE_CONFIG_ADAPTER}
 					icon={OpenCodeIcon}
 					version={versions?.opencode}
 					ready={Boolean(status?.opencode)}
@@ -72,6 +81,7 @@ export function ProvidersPanel() {
 				/>
 				<SlugProviderRow
 					adapter={MIMO_ADAPTER}
+					configAdapter={MIMO_CONFIG_ADAPTER}
 					icon={MiMoCodeIcon}
 					version={versions?.mimo}
 					ready={Boolean(status?.mimo)}
@@ -88,12 +98,7 @@ export function ProvidersPanel() {
 					onLoginExit={refetchStatus}
 					collapsible
 				>
-					<ProviderConfigRow
-						label="Custom Providers"
-						description="Enter API keys here to use third-party models. They run alongside Claude Code's official models."
-					>
-						<ClaudeCustomProvidersPanel />
-					</ProviderConfigRow>
+					<ProviderConfigSection adapter={CLAUDE_ADAPTER} />
 				</ProviderRow>
 				<ProviderRow
 					icon={OpenAIIcon}
@@ -103,7 +108,10 @@ export function ProvidersPanel() {
 					connecting={statusLoading}
 					loginProvider="codex"
 					onLoginExit={refetchStatus}
-				/>
+					collapsible
+				>
+					<ProviderConfigSection adapter={CODEX_ADAPTER} />
+				</ProviderRow>
 				<ProviderRow
 					icon={KimiIcon}
 					name="Kimi"
@@ -150,6 +158,7 @@ export function ProvidersPanel() {
 // + Custom Providers editor, wired through the provider's adapter.
 function SlugProviderRow({
 	adapter,
+	configAdapter,
 	icon,
 	version,
 	ready,
@@ -157,6 +166,7 @@ function SlugProviderRow({
 	onRefetchStatus,
 }: {
 	adapter: SlugProviderAdapter;
+	configAdapter: ProviderConfigAdapter;
 	icon: typeof ClaudeIcon;
 	version: string | null | undefined;
 	ready: boolean;
@@ -189,12 +199,9 @@ function SlugProviderRow({
 			</ProviderConfigRow>
 			<ProviderConfigRow
 				label="Custom Providers"
-				description={`Add a provider by API key or OpenAI-compatible endpoint, saved to ${adapter.configPathLabel}.`}
+				description={configAdapter.customProvidersDescription}
 			>
-				<SlugProviderCustomProvidersPanel
-					adapter={adapter}
-					onChanged={() => modelsRef.current?.syncIfIdle()}
-				/>
+				<CustomProvidersList adapter={configAdapter} />
 			</ProviderConfigRow>
 		</ProviderRow>
 	);

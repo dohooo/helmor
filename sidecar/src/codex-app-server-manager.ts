@@ -32,6 +32,7 @@ import {
 	pickFastestCodexModel,
 } from "./model-catalog.js";
 import type {
+	CodexProviderConfig,
 	GenerateTitleOptions,
 	ListSlashCommandsParams,
 	ProviderModelInfo,
@@ -400,6 +401,27 @@ function approvalToolInput(
 	return { ...params };
 }
 
+// Inject a custom Codex provider into thread/start|resume params. Bearer
+// token rides inline; Helmor never writes `~/.codex/config.toml`.
+export function applyCodexProviderConfig(
+	target: Record<string, unknown>,
+	codexProvider: CodexProviderConfig | undefined,
+): void {
+	if (!codexProvider) return;
+	target.modelProvider = codexProvider.id;
+	target.config = {
+		model_providers: {
+			[codexProvider.id]: {
+				// Codex requires a non-empty provider `name`.
+				name: codexProvider.id,
+				base_url: codexProvider.baseUrl,
+				wire_api: codexProvider.wireApi || "responses",
+				experimental_bearer_token: codexProvider.apiKey,
+			},
+		},
+	};
+}
+
 // ---------------------------------------------------------------------------
 // CodexAppServerManager
 // ---------------------------------------------------------------------------
@@ -521,6 +543,7 @@ export class CodexAppServerManager implements SessionManager {
 			permissionMode,
 			fastMode,
 			agentProxy,
+			codexProvider,
 			additionalDirectories,
 			images,
 		} = params;
@@ -570,6 +593,7 @@ export class CodexAppServerManager implements SessionManager {
 			permissionMode,
 			effectiveFastMode,
 			agentProxy,
+			codexProvider,
 		);
 		// Stop pressed during startup — `requestStop` already emitted `aborted`.
 		// Kill the freshly-started server and bail instead of running the turn.
@@ -1064,10 +1088,13 @@ export class CodexAppServerManager implements SessionManager {
 	): Promise<void> {
 		const generateBranch = options?.generateBranch ?? true;
 		const cwd = process.cwd();
+		const codexProvider = options?.codexProvider;
+		// pickFastestCodexModel only knows bundled names; custom uses its own.
 		const model = options?.model?.trim() || pickFastestCodexModel();
-		const fastMode = modelSupportsFastMode("codex", model);
+		// serviceTier=fast is ChatGPT-only; never request it for a custom endpoint.
+		const fastMode = !codexProvider && modelSupportsFastMode("codex", model);
 		logger.debug(
-			`[${requestId}] codex title generation using model ${model} (fastMode: ${fastMode})`,
+			`[${requestId}] codex title generation using model ${model} (fastMode: ${fastMode}, customProvider: ${codexProvider?.id ?? "none"})`,
 		);
 		const server = new CodexAppServer({
 			binaryPath: CODEX_BIN_PATH,
@@ -1098,6 +1125,7 @@ export class CodexAppServerManager implements SessionManager {
 				model,
 				approvalPolicy: BYPASS_GRANULAR_POLICY,
 			};
+			applyCodexProviderConfig(threadStartParams, codexProvider);
 			const threadResponse = await server.sendRequest<Record<string, unknown>>(
 				"thread/start",
 				threadStartParams,
@@ -1643,6 +1671,7 @@ export class CodexAppServerManager implements SessionManager {
 		permissionMode?: string,
 		fastMode?: boolean,
 		agentProxy?: AgentProxySettings,
+		codexProvider?: CodexProviderConfig,
 	): Promise<AppServerContext> {
 		const agentProxyKey = buildAgentProxyKey(agentProxy);
 		const existing = this.sessions.get(sessionId);
@@ -1713,6 +1742,7 @@ export class CodexAppServerManager implements SessionManager {
 				};
 				if (model) resumeParams.model = model;
 				if (fastMode) resumeParams.serviceTier = "fast";
+				applyCodexProviderConfig(resumeParams, codexProvider);
 				const response = await server.sendRequest<Record<string, unknown>>(
 					"thread/resume",
 					resumeParams,
@@ -1745,6 +1775,7 @@ export class CodexAppServerManager implements SessionManager {
 			};
 			if (model) threadStartParams.model = model;
 			if (fastMode) threadStartParams.serviceTier = "fast";
+			applyCodexProviderConfig(threadStartParams, codexProvider);
 			const response = await server.sendRequest<Record<string, unknown>>(
 				"thread/start",
 				threadStartParams,

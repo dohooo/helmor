@@ -5,7 +5,7 @@ import {
 	HoverCardContent,
 	HoverCardTrigger,
 } from "@/components/ui/hover-card";
-import { setSessionContextUsage } from "@/lib/api";
+import { type AgentProvider, setSessionContextUsage } from "@/lib/api";
 import {
 	claudeRichContextUsageQueryOptions,
 	sessionContextUsageQueryOptions,
@@ -29,14 +29,7 @@ type Props = {
 	 *  right project config. */
 	cwd: string | null;
 	/** Only Claude supports the rich hover breakdown. */
-	agentType:
-		| "claude"
-		| "codex"
-		| "cursor"
-		| "opencode"
-		| "mimo"
-		| "kimi"
-		| null;
+	agentType: AgentProvider | null;
 	/** Composer's current model id; used as the rich-fetch cache key. */
 	composerModelId: string | null;
 	alwaysShow: boolean;

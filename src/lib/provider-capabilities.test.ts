@@ -57,6 +57,10 @@ describe("findProviderCapabilities", () => {
 		expect(findProviderCapabilities(table, "copilot")).toBeNull();
 	});
 
+	it("maps custom Codex providers (codex:<id>) to the official Codex row", () => {
+		expect(findProviderCapabilities(table, "codex:hundun")).toBe(codexCaps);
+	});
+
 	it("returns null on an empty table", () => {
 		expect(findProviderCapabilities([], "claude")).toBeNull();
 	});

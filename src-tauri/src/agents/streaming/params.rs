@@ -32,6 +32,8 @@ pub struct BuildSendMessageParamsInput<'a> {
     /// Image attachments to forward to the sidecar. Omitted from the
     /// wire payload when empty.
     pub images: &'a [String],
+    /// Custom Codex provider to inject; `Some` only for `codex:<id>`.
+    pub codex_provider: Option<&'a crate::agents::CodexProviderConfig>,
 }
 
 /// Build the `sendMessage` request params that the sidecar receives.
@@ -91,6 +93,20 @@ pub fn build_send_message_params(input: BuildSendMessageParamsInput<'_>) -> Valu
     if let Some(proxy) = input.agent_proxy {
         if let Some(obj) = params.as_object_mut() {
             obj.insert("agentProxy".to_string(), proxy.clone());
+        }
+    }
+    if let Some(codex) = input.codex_provider {
+        if let Some(obj) = params.as_object_mut() {
+            obj.insert(
+                "codexProvider".to_string(),
+                serde_json::json!({
+                    "id": codex.id,
+                    "baseUrl": codex.base_url,
+                    "apiKey": codex.api_key,
+                    "wireApi": codex.wire_api,
+                    "model": codex.wire_model,
+                }),
+            );
         }
     }
     params
