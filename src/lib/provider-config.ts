@@ -1,6 +1,6 @@
 // Pure provider-config domain types, shared across all four agent families.
 
-export type ProviderFamily = "claude" | "codex" | "opencode" | "mimo";
+export type ProviderFamily = "claude" | "codex" | "opencode" | "mimo" | "kimi";
 
 export type CustomProviderModel = {
 	slug: string;
@@ -19,8 +19,10 @@ export type CustomProvider = {
 	presetKey?: string;
 	baseUrl: string;
 	apiKey: string;
-	/** OpenCode/MiMo only — `@ai-sdk/openai-compatible` vs `@ai-sdk/openai`. */
-	apiStyle?: ApiStyle;
+	/** Wire protocol / API style. OpenCode/MiMo: "chat" | "responses". Kimi:
+	 *  "openai" | "openai_responses" | "anthropic" | "kimi". Interpreted by the
+	 *  family's backend. */
+	apiStyle?: string;
 	headers?: Record<string, string>;
 	models: CustomProviderModel[];
 	/** Codex: per-provider enabled models (`null` = all). Merged families: unused. */

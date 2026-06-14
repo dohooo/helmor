@@ -597,6 +597,7 @@ pub fn run() {
             commands::workspace_commands::finalize_workspace_from_repo,
             commands::repository_commands::get_add_repository_defaults,
             commands::settings_commands::get_app_settings,
+            commands::kimi_provider_commands::get_kimi_provider_config,
             commands::settings_commands::get_claude_rate_limits,
             commands::settings_commands::get_codex_rate_limits,
             commands::local_llm_commands::detect_local_llm_hardware,

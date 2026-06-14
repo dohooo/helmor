@@ -90,7 +90,8 @@ export function parseProvider(value: unknown): Provider {
 		value === "codex" ||
 		value === "cursor" ||
 		value === "opencode" ||
-		value === "mimo"
+		value === "mimo" ||
+		value === "kimi"
 	)
 		return value;
 	throw new Error(`unknown provider: ${String(value)}`);

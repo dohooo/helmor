@@ -15,6 +15,7 @@ import type {
 } from "@opencode-ai/sdk/v2";
 import { ActiveTurnRegistry } from "../active-turn-registry.js";
 import type { SidecarEmitter } from "../emitter.js";
+import { imageMime } from "../images.js";
 import { prependLinkedDirectoriesContext } from "../linked-directories-context.js";
 import { errorDetails, logger } from "../logger.js";
 import type {
@@ -211,22 +212,6 @@ export function planMessageId(capture: PlanCapture): string | null {
 			return messageId;
 	}
 	return null;
-}
-
-const IMAGE_MIME_BY_EXT: Record<string, string> = {
-	png: "image/png",
-	jpg: "image/jpeg",
-	jpeg: "image/jpeg",
-	gif: "image/gif",
-	webp: "image/webp",
-	bmp: "image/bmp",
-	svg: "image/svg+xml",
-	heic: "image/heic",
-};
-
-function imageMime(path: string): string {
-	const ext = path.split(".").pop()?.toLowerCase() ?? "";
-	return IMAGE_MIME_BY_EXT[ext] ?? "image/png";
 }
 
 export function buildImageParts(images: readonly string[]): FilePartInput[] {

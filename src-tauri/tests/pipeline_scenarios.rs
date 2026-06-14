@@ -564,6 +564,44 @@ fn opencode_running_tool_renders_output() {
     assert_yaml_snapshot!(run_normalized(msgs));
 }
 
+// kimi reload: two turns each carrying a plan snapshot. The collapse pass
+// folds the repeated todo lists into one widget — anchored at the first
+// occurrence, showing the LATEST entries' statuses.
+#[test]
+fn kimi_plan_snapshots_collapse_to_latest() {
+    let turn = |id: &str, entries: serde_json::Value, text: &str| {
+        let parsed = json!({
+            "type": "kimi_message",
+            "session_id": "ses_1",
+            "role": "assistant",
+            "parts": [
+                { "type": "plan", "entries": entries },
+                { "type": "text", "text": text },
+            ],
+        });
+        make_record(id, "assistant", &serde_json::to_string(&parsed).unwrap())
+    };
+    let msgs = vec![
+        turn(
+            "k1",
+            json!([
+                { "content": "read config", "priority": "high", "status": "in_progress" },
+                { "content": "bump timeout", "priority": "medium", "status": "pending" },
+            ]),
+            "Reading.",
+        ),
+        turn(
+            "k2",
+            json!([
+                { "content": "read config", "priority": "high", "status": "completed" },
+                { "content": "bump timeout", "priority": "medium", "status": "completed" },
+            ]),
+            "Done.",
+        ),
+    ];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
 // ============================================================================
 // 4. Edge cases
 // ============================================================================

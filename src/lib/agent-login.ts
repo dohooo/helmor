@@ -5,6 +5,7 @@ import type {
 import {
 	ClaudeIcon,
 	CursorIcon,
+	KimiIcon,
 	MiMoCodeIcon,
 	OpenAIIcon,
 	OpenCodeIcon,
@@ -61,6 +62,17 @@ export function buildAgentLoginItems(
 			label: "Codex",
 			description: checking ? CHECKING_COPY : codexDescription(status),
 			status: resolve(status?.codex),
+		},
+		{
+			icon: KimiIcon,
+			provider: "kimi",
+			label: "Kimi Code",
+			description: checking
+				? CHECKING_COPY
+				: status?.kimi
+					? "Signed in and ready to run Kimi models in Helmor."
+					: "Sign in with `kimi login` to use Kimi models in Helmor.",
+			status: resolve(status?.kimi),
 		},
 		{
 			icon: CursorIcon,

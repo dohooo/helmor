@@ -114,6 +114,7 @@ describe("DEFAULT_PROVIDER_CAPABILITIES (cold-start initialData)", () => {
 			"cursor",
 			"opencode",
 			"mimo",
+			"kimi",
 		]);
 	});
 
@@ -153,6 +154,17 @@ describe("DEFAULT_PROVIDER_CAPABILITIES (cold-start initialData)", () => {
 		expect(opencode?.supportsContextUsage).toBe(true);
 		expect(opencode?.supportsActiveGoal).toBe(false);
 		expect(opencode?.requiresApiKey).toBe(false);
+		// Kimi (ACP) must resolve to itself, not fall back to "Claude".
+		const kimi = findProviderCapabilities(
+			DEFAULT_PROVIDER_CAPABILITIES,
+			"kimi",
+		);
+		expect(kimi?.displayName).toBe("Kimi");
+		expect(kimi?.requiresApiKey).toBe(false);
+		expect(kimi?.supportsSlashCommands).toBe(true);
+		expect(kimi?.supportsPlanMode).toBe(false);
+		expect(kimi?.supportsContextUsage).toBe(false);
+		expect(kimi?.supportsSteer).toBe(false);
 		// MiMo Code (opencode-protocol fork) mirrors OpenCode's capability row.
 		const mimo = findProviderCapabilities(
 			DEFAULT_PROVIDER_CAPABILITIES,

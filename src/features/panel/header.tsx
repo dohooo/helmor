@@ -29,6 +29,7 @@ import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator"
 import {
 	ClaudeIcon,
 	CursorIcon,
+	KimiIcon,
 	MiMoCodeIcon,
 	OpenAIIcon,
 	OpenCodeIcon,
@@ -869,6 +870,9 @@ function SessionProviderIcon({
 	}
 	if (agentType === "opencode") {
 		return <OpenCodeIcon className="size-3 shrink-0 text-muted-foreground" />;
+	}
+	if (agentType === "kimi") {
+		return <KimiIcon className="size-3 shrink-0 text-muted-foreground" />;
 	}
 	if (agentType === "mimo") {
 		return <MiMoCodeIcon className="size-3 shrink-0 text-muted-foreground" />;

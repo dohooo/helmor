@@ -616,6 +616,14 @@ pub(super) fn stream_via_sidecar(
                             pipeline_state.accumulator.flush_codex_in_progress();
                             pipeline_state.accumulator.flush_cursor_in_progress();
                             pipeline_state.accumulator.flush_opencode_in_progress();
+                        }
+                        // Kimi finalizes on `kimi/turn_complete`, which never
+                        // arrives when the stream ends via `error`+`end`
+                        // (e.g. child crash) — flush on every termination so
+                        // the partial turn reaches the persist loop below.
+                        // Idempotent after a normal turn_complete.
+                        pipeline_state.accumulator.flush_kimi_in_progress();
+                        if is_aborted {
                             pipeline_state.materialize_partial();
                             pipeline_state.accumulator.append_aborted_notice();
                         }
