@@ -11,74 +11,11 @@ import {
 	OPENCODE_PROVIDER_PRESETS,
 } from "./builtin-opencode-providers";
 import { groupHeading } from "./model-multi-select";
-import { customSig, generateProviderId } from "./opencode-custom-providers";
 import {
 	defaultEnabledSlugs,
 	isMimoBuiltinProvider,
 	reconcileEnabledModelIds,
 } from "./opencode-model-defaults";
-
-describe("customSig", () => {
-	const base = {
-		id: "my-proxy",
-		name: "My Proxy",
-		baseUrl: "https://example.com/v1",
-		apiKey: "sk-1",
-		headers: {},
-		models: [{ id: "m1", name: "Model One", reasoning: true }],
-	};
-
-	it("ignores surrounding whitespace and empty-id models", () => {
-		const padded = {
-			...base,
-			id: "  my-proxy  ",
-			name: "My Proxy ",
-			models: [
-				{ id: " m1 ", name: "Model One", reasoning: true },
-				{ id: "", name: "dropped", reasoning: false },
-			],
-		};
-		expect(customSig(padded)).toBe(customSig(base));
-	});
-
-	it("changes when any meaningful field changes", () => {
-		expect(customSig({ ...base, apiKey: "sk-2" })).not.toBe(customSig(base));
-		expect(customSig({ ...base, baseUrl: "https://other/v1" })).not.toBe(
-			customSig(base),
-		);
-		expect(
-			customSig({
-				...base,
-				models: [{ id: "m1", name: "Model One", reasoning: false }],
-			}),
-		).not.toBe(customSig(base));
-	});
-});
-
-describe("generateProviderId", () => {
-	it("slugifies the display name", () => {
-		expect(generateProviderId("My Proxy", "", new Set())).toBe("my-proxy");
-	});
-
-	it("appends a numeric suffix to avoid clashing with custom blocks or presets", () => {
-		expect(generateProviderId("DeepSeek", "", new Set(["deepseek"]))).toBe(
-			"deepseek-2",
-		);
-		expect(
-			generateProviderId("My Proxy", "", new Set(["my-proxy", "my-proxy-2"])),
-		).toBe("my-proxy-3");
-	});
-
-	it("falls back to the base URL host, then 'custom'", () => {
-		expect(
-			generateProviderId("", "https://api.example.com/v1", new Set()),
-		).toBe("api-example-com");
-		expect(generateProviderId("", "api.example.com/v1", new Set())).toBe(
-			"api-example-com",
-		);
-		expect(generateProviderId("", "not a url", new Set())).toBe("custom");
-	});
-});
 
 describe("findOpencodePreset", () => {
 	it("finds a known preset by key and returns undefined otherwise", () => {

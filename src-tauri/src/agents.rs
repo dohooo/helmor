@@ -8,12 +8,9 @@ use uuid::Uuid;
 use crate::error::CommandError;
 
 pub mod action_kind;
-mod builtin_claude_providers;
 mod catalog;
 pub(crate) mod claude_project_files;
-mod custom_providers;
 pub(crate) mod model_ref;
-pub(crate) mod opencode_config;
 mod persistence;
 pub mod provider_capabilities;
 mod queries;
@@ -24,7 +21,9 @@ mod support;
 pub(crate) mod system_prompt;
 
 pub use self::action_kind::ActionKind;
-pub use self::catalog::{resolve_model, AgentModelOption, AgentModelSection, ResolvedModel};
+pub use self::catalog::{
+    resolve_model, AgentModelOption, AgentModelSection, CodexProviderConfig, ResolvedModel,
+};
 pub use self::queries::{
     fetch_agent_model_sections, fetch_live_context_usage, GenerateSessionTitleRequest,
     GenerateSessionTitleResponse, GetLiveContextUsageRequest, ListSlashCommandsRequest,
@@ -226,6 +225,12 @@ pub(crate) struct ExchangeContext {
 #[tauri::command]
 pub async fn list_agent_model_sections() -> CmdResult<Vec<AgentModelSection>> {
     Ok(queries::fetch_agent_model_sections())
+}
+
+/// Full unfiltered catalog, for the Settings "Models" multi-selects.
+#[tauri::command]
+pub async fn list_all_agent_model_sections() -> CmdResult<Vec<AgentModelSection>> {
+    Ok(queries::fetch_all_agent_model_sections())
 }
 
 /// Return the provider-capability table for every provider Helmor
@@ -857,9 +862,12 @@ mod tests {
     #[test]
     fn resolve_model_infers_provider() {
         let _env = crate::testkit::TestEnv::new("resolve-model-infers-provider");
-        let claude = resolve_model("default", None);
+        // Hint-less ids that match no other provider infer to claude and pass
+        // through verbatim (legacy "default" rows are normalized by the DB
+        // migration, so resolve_model needs no special case for it).
+        let claude = resolve_model("claude-opus-4-8[1m]", None);
         assert_eq!(claude.provider, "claude");
-        assert_eq!(claude.cli_model, "default");
+        assert_eq!(claude.cli_model, "claude-opus-4-8[1m]");
 
         let codex = resolve_model("gpt-5.4", None);
         assert_eq!(codex.provider, "codex");

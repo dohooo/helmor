@@ -162,7 +162,8 @@ pub(super) fn stream_via_sidecar(
         cli_model: &model.cli_model,
         cwd: &working_directory.display().to_string(),
         resume_session_id: resume_session_id.as_deref(),
-        provider: &model.provider,
+        // `codex:<id>` collapses to `codex` (same app-server pipeline).
+        provider: model.sidecar_provider(),
         effort_level: request.effort_level.as_deref(),
         permission_mode: request.permission_mode.as_deref(),
         fast_mode: request.fast_mode.unwrap_or(false),
@@ -172,6 +173,7 @@ pub(super) fn stream_via_sidecar(
         agent_proxy: agent_proxy.as_ref(),
         claude_thinking_display: claude_thinking_display.as_deref(),
         images: &images_for_wire,
+        codex_provider: model.codex_provider.as_ref(),
     });
 
     // Surface the `/add-dir` decision in logs — we often debug linked-

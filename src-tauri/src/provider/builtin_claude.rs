@@ -1,3 +1,5 @@
+//! Built-in Claude provider presets, loaded from `provider-catalog.json`.
+
 use std::sync::OnceLock;
 
 use serde::Deserialize;
@@ -7,7 +9,6 @@ const CATALOG_JSON: &str = include_str!(concat!(
     "/../src/shared/provider-catalog.json"
 ));
 
-// Only the `claude` section is consumed here; `opencode` is frontend-only.
 #[derive(Debug, Clone, Deserialize)]
 struct ProviderCatalog {
     claude: Vec<BuiltinClaudeProvider>,
@@ -17,14 +18,9 @@ struct ProviderCatalog {
 #[serde(rename_all = "camelCase")]
 pub struct BuiltinClaudeProvider {
     pub key: String,
-    pub base_url: String,
-    pub models: Vec<BuiltinClaudeModel>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct BuiltinClaudeModel {
-    pub id: String,
+    #[serde(default)]
     pub label: String,
+    pub base_url: String,
 }
 
 pub fn builtin_claude_providers() -> &'static [BuiltinClaudeProvider] {

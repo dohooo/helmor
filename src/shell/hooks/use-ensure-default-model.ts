@@ -6,18 +6,10 @@ import { type AppSettings, type ModelRef, useSettings } from "@/lib/settings";
 import { isQuickPanelWindow } from "@/lib/window-role";
 import { findModelOption } from "@/lib/workspace-helpers";
 
-const KNOWN_MODEL_PROVIDERS = ["claude", "codex"] as const;
-
 function isModelCatalogSettled(sections: AgentModelSection[]) {
+	// Don't require any specific provider: users can hide a provider entirely.
 	if (sections.length === 0) return false;
-	const sectionsById = new Map(
-		sections.map((section) => [section.id, section]),
-	);
-	return KNOWN_MODEL_PROVIDERS.every((provider) => {
-		const section = sectionsById.get(provider);
-		if (!section) return false;
-		return (section.status ?? "ready") !== "error";
-	});
+	return sections.every((section) => (section.status ?? "ready") !== "error");
 }
 
 /**
@@ -67,13 +59,14 @@ export function useEnsureDefaultModel() {
 		// Repair the default when it's never been set, or was set but is now
 		// definitively gone (wait for every provider to settle first).
 		if (!defaultOption && (settled || !settings.defaultModel)) {
-			// Prefer the Claude `default` entry (auto-latest Opus) over the
-			// first listed option — pricier models (Fable 5) sit above it in
-			// the picker but must not become the app default.
+			// Prefer the pinned Opus 4.8 1M entry over the first listed option —
+			// pricier models (Fable 5) sit above it in the picker but must not
+			// become the app default. A legacy stored "default" id no longer
+			// matches any option, so this re-pins it to the explicit wire id.
 			const claudeOptions =
 				sections.find((s) => s.id === "claude")?.options ?? [];
 			const pickOption =
-				claudeOptions.find((o) => o.id === "default") ??
+				claudeOptions.find((o) => o.id === "claude-opus-4-8[1m]") ??
 				claudeOptions[0] ??
 				allOptions[0] ??
 				null;

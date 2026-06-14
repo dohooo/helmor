@@ -432,6 +432,27 @@ describe("settings", () => {
 		expect(writtenMap?.["app.review_model_id"]).toBe("");
 	});
 
+	it("parses official enabled model ids", async () => {
+		invokeMock.mockResolvedValue({
+			"app.claude_enabled_model_ids": JSON.stringify(["default"]),
+			"app.codex_enabled_model_ids": JSON.stringify([]),
+		});
+
+		const settings = await loadSettings();
+
+		expect(settings.claudeEnabledModelIds).toEqual(["default"]);
+		expect(settings.codexEnabledModelIds).toEqual([]);
+	});
+
+	it("defaults enabled model ids to null when unset", async () => {
+		invokeMock.mockResolvedValue({});
+
+		const settings = await loadSettings();
+
+		expect(settings.claudeEnabledModelIds).toBeNull();
+		expect(settings.codexEnabledModelIds).toBeNull();
+	});
+
 	it("flags an opencode cache without cacheVersion as stale (→ migration)", async () => {
 		invokeMock.mockResolvedValue({
 			"app.opencode_provider": JSON.stringify({
