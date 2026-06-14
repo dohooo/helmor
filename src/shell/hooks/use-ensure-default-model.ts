@@ -6,18 +6,10 @@ import { type AppSettings, type ModelRef, useSettings } from "@/lib/settings";
 import { isQuickPanelWindow } from "@/lib/window-role";
 import { findModelOption } from "@/lib/workspace-helpers";
 
-const KNOWN_MODEL_PROVIDERS = ["claude", "codex"] as const;
-
 function isModelCatalogSettled(sections: AgentModelSection[]) {
+	// Don't require any specific provider: users can hide a provider entirely.
 	if (sections.length === 0) return false;
-	const sectionsById = new Map(
-		sections.map((section) => [section.id, section]),
-	);
-	return KNOWN_MODEL_PROVIDERS.every((provider) => {
-		const section = sectionsById.get(provider);
-		if (!section) return false;
-		return (section.status ?? "ready") !== "error";
-	});
+	return sections.every((section) => (section.status ?? "ready") !== "error");
 }
 
 /**

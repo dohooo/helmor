@@ -20,6 +20,7 @@ pub mod mcp;
 pub mod models;
 pub mod pipeline;
 pub(crate) mod platform;
+pub mod provider;
 pub mod quick_panel;
 pub mod rate_limits;
 pub mod schema;
@@ -564,6 +565,11 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             agents::list_agent_model_sections,
+            agents::list_all_agent_model_sections,
+            commands::provider_commands::list_custom_providers,
+            commands::provider_commands::upsert_custom_provider,
+            commands::provider_commands::remove_custom_provider,
+            commands::provider_commands::fetch_provider_models,
             agents::list_cursor_models,
             agents::list_opencode_models,
             agents::list_mimo_models,
@@ -591,12 +597,6 @@ pub fn run() {
             commands::workspace_commands::finalize_workspace_from_repo,
             commands::repository_commands::get_add_repository_defaults,
             commands::settings_commands::get_app_settings,
-            commands::opencode_config_commands::get_opencode_custom_providers,
-            commands::opencode_config_commands::upsert_opencode_custom_provider,
-            commands::opencode_config_commands::delete_opencode_custom_provider,
-            commands::mimo_config_commands::get_mimo_custom_providers,
-            commands::mimo_config_commands::upsert_mimo_custom_provider,
-            commands::mimo_config_commands::delete_mimo_custom_provider,
             commands::settings_commands::get_claude_rate_limits,
             commands::settings_commands::get_codex_rate_limits,
             commands::local_llm_commands::detect_local_llm_hardware,

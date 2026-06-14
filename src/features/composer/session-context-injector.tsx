@@ -6,7 +6,7 @@ import {
 	OpenCodeIcon,
 } from "@/components/icons";
 import type { SessionContextCandidate } from "@/features/panel/session-context";
-import type { AgentProvider } from "@/lib/api";
+import { type AgentProvider, isCodexProvider } from "@/lib/api";
 import { I18nText } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -76,7 +76,7 @@ function SessionProviderIcon({
 	provider: AgentProvider | null;
 	className?: string;
 }) {
-	if (provider === "codex") {
+	if (isCodexProvider(provider)) {
 		return <OpenAIIcon className={className} />;
 	}
 	if (provider === "cursor") {

@@ -76,13 +76,31 @@ fn detect_title_providers() -> Vec<String> {
 /// provider's own fast/default pick. The sidecar walks this list and stops
 /// at the first attempt that produces a title.
 fn build_title_attempts() -> Vec<Value> {
-    let claude_custom = super::custom_providers::configured_models()
+    let claude_custom = crate::provider::claude::configured_models()
         .into_iter()
         .next();
     let opencode_custom = first_opencode_custom_model();
     let mimo_custom = first_mimo_custom_model();
     let mut attempts: Vec<Value> = Vec::new();
     for provider in detect_title_providers() {
+        // Custom Codex providers run through the Codex sidecar with the
+        // provider definition injected.
+        if let Some(instance_id) = provider.strip_prefix(crate::provider::codex::PROVIDER_PREFIX) {
+            if let Some(model) = crate::provider::codex::first_model_for(instance_id) {
+                attempts.push(serde_json::json!({
+                    "provider": "codex",
+                    "model": model.cli_model,
+                    "codexProvider": {
+                        "id": model.instance_id,
+                        "baseUrl": model.base_url,
+                        "apiKey": model.api_key,
+                        "wireApi": "responses",
+                        "model": model.cli_model,
+                    },
+                }));
+            }
+            continue;
+        }
         // A provider's custom model (if the user configured one) is tried
         // before its fast/default pick.
         match provider.as_str() {
@@ -127,16 +145,16 @@ fn build_title_attempts() -> Vec<Value> {
 /// `provider/model` slug (e.g. `hundun/deepseek-v4-flash`). `None` when no
 /// custom opencode provider is set up.
 fn first_opencode_custom_model() -> Option<String> {
-    first_slug_custom_model(super::opencode_config::read_custom_providers().ok()?)
+    first_slug_custom_model(crate::provider::opencode_config::read_custom_providers().ok()?)
 }
 
 /// Same, for MiMo Code's `mimocode.json`.
 fn first_mimo_custom_model() -> Option<String> {
-    first_slug_custom_model(super::opencode_config::read_mimo_custom_providers().ok()?)
+    first_slug_custom_model(crate::provider::opencode_config::read_mimo_custom_providers().ok()?)
 }
 
 fn first_slug_custom_model(
-    providers: Vec<super::opencode_config::OpencodeCustomProvider>,
+    providers: Vec<crate::provider::opencode_config::OpencodeCustomProvider>,
 ) -> Option<String> {
     let provider = providers.into_iter().next()?;
     let model = provider.models.into_iter().next()?;
@@ -1154,6 +1172,10 @@ pub fn fetch_agent_model_sections() -> Vec<super::catalog::AgentModelSection> {
     super::catalog::static_model_sections()
 }
 
+pub fn fetch_all_agent_model_sections() -> Vec<super::catalog::AgentModelSection> {
+    super::catalog::full_catalog_sections()
+}
+
 // ---------------------------------------------------------------------------
 // Cursor model list — proxied to the sidecar's `Cursor.models.list`
 // ---------------------------------------------------------------------------
@@ -1727,6 +1749,40 @@ mod tests {
         assert_eq!(chain, vec!["codex", "cursor"]);
         // No custom configured → no attempt carries an explicit model.
         assert!(attempts.iter().all(|a| a.get("model").is_none()));
+
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    #[test]
+    fn build_title_attempts_includes_custom_codex_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+        setup_test_db(dir.path());
+
+        crate::settings::upsert_setting_value(
+            "app.codex_custom_providers",
+            r#"[{"id":"hundun","name":"Codex (Hundun)","baseUrl":"http://dollar.hundun.cn/v1","apiKey":"sk-secret","models":[{"slug":"gpt-5.5","label":"GPT-5.5"}],"enabledModelIds":null}]"#,
+        )
+        .unwrap();
+        crate::settings::upsert_setting_value("app.default_model_id", "codex:hundun|gpt-5.5")
+            .unwrap();
+
+        // One attempt, routed through `codex`, carrying the injected provider.
+        let attempts = build_title_attempts();
+        assert_eq!(attempts.len(), 1);
+        let attempt = &attempts[0];
+        assert_eq!(attempt.get("provider").unwrap().as_str().unwrap(), "codex");
+        assert_eq!(attempt.get("model").unwrap().as_str().unwrap(), "gpt-5.5");
+        let codex = attempt.get("codexProvider").unwrap();
+        assert_eq!(codex.get("id").unwrap().as_str().unwrap(), "hundun");
+        assert_eq!(
+            codex.get("baseUrl").unwrap().as_str().unwrap(),
+            "http://dollar.hundun.cn/v1"
+        );
+        assert_eq!(codex.get("apiKey").unwrap().as_str().unwrap(), "sk-secret");
+        assert_eq!(codex.get("wireApi").unwrap().as_str().unwrap(), "responses");
+        assert_eq!(codex.get("model").unwrap().as_str().unwrap(), "gpt-5.5");
 
         std::env::remove_var("HELMOR_DATA_DIR");
     }

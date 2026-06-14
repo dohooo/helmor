@@ -1,8 +1,6 @@
-//! Read/write custom providers in the GLOBAL config file of an
-//! opencode-protocol provider (opencode itself, or the MiMo Code fork —
-//! same JSON schema, different config dir/filenames). Single source of
-//! truth; writes go through the jsonc CST to preserve comments/formatting
-//! outside the edited `provider.<id>` block.
+//! Read/write custom providers in an opencode-protocol family's global config
+//! (opencode or the MiMo fork). Writes go through the jsonc CST to preserve
+//! comments/formatting outside the edited `provider.<id>` block.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -12,14 +10,11 @@ use jsonc_parser::cst::{CstInputValue, CstObject, CstRootNode};
 use jsonc_parser::ParseOptions;
 use serde::{Deserialize, Serialize};
 
-// MiMo Code's binary still declares opencode's schema URL — verified against
-// @mimo-ai/cli 0.1.0 — so both families share it.
+// MiMo Code declares opencode's schema URL too, so both families share it.
 const SCHEMA_URL: &str = "https://opencode.ai/config.json";
 const DEFAULT_NPM: &str = "@ai-sdk/openai-compatible";
 
-/// Filesystem layout of one opencode-protocol family's global config.
-/// `file_candidates` is the provider's own lookup precedence; index 0 is
-/// the default filename when none exists yet.
+/// `file_candidates` is the lookup precedence; index 0 is the default filename.
 struct FamilyConfig {
     /// Subdir under `$XDG_CONFIG_HOME` / `~/.config`.
     xdg_dir: &'static str,
@@ -31,8 +26,7 @@ const OPENCODE_FAMILY: FamilyConfig = FamilyConfig {
     file_candidates: ["opencode.jsonc", "opencode.json", "config.json"],
 };
 
-// mimo's own lookup checks `mimocode.json` BEFORE `mimocode.jsonc`
-// (verified against the 0.1.0 binary), so mirror that order.
+// mimo checks `mimocode.json` BEFORE `mimocode.jsonc`; mirror that order.
 const MIMO_FAMILY: FamilyConfig = FamilyConfig {
     xdg_dir: "mimocode",
     file_candidates: ["mimocode.json", "mimocode.jsonc", "config.json"],
@@ -44,7 +38,7 @@ pub struct OpencodeCustomModel {
     pub id: String,
     #[serde(default)]
     pub name: String,
-    // `reasoning: true` makes opencode compute effort variants; only safe if the endpoint accepts it.
+    // `reasoning: true` makes opencode compute effort variants.
     #[serde(default)]
     pub reasoning: bool,
 }
@@ -71,7 +65,6 @@ fn default_npm() -> String {
     DEFAULT_NPM.to_string()
 }
 
-// `$XDG_CONFIG_HOME/<dir>` or `~/.config/<dir>`.
 fn config_dir(family: &FamilyConfig) -> Result<PathBuf> {
     if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
         if !xdg.is_empty() {
@@ -81,7 +74,6 @@ fn config_dir(family: &FamilyConfig) -> Result<PathBuf> {
     crate::platform::paths::xdg_config_dir(family.xdg_dir).context("HOME is not set")
 }
 
-// First existing candidate wins; default to candidate 0 when none exists.
 fn config_file_path(family: &FamilyConfig) -> Result<PathBuf> {
     let dir = config_dir(family)?;
     for name in family.file_candidates {
@@ -144,7 +136,7 @@ fn read_custom_providers_at(path: &Path) -> Result<Vec<OpencodeCustomProvider>> 
 
     let mut out = Vec::new();
     for (id, block) in providers {
-        // Only Helmor-managed blocks (have apiKey and/or baseURL); skip built-ins and bare overrides.
+        // Skip blocks with no apiKey/baseURL (built-ins, bare overrides).
         let options = block.get("options").and_then(serde_json::Value::as_object);
         let api_key = options
             .and_then(|o| o.get("apiKey"))
@@ -214,7 +206,7 @@ fn read_models(models: Option<&serde_json::Value>) -> Vec<OpencodeCustomModel> {
 fn upsert_custom_provider_at(path: &Path, provider: &OpencodeCustomProvider) -> Result<()> {
     let text = std::fs::read_to_string(path)
         .unwrap_or_else(|_| format!("{{\n  \"$schema\": \"{SCHEMA_URL}\"\n}}\n"));
-    // Only rewrite `models` when changed, so comments in an untouched models map survive.
+    // Only rewrite `models` when changed, to preserve comments in it.
     let models_unchanged = read_custom_providers_at(path)
         .ok()
         .and_then(|list| list.into_iter().find(|p| p.id == provider.id))
@@ -226,7 +218,7 @@ fn upsert_custom_provider_at(path: &Path, provider: &OpencodeCustomProvider) -> 
     if root_obj.get("$schema").is_none() {
         root_obj.append("$schema", CstInputValue::String(SCHEMA_URL.to_string()));
     }
-    // Update field-by-field (NOT a full set_value replace, which nukes every comment in the block).
+    // Field-by-field, not a full set_value replace (that drops block comments).
     let block = root_obj
         .object_value_or_set("provider")
         .object_value_or_set(&provider.id);
@@ -262,7 +254,6 @@ fn set_string(obj: &CstObject, key: &str, value: &str) {
     set_object(obj, key, CstInputValue::String(value.to_string()));
 }
 
-// Set the string, or remove the key entirely when empty.
 fn set_or_remove_string(obj: &CstObject, key: &str, value: &str) {
     if value.is_empty() {
         if let Some(prop) = obj.get(key) {
@@ -311,7 +302,7 @@ fn models_to_cst(models: &[OpencodeCustomModel]) -> CstInputValue {
     )
 }
 
-// Order-independent equality of model fields.
+// Order-independent equality.
 fn models_equal(a: &[OpencodeCustomModel], b: &[OpencodeCustomModel]) -> bool {
     let key = |models: &[OpencodeCustomModel]| {
         let mut out: Vec<(String, String, bool)> = models
@@ -330,7 +321,7 @@ fn models_equal(a: &[OpencodeCustomModel], b: &[OpencodeCustomModel]) -> bool {
     key(a) == key(b)
 }
 
-// Preset providers (in opencode's catalog) only need an apiKey; set just that, preserve the rest.
+// Preset providers only need an apiKey; set just that, preserve the rest.
 fn upsert_preset_key_at(path: &Path, id: &str, api_key: &str) -> Result<()> {
     let text = std::fs::read_to_string(path)
         .unwrap_or_else(|_| format!("{{\n  \"$schema\": \"{SCHEMA_URL}\"\n}}\n"));
@@ -362,7 +353,7 @@ fn delete_custom_provider_at(path: &Path, id: &str) -> Result<()> {
     let Ok(text) = std::fs::read_to_string(path) else {
         return Ok(());
     };
-    // Confirm it exists first, so we don't create an empty `provider` block just to delete from it.
+    // Confirm it exists first, to avoid creating an empty `provider` block.
     let exists = read_custom_providers_at(path)?.iter().any(|p| p.id == id);
     if !exists {
         return Ok(());
