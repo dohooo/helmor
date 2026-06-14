@@ -197,6 +197,7 @@ export class KimiSessionManager implements SessionManager {
 		ctx.activeEmitter = emitter;
 		this.connection.setActiveRequestId(requestId);
 		await this.applyModel(ctx, params.model);
+		await this.applyThinking(ctx.acpSessionId, "on");
 
 		const prompt = await buildPromptBlocks(
 			prependLinkedDirectoriesContext(
@@ -377,6 +378,26 @@ export class KimiSessionManager implements SessionManager {
 				model: next,
 				...errorDetails(error),
 			});
+		}
+	}
+
+	/** Kimi exposes thinking as a 2-value `thought_level` config option
+	 *  (`thinking` = `on`/`off`), not an effort gradient. Helmor has no UI for a
+	 *  toggle, so the chat path forces `on` and title generation forces `off`.
+	 *  A model without thinking support silently no-ops this (kimi accepts the
+	 *  call without validating); the try/catch only guards a dead connection. */
+	private async applyThinking(
+		acpSessionId: string,
+		value: "on" | "off",
+	): Promise<void> {
+		try {
+			await this.connection.sendRequest("session/set_config_option", {
+				sessionId: acpSessionId,
+				configId: "thinking",
+				value,
+			});
+		} catch (error) {
+			logger.debug(`kimi set thinking=${value} skipped`, errorDetails(error));
 		}
 	}
 
@@ -671,6 +692,8 @@ export class KimiSessionManager implements SessionManager {
 					})
 					.catch(() => {});
 			}
+			// Titles are one-shot — never burn thinking tokens on them.
+			await this.applyThinking(acpSessionId, "off");
 			await this.connection.sendRequest<AcpPromptResult>(
 				"session/prompt",
 				{ sessionId: acpSessionId, prompt: [{ type: "text", text: prompt }] },
