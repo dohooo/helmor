@@ -172,6 +172,7 @@ export const helmorQueryKeys = {
 	teamMembers: (url: string) => ["teamMembers", url] as const,
 	teamWorkspaces: (url: string) => ["teamWorkspaces", url] as const,
 	cloudCodexIdentity: (url: string) => ["cloudCodexIdentity", url] as const,
+	cloudClaudeIdentity: (url: string) => ["cloudClaudeIdentity", url] as const,
 };
 
 /** Persistence is opt-in per `queryOptions` via `meta: { persist: true }`.

@@ -36,6 +36,14 @@ name = "Sandbox"
 class_name = "CodexIdentity"
 name = "CODEX_IDENTITY"
 
+# Per-member Claude subscription token broker. Holds the user's Claude
+# `setup-token` OAuth token (`sk-ant-oat01…`) encrypted at rest and hands it back
+# at container cold start to inject as CLAUDE_CODE_OAUTH_TOKEN. Keyed by the
+# member's GitHub numeric id (idFromName(memberId)). REUSES BROKER_ENC_KEY.
+[[durable_objects.bindings]]
+class_name = "ClaudeIdentity"
+name = "CLAUDE_IDENTITY"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Sandbox"]
@@ -43,6 +51,10 @@ new_sqlite_classes = ["Sandbox"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["CodexIdentity"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["ClaudeIdentity"]
 
 # D1 control-plane registry (Phase 3 / action item ①): members / workspaces /
 # invites / teams. Additive — the Phase 0 stateless proxy is untouched. Schema

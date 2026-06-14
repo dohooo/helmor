@@ -69,7 +69,10 @@ import { AccountPanel } from "./panels/account";
 import { AppUpdatesPanel } from "./panels/app-updates";
 import { AppearancePanel } from "./panels/appearance";
 import { ArchiveCleanupPanel } from "./panels/archive-cleanup";
-import { CloudIdentityPanel } from "./panels/cloud-identity";
+import {
+	CloudClaudeIdentityPanel,
+	CloudIdentityPanel,
+} from "./panels/cloud-identity";
 import { ComponentsPanel } from "./panels/components";
 import { ConductorImportPanel } from "./panels/conductor-import";
 import { DevToolsPanel } from "./panels/dev-tools";
@@ -651,6 +654,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 								<>
 									<TeamPanel />
 									<CloudIdentityPanel />
+									<CloudClaudeIdentityPanel />
 								</>
 							)}
 

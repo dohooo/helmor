@@ -17,6 +17,8 @@ import {
 } from "./team";
 
 export { Sandbox } from "@cloudflare/sandbox";
+// Likewise for the `CLAUDE_IDENTITY` binding (Claude subscription token broker).
+export { ClaudeIdentity } from "./claude-identity";
 // Re-export so workerd registers the Durable Object class named in
 // wrangler.toml's `CODEX_IDENTITY` binding (Phase 1 Codex token broker).
 export { CodexIdentity } from "./codex-identity";
@@ -42,9 +44,17 @@ export interface Env {
 	CODEX_IDENTITY: DurableObjectNamespace<
 		import("./codex-identity").CodexIdentity
 	>;
-	/** Base64-encoded 32-byte AES-256-GCM key the `CodexIdentity` DO derives its
-	 *  at-rest encryption key from (Worker secret). NEVER enters the container,
-	 *  D1, or the frontend. */
+	/** Claude subscription token broker: per-member Durable Object that holds the
+	 *  Claude `setup-token` OAuth token (`sk-ant-oat01…`) encrypted at rest and
+	 *  hands it back at cold start to inject as the `CLAUDE_CODE_OAUTH_TOKEN` env
+	 *  var. Unlike Codex, the token is self-contained (~1-year, inference-only):
+	 *  inject-and-forget, no in-DO refresh. */
+	CLAUDE_IDENTITY: DurableObjectNamespace<
+		import("./claude-identity").ClaudeIdentity
+	>;
+	/** Base64-encoded 32-byte AES-256-GCM key the `CodexIdentity` AND
+	 *  `ClaudeIdentity` DOs derive their at-rest encryption key from (Worker
+	 *  secret, SHARED). NEVER enters the container, D1, or the frontend. */
 	BROKER_ENC_KEY: string;
 	/** Override the OAuth token endpoint the broker refreshes against (tests /
 	 *  spike). Falls back to the hard-coded OpenAI endpoint inside the DO. */
@@ -509,6 +519,12 @@ async function ensureServe(
 	// container runs un-authenticated for Codex until the user re-authorizes);
 	// we log only a NON-SENSITIVE marker, never the auth.json or any token.
 	const codexAuthJson = await mintCodexAuthJson(env);
+	// Claude subscription token broker: mint the team's Claude OAuth token and
+	// inject it as the plain CLAUDE_CODE_OAUTH_TOKEN env var (VERIFIED §1.5: the
+	// serve process env is inherited all the way to the claude child — no file
+	// write needed, unlike CODEX_AUTH_JSON). A missing identity starts serve
+	// WITHOUT Claude subscription auth; never logs the token.
+	const claudeToken = await mintClaudeOauthToken(env);
 
 	await sandbox.startProcess(SERVE_START_CMD, {
 		env: {
@@ -518,8 +534,19 @@ async function ensureServe(
 			// backed-up /home/helmor tree (createBackup dir must be under
 			// /workspace|/home|/tmp|/var/tmp|/app).
 			HELMOR_DATA_DIR: "/home/helmor",
+			// Pin HOME explicitly. The image sets no USER/HOME, so the spawned
+			// serve process would otherwise inherit whatever ambient HOME the
+			// sandbox runtime injects. The Claude onboarding seed in
+			// start-serve.sh writes
+			// `${CLAUDE_CONFIG_DIR:-${HOME:-/root}}/.claude.json` and the SDK's
+			// claude child reads `$HOME/.claude.json` — pinning HOME makes the
+			// seeded dir == the child's read path PROVABLY (VERIFIED §2.6 /
+			// RISK-2). /root is root's home (matches start-serve.sh's fallback),
+			// so today's behavior is unchanged, just made deterministic.
+			HOME: "/root",
 			...(env.GITHUB_TOKEN ? { GITHUB_TOKEN: env.GITHUB_TOKEN } : {}),
 			...(codexAuthJson ? { CODEX_AUTH_JSON: codexAuthJson } : {}),
+			...(claudeToken ? { CLAUDE_CODE_OAUTH_TOKEN: claudeToken } : {}),
 		},
 	});
 
@@ -574,6 +601,42 @@ async function mintCodexAuthJson(env: Env): Promise<string | null> {
 	} catch (error) {
 		console.error(
 			"Phase 1 codex mint failed",
+			error instanceof Error ? error.message : "unknown",
+		);
+		return null;
+	}
+}
+
+/**
+ * Mint the container's Claude subscription OAuth token from the team's identity
+ * DO at cold start (Claude broker). Resolves the team's bound
+ * `cloud_identity_member_id` (REUSED — shared identity for v1; same binding as
+ * Codex), gets that member's `ClaudeIdentity` DO, and calls `mintToken()`
+ * (Workers RPC). Returns the bare `sk-ant-oat01…` token to inject as
+ * `CLAUDE_CODE_OAUTH_TOKEN`, or `null` to start serve WITHOUT Claude auth.
+ *
+ * SECURITY: only ever logs a NON-SENSITIVE marker — never the token. A
+ * `{ error }` result (no identity) is a clean skip; cloud Claude runs fail until
+ * the user authorizes.
+ */
+async function mintClaudeOauthToken(env: Env): Promise<string | null> {
+	const memberId = await readCloudIdentityMemberId(env);
+	if (!memberId) return null; // No cloud identity configured for this team.
+
+	try {
+		const stub = env.CLAUDE_IDENTITY.get(
+			env.CLAUDE_IDENTITY.idFromName(memberId),
+		);
+		const mint = await stub.mintToken();
+		if ("token" in mint) {
+			return mint.token;
+		}
+		// Non-sensitive marker only (the `error` discriminant, never a value).
+		console.error(`Claude mint skipped: ${mint.error}`);
+		return null;
+	} catch (error) {
+		console.error(
+			"Claude mint failed",
 			error instanceof Error ? error.message : "unknown",
 		);
 		return null;

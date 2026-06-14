@@ -548,7 +548,7 @@ describe("CodexIdentity DO", () => {
 			);
 			const mint = await onDo(stub, (doi) => doi.mintAuthJson());
 			if (!("authJson" in mint)) throw new Error("expected authJson");
-			expect(mint.authJson.auth_mode).toBe("chatgptauthtokens");
+			expect(mint.authJson.auth_mode).toBe("chatgptAuthTokens");
 			expect(mint.authJson.tokens.refresh_token).toBe(""); // EMPTY RT
 			expect(mint.authJson.tokens.account_id).toBe("acct-shape");
 			expect(mint.accountId).toBe("acct-shape");

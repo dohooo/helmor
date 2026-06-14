@@ -487,14 +487,18 @@ export function convertFileSrc(filePath: string, protocol?: string): string {
 
 /**
  * Commands that ALWAYS run on the local Tauri backend, even in team/companion
- * mode. `authorize_cloud_codex_identity` runs `codex login` on the user's own
- * machine and captures the OAuth refresh_token, then uploads it to the Worker —
- * it fundamentally cannot run inside the cloud container (no local browser /
- * codex login there), so it must NOT be routed to the companion like other
- * invokes. Keep in sync with `LOCAL_ONLY` in
+ * mode. `authorize_cloud_codex_identity` runs `codex login` and
+ * `authorize_cloud_claude_identity` runs `claude setup-token` on the user's own
+ * machine, capturing the subscription OAuth credential and uploading it to the
+ * Worker — they fundamentally cannot run inside the cloud container (no local
+ * browser / CLI login there), so they must NOT be routed to the companion like
+ * other invokes. Keep in sync with `LOCAL_ONLY` in
  * `src-tauri/tests/companion_dispatch_coverage.rs`.
  */
-const LOCAL_ONLY_INVOKES = new Set<string>(["authorize_cloud_codex_identity"]);
+const LOCAL_ONLY_INVOKES = new Set<string>([
+	"authorize_cloud_codex_identity",
+	"authorize_cloud_claude_identity",
+]);
 
 export function invoke<T>(
 	cmd: string,

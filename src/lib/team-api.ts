@@ -207,3 +207,40 @@ export async function getCloudCodexIdentityStatus(
 		bricked: body.bricked ?? false,
 	};
 }
+
+/**
+ * The team's cloud Claude identity status, as returned by the Worker's
+ * `GET /team/claude-identity` → the bound member's `ClaudeIdentity` DO
+ * `status()`. Far simpler than the Codex shape: the `setup-token` credential is
+ * a self-contained ~1-year inference-only token (no refresh, no JWT, no account
+ * claim — see claude-cloud-auth-VERIFIED.md §1.7), so status is `{ hasToken }`
+ * only. NEVER carries the token itself — metadata only.
+ */
+export interface CloudClaudeIdentityStatus {
+	/** Whether the DO currently holds a Claude OAuth token for this team. */
+	hasToken: boolean;
+}
+
+/**
+ * `GET /team/claude-identity` — the team's cloud Claude identity status (the
+ * member's `ClaudeIdentity` DO `status()`). Mirrors
+ * {@link getCloudCodexIdentityStatus}: bearer auth, throws on non-2xx so React
+ * Query surfaces an error state.
+ */
+export async function getCloudClaudeIdentityStatus(
+	cfg: TeamConfig,
+): Promise<CloudClaudeIdentityStatus> {
+	const base = normalizeUrl(cfg.url);
+	const res = await fetch(`${base}/team/claude-identity`, {
+		headers: authHeaders(cfg),
+	});
+	if (!res.ok) {
+		throw new Error(
+			`Failed to load cloud Claude identity (HTTP ${res.status})`,
+		);
+	}
+	const body = (await res.json()) as Partial<CloudClaudeIdentityStatus>;
+	return {
+		hasToken: body.hasToken ?? false,
+	};
+}

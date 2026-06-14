@@ -27,10 +27,11 @@ const workersOptions = {
 	miniflare: {
 		compatibilityDate: "2026-06-09",
 		compatibilityFlags: ["nodejs_compat"],
-		// The DO binding under test. The class lives in the `main` worker's
+		// The DO bindings under test. Each class lives in the `main` worker's
 		// module graph (re-exported there).
 		durableObjects: {
 			CODEX_IDENTITY: { className: "CodexIdentity" },
+			CLAUDE_IDENTITY: { className: "ClaudeIdentity" },
 		},
 		// A 32-byte AES key, base64-encoded, for the DO's at-rest crypto.
 		// Deterministic so encrypt/decrypt round-trips are reproducible.

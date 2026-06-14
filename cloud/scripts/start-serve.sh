@@ -59,6 +59,30 @@ if [ -n "${CODEX_AUTH_JSON:-}" ]; then
 	echo "helmor-start-serve: wrote $codex_dir/auth.json ($(wc -c <"$codex_dir/auth.json") bytes)"
 fi
 
+# Cloud run identity (Claude subscription): the Worker injects the Claude OAuth
+# token as the CLAUDE_CODE_OAUTH_TOKEN env var (inherited by claude-code through
+# the serve process — no file write needed). Two guards are REQUIRED so the token
+# actually wins (claude-cloud-auth-VERIFIED.md §2.6):
+#
+#   (a) ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN silently OUTRANK
+#       CLAUDE_CODE_OAUTH_TOKEN in non-interactive mode (VERIFIED §1.4) — the
+#       cloud Agent SDK runs non-interactively, so a stray container secret would
+#       silently win and run on the wrong credential. Unset both defensively.
+unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
+
+#   (b) A fresh container has no ~/.claude.json, so claude-code may run first-run
+#       onboarding and ignore the token (VERIFIED §2.6 / RISK-2). Seed the
+#       onboarding flag (the `hasCompletedOnboarding` field is binary-verified in
+#       claude-code 2.1.173). This file holds NO secret — just the flag — and is
+#       distinct from ~/.claude/.credentials.json (which we never write, so the
+#       Linux child-launch guard that prefers a credentials-file refreshToken
+#       can't strip our env var — VERIFIED RISK-4).
+if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+	claude_cfg="${CLAUDE_CONFIG_DIR:-${HOME:-/root}}/.claude.json"
+	mkdir -p "$(dirname "$claude_cfg")"
+	[ -f "$claude_cfg" ] || printf '%s' '{"hasCompletedOnboarding":true}' >"$claude_cfg"
+fi
+
 # 1. Independent Xvfb daemon (idempotent — skip if one is already running).
 if ! pgrep -x Xvfb >/dev/null 2>&1; then
 	Xvfb "$DISPLAY" -screen 0 1280x800x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &

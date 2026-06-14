@@ -33,21 +33,14 @@ use zeroize::Zeroizing;
 
 use crate::{platform, sidecar};
 
-use super::common::{run_blocking, CmdResult};
-
-/// Worker route the broker PUTs/GETs the cloud identity through, appended to
-/// the (trailing-slash-stripped) team base URL.
-const CLOUD_IDENTITY_PATH: &str = "/team/cloud-identity";
+use super::{cloud_identity_url, harden_dir_permissions, WORKER_TIMEOUT};
+use crate::commands::common::{run_blocking, CmdResult};
 
 /// Hard cap on how long we wait for the interactive `codex login` to finish.
 /// The user completes the OAuth flow in a browser the CLI opens; if they
 /// abandon it we don't want a zombie child wedged forever. 10 minutes is
 /// generous for a human sign-in.
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
-
-/// Short timeout for the control-plane round-trips — these are tiny JSON
-/// requests against the Worker, mirroring `rate_limits::codex`.
-const WORKER_TIMEOUT: Duration = Duration::from_secs(30);
 
 // ---------------------------------------------------------------------------
 // Public command result shapes
@@ -173,21 +166,6 @@ fn build_upload_body_json(tokens: &CapturedTokens) -> anyhow::Result<String> {
         id_token: &tokens.id_token,
     };
     serde_json::to_string(&body).context("Failed to serialize cloud-identity upload body")
-}
-
-// ---------------------------------------------------------------------------
-// Worker URL helpers
-// ---------------------------------------------------------------------------
-
-/// Join the (possibly trailing-slashed) team base URL with the cloud-identity
-/// route. Mirrors the frontend's `normalizeUrl` (strip trailing `/`) so a base
-/// saved with or without a slash resolves identically. Rejects an empty base.
-fn cloud_identity_url(worker_base: &str) -> anyhow::Result<String> {
-    let trimmed = worker_base.trim().trim_end_matches('/');
-    if trimmed.is_empty() {
-        anyhow::bail!("Team mode is not configured (no Worker URL).");
-    }
-    Ok(format!("{trimmed}{CLOUD_IDENTITY_PATH}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -377,25 +355,6 @@ fn authorize_impl(worker_url: &str, team_token: &str) -> anyhow::Result<CloudIde
     })
 }
 
-/// Tighten a freshly created directory to `0700` on Unix. No-op on Windows,
-/// where the per-user temp dir already inherits the user's ACL and there is no
-/// POSIX mode to set. Best-effort hardening on top of `tempfile`'s default.
-#[cfg(unix)]
-fn harden_dir_permissions(path: &Path) -> anyhow::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).with_context(|| {
-        format!(
-            "Failed to set 0700 on temp CODEX_HOME at {}",
-            path.display()
-        )
-    })
-}
-
-#[cfg(not(unix))]
-fn harden_dir_permissions(_path: &Path) -> anyhow::Result<()> {
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
@@ -502,28 +461,8 @@ mod tests {
         assert!(value.get("accountId").is_none());
     }
 
-    #[test]
-    fn cloud_identity_url_strips_trailing_slash() {
-        assert_eq!(
-            cloud_identity_url("https://team.example.workers.dev/").unwrap(),
-            "https://team.example.workers.dev/team/cloud-identity"
-        );
-        assert_eq!(
-            cloud_identity_url("https://team.example.workers.dev").unwrap(),
-            "https://team.example.workers.dev/team/cloud-identity"
-        );
-        assert_eq!(
-            cloud_identity_url("  https://team.example.workers.dev///  ").unwrap(),
-            "https://team.example.workers.dev/team/cloud-identity"
-        );
-    }
-
-    #[test]
-    fn cloud_identity_url_rejects_empty_base() {
-        assert!(cloud_identity_url("").is_err());
-        assert!(cloud_identity_url("   ").is_err());
-        assert!(cloud_identity_url("///").is_err());
-    }
+    // NB: `cloud_identity_url` lives in the parent module now (shared with the
+    // claude broker); its tests live there too.
 
     #[test]
     fn captured_refresh_token_is_zeroizing_and_derefs_to_secret() {

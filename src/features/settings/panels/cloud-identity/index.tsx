@@ -10,6 +10,8 @@ import {
 } from "../../components/settings-row";
 import { isCloudIdentityExpired, useCloudIdentity } from "./use-cloud-identity";
 
+export { CloudClaudeIdentityPanel } from "./claude-panel";
+
 /**
  * Settings → Team "Cloud Run Identity · Codex" panel.
  *

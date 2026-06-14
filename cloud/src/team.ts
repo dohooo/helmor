@@ -123,6 +123,10 @@ export async function handleTeamRoute(
 			return putCloudIdentity(request, env);
 		case "GET /team/cloud-identity":
 			return getCloudIdentity(request, env);
+		case "PUT /team/claude-identity":
+			return putClaudeIdentity(request, env);
+		case "GET /team/claude-identity":
+			return getClaudeIdentity(request, env);
 		default:
 			return json({ code: "NotFound", message: `no route ${route}` }, 404);
 	}
@@ -322,6 +326,90 @@ async function getCloudIdentity(request: Request, env: Env): Promise<Response> {
 	}
 
 	const stub = env.CODEX_IDENTITY.get(env.CODEX_IDENTITY.idFromName(memberId));
+	const status = await stub.status();
+	return json(status);
+}
+
+/**
+ * PUT /team/claude-identity (AUTHENTICATED MEMBER) — store the member's Claude
+ * subscription OAuth token in their own `ClaudeIdentity` Durable Object.
+ *
+ * SECURITY (the trust boundary, identical to the Codex route): the member id is
+ * derived SOLELY from the `Authorization: Bearer <invite-token>` →
+ * `invites.member_id` mapping. A client-supplied `X-Helmor-Member-Id` is NEVER
+ * trusted (and is stripped on the proxy path in index.ts regardless). The
+ * admin/shared token carries no member identity, so it cannot write a cloud
+ * identity — only a real member can write their OWN. An unauthenticated /
+ * unknown token is rejected with 401.
+ *
+ * The body is `{ oauthToken }` (the `sk-ant-oat01…` token from
+ * `claude setup-token`). The token is handed straight to the DO (encrypted at
+ * rest there) and is NEVER logged, NEVER echoed back — the response is
+ * `{ changed }` only.
+ */
+async function putClaudeIdentity(
+	request: Request,
+	env: Env,
+): Promise<Response> {
+	// Derive the member id from the bearer alone — never from a client header.
+	const bearer = readBearer(request);
+	const memberId = bearer ? await lookupMemberId(env, bearer) : null;
+	if (!memberId) {
+		return json({ code: "Unauthorized" }, 401);
+	}
+
+	const body = await readJsonBody(request);
+	const oauthToken = typeof body.oauthToken === "string" ? body.oauthToken : "";
+	if (!oauthToken) {
+		// NB: never include the (absent/empty) token value in the error.
+		return json({ code: "BadRequest", message: "oauthToken required" }, 400);
+	}
+
+	const stub = env.CLAUDE_IDENTITY.get(
+		env.CLAUDE_IDENTITY.idFromName(memberId),
+	);
+	const result = await stub.store(oauthToken);
+
+	// Bind this team's cloud run identity to the authorizing member (v1: one
+	// team -> one identity; last writer wins). REUSES the same
+	// `cloud_identity_member_id` binding as Codex (shared identity for v1).
+	// Upsert the single team row so a member can authorize before any explicit
+	// bootstrap.
+	await env.DB.prepare(
+		`INSERT INTO teams (id, sandbox_id, cloud_identity_member_id) VALUES (?1, ?2, ?3)
+		 ON CONFLICT(id) DO UPDATE SET cloud_identity_member_id = excluded.cloud_identity_member_id`,
+	)
+		.bind(TEAM_ID, env.HELMOR_SANDBOX_ID, memberId)
+		.run();
+
+	return json({ changed: result.changed });
+}
+
+/**
+ * GET /team/claude-identity (member-or-admin) — read the team's cloud Claude
+ * identity status from its `ClaudeIdentity` DO. Returns metadata only
+ * (`{ hasToken }`) — NEVER any token material.
+ *
+ * For v1 (one team -> one identity) the queried DO is the team's bound
+ * `cloud_identity_member_id`. A no-identity team (none bound yet) reports
+ * `hasToken: false` without touching a DO.
+ */
+async function getClaudeIdentity(
+	request: Request,
+	env: Env,
+): Promise<Response> {
+	if ((await classifyCaller(request, env)) === "unauthorized") {
+		return json({ code: "Unauthorized" }, 401);
+	}
+
+	const memberId = await readCloudIdentityMemberId(env);
+	if (!memberId) {
+		return json({ hasToken: false });
+	}
+
+	const stub = env.CLAUDE_IDENTITY.get(
+		env.CLAUDE_IDENTITY.idFromName(memberId),
+	);
 	const status = await stub.status();
 	return json(status);
 }
