@@ -101,7 +101,7 @@ mock.module("@anthropic-ai/claude-agent-sdk", () => ({
 // mocked `query`. A static top-level import of the manager would resolve
 // the real SDK before the mock is applied.
 const { ClaudeSessionManager } = await import(
-	"../src/claude-session-manager.js"
+	"../src/claude/session-manager.js"
 );
 
 // ---------------------------------------------------------------------------

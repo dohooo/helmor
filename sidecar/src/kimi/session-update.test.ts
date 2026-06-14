@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { AcpSessionUpdate } from "./kimi-acp-types.js";
+import type { AcpSessionUpdate } from "./acp-types.js";
 import {
 	buildPromptBlocks,
 	contentBlockToText,
@@ -7,7 +7,7 @@ import {
 	isSelectionRequest,
 	toolContentText,
 	translateSessionUpdate,
-} from "./kimi-session-update.js";
+} from "./session-update.js";
 
 const update = (u: Partial<AcpSessionUpdate> & { sessionUpdate: string }) =>
 	translateSessionUpdate("ses_1", u as AcpSessionUpdate);

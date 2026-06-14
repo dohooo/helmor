@@ -10,8 +10,8 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import readline from "node:readline";
-import { type AgentProxySettings, buildAgentProxyEnv } from "./agent-proxy.js";
-import { logger } from "./logger.js";
+import { type AgentProxySettings, buildAgentProxyEnv } from "../agent-proxy.js";
+import { logger } from "../logger.js";
 
 // ---------------------------------------------------------------------------
 // JSON-RPC types

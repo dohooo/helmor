@@ -11,12 +11,12 @@ import type {
 	SDKMessage,
 	SDKUserMessage,
 } from "@cursor/sdk";
-import { readImageWithResize } from "../image-resize.js";
-import { errorDetails, logger } from "../logger.js";
+import { readImageWithResize } from "../../image-resize.js";
+import { errorDetails, logger } from "../../logger.js";
 import type {
 	CursorModelParameter,
 	ProviderModelInfo,
-} from "../session-manager.js";
+} from "../../session-manager.js";
 
 /// Map Helmor's permissionMode to Cursor's conversation mode. Plan mode
 /// runs Cursor read-only; everything else is the normal agent mode.

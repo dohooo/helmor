@@ -24,7 +24,7 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { CodexAppServerManager } from "../src/codex-app-server-manager.js";
+import { CodexAppServerManager } from "../src/codex/app-server-manager.js";
 import { createSidecarEmitter } from "../src/emitter.js";
 
 function createStableMapper(prefix: string) {

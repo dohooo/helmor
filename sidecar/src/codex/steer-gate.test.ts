@@ -22,10 +22,10 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { OnNotification, OnRequest } from "./codex-app-server.js";
-import { CodexAppServerManager } from "./codex-app-server-manager.js";
-import { SubAgentTracker } from "./codex-subagent-tracker.js";
-import { createSidecarEmitter } from "./emitter.js";
+import { createSidecarEmitter } from "../emitter.js";
+import type { OnNotification, OnRequest } from "./app-server.js";
+import { CodexAppServerManager } from "./app-server-manager.js";
+import { SubAgentTracker } from "./subagent-tracker.js";
 
 interface PendingRpc {
 	method: string;

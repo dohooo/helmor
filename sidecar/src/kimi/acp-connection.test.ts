@@ -10,7 +10,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { KimiAcpConnection } from "./kimi-acp-connection.js";
+import { KimiAcpConnection } from "./acp-connection.js";
 
 /**
  * Scriptable fake ACP agent. Speaks just enough newline-delimited JSON-RPC

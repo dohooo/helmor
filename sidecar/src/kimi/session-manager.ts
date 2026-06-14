@@ -10,32 +10,12 @@
  */
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
-import { ActiveTurnRegistry } from "./active-turn-registry.js";
-import type { SidecarEmitter } from "./emitter.js";
-import {
-	type JsonRpcNotification,
-	type JsonRpcRequest,
-	KimiAcpConnection,
-} from "./kimi-acp-connection.js";
-import type {
-	AcpNewSessionResult,
-	AcpPromptResult,
-	AcpReadTextFileParams,
-	AcpRequestPermissionParams,
-	AcpSessionNotification,
-	AcpWriteTextFileParams,
-} from "./kimi-acp-types.js";
-import {
-	buildPromptBlocks,
-	firstAnswerLabel,
-	isSelectionRequest,
-	toolContentText,
-	translateSessionUpdate,
-} from "./kimi-session-update.js";
-import { prependLinkedDirectoriesContext } from "./linked-directories-context.js";
-import { errorDetails, logger } from "./logger.js";
-import { listProviderModels } from "./model-catalog.js";
+import { dirname, isAbsolute, resolve } from "node:path";
+import { ActiveTurnRegistry } from "../active-turn-registry.js";
+import type { SidecarEmitter } from "../emitter.js";
+import { prependLinkedDirectoriesContext } from "../linked-directories-context.js";
+import { errorDetails, logger } from "../logger.js";
+import { listProviderModels } from "../model-catalog.js";
 import type {
 	GenerateTitleOptions,
 	ListSlashCommandsParams,
@@ -44,8 +24,32 @@ import type {
 	SessionManager,
 	SlashCommandInfo,
 	UserInputResolution,
-} from "./session-manager.js";
-import { parseTitleAndBranch } from "./title.js";
+} from "../session-manager.js";
+import {
+	buildTitlePrompt,
+	parseTitleAndBranchWithDiagnostics,
+	TITLE_GENERATION_TIMEOUT_MS,
+} from "../title.js";
+import {
+	type JsonRpcNotification,
+	type JsonRpcRequest,
+	KimiAcpConnection,
+} from "./acp-connection.js";
+import type {
+	AcpNewSessionResult,
+	AcpPromptResult,
+	AcpReadTextFileParams,
+	AcpRequestPermissionParams,
+	AcpSessionNotification,
+	AcpWriteTextFileParams,
+} from "./acp-types.js";
+import {
+	buildPromptBlocks,
+	firstAnswerLabel,
+	isSelectionRequest,
+	toolContentText,
+	translateSessionUpdate,
+} from "./session-update.js";
 
 const KIMI_PERMISSION_PREFIX = "kimi-";
 const AUTH_REQUIRED_CODE = -32000;
@@ -91,6 +95,9 @@ export class KimiSessionManager implements SessionManager {
 	private readonly pendingQuestions = new Map<string, PendingPrompt>();
 	/** Latest `available_commands_update`, surfaced by `listSlashCommands`. */
 	private cachedCommands: SlashCommandInfo[] = [];
+	/** Throwaway title-generation sessions: acpSessionId → collected message
+	 *  text. Lets `generateTitle` capture streamed output off the chat path. */
+	private readonly titleCollectors = new Map<string, string[]>();
 
 	constructor() {
 		this.connection = new KimiAcpConnection({
@@ -378,6 +385,24 @@ export class KimiSessionManager implements SessionManager {
 		const params = notification.params as AcpSessionNotification | undefined;
 		const acpSessionId = params?.sessionId;
 		if (!acpSessionId || !params?.update) return;
+
+		// Throwaway title-generation session: collect streamed message text and
+		// skip the chat-routing path entirely (it isn't a registered ctx).
+		const collector = this.titleCollectors.get(acpSessionId);
+		if (collector) {
+			const update = params.update as {
+				sessionUpdate?: string;
+				content?: { type?: string; text?: string };
+			};
+			if (
+				update.sessionUpdate === "agent_message_chunk" &&
+				update.content?.type === "text"
+			) {
+				collector.push(update.content.text ?? "");
+			}
+			return;
+		}
+
 		const ctx = this.byAcpId.get(acpSessionId);
 		if (!ctx) return;
 
@@ -498,11 +523,22 @@ export class KimiSessionManager implements SessionManager {
 		);
 	}
 
+	/** Resolve an ACP fs path. Paths are absolute per spec, but a relative one
+	 *  must resolve against the session's cwd (the workspace) — NOT the sidecar's
+	 *  own process cwd (its install dir), which is where `readFile`/`writeFile`
+	 *  would otherwise land it. */
+	private resolveFsPath(acpSessionId: string, path: string): string {
+		if (isAbsolute(path)) return path;
+		const cwd = this.byAcpId.get(acpSessionId)?.cwd ?? process.cwd();
+		return resolve(cwd, path);
+	}
+
 	private async handleReadTextFile(request: JsonRpcRequest): Promise<void> {
 		const params = request.params as AcpReadTextFileParams | undefined;
 		try {
 			if (!params?.path) throw new Error("missing path");
-			const raw = await readFile(params.path, "utf8");
+			const path = this.resolveFsPath(params.sessionId, params.path);
+			const raw = await readFile(path, "utf8");
 			let content = raw;
 			if (params.line || params.limit) {
 				const lines = raw.split(/\r?\n/);
@@ -524,8 +560,9 @@ export class KimiSessionManager implements SessionManager {
 		const params = request.params as AcpWriteTextFileParams | undefined;
 		try {
 			if (!params?.path) throw new Error("missing path");
-			await mkdir(dirname(params.path), { recursive: true });
-			await writeFile(params.path, params.content ?? "", "utf8");
+			const path = this.resolveFsPath(params.sessionId, params.path);
+			await mkdir(dirname(path), { recursive: true });
+			await writeFile(path, params.content ?? "", "utf8");
 			this.connection.sendResponse(request.id, {});
 		} catch (error) {
 			this.connection.sendError(request.id, -32603, errorMessage(error));
@@ -597,15 +634,79 @@ export class KimiSessionManager implements SessionManager {
 	async generateTitle(
 		requestId: string,
 		userMessage: string,
-		_branchRenamePrompt: string | null,
+		branchRenamePrompt: string | null,
 		emitter: SidecarEmitter,
-		_timeoutMs?: number,
-		_options?: GenerateTitleOptions,
+		timeoutMs?: number,
+		options?: GenerateTitleOptions,
 	): Promise<void> {
-		const firstLine =
-			userMessage.split("\n").find((l) => l.trim()) ?? userMessage;
-		const { title } = parseTitleAndBranch(`title: ${firstLine}`);
-		emitter.titleGenerated(requestId, title, undefined);
+		const generateBranch = options?.generateBranch ?? true;
+		const prompt = buildTitlePrompt(
+			userMessage,
+			branchRenamePrompt,
+			generateBranch,
+		);
+		const timeout = timeoutMs ?? TITLE_GENERATION_TIMEOUT_MS;
+
+		// Run a throwaway ACP turn so the title comes from the same model the
+		// user configured — consistent with claude/codex/opencode/mimo.
+		let text = "";
+		let acpSessionId: string | null = null;
+		try {
+			await this.connection.start();
+			const created = await this.connection.sendRequest<AcpNewSessionResult>(
+				"session/new",
+				{ cwd: process.cwd(), mcpServers: [] },
+				timeout,
+			);
+			acpSessionId = created?.sessionId ?? null;
+			if (!acpSessionId) throw new Error("session/new returned no sessionId");
+			const chunks: string[] = [];
+			this.titleCollectors.set(acpSessionId, chunks);
+			if (options?.model) {
+				// Best-effort — fall back to the session default if unsupported.
+				await this.connection
+					.sendRequest("session/set_model", {
+						sessionId: acpSessionId,
+						modelId: options.model,
+					})
+					.catch(() => {});
+			}
+			await this.connection.sendRequest<AcpPromptResult>(
+				"session/prompt",
+				{ sessionId: acpSessionId, prompt: [{ type: "text", text: prompt }] },
+				timeout,
+			);
+			text = chunks.join("");
+		} catch (error) {
+			logger.debug("kimi generateTitle failed", errorDetails(error));
+		} finally {
+			if (acpSessionId) {
+				this.titleCollectors.delete(acpSessionId);
+				try {
+					this.connection.writeNotification("session/cancel", {
+						sessionId: acpSessionId,
+					});
+				} catch {
+					// best-effort cleanup
+				}
+			}
+		}
+
+		const { title, branchName } = parseTitleAndBranchWithDiagnostics(
+			requestId,
+			text,
+			{
+				...(options?.model ? { model: options.model } : {}),
+				generateBranch,
+				logError: (message, meta) => logger.error(message, meta),
+			},
+		);
+		// Throw on empty so the cascade falls through to the next attempt
+		// instead of treating a failed/empty kimi run as success.
+		if (!title) {
+			throw new Error("kimi title generation produced no title");
+		}
+		emitter.titleGenerated(requestId, title, branchName);
 	}
 
 	async listSlashCommands(

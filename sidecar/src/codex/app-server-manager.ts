@@ -11,26 +11,19 @@ import crypto from "node:crypto";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { ActiveTurnRegistry } from "./active-turn-registry.js";
-import type { AgentProxySettings } from "./agent-proxy.js";
-import {
-	CodexAppServer,
-	type JsonRpcNotification,
-	type JsonRpcRequest,
-} from "./codex-app-server.js";
-import { ensureCodexGoalsFeatureEnabled } from "./codex-config.js";
-import { SubAgentTracker } from "./codex-subagent-tracker.js";
-import { buildCodexStoredMeta } from "./context-usage.js";
-import type { SidecarEmitter } from "./emitter.js";
-import { resolveGitAccessDirectories } from "./git-access.js";
-import { parseImageRefs } from "./images.js";
-import { prependLinkedDirectoriesContext } from "./linked-directories-context.js";
-import { errorDetails, logger } from "./logger.js";
+import { ActiveTurnRegistry } from "../active-turn-registry.js";
+import type { AgentProxySettings } from "../agent-proxy.js";
+import { buildCodexStoredMeta } from "../context-usage.js";
+import type { SidecarEmitter } from "../emitter.js";
+import { resolveGitAccessDirectories } from "../git-access.js";
+import { parseImageRefs } from "../images.js";
+import { prependLinkedDirectoriesContext } from "../linked-directories-context.js";
+import { errorDetails, logger } from "../logger.js";
 import {
 	listProviderModels,
 	modelSupportsFastMode,
 	pickFastestCodexModel,
-} from "./model-catalog.js";
+} from "../model-catalog.js";
 import type {
 	CodexProviderConfig,
 	GenerateTitleOptions,
@@ -40,12 +33,19 @@ import type {
 	SessionManager,
 	SlashCommandInfo,
 	UserInputResolution,
-} from "./session-manager.js";
+} from "../session-manager.js";
 import {
 	buildTitlePrompt,
 	parseTitleAndBranchWithDiagnostics,
 	TITLE_GENERATION_TIMEOUT_MS,
-} from "./title.js";
+} from "../title.js";
+import {
+	CodexAppServer,
+	type JsonRpcNotification,
+	type JsonRpcRequest,
+} from "./app-server.js";
+import { ensureCodexGoalsFeatureEnabled } from "./config.js";
+import { SubAgentTracker } from "./subagent-tracker.js";
 
 /**
  * Resolve the path to the Codex native binary, used as the spawn target for

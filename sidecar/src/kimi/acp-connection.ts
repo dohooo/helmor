@@ -14,11 +14,8 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
-import {
-	ACP_PROTOCOL_VERSION,
-	type AcpInitializeResult,
-} from "./kimi-acp-types.js";
-import { errorDetails, logger } from "./logger.js";
+import { errorDetails, logger } from "../logger.js";
+import { ACP_PROTOCOL_VERSION, type AcpInitializeResult } from "./acp-types.js";
 
 interface PendingRequest {
 	method: string;
@@ -69,8 +66,11 @@ export function resolveKimiBinPath(): string {
 	const override = process.env.HELMOR_KIMI_BIN_PATH;
 	if (override) return override;
 	const binName = process.platform === "win32" ? "kimi.exe" : "kimi";
+	// This file lives at src/kimi/, so climb two levels to the sidecar root
+	// (src/kimi → src → sidecar) before descending into dist/vendor.
 	const staged = join(
 		dirname(fileURLToPath(import.meta.url)),
+		"..",
 		"..",
 		"dist",
 		"vendor",
