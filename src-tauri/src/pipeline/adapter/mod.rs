@@ -343,6 +343,7 @@ fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, Wo
                     content,
                     status: None,
                     streaming: if msg.is_streaming { Some(true) } else { None },
+                    source: None,
                 });
             }
             i += 1;
