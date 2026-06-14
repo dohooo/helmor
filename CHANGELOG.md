@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.39.0
+
+### Minor Changes
+
+- [#846](https://github.com/dohooo/helmor/pull/846) [`533228a`](https://github.com/dohooo/helmor/commit/533228a8a1278fe76abc9bbff14160b32c4a8270) Thanks [@natllian](https://github.com/natllian)! - Unify custom AI provider configuration across Claude Code, Codex, OpenCode, and MiMo Code.
+
+  - Configure multiple custom providers per agent in Settings — pick a built-in preset or add an OpenAI-compatible endpoint; models are auto-fetched from the endpoint with a manual fallback.
+  - Claude Code custom providers are now multi-slot, matching Codex, OpenCode, and MiMo Code.
+  - Pick which official and custom models appear in the composer's model picker; deselecting all of a provider hides its section.
+
+### Patch Changes
+
+- [#844](https://github.com/dohooo/helmor/pull/844) [`e8dbade`](https://github.com/dohooo/helmor/commit/e8dbade1bfd0600f98472c0b57fc96250d796c74) Thanks [@lncitador](https://github.com/lncitador)! - Fix Intel (x86_64) builds shipping an arm64 `helmor-sidecar`, which made the app fail to launch its sidecar with "Failed to start sidecar binary" / "bad CPU type in executable" on Intel Macs. The sidecar is now cross-compiled to the release target triple, and the bundle arch check covers it so the mismatch can't ship again.
+
 ## 0.38.0
 
 ### Minor Changes
