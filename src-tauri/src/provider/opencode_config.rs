@@ -165,8 +165,34 @@ fn read_custom_providers_at(path: &Path) -> Result<Vec<OpencodeCustomProvider>> 
             models: read_models(block.get("models")),
         });
     }
-    out.sort_by(|a, b| a.id.cmp(&b.id));
+    // Preserve the file's declaration order so a newly-appended provider lands
+    // last (serde_json's map sorts keys; the CST keeps file order).
+    let order = provider_key_order(&text);
+    out.sort_by_key(|p| {
+        order
+            .iter()
+            .position(|id| *id == p.id)
+            .unwrap_or(usize::MAX)
+    });
     Ok(out)
+}
+
+// Provider ids in the order they appear in the config file.
+fn provider_key_order(text: &str) -> Vec<String> {
+    let Ok(root) = CstRootNode::parse(text, &ParseOptions::default()) else {
+        return Vec::new();
+    };
+    let Some(provider_obj) = root
+        .object_value()
+        .and_then(|root_obj| root_obj.object_value("provider"))
+    else {
+        return Vec::new();
+    };
+    provider_obj
+        .properties()
+        .into_iter()
+        .filter_map(|prop| prop.name().and_then(|name| name.decoded_value().ok()))
+        .collect()
 }
 
 fn read_headers(
@@ -436,7 +462,7 @@ mod tests {
         upsert_custom_provider_at(&path, &sample()).unwrap();
         let read = read_custom_providers_at(&path).unwrap();
         let ids: Vec<&str> = read.iter().map(|p| p.id.as_str()).collect();
-        assert_eq!(ids, vec!["hundun", "other"]);
+        assert_eq!(ids, vec!["other", "hundun"], "file order preserved");
         let hundun = read.iter().find(|p| p.id == "hundun").unwrap();
         assert_eq!(hundun.base_url, "http://rmb.hundun.cn/v1");
         assert_eq!(hundun.name, "DeepSeek (Hundun)");
@@ -475,7 +501,11 @@ mod tests {
 
         let read = read_custom_providers_at(&path).unwrap();
         let ids: Vec<&str> = read.iter().map(|p| p.id.as_str()).collect();
-        assert_eq!(ids, vec!["custom", "deepseek"], "bare block skipped");
+        assert_eq!(
+            ids,
+            vec!["deepseek", "custom"],
+            "bare block skipped, file order preserved"
+        );
         let deepseek = read.iter().find(|p| p.id == "deepseek").unwrap();
         assert_eq!(deepseek.api_key, "sk-x");
         assert_eq!(deepseek.base_url, "", "preset block has no baseURL");

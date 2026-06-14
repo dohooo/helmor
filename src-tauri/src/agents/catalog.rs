@@ -78,7 +78,7 @@ pub fn static_model_sections() -> Vec<AgentModelSection> {
 pub fn full_catalog_sections() -> Vec<AgentModelSection> {
     model_sections_for_inputs(
         crate::provider::claude::configured_models(),
-        codex_custom_catalog_options(),
+        codex_custom_catalog_options(crate::provider::codex::load_providers()),
         load_cursor_prefs(),
         load_opencode_prefs(),
         load_mimo_prefs(),
@@ -181,14 +181,24 @@ fn codex_custom_sections(
 }
 
 /// Flat unfiltered list of every custom Codex model, for the Settings picker.
-fn codex_custom_catalog_options() -> Vec<AgentModelOption> {
+/// Custom models merge into the Codex section here, so each label is prefixed
+/// with its provider name (`Name · model`) — otherwise a custom `gpt-5.5` is
+/// indistinguishable from the official one. Mirrors OpenCode's labelling.
+fn codex_custom_catalog_options(
+    providers: Vec<crate::provider::CustomProvider>,
+) -> Vec<AgentModelOption> {
     let mut out = Vec::new();
-    for provider in crate::provider::codex::load_providers() {
+    for provider in providers {
         let instance_id = provider.id.trim();
         if instance_id.is_empty() || provider.base_url.trim().is_empty() {
             continue;
         }
         let provider_id = crate::provider::codex::provider_id(instance_id);
+        let prefix = if provider.name.trim().is_empty() {
+            instance_id
+        } else {
+            provider.name.trim()
+        };
         let mut seen = std::collections::HashSet::new();
         for model in &provider.models {
             let wire = model.slug.trim();
@@ -204,7 +214,7 @@ fn codex_custom_catalog_options() -> Vec<AgentModelOption> {
                 instance_id,
                 &provider_id,
                 wire,
-                model_label,
+                &format!("{prefix} · {model_label}"),
             ));
         }
     }
@@ -1088,6 +1098,23 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["gpt-5.4"]
         );
+    }
+
+    #[test]
+    fn codex_custom_catalog_options_prefixes_label_with_provider_name() {
+        // Merged into the Codex section, so the name prefix disambiguates a
+        // custom `gpt-5.5` from the official one.
+        let opts =
+            codex_custom_catalog_options(vec![codex_custom("hundun", "Hundun", &["gpt-5.5"])]);
+        assert_eq!(opts.len(), 1);
+        assert_eq!(opts[0].label, "Hundun · gpt-5.5");
+        assert_eq!(opts[0].id, "codex:hundun|gpt-5.5");
+    }
+
+    #[test]
+    fn codex_custom_catalog_options_prefix_falls_back_to_id() {
+        let opts = codex_custom_catalog_options(vec![codex_custom("hundun", "", &["gpt-5.5"])]);
+        assert_eq!(opts[0].label, "hundun · gpt-5.5");
     }
 
     #[test]
