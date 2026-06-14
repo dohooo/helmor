@@ -70,7 +70,7 @@ pub fn static_model_sections() -> Vec<AgentModelSection> {
             sections.insert(at + offset, section);
         }
     }
-    sections
+    drop_empty_sections(sections)
 }
 
 /// Full unfiltered catalog for the Settings "Models" multi-selects. Custom
@@ -92,7 +92,9 @@ fn load_enabled_model_ids(key: &str) -> Option<Vec<String>> {
         .flatten()
 }
 
-/// Filter the `claude`/`codex` sections by enabled ids, dropping empty ones.
+/// Apply each official family's enabled-id filter to its own section's options.
+/// `claude`/`codex` track separate enabled lists; other sections pass through.
+/// Sections left without models are hidden later by `drop_empty_sections`.
 fn apply_official_enabled_filter(
     sections: Vec<AgentModelSection>,
     claude_enabled: Option<&[String]>,
@@ -100,21 +102,27 @@ fn apply_official_enabled_filter(
 ) -> Vec<AgentModelSection> {
     sections
         .into_iter()
-        .filter_map(|mut section| {
-            let enabled = match section.id.as_str() {
-                "claude" => claude_enabled,
-                "codex" => codex_enabled,
-                _ => return Some(section),
-            };
-            section
-                .options
-                .retain(|opt| crate::provider::is_enabled(enabled, &opt.id));
-            if section.options.is_empty() {
-                None
-            } else {
-                Some(section)
+        .map(|mut section| {
+            match section.id.as_str() {
+                "claude" => section
+                    .options
+                    .retain(|opt| crate::provider::is_enabled(claude_enabled, &opt.id)),
+                "codex" => section
+                    .options
+                    .retain(|opt| crate::provider::is_enabled(codex_enabled, &opt.id)),
+                _ => {}
             }
+            section
         })
+        .collect()
+}
+
+/// Hide every section with no models, regardless of provider, so the composer
+/// never renders an empty group.
+fn drop_empty_sections(sections: Vec<AgentModelSection>) -> Vec<AgentModelSection> {
+    sections
+        .into_iter()
+        .filter(|section| !section.options.is_empty())
         .collect()
 }
 
@@ -1083,7 +1091,7 @@ mod tests {
     }
 
     #[test]
-    fn official_filter_keeps_subset_and_drops_empty_section() {
+    fn official_filter_keeps_enabled_subset() {
         let base = model_sections_for_inputs(Vec::new(), Vec::new(), None, None, None);
         let filtered = apply_official_enabled_filter(base, None, Some(&["gpt-5.5".to_string()]));
         let codex = filtered.iter().find(|s| s.id == "codex").unwrap();
@@ -1100,16 +1108,36 @@ mod tests {
     }
 
     #[test]
-    fn official_filter_empty_list_omits_section() {
+    fn official_filter_empty_list_empties_options() {
         let base = model_sections_for_inputs(Vec::new(), Vec::new(), None, None, None);
         let filtered = apply_official_enabled_filter(base, Some(&[]), None);
+        // The filter only empties options; hiding the now-empty section is
+        // `drop_empty_sections`' job (tested separately).
+        let claude = filtered.iter().find(|s| s.id == "claude").unwrap();
         assert!(
-            filtered.iter().all(|s| s.id != "claude"),
-            "claude hidden when enabled = []"
+            claude.options.is_empty(),
+            "claude emptied when enabled = []"
         );
-        assert!(
-            filtered.iter().any(|s| s.id == "codex"),
-            "codex stays (None = all)"
+        let codex = filtered.iter().find(|s| s.id == "codex").unwrap();
+        assert!(!codex.options.is_empty(), "codex untouched (None = all)");
+    }
+
+    #[test]
+    fn drop_empty_sections_hides_any_section_without_models() {
+        let section = |id: &str, options: Vec<AgentModelOption>| AgentModelSection {
+            id: id.to_string(),
+            label: id.to_string(),
+            status: AgentModelSectionStatus::Ready,
+            options,
+        };
+        let kept = drop_empty_sections(vec![
+            section("alpha", vec![codex_model("m1", "M1")]),
+            section("beta", Vec::new()),
+            section("gamma", vec![codex_model("m2", "M2")]),
+        ]);
+        assert_eq!(
+            kept.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["alpha", "gamma"],
         );
     }
 

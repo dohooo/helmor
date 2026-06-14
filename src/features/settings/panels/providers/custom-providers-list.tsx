@@ -1,6 +1,6 @@
 // The custom-providers editor for one family: a card per provider + an "Add" control.
 
-import { Box, ChevronDown, Plus } from "lucide-react";
+import { ChevronDown, Plus, SlidersHorizontal } from "lucide-react";
 import { useMemo } from "react";
 import { ProviderBrandIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
+	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
@@ -94,6 +95,18 @@ function AddProviderMenu({
 	onAddPreset: (preset: ProviderPreset) => void;
 	onAddCustom: () => void;
 }) {
+	// Claude endpoints speak Anthropic's API; every other family is OpenAI-style.
+	const customLabel =
+		adapter.family === "claude"
+			? "Custom (Anthropic-compatible)"
+			: "Custom (OpenAI-compatible)";
+	const customItem = (
+		<DropdownMenuItem onClick={onAddCustom} className="flex items-center gap-2">
+			<SlidersHorizontal className="size-4 text-muted-foreground" />
+			{customLabel}
+		</DropdownMenuItem>
+	);
+
 	if (adapter.presets.length === 0) {
 		return (
 			<Button
@@ -123,6 +136,9 @@ function AddProviderMenu({
 				</Button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="start" className="max-h-[320px] w-[300px]">
+				{/* Custom always leads — most prominent, family-agnostic. */}
+				{customItem}
+				<DropdownMenuSeparator />
 				{adapter.presets.map((preset) => (
 					<DropdownMenuItem
 						key={preset.key}
@@ -141,13 +157,6 @@ function AddProviderMenu({
 						/>
 					</DropdownMenuItem>
 				))}
-				<DropdownMenuItem
-					onClick={onAddCustom}
-					className="flex items-center gap-2"
-				>
-					<Box className="size-4 text-muted-foreground" />
-					Custom (OpenAI-compatible)
-				</DropdownMenuItem>
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);
