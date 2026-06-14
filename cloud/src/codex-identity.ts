@@ -61,7 +61,7 @@ interface EncEnvelope {
 /** ChatgptAuthTokens auth.json shape codex accepts (design §1 fact #2). The
  *  `refresh_token` is ALWAYS empty in the injected form. */
 export interface ChatgptAuthJson {
-	auth_mode: "chatgptauthtokens";
+	auth_mode: "chatgptAuthTokens";
 	tokens: {
 		id_token: string;
 		access_token: string;
@@ -419,7 +419,7 @@ function buildAuthJson(
 	accountId: string,
 ): ChatgptAuthJson {
 	return {
-		auth_mode: "chatgptauthtokens",
+		auth_mode: "chatgptAuthTokens",
 		tokens: {
 			id_token: idToken,
 			access_token: accessToken,

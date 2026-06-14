@@ -170,6 +170,36 @@ async function route(
 		env.HELMOR_SANDBOX_ID ?? "helmor-team-0",
 	);
 
+	// Admin/member op: restart the sandbox so the NEXT request cold-starts and
+	// re-mints the Codex auth.json — needed to apply a re-authorization or a
+	// broker change without waiting for an idle sleep. `stop()` is graceful;
+	// /workspace persists and the DB restores from R2 on the next cold start.
+	// Gated to an authenticated member (X-Helmor-Member-Id, set by
+	// deriveForwardedRequest) or the admin token.
+	if (url.pathname === "/admin/restart-sandbox") {
+		const authed =
+			forwarded.headers.get("X-Helmor-Member-Id") !== null ||
+			forwarded.headers.get("Authorization") ===
+				`Bearer ${env.HELMOR_COMPANION_TOKEN}`;
+		if (!authed) {
+			return new Response(
+				JSON.stringify({
+					code: "Unauthorized",
+					message: "member or admin token required",
+				}),
+				{ status: 401, headers: { "content-type": "application/json" } },
+			);
+		}
+		await sandbox.stop();
+		return new Response(
+			JSON.stringify({
+				ok: true,
+				message: "sandbox stopped; the next request cold-starts and re-mints",
+			}),
+			{ headers: { "content-type": "application/json" } },
+		);
+	}
+
 	try {
 		await ensureServe(sandbox, env, port);
 	} catch (error) {
