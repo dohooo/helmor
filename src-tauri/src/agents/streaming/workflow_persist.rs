@@ -286,6 +286,7 @@ mod tests {
                     parsed_content: serde_json::from_str(&content).ok(),
                     content,
                     created_at: r.get(3)?,
+                    author_id: None,
                 })
             })
             .unwrap()

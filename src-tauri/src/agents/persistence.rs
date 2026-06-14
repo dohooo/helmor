@@ -49,15 +49,19 @@ pub(super) fn persist_user_message(
     conn.execute(
         r#"
             INSERT INTO session_messages (
-              id, session_id, role, content, created_at, sent_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+              id, session_id, role, content, created_at, sent_at, author_id
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)
             "#,
         params![
             user_message_id,
             ctx.helmor_session_id,
             MessageRole::User,
             content,
-            now
+            now,
+            // Cloud rooms only — the human author's team member id. `None`
+            // binds SQL NULL, so the local/desktop path's row (and its
+            // pipeline snapshots) is unchanged.
+            ctx.author_id,
         ],
     )?;
     Ok(())
@@ -318,6 +322,7 @@ mod tests {
             model_id: "gpt-5.4".to_string(),
             model_provider: "codex".to_string(),
             user_message_id: "user-1".to_string(),
+            author_id: None,
         }
     }
 
@@ -369,7 +374,8 @@ mod tests {
                 role TEXT,
                 content TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                sent_at TEXT
+                sent_at TEXT,
+                author_id TEXT
             );
             "#,
         )

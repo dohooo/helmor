@@ -152,3 +152,27 @@ fn wire_format_error() {
         internal: true,
     }));
 }
+
+/// A team-room user message carries an `author`. When present it must
+/// serialize as a camelCase object with at least `id`, inside the
+/// `ThreadMessageLike` of an `Update` event — the wire shape the frontend
+/// reads to render the sender. Asserted directly (not snapshotted) so the
+/// presence + camelCase invariant is explicit and the existing single-user
+/// snapshots stay byte-identical.
+#[test]
+fn wire_format_update_includes_author_when_present() {
+    let message: ThreadMessageLike = serde_json::from_value(json!({
+        "id": "msg-1",
+        "role": "user",
+        "content": [],
+        "author": { "id": "member-42", "displayName": "Ada" },
+    }))
+    .expect("ThreadMessageLike with author parses");
+
+    let wire = to_value(AgentStreamEvent::Update {
+        messages: vec![message],
+    });
+    let author = &wire["messages"][0]["author"];
+    assert_eq!(author["id"], "member-42");
+    assert_eq!(author["displayName"], "Ada");
+}

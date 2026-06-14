@@ -108,6 +108,28 @@ fn user_prompt_wrapped() {
 }
 
 #[test]
+fn user_prompt_with_author_id_renders_author_end_to_end() {
+    // Full pipeline reload (the production `convert_historical` path) for a
+    // human-authored cloud-room prompt: a non-NULL `author_id` on the
+    // `HistoricalRecord` must surface as `ThreadMessageLike.author` with the
+    // member id, display fields left None (the frontend hydrates those). Not a
+    // normalized snapshot — `NormThreadMessage` drops `author`, so we assert
+    // the field directly.
+    let records = vec![user_prompt_with_author("u1", "hello team", "member-7")];
+    let rendered = MessagePipeline::convert_historical(&records);
+    assert_eq!(rendered.len(), 1);
+    let author = rendered[0].author.as_ref().expect("author populated");
+    assert_eq!(author.id, "member-7");
+    assert_eq!(author.display_name, None);
+    assert_eq!(author.avatar_url, None);
+
+    // The single-user path (no author_id) leaves author None, so the wire
+    // shape stays byte-identical to the pre-author pipeline.
+    let plain = MessagePipeline::convert_historical(&[user_prompt("u2", "hello team")]);
+    assert!(plain[0].author.is_none(), "no author_id ⇒ author omitted");
+}
+
+#[test]
 fn user_prompt_with_brace_content() {
     // Latent-bug regression: prompts that happened to start with `{` were
     // mis-rendered as system "Event" because the sniff classified them as

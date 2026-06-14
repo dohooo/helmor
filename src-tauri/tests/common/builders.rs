@@ -15,7 +15,17 @@ pub fn make_record(id: &str, role: &str, content: &str) -> HistoricalRecord {
         content: content.to_string(),
         parsed_content: serde_json::from_str::<Value>(content).ok(),
         created_at: "2026-04-06T00:00:00.000Z".to_string(),
+        author_id: None,
     }
+}
+
+/// A human-authored `user_prompt` row carrying a team member id — the
+/// multi-member cloud-room shape. Mirrors what `persist_user_message` writes
+/// when `ExchangeContext.author_id` is set.
+pub fn user_prompt_with_author(id: &str, text: &str, author_id: &str) -> HistoricalRecord {
+    let mut record = user_prompt(id, text);
+    record.author_id = Some(author_id.to_string());
+    record
 }
 
 pub fn assistant_json(id: &str, blocks: Value, extra: Option<Value>) -> HistoricalRecord {

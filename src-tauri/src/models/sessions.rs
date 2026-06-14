@@ -211,7 +211,8 @@ fn list_session_historical_records_windowed_with_connection(
                   sm.id,
                   sm.role,
                   sm.content,
-                  sm.created_at
+                  sm.created_at,
+                  sm.author_id
                 FROM session_messages sm
                 WHERE sm.session_id = ?1
                 ORDER BY sm.sent_at DESC, sm.rowid DESC
@@ -236,7 +237,8 @@ fn list_session_historical_records_windowed_with_connection(
               sm.id,
               sm.role,
               sm.content,
-              sm.created_at
+              sm.created_at,
+              sm.author_id
             FROM session_messages sm
             WHERE sm.session_id = ?1
             ORDER BY sm.sent_at ASC, sm.rowid ASC
@@ -265,6 +267,7 @@ fn map_historical_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoricalRec
         content,
         parsed_content,
         created_at: row.get(3)?,
+        author_id: row.get(4)?,
     })
 }
 

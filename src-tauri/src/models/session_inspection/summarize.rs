@@ -84,6 +84,7 @@ mod tests {
             content: content.to_string(),
             parsed_content: Some(content),
             created_at: "2026-05-25T00:00:00Z".to_string(),
+            author_id: None,
         }
     }
 
@@ -94,6 +95,7 @@ mod tests {
             content: raw.to_string(),
             parsed_content: serde_json::from_str(raw).ok(),
             created_at: "2026-05-25T00:00:00Z".to_string(),
+            author_id: None,
         }
     }
 

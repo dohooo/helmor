@@ -45,8 +45,8 @@ use labels::{
 };
 
 use super::types::{
-    ExtendedMessagePart, HistoricalRecord, IntermediateMessage, MessagePart, MessageRole,
-    MessageStatus, PlanAllowedPrompt, ThreadMessageLike,
+    ExtendedMessagePart, HistoricalRecord, IntermediateMessage, MessageAuthor, MessagePart,
+    MessageRole, MessageStatus, PlanAllowedPrompt, ThreadMessageLike,
 };
 
 // ---------------------------------------------------------------------------
@@ -182,6 +182,7 @@ pub fn convert_historical(records: &[HistoricalRecord]) -> Vec<ThreadMessageLike
             parsed: r.parsed_content.clone(),
             created_at: r.created_at.clone(),
             is_streaming: false,
+            author_id: r.author_id.clone(),
         })
         .collect();
     convert(&intermediate)
@@ -472,7 +473,11 @@ fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, Wo
                 content: parts.into_iter().map(ExtendedMessagePart::Basic).collect(),
                 status: None,
                 streaming: None,
-                author: None,
+                // Display fields stay None — the frontend hydrates them from
+                // the team member list. Only the human-typed prompt carries an
+                // author; agent output and local messages leave `author_id`
+                // None, so this stays None and the wire shape is unchanged.
+                author: author_from_id(msg.author_id.as_deref()),
             });
             i += 1;
             continue;
@@ -541,6 +546,20 @@ fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, Wo
     late_merge_unresolved_tool_results(messages, &mut result);
 
     (result, workflow_acc)
+}
+
+/// Build a `MessageAuthor` from a persisted member id. Display fields stay
+/// `None` — the sandbox SQLite stores only the member id (the D1 registry is
+/// the read-only mirror; the frontend hydrates display name / avatar from the
+/// team member list). Returns `None` when there's no author so the wire shape
+/// (and pipeline snapshots) for agent / local single-user messages is
+/// byte-identical to the pre-author pipeline.
+fn author_from_id(author_id: Option<&str>) -> Option<MessageAuthor> {
+    author_id.map(|id| MessageAuthor {
+        id: id.to_string(),
+        display_name: None,
+        avatar_url: None,
+    })
 }
 
 /// Translate Claude's `BetaMessage.stop_reason` into a unified

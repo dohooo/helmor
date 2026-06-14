@@ -95,6 +95,7 @@ pub fn replay_stream_events(provider: &str, events: &[Value]) -> StreamReplayFin
                 content: turn.content_json.clone(),
                 parsed_content: serde_json::from_str(&turn.content_json).ok(),
                 created_at: "2026-04-08T00:00:00.000Z".to_string(),
+                author_id: None,
             }
         })
         .collect();

@@ -103,6 +103,7 @@ impl MessagePipeline {
                 parsed: r.parsed_content.clone(),
                 created_at: r.created_at.clone(),
                 is_streaming: false,
+                author_id: r.author_id.clone(),
             })
             .collect();
         render_pipeline(&intermediate)

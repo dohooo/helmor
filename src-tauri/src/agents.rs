@@ -198,6 +198,13 @@ pub struct AgentSendRequest {
     /// text — this never alters the wire payload.
     #[serde(default)]
     pub pasted_texts: Option<Vec<crate::pipeline::types::PastedTextRange>>,
+    /// Team member id of the human who sent this prompt, in a multi-member
+    /// cloud room. NEVER client-asserted: the desktop IPC path leaves it
+    /// `None`, and the companion server OVERWRITES it from a trusted transport
+    /// header after deserialization (see `companion::stream::start_agent_stream`),
+    /// so a body-supplied value is ignored. `None` ⇒ no author persisted.
+    #[serde(default)]
+    pub author_id: Option<String>,
 }
 
 #[cfg(test)]
@@ -209,6 +216,10 @@ pub(crate) struct ExchangeContext {
     pub(crate) model_id: String,
     pub(crate) model_provider: String,
     pub(crate) user_message_id: String,
+    /// Team member id of the human who sent the prompt (cloud rooms only).
+    /// Persisted ONLY on the user-prompt row; agent output and error rows
+    /// carry no author. `None` on the local/desktop path.
+    pub(crate) author_id: Option<String>,
 }
 
 #[tauri::command]
@@ -856,6 +867,7 @@ mod tests {
             model_id: "opus-1m".to_string(),
             model_provider: "claude".to_string(),
             user_message_id: Uuid::new_v4().to_string(),
+            author_id: None,
         };
 
         // 1. Persist user message
@@ -929,6 +941,7 @@ mod tests {
             model_id: "opus-1m".to_string(),
             model_provider: "claude".to_string(),
             user_message_id: Uuid::new_v4().to_string(),
+            author_id: None,
         };
 
         persist_user_message(&conn, &ctx, "Hi", &[], &[], &[]).unwrap();
@@ -987,6 +1000,7 @@ mod tests {
             model_id: "opus-1m".to_string(),
             model_provider: "claude".to_string(),
             user_message_id: Uuid::new_v4().to_string(),
+            author_id: None,
         };
 
         // Persist user message
@@ -1058,6 +1072,7 @@ mod tests {
             model_id: "opus-1m".to_string(),
             model_provider: "claude".to_string(),
             user_message_id: "user-initial".to_string(),
+            author_id: None,
         };
 
         // 1. Initial prompt persisted via the normal path.

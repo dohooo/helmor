@@ -265,6 +265,9 @@ fn list_session_records(
             parsed_content: serde_json::from_str::<Value>(&content).ok(),
             content,
             created_at: row.get(3)?,
+            // Session inspection summarizes content only — author identity is
+            // not part of the summary, so it's left unset here.
+            author_id: None,
         })
     })?;
     let mut records = rows.collect::<std::result::Result<Vec<_>, _>>()?;

@@ -299,6 +299,7 @@ fn part_id_roundtrips_through_historical_reload() {
         content: turn.content_json.clone(),
         parsed_content: serde_json::from_str(&turn.content_json).ok(),
         created_at: "2026-04-20T00:00:00.000Z".to_string(),
+        author_id: None,
     };
     let historical = MessagePipeline::convert_historical(&[record]);
     let historical_reasoning_id =
@@ -389,6 +390,7 @@ fn multi_assistant_event_same_msgid_no_duplicate_part_ids() {
         content: turn.content_json.clone(),
         parsed_content: serde_json::from_str(&turn.content_json).ok(),
         created_at: "2026-04-20T00:00:00.000Z".to_string(),
+        author_id: None,
     };
     let historical = MessagePipeline::convert_historical(&[record]);
     let hist_ids = collect_all_part_ids(&historical);
@@ -431,6 +433,7 @@ fn codex_reasoning_id_roundtrips_through_historical_reload() {
         content: turn.content_json.clone(),
         parsed_content: serde_json::from_str(&turn.content_json).ok(),
         created_at: "2026-04-20T00:00:00.000Z".to_string(),
+        author_id: None,
     };
     let historical = MessagePipeline::convert_historical(&[record]);
     let hist_id = last_reasoning_id(&historical).expect("reasoning present on historical reload");

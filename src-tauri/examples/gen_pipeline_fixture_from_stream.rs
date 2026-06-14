@@ -57,6 +57,7 @@ fn run(provider: &str, stream_jsonl: &str, fixture_name: &str) -> Result<()> {
                 content: turn.content_json.clone(),
                 parsed_content: serde_json::from_str(&turn.content_json).ok(),
                 created_at: "2026-01-01T00:00:00.000Z".to_string(),
+                author_id: None,
             }
         })
         .collect();

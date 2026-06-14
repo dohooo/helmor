@@ -572,6 +572,11 @@ pub struct IntermediateMessage {
     pub parsed: Option<Value>,
     pub created_at: String,
     pub is_streaming: bool,
+    /// Team member id for a human-authored message in a multi-member cloud
+    /// room. `None` for agent output and local single-user messages. Carried
+    /// from `HistoricalRecord` so the adapter can stamp the rendered user
+    /// bubble's `author`.
+    pub author_id: Option<String>,
 }
 
 /// A single turn collected from the CLI stream output, used for DB persistence.
@@ -604,6 +609,10 @@ pub struct HistoricalRecord {
     pub content: String,
     pub parsed_content: Option<Value>,
     pub created_at: String,
+    /// Team member id persisted on a human-authored message (the
+    /// `session_messages.author_id` column). `None` for agent output and
+    /// local single-user messages.
+    pub author_id: Option<String>,
 }
 
 /// Token usage counters from an agent invocation.

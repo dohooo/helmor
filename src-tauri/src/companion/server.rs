@@ -23,6 +23,31 @@ use tower_http::cors::{Any, CorsLayer};
 use super::{auth, Verifier};
 use crate::error::CommandError;
 
+/// Trusted transport header carrying the authenticated team member id. Set by
+/// the edge (CF Worker / reverse proxy) after it authenticates the caller — the
+/// browser cannot forge it across origins, and we OVERWRITE any body-supplied
+/// `authorId` with this value so identity is never client-asserted.
+///
+/// SECURITY (enforced at the edge in P3.3): the edge MUST delete any
+/// client-supplied copy of this header on the inbound request before setting
+/// its own derived value — this handler trusts whatever arrives here. The
+/// container has no public ingress except through the edge (which holds the
+/// shared companion token), so a client cannot reach this handler directly to
+/// inject the header.
+const MEMBER_ID_HEADER: &str = "x-helmor-member-id";
+
+/// Pull the server-derived member id out of the trusted header. Returns `None`
+/// when absent or non-ASCII, so a malformed header degrades to "no author"
+/// rather than poisoning persistence.
+fn trusted_member_id(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(MEMBER_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+}
+
 /// Resolves a request path to embedded SPA bytes + MIME type. Type-erased so
 /// the HTTP layer stays runtime-agnostic (the Tauri `AssetResolver` is captured
 /// behind this closure in [`super::CompanionState::start`]); this also lets the
@@ -33,16 +58,28 @@ pub type AssetLoader = Arc<dyn Fn(&str) -> Option<(Vec<u8>, String)> + Send + Sy
 /// `subscribe_ui_mutations`): given the command name + args, feeds each event as
 /// an NDJSON line into the sender. Type-erased so the server stays
 /// runtime-agnostic; built from a concrete `AppHandle` in [`super::stream`].
-pub type StreamStarter =
-    Arc<dyn Fn(&str, Value, UnboundedSender<String>) -> Result<(), CommandError> + Send + Sync>;
+///
+/// `author_id` is the server-derived team member id (from the trusted
+/// `X-Helmor-Member-Id` header). It is passed separately — never read from the
+/// request body — so a client cannot assert another member's identity.
+pub type StreamStarter = Arc<
+    dyn Fn(&str, Value, Option<String>, UnboundedSender<String>) -> Result<(), CommandError>
+        + Send
+        + Sync,
+>;
 
 /// Dispatches a non-streaming `/rpc/{cmd}` call to the real Tauri command behind
 /// the concrete `AppHandle` (so commands needing `State`/`AppHandle` work).
 /// Type-erased so the server stays runtime-agnostic; built in
-/// [`super::rpc::build_dispatcher`]. Takes owned `(cmd, args)` so the returned
-/// future is `'static`.
+/// [`super::rpc::build_dispatcher`]. Takes owned `(cmd, args, author_id)` so the
+/// returned future is `'static`; `author_id` is the server-derived member id
+/// from the trusted `X-Helmor-Member-Id` header (never client-asserted).
 pub type Dispatcher = Arc<
-    dyn Fn(String, Value) -> futures::future::BoxFuture<'static, Result<Value, CommandError>>
+    dyn Fn(
+            String,
+            Value,
+            Option<String>,
+        ) -> futures::future::BoxFuture<'static, Result<Value, CommandError>>
         + Send
         + Sync,
 >;
@@ -123,7 +160,8 @@ async fn rpc_handler(
         }
     };
 
-    match (state.dispatcher)(cmd, args).await {
+    let author_id = trusted_member_id(&headers);
+    match (state.dispatcher)(cmd, args, author_id).await {
         Ok(value) => Json(value).into_response(),
         Err(command_error) => {
             // `CommandError` serialises as { code, message } — the same shape
@@ -167,8 +205,9 @@ async fn rpc_stream_handler(
         }
     };
 
+    let author_id = trusted_member_id(&headers);
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    match (state.streamer)(&cmd, args, tx) {
+    match (state.streamer)(&cmd, args, author_id, tx) {
         Ok(()) => {
             let stream = UnboundedReceiverStream::new(rx).map(|line| {
                 Ok::<Bytes, std::convert::Infallible>(Bytes::from(format!("{line}\n")))

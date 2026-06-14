@@ -256,6 +256,7 @@ pub(super) fn stream_via_sidecar(
     let permission_mode_initial = request.permission_mode.clone();
     let fast_mode = request.fast_mode.unwrap_or(false);
     let user_message_id_copy = request.user_message_id.clone();
+    let author_id_copy = request.author_id.clone();
     let files_copy = request.files.clone().unwrap_or_default();
     let images_copy = request.images.clone().unwrap_or_default();
     let pasted_texts_copy = request.pasted_texts.clone().unwrap_or_default();
@@ -315,6 +316,8 @@ pub(super) fn stream_via_sidecar(
                 user_message_id: user_message_id_copy
                     .clone()
                     .unwrap_or_else(|| Uuid::new_v4().to_string()),
+                // Server-derived in the companion path; None on desktop IPC.
+                author_id: author_id_copy.clone(),
             };
 
             match crate::models::db::write_conn() {

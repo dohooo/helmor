@@ -23,10 +23,16 @@ use crate::error::CommandError;
 /// runtime-generic server holds a single entry point (mirrors
 /// [`super::build_stream_starter`]).
 pub fn build_dispatcher(app: tauri::AppHandle) -> Dispatcher {
-    std::sync::Arc::new(move |command: String, args: Value| {
-        let app = app.clone();
-        async move { dispatch(&app, &command, args).await }.boxed()
-    })
+    std::sync::Arc::new(
+        move |command: String, args: Value, _author_id: Option<String>| {
+            let app = app.clone();
+            // `_author_id` is the trusted member id from `X-Helmor-Member-Id`. No
+            // non-streaming RPC persists a user-prompt today (the streaming
+            // `send_agent_message_stream` path owns author attribution), so it's
+            // threaded for parity but intentionally unused here.
+            async move { dispatch(&app, &command, args).await }.boxed()
+        },
+    )
 }
 
 /// Dispatch a single RPC call. `args` is the parsed JSON request body (or

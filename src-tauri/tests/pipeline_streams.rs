@@ -194,6 +194,7 @@ fn build_historical_snapshot(pipeline: &MessagePipeline) -> HistoricalRenderSnap
                 content: turn.content_json.clone(),
                 parsed_content: serde_json::from_str(&turn.content_json).ok(),
                 created_at: "2026-04-08T00:00:00.000Z".to_string(),
+                author_id: None,
             }
         })
         .collect();

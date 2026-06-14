@@ -433,6 +433,8 @@ pub(super) fn build_partial_from_blocks(
         raw_json: serde_json::to_string(&parsed).unwrap_or_default(),
         parsed: Some(parsed),
         created_at,
+        // Live streaming partials never carry a human author.
+        author_id: None,
         is_streaming: true,
     })
 }
@@ -526,6 +528,8 @@ pub(super) fn build_materialized_partial_from_blocks(
         raw_json: serde_json::to_string(&parsed).unwrap_or_default(),
         parsed: Some(parsed),
         created_at,
+        // Materialized partials are agent output — no human author.
+        author_id: None,
         is_streaming: false,
     })
 }
@@ -580,6 +584,8 @@ pub(super) fn build_partial_fallback(
         raw_json: serde_json::to_string(&parsed).unwrap_or_default(),
         parsed: Some(parsed),
         created_at,
+        // Live streaming partials never carry a human author.
+        author_id: None,
         is_streaming: true,
     }
 }
@@ -632,6 +638,8 @@ pub(super) fn build_materialized_partial_fallback(
         raw_json: serde_json::to_string(&parsed).unwrap_or_default(),
         parsed: Some(parsed),
         created_at,
+        // Materialized partials are agent output — no human author.
+        author_id: None,
         is_streaming: false,
     })
 }

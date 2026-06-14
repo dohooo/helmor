@@ -166,6 +166,7 @@ fn load_session_records(session_id: &str) -> Result<Vec<HistoricalRecord>> {
             content,
             parsed_content,
             created_at,
+            author_id: None,
         });
     }
 

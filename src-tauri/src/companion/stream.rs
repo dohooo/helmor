@@ -25,13 +25,18 @@ use crate::ui_sync::{UiMutationEvent, UiSyncManager};
 /// command name so the server holds a single type-erased entry point.
 pub fn build_stream_starter(app: tauri::AppHandle) -> StreamStarter {
     Arc::new(
-        move |command: &str, args: Value, tx: UnboundedSender<String>| match command {
-            "send_agent_message_stream" => start_agent_stream(&app, args, tx),
-            "subscribe_ui_mutations" => start_ui_subscription(&app, args, tx),
-            "subscribe_session_stream" => start_session_stream_subscription(&app, args, tx),
-            other => Err(CommandError::from(anyhow::anyhow!(
-                "No companion stream for command: {other}"
-            ))),
+        move |command: &str,
+              args: Value,
+              author_id: Option<String>,
+              tx: UnboundedSender<String>| {
+            match command {
+                "send_agent_message_stream" => start_agent_stream(&app, args, author_id, tx),
+                "subscribe_ui_mutations" => start_ui_subscription(&app, args, tx),
+                "subscribe_session_stream" => start_session_stream_subscription(&app, args, tx),
+                other => Err(CommandError::from(anyhow::anyhow!(
+                    "No companion stream for command: {other}"
+                ))),
+            }
         },
     )
 }
@@ -49,16 +54,30 @@ fn ndjson_channel<T>(tx: UnboundedSender<String>) -> Channel<T> {
     })
 }
 
+/// Deserialize the agent-send request and stamp the SERVER-DERIVED `author_id`
+/// onto it, OVERWRITING any body-supplied `authorId` so a client can never
+/// assert another member's identity (the hard "never client-asserted" rule).
+/// Absent header ⇒ `author_id` is `None` ⇒ no author persisted (the
+/// local/desktop path). `api.ts` sends `{ request, onEvent }`; the shim strips
+/// the channel, leaving `{ request }` — accept either the wrapped or bare object.
+fn resolve_request(
+    args: Value,
+    author_id: Option<String>,
+) -> Result<AgentSendRequest, CommandError> {
+    let request_value = args.get("request").cloned().unwrap_or(args);
+    let mut request: AgentSendRequest = serde_json::from_value(request_value)
+        .map_err(|e| CommandError::from(anyhow::anyhow!("Invalid send request: {e}")))?;
+    request.author_id = author_id;
+    Ok(request)
+}
+
 fn start_agent_stream(
     app: &tauri::AppHandle,
     args: Value,
+    author_id: Option<String>,
     tx: UnboundedSender<String>,
 ) -> Result<(), CommandError> {
-    // `api.ts` sends `{ request, onEvent }`; the shim strips the channel,
-    // leaving `{ request }`. Accept either the wrapped or bare object.
-    let request_value = args.get("request").cloned().unwrap_or(args);
-    let request: AgentSendRequest = serde_json::from_value(request_value)
-        .map_err(|e| CommandError::from(anyhow::anyhow!("Invalid send request: {e}")))?;
+    let request = resolve_request(args, author_id)?;
 
     let channel = ndjson_channel::<AgentStreamEvent>(tx);
     let app = app.clone();
@@ -129,4 +148,39 @@ fn start_session_stream_subscription(
             .unsubscribe(&session_id, &subscription_id);
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod resolve_request_tests {
+    use super::resolve_request;
+    use serde_json::json;
+
+    fn body(author: Option<&str>) -> serde_json::Value {
+        let mut req = json!({ "provider": "codex", "modelId": "gpt-5.5", "prompt": "hi" });
+        if let Some(a) = author {
+            req["authorId"] = json!(a);
+        }
+        json!({ "request": req })
+    }
+
+    #[test]
+    fn trusted_header_overwrites_body_author_id() {
+        // Client forges authorId in the body; the server-derived header wins.
+        let request =
+            resolve_request(body(Some("evil-client-id")), Some("trusted-7".to_string())).unwrap();
+        assert_eq!(request.author_id.as_deref(), Some("trusted-7"));
+    }
+
+    #[test]
+    fn absent_header_drops_body_author_id_to_none() {
+        // No trusted header ⇒ a body-supplied authorId must NOT survive.
+        let request = resolve_request(body(Some("evil-client-id")), None).unwrap();
+        assert_eq!(request.author_id, None);
+    }
+
+    #[test]
+    fn header_sets_author_when_body_omits_it() {
+        let request = resolve_request(body(None), Some("member-1".to_string())).unwrap();
+        assert_eq!(request.author_id.as_deref(), Some("member-1"));
+    }
 }

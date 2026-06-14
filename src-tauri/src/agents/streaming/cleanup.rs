@@ -199,6 +199,7 @@ mod tests {
             model_id: "opus".to_string(),
             model_provider: "claude".to_string(),
             user_message_id: "user-1".to_string(),
+            author_id: None,
         }
     }
 
