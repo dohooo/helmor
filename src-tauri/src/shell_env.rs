@@ -335,9 +335,18 @@ mod unix {
             // Simulate: login shell has /opt/homebrew/bin:/usr/bin
             // Current process has /usr/bin:/plugin/bin
             // Result should be: /opt/homebrew/bin:/usr/bin:/plugin/bin
+            let original_path = std::env::var("PATH").ok();
             unsafe { std::env::set_var("PATH", "/usr/bin:/plugin/bin") };
             merge_path("/opt/homebrew/bin:/usr/bin");
             let result = std::env::var("PATH").unwrap();
+            // Restore PATH before asserting — leaving the mutated PATH
+            // behind breaks any later test that spawns shell commands
+            // (macOS keeps `sleep` etc. in /bin, which the mutated PATH
+            // lacks, so spawned `sh -c` scripts exit 127).
+            match original_path {
+                Some(p) => unsafe { std::env::set_var("PATH", p) },
+                None => unsafe { std::env::remove_var("PATH") },
+            }
             assert!(result.starts_with("/opt/homebrew/bin:/usr/bin"));
             assert!(result.contains("/plugin/bin"));
             // /usr/bin should appear only once

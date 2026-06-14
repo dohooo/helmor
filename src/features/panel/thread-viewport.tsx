@@ -25,7 +25,13 @@ import { useSessionThreadPagination } from "@/lib/session-thread-pagination";
 import { useSettings } from "@/lib/settings";
 import type { WorkspaceScriptType } from "@/lib/workspace-script-actions";
 import { isShellResizing, onShellResize } from "@/shell/hooks/use-panels";
-import { EmptyState, MemoConversationMessage } from "./message-components";
+import {
+	consumeAnchoredToggle,
+	EmptyState,
+	MemoConversationMessage,
+	resetAnchoredToggle,
+	UserMessageExpansionProvider,
+} from "./message-components";
 import { useEscapeBottomLock } from "./thread-viewport/use-escape-bottom-lock";
 import { useStreamingIndicatorSync } from "./thread-viewport/use-streaming-indicator-sync";
 
@@ -60,13 +66,52 @@ export function resolveConversationRowHeight({
 	return measuredHeight ?? estimatedHeight;
 }
 
+// Floor for the Tauri stable-bottom tail window. Kept small on purpose: near the
+// bottom, visibleRows mounts this tail UNIONED with the regular scroll window, so
+// a giant row sitting above the window stays unmounted and the switch commit only
+// builds the visible region's DOM (the old 6x full-mount built thousands of
+// off-screen nodes per switch — that was the bulk of the switch jank). The small
+// mount is flash-free because the height estimator is now accurate (tab-normalized
+// pretext measurement): the bottom anchor lands on the right row without mounting
+// everything to force a measurement, and the union guarantees a scroll-up within
+// the zone never exposes unmounted rows.
+export function resolveStableBottomTailHeight(viewportHeight: number): number {
+	const effectiveHeight =
+		viewportHeight > 0 ? viewportHeight : PROGRESSIVE_VIEWPORT_DEFAULT_HEIGHT;
+	return effectiveHeight * 1.5;
+}
+
+// How long after a session switch the viewport stays in its "initial settle"
+// regime. Within it, measurement corrections commit at urgent priority and the
+// true bottom is re-pinned pre-paint on every height wave (a late measure — e.g.
+// a giant visible row landing its real height, or async fonts/highlighting): the
+// deferred flip lets the estimate-positioned first layout and each correction
+// wave PAINT as distinct frames (the old synchronous switch commit hid them),
+// which reads as the list flashing through several regions. With an accurate
+// estimator this is a no-op for light sessions and only fires for the rare giant
+// visible row. Ends early on the first real user scroll.
+export const INITIAL_SETTLE_WINDOW_MS = 1000;
+
+// Measurement-correction commit priority: urgent while the initial settle is
+// active (so the corrected layout paints first) and for the streaming row
+// (whose height `useStickToBottom` must observe in step); transition
+// otherwise, exactly as before.
+export function shouldCommitMeasurementUrgently(
+	isStreamingRow: boolean,
+	initialSettleActive: boolean,
+): boolean {
+	return isStreamingRow || initialSettleActive;
+}
+
 export function ActiveThreadViewport({
 	hasSession,
+	workspaceName = null,
 	pane,
 	missingScriptTypes = [],
 	onInitializeScript,
 }: {
 	hasSession: boolean;
+	workspaceName?: string | null;
 	pane: PresentedSessionPane;
 	missingScriptTypes?: WorkspaceScriptType[];
 	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
@@ -137,6 +182,7 @@ export function ActiveThreadViewport({
 			<div className="relative z-10 flex min-h-0 min-w-0 flex-1">
 				<ChatThread
 					hasSession={hasSession}
+					workspaceName={workspaceName}
 					messages={pane.messages}
 					missingScriptTypes={missingScriptTypes}
 					onInitializeScript={onInitializeScript}
@@ -152,6 +198,7 @@ export function ActiveThreadViewport({
 function ChatThread({
 	messages,
 	hasSession,
+	workspaceName,
 	missingScriptTypes,
 	onInitializeScript,
 	paneWidth,
@@ -160,6 +207,7 @@ function ChatThread({
 }: {
 	messages: ThreadMessageLike[];
 	hasSession: boolean;
+	workspaceName: string | null;
 	missingScriptTypes: WorkspaceScriptType[];
 	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
 	paneWidth: number;
@@ -357,37 +405,40 @@ function ChatThread({
 
 	return (
 		<HelmorProfiler id="ChatThread">
-			<ConversationViewport
-				contentRef={contentRef}
-				data={threadMessages}
-				fontSize={settings.chatFontSize}
-				hasSession={hasSession}
-				itemContent={itemContent}
-				missingScriptTypes={missingScriptTypes}
-				onInitializeScript={onInitializeScript}
-				paneWidth={paneWidth}
-				pinTailRows={pinTailRows}
-				prologueSlot={loadEarlierBanner}
-				scrollRef={handleScrollRef}
-				sessionId={sessionId}
-				sending={sending}
-				sendingStartTime={sendingStartTime}
-				stopScroll={stopScroll}
-				usePlainThread={usePlainThread}
-			>
-				<Button
-					type="button"
-					variant="ghost"
-					size="icon-sm"
-					onClick={() => {
-						scrollToBottom("instant");
-					}}
-					className={`conversation-scroll-button ${isAtBottom || sendingJustStarted ? "conversation-scroll-button-hidden" : ""}`}
-					aria-label="Scroll to latest message"
+			<UserMessageExpansionProvider sessionId={sessionId}>
+				<ConversationViewport
+					contentRef={contentRef}
+					data={threadMessages}
+					fontSize={settings.chatFontSize}
+					hasSession={hasSession}
+					workspaceName={workspaceName}
+					itemContent={itemContent}
+					missingScriptTypes={missingScriptTypes}
+					onInitializeScript={onInitializeScript}
+					paneWidth={paneWidth}
+					pinTailRows={pinTailRows}
+					prologueSlot={loadEarlierBanner}
+					scrollRef={handleScrollRef}
+					sessionId={sessionId}
+					sending={sending}
+					sendingStartTime={sendingStartTime}
+					stopScroll={stopScroll}
+					usePlainThread={usePlainThread}
 				>
-					<ArrowDown className="size-4" strokeWidth={2} />
-				</Button>
-			</ConversationViewport>
+					<Button
+						type="button"
+						variant="ghost"
+						size="icon-sm"
+						onClick={() => {
+							scrollToBottom("instant");
+						}}
+						className={`conversation-scroll-button ${isAtBottom || sendingJustStarted ? "conversation-scroll-button-hidden" : ""}`}
+						aria-label="Scroll to latest message"
+					>
+						<ArrowDown className="size-4" strokeWidth={2} />
+					</Button>
+				</ConversationViewport>
+			</UserMessageExpansionProvider>
 		</HelmorProfiler>
 	);
 }
@@ -398,6 +449,7 @@ function ConversationViewport({
 	data,
 	fontSize,
 	hasSession,
+	workspaceName,
 	itemContent,
 	missingScriptTypes,
 	onInitializeScript,
@@ -416,6 +468,7 @@ function ConversationViewport({
 	data: RenderedMessage[];
 	fontSize: number;
 	hasSession: boolean;
+	workspaceName: string | null;
 	itemContent: (index: number, message: RenderedMessage) => ReactNode;
 	missingScriptTypes: WorkspaceScriptType[];
 	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
@@ -449,6 +502,7 @@ function ConversationViewport({
 		<div className="flex min-h-full flex-1 items-center justify-center px-8">
 			<EmptyState
 				hasSession={hasSession}
+				workspaceName={workspaceName}
 				missingScriptTypes={missingScriptTypes}
 				onInitializeScript={onInitializeScript}
 			/>
@@ -561,7 +615,6 @@ function ProgressiveConversationViewport({
 	stopScroll: () => void;
 	streamingIndicatorStartTime?: number;
 }) {
-	const isTauri = true;
 	const [committedScrollState, setCommittedScrollState] = useState({
 		scrollTop: 0,
 		viewportHeight: 0,
@@ -592,6 +645,11 @@ function ProgressiveConversationViewport({
 	// remeasure. Within a session the message refs are stable, so the
 	// ResizeObserver naturally reports new heights after the DOM reflows.
 	const [lastSessionId, setLastSessionId] = useState(sessionId);
+	const initialSettleAtRef = useRef<number | null>(null);
+	if (initialSettleAtRef.current === null) {
+		// Fresh mounts settle too (first open of a pane).
+		initialSettleAtRef.current = performance.now();
+	}
 	if (lastSessionId !== sessionId) {
 		setLastSessionId(sessionId);
 		setCommittedScrollState({ scrollTop: 0, viewportHeight: 0 });
@@ -599,7 +657,11 @@ function ProgressiveConversationViewport({
 		initialScrollAppliedRef.current = false;
 		hasUserScrolledRef.current = false;
 		isUserScrollingRef.current = false;
+		initialSettleAtRef.current = performance.now();
 		deferredMeasuredHeightsRef.current = {};
+		// A mark from the previous session must not suppress a legit
+		// compensation here (message ids could collide across panes).
+		resetAnchoredToggle();
 		if (scrollIdleTimerRef.current !== null) {
 			window.clearTimeout(scrollIdleTimerRef.current);
 			scrollIdleTimerRef.current = null;
@@ -645,11 +707,12 @@ function ProgressiveConversationViewport({
 					nextViewportHeight - current.viewportHeight,
 				);
 				const isScrollingUp = nextScrollTop < current.scrollTop;
-				const commitThreshold = isTauri
-					? isScrollingUp
-						? Math.max(24, Math.floor(buffer / 8))
-						: Math.max(96, Math.floor(buffer / 3))
-					: buffer / 2;
+				// Asymmetric hysteresis: commit a scroll-up sooner (cheaper
+				// threshold) so the tail union never exposes unmounted rows
+				// mid-scroll; a scroll-down can wait for a larger delta.
+				const commitThreshold = isScrollingUp
+					? Math.max(24, Math.floor(buffer / 8))
+					: Math.max(96, Math.floor(buffer / 3));
 				if (scrollDelta < commitThreshold && viewportDelta < 8) {
 					return current;
 				}
@@ -700,7 +763,7 @@ function ProgressiveConversationViewport({
 			scrollParent.removeEventListener("scroll", scheduleCommit);
 			observer?.disconnect();
 		};
-	}, [flushDeferredMeasuredHeights, isTauri, scrollParent]);
+	}, [flushDeferredMeasuredHeights, scrollParent]);
 
 	// Flush row heights deferred during shell resize once the drag ends.
 	useEffect(() => {
@@ -810,17 +873,30 @@ function ProgressiveConversationViewport({
 		0,
 		totalRowsHeight - (effectiveScrollTop + effectiveViewportHeight),
 	);
+	// The stable-bottom zone (4x) stays WIDER than the tail floor (1.5x) so that
+	// on scroll-up within the zone the scroll-window clamp — not the tail — is the
+	// binding constraint in the union below (locked by the scroll-up union test).
 	const tauriStableBottomZoneHeight = effectiveViewportHeight * 4;
-	const tauriStableBottomTailHeight = effectiveViewportHeight * 6;
+	const tauriStableBottomTailHeight =
+		resolveStableBottomTailHeight(viewportHeight);
 	const visibleRows = useMemo(
 		() =>
 			measureSync(
 				"viewport:visible-rows",
 				() => {
-					if (isTauri && distanceFromBottom <= tauriStableBottomZoneHeight) {
-						const tailWindowTop = Math.max(
-							0,
-							totalRowsHeight - tauriStableBottomTailHeight,
+					// Two exclusive mount modes keep the "hold the bottom" paths from
+					// overlapping: near the bottom (within the zone) → bottom tail UNION
+					// the scroll window; scrolled far up → the regular window plus the
+					// streaming pinTailRows append. (The settle pin is orthogonal — it
+					// moves scrollTop, not which rows mount.)
+					if (distanceFromBottom <= tauriStableBottomZoneHeight) {
+						// Bottom-anchored tail (cheap: a giant row sitting above the
+						// window stays unmounted) UNION the regular scroll window, so a
+						// scroll-up within the stable-bottom zone can never expose
+						// unmounted rows — the tail alone is narrower than the zone.
+						const tailWindowTop = Math.min(
+							Math.max(0, totalRowsHeight - tauriStableBottomTailHeight),
+							windowTop,
 						);
 						return rows.filter((row) => row.top + row.height >= tailWindowTop);
 					}
@@ -859,9 +935,9 @@ function ProgressiveConversationViewport({
 			buffer,
 			distanceFromBottom,
 			effectiveViewportHeight,
-			isTauri,
 			pinTailRows,
 			rows,
+			tauriStableBottomTailHeight,
 			totalRowsHeight,
 			windowBottom,
 			windowTop,
@@ -892,16 +968,48 @@ function ProgressiveConversationViewport({
 		initialScrollAppliedRef.current = true;
 	}, [scrollParent, totalContentHeight]);
 
+	const isInitialSettleActive = useCallback(
+		() =>
+			!hasUserScrolledRef.current &&
+			performance.now() - (initialSettleAtRef.current ?? 0) <
+				INITIAL_SETTLE_WINDOW_MS,
+		[],
+	);
+
 	useLayoutEffect(() => {
-		if (!scrollParent || pendingScrollAdjustmentRef.current === 0) {
+		if (!scrollParent) {
 			return;
 		}
 
+		// Initial-settle regime: hold the TRUE bottom through the expansion
+		// and measurement waves before anything paints. Pinned absolutely so
+		// the per-row adjustments below can't fight it. The scrollHeight
+		// guard skips environments without layout (jsdom), where the "true
+		// bottom" would read as 0 and fight the initial-scroll effect.
+		if (isInitialSettleActive() && scrollParent.scrollHeight > 0) {
+			const target = Math.max(
+				0,
+				scrollParent.scrollHeight - scrollParent.clientHeight,
+			);
+			if (Math.abs(scrollParent.scrollTop - target) > 1) {
+				scrollParent.scrollTop = target;
+			}
+			// The absolute settle pin supersedes any per-row delta queued by
+			// handleHeightChange — drop it so the two paths can't double-apply.
+			pendingScrollAdjustmentRef.current = 0;
+			return;
+		}
+
+		if (pendingScrollAdjustmentRef.current === 0) {
+			return;
+		}
 		if (!hasUserScrolledRef.current) {
 			scrollParent.scrollTop += pendingScrollAdjustmentRef.current;
 		}
 		pendingScrollAdjustmentRef.current = 0;
-	}, [rows, scrollParent]);
+		// visibleRows (not rows): the expansion wave widens the window without
+		// touching the row model, and the pin must land in that very commit.
+	}, [isInitialSettleActive, scrollParent, totalContentHeight, visibleRows]);
 
 	const handleHeightChange = useCallback(
 		(rowKey: string, nextHeight: number) => {
@@ -918,13 +1026,17 @@ function ProgressiveConversationViewport({
 				return;
 			}
 
+			// One-shot: the expand/collapse anchor already offset the scroller
+			// for this row's height change — compensating below too would
+			// double-apply the delta.
+			const anchoredToggle = consumeAnchoredToggle(row.message.id);
+
 			// Defer during shell resize too: each visible row's RO fires per frame
 			// as the main pane width changes, and committing all of them would
 			// thrash React. Same buffered path as user-scrolling.
 			if (
-				isTauri &&
-				((hasUserScrolledRef.current && isUserScrollingRef.current) ||
-					isShellResizing())
+				(hasUserScrolledRef.current && isUserScrollingRef.current) ||
+				isShellResizing()
 			) {
 				deferredMeasuredHeightsRef.current[rowKey] = roundedHeight;
 				return;
@@ -946,6 +1058,7 @@ function ProgressiveConversationViewport({
 			// swaps) where it is genuinely needed.
 			if (
 				!isStreamingRow &&
+				!anchoredToggle &&
 				scrollParent &&
 				row.top + headerHeight < scrollParent.scrollTop
 			) {
@@ -964,13 +1077,15 @@ function ProgressiveConversationViewport({
 			// we don't need `flushSync` here — which in long threads becomes
 			// O(n) and re-introduces stuttering near the end of a long
 			// streamed reply.
-			if (isStreamingRow) {
+			if (
+				shouldCommitMeasurementUrgently(isStreamingRow, isInitialSettleActive())
+			) {
 				commit();
 			} else {
 				startTransition(commit);
 			}
 		},
-		[headerHeight, isTauri, scrollParent],
+		[headerHeight, isInitialSettleActive, scrollParent],
 	);
 
 	if (data.length === 0) {
@@ -1015,14 +1130,12 @@ function ProgressiveConversationViewport({
 					return (
 						<MeasuredConversationRow
 							key={row.key}
-							disableContentVisibility={isTauri}
 							onDomMount={
 								isStreamingMessage ? handleStreamingRowMount : undefined
 							}
 							onHeightChange={handleHeightChange}
 							rowKey={row.key}
 							top={row.top}
-							estimatedHeight={row.height}
 						>
 							{itemContent(row.index, row.message)}
 						</MeasuredConversationRow>
@@ -1036,16 +1149,12 @@ function ProgressiveConversationViewport({
 
 function MeasuredConversationRow({
 	children,
-	disableContentVisibility,
-	estimatedHeight,
 	onDomMount,
 	onHeightChange,
 	rowKey,
 	top,
 }: {
 	children: ReactNode;
-	disableContentVisibility: boolean;
-	estimatedHeight: number;
 	/**
 	 * Optional callback fired with the row's outer DOM node when it mounts
 	 * (and `null` when it unmounts). Used by the parent to wire a
@@ -1095,15 +1204,11 @@ function MeasuredConversationRow({
 		};
 	}, [onHeightChange, rowKey]);
 
-	const intrinsicSize = `auto ${Math.max(24, Math.round(estimatedHeight))}px`;
 	return (
 		<div
 			ref={setRowRef}
 			style={{
-				...(disableContentVisibility
-					? conversationRowIsolationStyle
-					: measuredRowIsolationStyle),
-				containIntrinsicSize: intrinsicSize,
+				...conversationRowIsolationStyle,
 				left: 0,
 				position: "absolute",
 				right: 0,
@@ -1119,12 +1224,6 @@ function MeasuredConversationRow({
 const conversationRowIsolationStyle = {
 	contain: "paint",
 	isolation: "isolate",
-} as const;
-
-const measuredRowIsolationStyle = {
-	...conversationRowIsolationStyle,
-	contentVisibility: "auto",
-	containIntrinsicSize: "auto 100px",
 } as const;
 
 function ConversationRowShell({ children }: { children: ReactNode }) {
@@ -1220,16 +1319,16 @@ function ConversationBottomSpacer() {
 }
 
 function StreamingFooter({ startTime }: { startTime: number }) {
-	const [elapsed, setElapsed] = useState(() =>
-		Math.floor((Date.now() - startTime) / 1000),
-	);
+	// Derive elapsed from a ticking clock so a startTime change (e.g. workspace
+	// switch) reflects immediately instead of waiting for the next tick.
+	const [now, setNow] = useState(() => Date.now());
 
 	useEffect(() => {
-		const intervalId = window.setInterval(() => {
-			setElapsed(Math.floor((Date.now() - startTime) / 1000));
-		}, 1000);
+		const intervalId = window.setInterval(() => setNow(Date.now()), 1000);
 		return () => window.clearInterval(intervalId);
-	}, [startTime]);
+	}, []);
+
+	const elapsed = Math.max(0, Math.floor((now - startTime) / 1000));
 
 	const display =
 		elapsed < 60

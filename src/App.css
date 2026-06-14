@@ -21,13 +21,14 @@
  */
 @theme {
 	--font-sans:
-		var(--font-sans-user, "Geist Variable"), "SF Pro Display", -apple-system,
-		BlinkMacSystemFont, "Segoe UI", sans-serif;
+		var(--font-sans-user, "Geist Variable"), -apple-system, BlinkMacSystemFont,
+		"Segoe UI", sans-serif;
 	--font-mono:
 		var(--font-mono-user, "Geist Mono Variable"), ui-monospace, "SF Mono",
 		SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 	--font-terminal:
-		var(--font-terminal-user, "GeistMono"), "SF Mono", Monaco, Menlo, monospace;
+		var(--font-terminal-user, "Geist Mono Variable"), "SF Mono", Monaco, Menlo,
+		monospace;
 }
 
 :root {
@@ -724,12 +725,15 @@ body {
 
 @theme inline {
 	--font-heading: var(--font-sans);
-	--font-sans: var(--font-sans-user, "Geist Variable"), sans-serif;
+	--font-sans:
+		var(--font-sans-user, "Geist Variable"), -apple-system, BlinkMacSystemFont,
+		"Segoe UI", sans-serif;
 	--font-mono:
 		var(--font-mono-user, "Geist Mono Variable"), ui-monospace, "SF Mono",
 		SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 	--font-terminal:
-		var(--font-terminal-user, "GeistMono"), "SF Mono", Monaco, Menlo, monospace;
+		var(--font-terminal-user, "Geist Mono Variable"), "SF Mono", Monaco, Menlo,
+		monospace;
 
 	/* ── Shadcn/ui interface utilities (ecosystem protocol layer) ─────── */
 	--color-background: var(--background);

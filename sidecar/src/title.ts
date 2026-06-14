@@ -4,8 +4,7 @@
  * exchangeable results.
  */
 
-export const TITLE_GENERATION_TIMEOUT_MS = 30_000;
-export const TITLE_GENERATION_FALLBACK_TIMEOUT_MS = 30_000;
+export const TITLE_GENERATION_TIMEOUT_MS = 15_000;
 const MAX_GENERATED_TITLE_CHARS = 80;
 const TITLE_ELLIPSIS = "...";
 

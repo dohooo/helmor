@@ -30,6 +30,12 @@ export type FollowUpBehavior = "steer" | "queue";
 export type ClaudeThinkingDisplay = "summarized" | "omitted";
 export type AppSurface = "workspace" | "workspace-start";
 export type WorkspaceRightSidebarMode = "inspector" | "context";
+/** A global model preference (default / review / action). Carries its
+ *  provider so a slug-based model (opencode / mimo) is never re-derived
+ *  ambiguously from the bare id. `provider` is null only for legacy rows
+ *  not yet re-saved. Persisted as JSON. */
+export type ModelRef = { provider: string | null; modelId: string };
+
 export type SidebarGrouping = "status" | "repo";
 export type SidebarSort = "custom" | "repoName" | "updatedAt" | "createdAt";
 
@@ -255,6 +261,8 @@ export type StartSurfacePreferences = {
 	branchIntentByRepoId: Record<string, WorkspaceBranchIntent>;
 	/** Top-level "Just chat" toggle. Independent of the selected repo. */
 	chatModeActive: boolean;
+	/** Start-composer Terminal-Mode toggle. */
+	terminalModeActive: boolean;
 };
 
 export type AppSettings = {
@@ -281,15 +289,21 @@ export type AppSettings = {
 	notificationSound: NotificationSound;
 	/** When true, hovering a terminal-like inspector tab body expands it. */
 	terminalHoverExpansion: boolean;
+	/** Shows the Terminal-Mode toggle in the composer; sending with it on
+	 *  opens the prompt in an agent TUI instead of a GUI session. */
+	enableTerminalMode: boolean;
+	/** When true, skip the heads-up dialog shown before sending a conversation
+	 *  with history to the terminal (new Terminal session + resume). */
+	suppressTerminalResumeWarning: boolean;
 	lastWorkspaceId: string | null;
 	lastSessionId: string | null;
 	lastSurface: AppSurface;
 	startContextPanelOpen: boolean;
 	workspaceRightSidebarMode: WorkspaceRightSidebarMode;
-	defaultModelId: string | null;
+	defaultModel: ModelRef | null;
 	/** Model used when the inspector "Review changes" helper creates a session.
-	 *  When null, falls back to `defaultModelId`. */
-	reviewModelId: string | null;
+	 *  When null, falls back to `defaultModel`. */
+	reviewModel: ModelRef | null;
 	/** Effort level for the Review helper. When null, falls back to
 	 *  `defaultEffort`. */
 	reviewEffort: string | null;
@@ -297,8 +311,8 @@ export type AppSettings = {
 	 *  `defaultFastMode`. */
 	reviewFastMode: boolean | null;
 	/** Model used by simple action sessions: create/reopen PR/MR and
-	 *  commit-and-push. When null, falls back to `defaultModelId`. */
-	prModelId: string | null;
+	 *  commit-and-push. When null, falls back to `defaultModel`. */
+	prModel: ModelRef | null;
 	/** Effort level for simple action sessions. When null, falls back to
 	 *  `defaultEffort`. */
 	prEffort: string | null;
@@ -329,6 +343,8 @@ export type AppSettings = {
 	cursorProvider: CursorProviderSettings;
 	opencodeProvider: OpencodeProviderSettings;
 	kimiProvider: KimiProviderSettings;
+	/** MiMo Code (opencode-protocol fork) — same settings shape. */
+	mimoProvider: OpencodeProviderSettings;
 	agentProxy: AgentProxySettings;
 	localLlm: LocalLlmSettings;
 	inboxSourceConfig: InboxSourceConfig;
@@ -351,6 +367,7 @@ export const DEFAULT_START_SURFACE_PREFERENCES: StartSurfacePreferences = {
 	modeByRepoId: {},
 	branchIntentByRepoId: {},
 	chatModeActive: false,
+	terminalModeActive: false,
 };
 
 /** Fallbacks for repos without a per-repo entry. */
@@ -396,16 +413,18 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	notifications: true,
 	notificationSound: "off",
 	terminalHoverExpansion: true,
+	enableTerminalMode: false,
+	suppressTerminalResumeWarning: false,
 	lastWorkspaceId: null,
 	lastSessionId: null,
 	lastSurface: "workspace",
 	startContextPanelOpen: false,
 	workspaceRightSidebarMode: "inspector",
-	defaultModelId: null,
-	reviewModelId: null,
+	defaultModel: null,
+	reviewModel: null,
 	reviewEffort: null,
 	reviewFastMode: null,
-	prModelId: null,
+	prModel: null,
 	prEffort: null,
 	prFastMode: null,
 	defaultEffort: "high",
@@ -436,6 +455,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		enabledModelIds: null,
 	},
 	kimiProvider: {
+		cachedModels: null,
+		enabledModelIds: null,
+	},
+	mimoProvider: {
+		status: "unavailable",
+		connected: [],
 		cachedModels: null,
 		enabledModelIds: null,
 	},
@@ -578,16 +603,18 @@ const SETTINGS_KEY_MAP: Record<
 	notifications: "app.notifications",
 	notificationSound: "app.notification_sound",
 	terminalHoverExpansion: "app.terminal_hover_expansion",
+	enableTerminalMode: "app.enable_terminal_mode",
+	suppressTerminalResumeWarning: "app.suppress_terminal_resume_warning",
 	lastWorkspaceId: "app.last_workspace_id",
 	lastSessionId: "app.last_session_id",
 	lastSurface: "app.last_surface",
 	startContextPanelOpen: "app.start_context_panel_open",
 	workspaceRightSidebarMode: "app.workspace_right_sidebar_mode",
-	defaultModelId: "app.default_model_id",
-	reviewModelId: "app.review_model_id",
+	defaultModel: "app.default_model_id",
+	reviewModel: "app.review_model_id",
 	reviewEffort: "app.review_effort",
 	reviewFastMode: "app.review_fast_mode",
-	prModelId: "app.pr_model_id",
+	prModel: "app.pr_model_id",
 	prEffort: "app.pr_effort",
 	prFastMode: "app.pr_fast_mode",
 	defaultEffort: "app.default_effort",
@@ -604,6 +631,7 @@ const SETTINGS_KEY_MAP: Record<
 	cursorProvider: "app.cursor_provider",
 	opencodeProvider: "app.opencode_provider",
 	kimiProvider: "app.kimi_provider",
+	mimoProvider: "app.mimo_provider",
 	agentProxy: "app.agent_proxy",
 	localLlm: "app.local_llm",
 	inboxSourceConfig: "app.inbox_source_config",
@@ -949,6 +977,10 @@ function parseStartSurfacePreferences(
 			modeByRepoId,
 			branchIntentByRepoId,
 			chatModeActive,
+			terminalModeActive:
+				typeof o.terminalModeActive === "boolean"
+					? o.terminalModeActive
+					: false,
 		};
 	} catch {
 		return DEFAULT_START_SURFACE_PREFERENCES;
@@ -971,10 +1003,12 @@ function parseCursorProviderSettings(
 	}
 }
 
-function parseOpencodeProviderSettings(
+// Shared by opencodeProvider and mimoProvider — same persisted shape.
+function parseSlugProviderSettings(
 	raw: string | undefined,
+	fallback: OpencodeProviderSettings,
 ): OpencodeProviderSettings {
-	if (!raw) return DEFAULT_SETTINGS.opencodeProvider;
+	if (!raw) return fallback;
 	try {
 		const parsed = JSON.parse(raw) as Record<string, unknown>;
 		return {
@@ -986,7 +1020,7 @@ function parseOpencodeProviderSettings(
 				typeof parsed.cacheVersion === "number" ? parsed.cacheVersion : 0,
 		};
 	} catch {
-		return DEFAULT_SETTINGS.opencodeProvider;
+		return fallback;
 	}
 }
 
@@ -1199,19 +1233,43 @@ function readClampedInt(
 	return Math.min(max, Math.max(min, Math.round(n)));
 }
 
-function readModelId(value: string | undefined): string | null {
-	return value && value !== "" ? value : null;
+/** Parse a stored model preference. Accepts the new `{provider, modelId}` JSON
+ *  form and legacy bare ids (provider unknown → null until re-saved). */
+function parseModelRef(value: string | undefined): ModelRef | null {
+	const trimmed = value?.trim();
+	if (!trimmed) return null;
+	try {
+		const obj = JSON.parse(trimmed) as unknown;
+		if (
+			obj &&
+			typeof obj === "object" &&
+			typeof (obj as { modelId?: unknown }).modelId === "string"
+		) {
+			const o = obj as { provider?: unknown; modelId: string };
+			const modelId = o.modelId.trim();
+			if (modelId) {
+				const provider =
+					typeof o.provider === "string" && o.provider.trim()
+						? o.provider.trim()
+						: null;
+				return { provider, modelId };
+			}
+		}
+	} catch {
+		// Not JSON → legacy bare id below.
+	}
+	return { provider: null, modelId: trimmed };
 }
 
 export async function loadSettings(): Promise<AppSettings> {
 	try {
 		const rawFromDb = await invoke<Record<string, string>>("get_app_settings");
 		const raw = migrateLegacySettings(rawFromDb);
-		const rawDefaultModelId = raw[SETTINGS_KEY_MAP.defaultModelId];
-		const rawReviewModelId = raw[SETTINGS_KEY_MAP.reviewModelId];
+		const rawDefaultModelId = raw[SETTINGS_KEY_MAP.defaultModel];
+		const rawReviewModelId = raw[SETTINGS_KEY_MAP.reviewModel];
 		const rawReviewEffort = raw[SETTINGS_KEY_MAP.reviewEffort];
 		const rawReviewFastMode = raw[SETTINGS_KEY_MAP.reviewFastMode];
-		const rawPrModelId = raw[SETTINGS_KEY_MAP.prModelId];
+		const rawPrModelId = raw[SETTINGS_KEY_MAP.prModel];
 		const rawPrEffort = raw[SETTINGS_KEY_MAP.prEffort];
 		const rawPrFastMode = raw[SETTINGS_KEY_MAP.prFastMode];
 		// Migration: legacy `app.font_size` is the new chatFontSize. Read
@@ -1272,6 +1330,9 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.terminalHoverExpansion] !== undefined
 					? raw[SETTINGS_KEY_MAP.terminalHoverExpansion] === "true"
 					: DEFAULT_SETTINGS.terminalHoverExpansion,
+			enableTerminalMode: raw[SETTINGS_KEY_MAP.enableTerminalMode] === "true",
+			suppressTerminalResumeWarning:
+				raw[SETTINGS_KEY_MAP.suppressTerminalResumeWarning] === "true",
 			lastWorkspaceId: raw[SETTINGS_KEY_MAP.lastWorkspaceId] || null,
 			lastSessionId: raw[SETTINGS_KEY_MAP.lastSessionId] || null,
 			lastSurface:
@@ -1286,8 +1347,8 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.workspaceRightSidebarMode] === "context"
 					? "context"
 					: DEFAULT_SETTINGS.workspaceRightSidebarMode,
-			defaultModelId: readModelId(rawDefaultModelId),
-			reviewModelId: readModelId(rawReviewModelId),
+			defaultModel: parseModelRef(rawDefaultModelId),
+			reviewModel: parseModelRef(rawReviewModelId),
 			reviewEffort:
 				rawReviewEffort && rawReviewEffort !== ""
 					? rawReviewEffort
@@ -1298,7 +1359,7 @@ export async function loadSettings(): Promise<AppSettings> {
 					: rawReviewFastMode === "false"
 						? false
 						: DEFAULT_SETTINGS.reviewFastMode,
-			prModelId: readModelId(rawPrModelId),
+			prModel: parseModelRef(rawPrModelId),
 			prEffort:
 				rawPrEffort && rawPrEffort !== ""
 					? rawPrEffort
@@ -1353,8 +1414,13 @@ export async function loadSettings(): Promise<AppSettings> {
 			cursorProvider: parseCursorProviderSettings(
 				raw[SETTINGS_KEY_MAP.cursorProvider],
 			),
-			opencodeProvider: parseOpencodeProviderSettings(
+			opencodeProvider: parseSlugProviderSettings(
 				raw[SETTINGS_KEY_MAP.opencodeProvider],
+				DEFAULT_SETTINGS.opencodeProvider,
+			),
+			mimoProvider: parseSlugProviderSettings(
+				raw[SETTINGS_KEY_MAP.mimoProvider],
+				DEFAULT_SETTINGS.mimoProvider,
 			),
 			kimiProvider: parseKimiProviderSettings(
 				raw[SETTINGS_KEY_MAP.kimiProvider],
@@ -1402,20 +1468,24 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 	for (const [key, dbKey] of Object.entries(SETTINGS_KEY_MAP)) {
 		const value = patch[key as keyof Omit<AppSettings, LocalStorageKey>];
 		if (value !== undefined) {
-			settings[dbKey] =
+			const isJsonKey =
 				key === "shortcuts" ||
 				key === "claudeCustomProviders" ||
 				key === "cursorProvider" ||
 				key === "opencodeProvider" ||
 				key === "kimiProvider" ||
+				key === "mimoProvider" ||
 				key === "agentProxy" ||
 				key === "localLlm" ||
 				key === "inboxSourceConfig" ||
-				key === "startSurfacePreferences"
-					? JSON.stringify(value)
-					: value === null
-						? ""
-						: String(value);
+				key === "startSurfacePreferences" ||
+				key === "defaultModel" ||
+				key === "reviewModel" ||
+				key === "prModel";
+			// null clears the row (falls back to default on next boot); JSON keys
+			// otherwise serialize the object, scalars stringify.
+			settings[dbKey] =
+				value === null ? "" : isJsonKey ? JSON.stringify(value) : String(value);
 		}
 	}
 	if (Object.keys(settings).length === 0) return;

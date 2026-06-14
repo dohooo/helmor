@@ -682,7 +682,10 @@ describe("App global navigation shortcuts", () => {
 		pressCreateSessionShortcut();
 
 		await waitFor(() => {
-			expect(apiMocks.createSession).toHaveBeenCalledWith(WORKSPACE_IDS.done);
+			expect(apiMocks.createSession).toHaveBeenCalledWith(
+				WORKSPACE_IDS.done,
+				expect.objectContaining({ sessionKind: "gui" }),
+			);
 			expectSelectedSession("Untitled");
 		});
 	});
@@ -761,14 +764,14 @@ describe("App global navigation shortcuts", () => {
 		expect(await screen.findByText("New worktree")).toBeInTheDocument();
 	});
 
-	it("toggles the context panel on Option+Command+C", async () => {
+	it("toggles the context panel on Command+Shift+C", async () => {
 		await renderAppReady();
 
 		fireEvent.keyDown(window, {
 			key: "c",
 			code: "KeyC",
 			metaKey: true,
-			altKey: true,
+			shiftKey: true,
 		});
 
 		await screen.findByRole("heading", { name: "Contexts" });
@@ -827,6 +830,26 @@ describe("App global navigation shortcuts", () => {
 
 		await waitFor(() => {
 			expectSelectedWorkspace("Review workspace");
+			expectSelectedSession("Review session 1");
+		});
+	});
+
+	it("moves the sidebar highlight inside the keydown task while the displayed pane flips one frame later", async () => {
+		await renderAppReady();
+
+		pressGlobalShortcut("l");
+
+		// Highlight is synchronous: the keyboard path applies the imperative
+		// `workspace-row-selected` class (and the router commit re-renders the
+		// sidebar) inside the keydown task…
+		expectSelectedWorkspace("Review workspace");
+		// …while the displayed paint track still shows the previous workspace's
+		// tab strip for one frame (the flip is deferred via scheduleDisplayFlip):
+		// the old tab is still mounted, the new workspace's isn't yet.
+		getSessionTab("Done session 1");
+		expect(screen.queryByText("Review session 1")).toBeNull();
+
+		await waitFor(() => {
 			expectSelectedSession("Review session 1");
 		});
 	});

@@ -13,14 +13,14 @@ export function CompanionPairingScreen() {
 			<div className="flex w-full max-w-sm flex-col items-center gap-6 text-center">
 				<HelmorLogoAnimated size={56} className="opacity-90" />
 				<div className="flex flex-col gap-2">
-					<h1 className="font-semibold text-foreground text-lg">
+					<h1 className="font-semibold text-foreground text-heading">
 						Pair this browser
 					</h1>
-					<p className="text-muted-foreground text-sm">
+					<p className="text-muted-foreground text-body">
 						This browser isn’t connected to your Helmor desktop yet.
 					</p>
 				</div>
-				<ol className="flex w-full flex-col gap-3 text-left text-muted-foreground text-sm">
+				<ol className="flex w-full flex-col gap-3 text-left text-muted-foreground text-body">
 					<li>
 						<span className="font-medium text-foreground">1.</span> On the
 						computer running Helmor, open{" "}

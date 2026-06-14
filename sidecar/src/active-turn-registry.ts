@@ -72,9 +72,15 @@ export class ActiveTurnRegistry {
 		return this.turns.get(sessionId)?.abortEmitted ?? false;
 	}
 
-	/** Clear the turn once a terminal event has been emitted. */
-	end(sessionId: string): void {
-		this.turns.delete(sessionId);
+	/** Clear the turn once its terminal event has been emitted. Guarded by
+	 *  `requestId`: a slow-unwinding aborted turn must NOT delete the slot a
+	 *  newer same-session turn already re-claimed via `begin` (the
+	 *  abort → queue-drain race — else the new turn's Stop silently no-ops).
+	 *  No-op when the slot no longer belongs to `requestId`. */
+	end(sessionId: string, requestId: string): void {
+		if (this.turns.get(sessionId)?.requestId === requestId) {
+			this.turns.delete(sessionId);
+		}
 	}
 
 	/** Terminal-fail every live turn (worker-fatal network blow-up): emit

@@ -16,6 +16,7 @@ export const providerLabels: Record<AgentLoginProvider, string> = {
 	cursor: "Cursor",
 	opencode: "OpenCode",
 	kimi: "Kimi",
+	mimo: "MiMo Code",
 };
 
 export function LoginTerminalPreview({

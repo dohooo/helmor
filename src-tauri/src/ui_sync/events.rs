@@ -34,6 +34,17 @@ pub enum UiMutationEvent {
     SessionMessagesAppended {
         session_id: String,
     },
+    /// A turn's terminal rows really landed in `session_messages` — fired
+    /// after `persist_result_and_finalize` / `persist_error_message`
+    /// succeed (including the abnormal-exit cleanup path) and after an
+    /// aborted turn finalizes. Unlike
+    /// `SessionMessagesAppended` (active refetch for out-of-band inserts),
+    /// frontends only mark the thread cache stale (`refetchType: 'none'`)
+    /// so the next mount refetches; the live-stream dispatcher keeps
+    /// owning the on-screen snapshot.
+    SessionTurnPersisted {
+        session_id: String,
+    },
     WorkspaceFilesChanged {
         workspace_id: String,
     },
@@ -70,6 +81,31 @@ pub enum UiMutationEvent {
     /// `list_active_streams`. See `agents::streaming::active_streams` for
     /// the source of truth this notification mirrors.
     ActiveStreamsChanged,
+    /// A Terminal-Mode agent hook reported a working/idle transition. The
+    /// ui-sync socket listener folds it into the active-stream registry (so the
+    /// sidebar spinner treats it like any session) and re-broadcasts
+    /// `ActiveStreamsChanged`. Carries the owning session + workspace.
+    TerminalActivityChanged {
+        session_id: String,
+        workspace_id: String,
+        busy: bool,
+    },
+    /// A Terminal-Mode agent hook reported the turn finished (`Stop`). The
+    /// ui-sync listener re-broadcasts this so the frontend runs the shared
+    /// completion path (mark-unread + OS notification) like a GUI session.
+    TerminalSessionIdle {
+        session_id: String,
+        workspace_id: String,
+    },
+    /// A Terminal-Mode agent hook captured the user's submitted prompt
+    /// (`UserPromptSubmit`). The frontend feeds it to the shared title and
+    /// branch-rename generator so a Terminal session names itself like a GUI
+    /// session does on its first turn.
+    TerminalPromptCaptured {
+        session_id: String,
+        workspace_id: String,
+        prompt: String,
+    },
     /// Connected-Slack-workspace set changed (Connect / Disconnect).
     /// Frontends invalidate the workspace list query and the inbox
     /// queries for any affected team.
@@ -97,6 +133,12 @@ pub enum UiMutationEvent {
     /// The mobile-companion paired-device list changed (paired or revoked).
     /// Frontends invalidate the `pairedDevices` query.
     PairedDevicesChanged,
+    /// "Open in Helmor" from the quick panel. Only the MAIN window acts on
+    /// this (navigates to the workspace/session); the quick panel ignores it.
+    WorkspaceRevealRequested {
+        workspace_id: String,
+        session_id: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,6 +192,9 @@ mod tests {
             UiMutationEvent::SessionMessagesAppended {
                 session_id: "s".into(),
             },
+            UiMutationEvent::SessionTurnPersisted {
+                session_id: "s".into(),
+            },
             UiMutationEvent::WorkspaceFilesChanged {
                 workspace_id: "w".into(),
             },
@@ -177,6 +222,20 @@ mod tests {
                 permission_mode: None,
             },
             UiMutationEvent::ActiveStreamsChanged,
+            UiMutationEvent::TerminalActivityChanged {
+                session_id: "s".into(),
+                workspace_id: "w".into(),
+                busy: true,
+            },
+            UiMutationEvent::TerminalSessionIdle {
+                session_id: "s".into(),
+                workspace_id: "w".into(),
+            },
+            UiMutationEvent::TerminalPromptCaptured {
+                session_id: "s".into(),
+                workspace_id: "w".into(),
+                prompt: "hi".into(),
+            },
             UiMutationEvent::SlackTokenInvalidated {
                 team_id: "T1".into(),
             },
@@ -214,6 +273,17 @@ mod tests {
         };
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "sessionPlanChanged");
+        assert_eq!(json["sessionId"], "abc");
+        assert!(json.get("session_id").is_none());
+    }
+
+    #[test]
+    fn session_turn_persisted_uses_camel_case_type_and_field() {
+        let event = UiMutationEvent::SessionTurnPersisted {
+            session_id: "abc".into(),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "sessionTurnPersisted");
         assert_eq!(json["sessionId"], "abc");
         assert!(json.get("session_id").is_none());
     }

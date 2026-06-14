@@ -81,6 +81,43 @@ impl ActiveStreams {
         }
     }
 
+    /// Register/unregister a non-SDK stream (e.g. a Terminal session) keyed by
+    /// its own session id, so the UI's busy/spinner derivation treats a working
+    /// terminal like any other busy session. `request_id` == `helmor_session_id`
+    /// == `session_id` (one in-flight "turn" per terminal).
+    pub(crate) fn set_session_active(
+        &self,
+        session_id: &str,
+        workspace_id: Option<String>,
+        provider: &str,
+        active: bool,
+    ) -> bool {
+        if active {
+            self.try_register_for_session(ActiveStreamHandle {
+                request_id: session_id.to_string(),
+                sidecar_session_id: String::new(),
+                provider: provider.to_string(),
+                helmor_session_id: Some(session_id.to_string()),
+                workspace_id,
+            })
+        } else {
+            self.unregister(session_id);
+            true
+        }
+    }
+
+    /// True iff a stream is registered for `session_id`. Busy guard for the
+    /// terminal interrupt inference (`crate::terminal::observe_stdin`).
+    pub(crate) fn is_session_active(&self, session_id: &str) -> bool {
+        self.inner
+            .lock()
+            .map(|map| {
+                map.values()
+                    .any(|h| h.helmor_session_id.as_deref() == Some(session_id))
+            })
+            .unwrap_or(false)
+    }
+
     fn snapshot(&self) -> Vec<ActiveStreamHandle> {
         self.inner
             .lock()
@@ -236,6 +273,18 @@ mod tests {
         // Anonymous streams never collide.
         assert!(streams.try_register_for_session(handle("r3", None)));
         assert!(streams.try_register_for_session(handle("r4", None)));
+    }
+
+    #[test]
+    fn is_session_active_tracks_registration() {
+        let streams = ActiveStreams::new();
+        assert!(!streams.is_session_active("s1"));
+
+        assert!(streams.set_session_active("s1", Some("ws-s1".into()), "terminal", true));
+        assert!(streams.is_session_active("s1"));
+
+        assert!(streams.set_session_active("s1", Some("ws-s1".into()), "terminal", false));
+        assert!(!streams.is_session_active("s1"));
     }
 
     #[test]

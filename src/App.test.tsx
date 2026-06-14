@@ -5,7 +5,6 @@ import {
 	render,
 	screen,
 	waitFor,
-	within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -36,16 +35,6 @@ function getPaneElement(target: "sidebar" | "inspector"): HTMLElement | null {
 		`[data-shell-pane="${target}"]`,
 	) as HTMLElement | null;
 	return pane;
-}
-
-// The mini-window toggle renders in both the sidebar (shown on desktop) and
-// the collapsed-state header (shown in the floating layout). jsdom can't apply
-// the media queries that reveal exactly one, so both are present — scope to the
-// sidebar copy for an unambiguous handle.
-function getSidebarMiniToggle(): HTMLElement {
-	const sidebar = getPaneElement("sidebar");
-	if (!sidebar) throw new Error("sidebar pane not rendered");
-	return within(sidebar).getByRole("button", { name: "Resize window" });
 }
 
 describe("App", () => {
@@ -276,32 +265,13 @@ describe("App", () => {
 		expect(window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)).toBe("360");
 	});
 
-	it("resizes the window without changing shell pane state", async () => {
-		const user = userEvent.setup();
-		const invokeMock = vi.mocked(invoke);
+	it("hides the mini-window resize entry from shell chrome", async () => {
 		render(<App />);
 		await screen.findByRole("main", { name: "Application shell" });
-		invokeMock.mockClear();
 
-		await user.click(getSidebarMiniToggle());
-
-		await waitFor(() => {
-			expect(invokeMock).toHaveBeenCalledWith("toggle_mini_window_mode");
-			expect(getPaneInlineWidth("sidebar")).toBe("336px");
-			expect(getPaneInlineWidth("inspector")).toBe("336px");
-		});
-
-		await user.click(getSidebarMiniToggle());
-
-		await waitFor(() => {
-			expect(
-				invokeMock.mock.calls.filter(
-					([command]) => command === "toggle_mini_window_mode",
-				),
-			).toHaveLength(2);
-			expect(getPaneInlineWidth("sidebar")).toBe("336px");
-			expect(getPaneInlineWidth("inspector")).toBe("336px");
-		});
+		expect(
+			screen.queryByRole("button", { name: "Resize window" }),
+		).not.toBeInTheDocument();
 	});
 
 	it("uses responsive floating sidebars instead of mini-mode layout state", async () => {
@@ -356,13 +326,6 @@ describe("App", () => {
 			"max-[960px]:overflow-visible",
 			"max-[960px]:pointer-events-auto",
 		);
-		// The sidebar keeps its own resize toggle but hides it in the floating
-		// layout — the collapsed-state header surfaces it there instead.
-		expect(
-			getSidebarMiniToggle().parentElement?.classList.contains(
-				"max-[960px]:hidden",
-			),
-		).toBe(true);
 		expect(
 			screen.getByRole("button", { name: "Collapse left sidebar" }),
 		).toHaveClass("max-[960px]:hidden");
@@ -373,16 +336,6 @@ describe("App", () => {
 			screen.getByRole("separator", { name: "Resize inspector sidebar" }),
 		).toHaveClass("max-[960px]:hidden");
 
-		// Trigger the toggle with a bare click. userEvent's pointer movement
-		// would enter the sidebar hover region and open the peek drawer —
-		// which only happens under jsdom, where the max-[960px] media gate is
-		// inert — flipping the closed-state translate/opacity classes below.
-		fireEvent.click(getSidebarMiniToggle());
-
-		await waitFor(() => {
-			expect(getPaneInlineWidth("sidebar")).toBe("336px");
-			expect(getPaneInlineWidth("inspector")).toBe("336px");
-		});
 		expect(sidebarInner).toHaveClass(
 			"max-[960px]:ml-3",
 			"max-[960px]:!w-[320px]",
@@ -406,18 +359,6 @@ describe("App", () => {
 		expect(sidebar).toHaveClass("max-[960px]:absolute");
 		expect(inspector).toHaveClass("max-[960px]:absolute");
 		expect(screen.getByLabelText("Workspace panel")).toHaveClass("flex-1");
-	});
-
-	it("shows the resize shortcut in the hover tooltip", async () => {
-		const user = userEvent.setup();
-		render(<App />);
-		await screen.findByRole("main", { name: "Application shell" });
-
-		await user.hover(getSidebarMiniToggle());
-
-		const tooltip = await screen.findByRole("tooltip");
-		expect(tooltip).toHaveTextContent("Resize window");
-		expect(tooltip).toHaveTextContent("⌘⌃M");
 	});
 
 	it("resizes the inspector sidebar and persists the width", async () => {

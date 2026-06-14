@@ -25,6 +25,10 @@ pub(crate) const SUPPRESSED_EVENT_TYPES: &[&str] = &[
     // type silent so the wire stays clean even if the SDK option is
     // turned on later by accident.
     "prompt_suggestion",
+    // Sidecar context-usage meta. Production routes it at the streaming
+    // layer (`handle_context_usage_updated`) before the pipeline; only
+    // stream-replay feeds it here. Never renders.
+    "contextUsageUpdated",
 ];
 
 /// Claude `system` subtypes that should be silently dropped.

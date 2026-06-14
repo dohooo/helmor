@@ -37,14 +37,14 @@ export function InteractionStepTabs({
 	return (
 		<div className="px-1 pb-2">
 			<Tabs value={value} onValueChange={onChange}>
-				<TabsList className="h-auto flex-wrap p-0.5">
+				<TabsList className="h-auto flex-wrap rounded-[8px] border border-border/55 bg-muted/80 p-0.5 dark:border-border/35 dark:bg-muted">
 					{items.map((item) => (
 						<TabsTrigger
 							key={item.key}
 							value={item.key}
 							disabled={disabled}
 							className={cn(
-								"h-6 px-2 text-small",
+								"h-6 rounded-[6px] px-2 text-small data-active:border-border/50 aria-selected:border-border/50 dark:data-active:border-input dark:aria-selected:border-input",
 								!item.complete && "opacity-55",
 							)}
 						>

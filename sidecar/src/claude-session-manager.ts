@@ -535,10 +535,9 @@ export class ClaudeSessionManager implements SessionManager {
 				canUseTool: async (_toolName, input, options) => {
 					// AskUserQuestion: pause this `canUseTool` callback on the
 					// same live `query()`, surface the question through the
-					// unified `userInputRequest` flow (form mode with a
-					// synthesized JSON Schema), then return the user's answer
-					// via `updatedInput` so the SDK executes the tool normally.
-					// No `--resume`, no extra process (issue #397 / #402).
+					// unified `userInputRequest` flow, then return the user's
+					// answer via `updatedInput` so the SDK executes the tool
+					// normally. No `--resume`, no extra process (issue #397 / #402).
 					if (USER_INPUT_TOOL_NAMES.has(_toolName)) {
 						const toolUseId = options.toolUseID;
 						const auqInput = input as Record<string, unknown>;
@@ -591,13 +590,13 @@ export class ClaudeSessionManager implements SessionManager {
 							action: resolution.action,
 						});
 						if (resolution.action === "submit") {
-							// The frontend AUQ renderer produces the full
-							// `updatedInput` shape directly (questions +
-							// answers + annotations), matching what the SDK
-							// expects — no conversion needed here.
+							// The unified AUQ renderer submits only the answer
+							// payload (`{ answers, annotations? }` keyed by
+							// question text); merge it over the original tool
+							// input to build the `updatedInput` the SDK expects.
 							return {
 								behavior: "allow" as const,
-								updatedInput: resolution.content,
+								updatedInput: { ...auqInput, ...resolution.content },
 							};
 						}
 						return {
@@ -715,10 +714,11 @@ export class ClaudeSessionManager implements SessionManager {
 						uuid: randomUUID(),
 					});
 				}
-				const passthroughMessage = stripUserInputToolUseFromAssistant(message);
-				if (passthroughMessage) {
-					emitter.passthrough(requestId, passthroughMessage);
-				}
+				// AskUserQuestion tool_use blocks pass through INTACT — the Rust
+				// adapter renders them as the persistent Q&A card (and merges
+				// the tool_result answers into it), so stripping them here
+				// would lose the card on finalize/persist/reload.
+				emitter.passthrough(requestId, message);
 				if (isTerminalResult(message)) {
 					// Terminal result (success OR error) — both shapes carry
 					// `usage`/`modelUsage`, so both should update the ring.
@@ -763,8 +763,13 @@ export class ClaudeSessionManager implements SessionManager {
 				});
 			}
 			promptSource.close();
-			this.sessions.delete(sessionId);
-			this.turns.end(sessionId);
+			// Guard by `requestId`: a Stop drains the queue, so a same-session
+			// follow-up may have already re-registered here. A bare-sessionId
+			// delete would wipe the new turn's live session + Stop handle.
+			if (this.sessions.get(sessionId)?.requestId === requestId) {
+				this.sessions.delete(sessionId);
+			}
+			this.turns.end(sessionId, requestId);
 			// Only cancel waiters belonging to THIS session — `pendingUserInputs`
 			// is manager-wide and other sessions may have parked AUQs / MCP
 			// elicitations on it.
@@ -876,8 +881,13 @@ export class ClaudeSessionManager implements SessionManager {
 		options?: GenerateTitleOptions,
 	): Promise<void> {
 		const abortController = new AbortController();
-		const timeout = setTimeout(() => abortController.abort(), timeoutMs);
+		let timedOut = false;
+		const timeout = setTimeout(() => {
+			timedOut = true;
+			abortController.abort();
+		}, timeoutMs);
 		const model = options?.model?.trim() || "haiku";
+		logger.debug(`[${requestId}] claude title generation using model ${model}`);
 		const claudeEnv =
 			options?.claudeEnvironment &&
 			Object.keys(options.claudeEnvironment).length > 0
@@ -918,6 +928,16 @@ export class ClaudeSessionManager implements SessionManager {
 				},
 			);
 			emitter.titleGenerated(requestId, title, branchName);
+		} catch (err) {
+			// A timeout aborts via `abortController`, which the SDK surfaces as
+			// "process aborted by user" — relabel it so logs don't read like a
+			// manual cancel.
+			if (timedOut) {
+				throw new Error(
+					`claude title generation timed out after ${timeoutMs}ms (model ${model})`,
+				);
+			}
+			throw err;
 		} finally {
 			clearTimeout(timeout);
 			try {
@@ -1283,64 +1303,6 @@ function describeFastModeUnavailable(
 	// `off`: extra usage (overage) isn't enabled. Default reason — the init
 	// event reports `off` before the rate-limit event arrives.
 	return "Fast mode isn't active — it runs on extra usage, which isn't enabled for your account.";
-}
-
-function stripUserInputToolUseFromAssistant(
-	message: SDKMessage,
-): object | null {
-	if (message.type !== "assistant") {
-		return message;
-	}
-	if (!("message" in message)) {
-		return message;
-	}
-
-	const assistantMessage = (message as { message?: unknown }).message;
-	if (typeof assistantMessage !== "object" || assistantMessage === null) {
-		return message;
-	}
-
-	const content = (assistantMessage as { content?: unknown }).content;
-	if (!Array.isArray(content)) {
-		return message;
-	}
-
-	let removedDeferredTool = false;
-	const filteredContent = content.filter((block) => {
-		if (!isUserInputToolUseBlock(block)) {
-			return true;
-		}
-		removedDeferredTool = true;
-		return false;
-	});
-
-	if (!removedDeferredTool) {
-		return message;
-	}
-	if (filteredContent.length === 0) {
-		return null;
-	}
-
-	return {
-		...(message as Record<string, unknown>),
-		message: {
-			...(assistantMessage as Record<string, unknown>),
-			content: filteredContent,
-		},
-	};
-}
-
-function isUserInputToolUseBlock(block: unknown): boolean {
-	if (typeof block !== "object" || block === null) {
-		return false;
-	}
-
-	const value = block as { type?: unknown; name?: unknown };
-	return (
-		value.type === "tool_use" &&
-		typeof value.name === "string" &&
-		USER_INPUT_TOOL_NAMES.has(value.name)
-	);
 }
 
 /**

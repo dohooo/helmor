@@ -1,0 +1,27 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: msg-1
+  content_length: 3
+  content:
+    - type: collapsed-group
+      category: read
+      tools_count: 2
+      active: false
+      summary: Read 2 files
+    - type: reasoning
+      text_length: 15
+      text_preview: compare the two
+      streaming: ~
+      duration_ms: 1200
+    - type: collapsed-group
+      category: read
+      tools_count: 2
+      active: false
+      summary: Read 2 files
+  status:
+    type: complete
+    reason: stop
+  streaming: ~

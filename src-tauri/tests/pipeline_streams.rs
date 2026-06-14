@@ -147,7 +147,9 @@ fn part_type(part: &helmor_lib::pipeline::types::ExtendedMessagePart) -> &'stati
         ExtendedMessagePart::Basic(MessagePart::Image { .. }) => "image",
         ExtendedMessagePart::Basic(MessagePart::PromptSuggestion { .. }) => "prompt-suggestion",
         ExtendedMessagePart::Basic(MessagePart::FileMention { .. }) => "file-mention",
+        ExtendedMessagePart::Basic(MessagePart::PastedText { .. }) => "pasted-text",
         ExtendedMessagePart::Basic(MessagePart::PlanReview { .. }) => "plan-review",
+        ExtendedMessagePart::Basic(MessagePart::UserQuestion { .. }) => "user-question",
         ExtendedMessagePart::CollapsedGroup(_) => "collapsed-group",
     }
 }
@@ -273,7 +275,7 @@ fn stream_replay() {
         assert!(
             matches!(
                 provider,
-                "claude" | "codex" | "cursor" | "opencode" | "kimi"
+                "claude" | "codex" | "cursor" | "opencode" | "mimo" | "kimi"
             ),
             "fixture {path:?} is under unknown provider directory {provider:?}"
         );

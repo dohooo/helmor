@@ -1,4 +1,4 @@
-// Stage claude-code + codex + opencode + gh + glab + cloudflared into
+// Stage claude-code + codex + opencode + mimo + gh + glab + cloudflared into
 // `sidecar/dist/vendor/` for Tauri to ship as bundle resources. macOS host only.
 //
 // Cross-arch staging: in CI the host is always Apple Silicon (macos-26
@@ -29,7 +29,7 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	claudeCodeArchivePlan,
@@ -41,6 +41,7 @@ import {
 	KIMI_VERSION,
 	kimiArchivePlan,
 	llamaArchivePlan,
+	mimoArchivePlan,
 	nodeArchivePlan,
 	opencodeArchivePlan,
 	resolveVendorTarget,
@@ -67,9 +68,50 @@ const TAR_BIN = IS_WINDOWS
 const SIDECAR_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const NODE_MODULES = join(SIDECAR_ROOT, "node_modules");
 const DIST_VENDOR = join(SIDECAR_ROOT, "dist", "vendor");
+
+// Local extraction scratch — per-worktree so concurrent `bun run dev` in two
+// worktrees can't race `freshExtractDir` on the same slug.
 const BUNDLE_CACHE = join(SIDECAR_ROOT, ".bundle-cache");
 
-// Bumping any version: update SHA256 below + wipe sidecar/.bundle-cache.
+// Downloaded archives are the network-expensive part and SHA256-verified, so we
+// share one cache across all worktrees of this repo: a new worktree reuses
+// already-fetched gh/glab/cloudflared/llama-cpp/node archives instead of
+// re-downloading them. This is a dev-only optimization, so the cache lives
+// inside the PROJECT (the main worktree's `sidecar/.bundle-cache`) rather than a
+// global user dir — found via git's common dir, which every linked worktree
+// shares. Archive filenames are version-keyed, so different version pins coexist
+// safely. Override with HELMOR_BUNDLE_CACHE (CI pins it per-job).
+const ARCHIVE_CACHE = resolveArchiveCache();
+
+function resolveArchiveCache(): string {
+	const override = process.env.HELMOR_BUNDLE_CACHE?.trim();
+	if (override) return resolve(override);
+	const mainRoot = mainWorktreeRoot();
+	// Fall back to the local scratch dir when not in a git checkout (e.g. a
+	// detached tarball build) — degrades to per-worktree, never breaks.
+	if (!mainRoot) return BUNDLE_CACHE;
+	return join(mainRoot, "sidecar", ".bundle-cache");
+}
+
+/// Resolve the main worktree's root via git's common dir. From any linked
+/// worktree `git rev-parse --git-common-dir` points at `<mainRoot>/.git`, so its
+/// parent is the shared main checkout. Returns null if git is unavailable.
+function mainWorktreeRoot(): string | null {
+	try {
+		const commonDir = execFileSync("git", ["rev-parse", "--git-common-dir"], {
+			cwd: SIDECAR_ROOT,
+			encoding: "utf8",
+		}).trim();
+		if (!commonDir) return null;
+		return dirname(resolve(SIDECAR_ROOT, commonDir));
+	} catch {
+		return null;
+	}
+}
+
+// Bumping any version: update SHA256 below. Archives are version-keyed in the
+// shared ARCHIVE_CACHE, so no wipe is needed; a changed SHA256 forces a
+// re-download automatically.
 //   gh:          github.com/cli/cli/releases/download/v$VER/gh_${VER}_checksums.txt
 //   glab:        gitlab.com/gitlab-org/cli/-/releases/v$VER/downloads/checksums.txt
 //   codex:       shasum -a 256 of the npm tarball at
@@ -80,6 +122,8 @@ const BUNDLE_CACHE = join(SIDECAR_ROOT, ".bundle-cache");
 //                github.com/cloudflare/cloudflared/releases/download/$VER/cloudflared-darwin-{arm64,amd64}.tgz
 //   opencode:    shasum -a 256 of the npm tarball at
 //                registry.npmjs.org/opencode-darwin-{arm64,x64}/-/opencode-darwin-{arm64,x64}-$VER.tgz
+//   mimo:        shasum -a 256 of the npm tarball at
+//                registry.npmjs.org/@mimo-ai/mimocode-{darwin-arm64,darwin-x64,windows-x64}/-/mimocode-<suffix>-$VER.tgz
 
 // Version pins, SHA256 tables, target mapping, and archive URL rules live in
 // `vendor-platform.ts` so platform-specific build support can grow there
@@ -139,6 +183,7 @@ const ENTITLEMENTS_PLIST = join(
 
 function ensureCacheDir(): void {
 	mkdirSync(BUNDLE_CACHE, { recursive: true });
+	mkdirSync(ARCHIVE_CACHE, { recursive: true });
 }
 
 function sha256OfFile(path: string): string {
@@ -238,7 +283,7 @@ function stageGhBinary(target: TargetInfo): string {
 	// `gh_<ver>_windows_<arch>.zip`; both nest `bin/gh[.exe]`. The Windows plan
 	// carries no pinned sha256 (soft-verify); macOS stays strict.
 	const plan = ghArchivePlan(target);
-	const archive = join(BUNDLE_CACHE, plan.archiveName);
+	const archive = join(ARCHIVE_CACHE, plan.archiveName);
 	// downloadMaybeVerify is strict when a sha256 is pinned (macOS) and trusts
 	// HTTPS when it's empty (Windows soft-verify).
 	downloadMaybeVerify(plan.url, archive, plan.sha256);
@@ -261,7 +306,7 @@ function stageGlabBinary(target: TargetInfo): string {
 	// `extractArchive` (bsdtar) transparently handles both formats. Windows plan
 	// carries no pinned sha256 (soft-verify); macOS stays strict.
 	const plan = glabArchivePlan(target);
-	const archive = join(BUNDLE_CACHE, plan.archiveName);
+	const archive = join(ARCHIVE_CACHE, plan.archiveName);
 	downloadMaybeVerify(plan.url, archive, plan.sha256);
 
 	const extractDir = join(BUNDLE_CACHE, plan.slug);
@@ -290,7 +335,7 @@ function stageCloudflaredBinary(target: TargetInfo): string {
 	ensureCacheDir();
 	const binDest = join(DIST_VENDOR, "cloudflared", `cloudflared${EXE}`);
 	const plan = cloudflaredArchivePlan(target);
-	const archive = join(BUNDLE_CACHE, plan.archiveName);
+	const archive = join(ARCHIVE_CACHE, plan.archiveName);
 
 	// Windows: upstream publishes a bare `cloudflared-windows-<arch>.exe` (no
 	// archive), so download it straight to the destination (no extraction).
@@ -369,7 +414,7 @@ function stageClaudeCodeBinary(target: TargetInfo): string {
 	const version = readClaudeCodeVersion();
 	const plan = claudeCodeArchivePlan(target, version);
 	ensureCacheDir();
-	const archive = join(BUNDLE_CACHE, plan.archiveName);
+	const archive = join(ARCHIVE_CACHE, plan.archiveName);
 	downloadAndVerify(plan.url, archive, plan.sha256);
 
 	const extractDir = join(BUNDLE_CACHE, plan.slug);
@@ -468,20 +513,39 @@ function stageCodexFromVendorRoot(archRoot: string): void {
 		}
 	}
 
-	// Windows codex (layoutVersion 1) ships a `codex-resources/` dir
-	// (command-runner + sandbox helpers) that the flattened binary expects
-	// adjacent to itself. Copy it next to codex.exe.
+	// codex (layoutVersion 1) ships a `codex-resources/` dir that the flattened
+	// binary expects adjacent to itself. On macOS it nests a `zsh/bin/zsh`
+	// Mach-O; on Windows it carries command-runner + sandbox helpers. Copy it
+	// next to codex[.exe] and re-sign every nested Mach-O — notarization rejects
+	// any unsigned executable inside the bundle, even several dirs deep.
 	if (resourcesDir) {
 		const resSrc = join(archRoot, resourcesDir);
 		if (existsSync(resSrc)) {
 			const resDest = join(DIST_VENDOR, "codex", resourcesDir);
 			cpSync(resSrc, resDest, { recursive: true });
-			for (const entry of readdirSync(resDest)) {
-				const file = join(resDest, entry);
-				if (statSync(file).isFile()) {
-					chmodSync(file, 0o755);
-					maybeSignMacBinary(file, false);
-				}
+			signCodexResourcesTree(resDest);
+		}
+	}
+}
+
+// Walk `codex-resources/` recursively: make every file executable and re-sign
+// each Mach-O with our Developer ID + hardened runtime. The tree can nest
+// binaries (e.g. `zsh/bin/zsh`), so a flat top-level pass misses them and
+// notarization fails.
+function signCodexResourcesTree(root: string): void {
+	const stack = [root];
+	while (stack.length > 0) {
+		const cur = stack.pop();
+		if (!cur) continue;
+		for (const entry of readdirSync(cur)) {
+			const p = join(cur, entry);
+			const st = lstatSync(p);
+			if (st.isSymbolicLink()) continue;
+			if (st.isDirectory()) {
+				stack.push(p);
+			} else if (st.isFile()) {
+				chmodSync(p, 0o755);
+				if (isMachO(p)) maybeSignMacBinary(p, false);
 			}
 		}
 	}
@@ -510,7 +574,7 @@ function stageCodexBinary(target: TargetInfo): void {
 	const version = readCodexVersion();
 	const plan = codexArchivePlan(target, version);
 	ensureCacheDir();
-	const archive = join(BUNDLE_CACHE, plan.archiveName);
+	const archive = join(ARCHIVE_CACHE, plan.archiveName);
 	downloadAndVerify(plan.url, archive, plan.sha256);
 
 	const extractDir = join(BUNDLE_CACHE, plan.slug);
@@ -569,7 +633,7 @@ function stageOpencodeBinary(target: TargetInfo): string {
 	const version = readOpencodeVersion();
 	const plan = opencodeArchivePlan(target, version);
 	ensureCacheDir();
-	const archive = join(BUNDLE_CACHE, plan.archiveName);
+	const archive = join(ARCHIVE_CACHE, plan.archiveName);
 	downloadAndVerify(plan.url, archive, plan.sha256);
 
 	const extractDir = join(BUNDLE_CACHE, plan.slug);
@@ -586,6 +650,61 @@ function stageOpencodeBinary(target: TargetInfo): string {
 		);
 	}
 	return copyOpencodeBin(binSrc);
+}
+
+// ---------------------------------------------------------------------------
+// mimo (MiMo Code, opencode fork) — stage the NATIVE binary
+// `@mimo-ai/mimocode-<suffix>/bin/mimo`, NOT the `@mimo-ai/cli` Node shim.
+// Same bun-compiled shape as opencode → codesign needs JIT entitlements.
+// ---------------------------------------------------------------------------
+
+function readMimoVersion(): string {
+	const pkgJsonPath = join(NODE_MODULES, "@mimo-ai", "cli", "package.json");
+	ensureExists(pkgJsonPath, "@mimo-ai/cli package.json");
+	const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf8")) as {
+		version?: string;
+	};
+	if (!pkg.version) {
+		throw new Error(`[stage-vendor] @mimo-ai/cli has no version field`);
+	}
+	return pkg.version;
+}
+
+function copyMimoBin(src: string): string {
+	const dest = join(DIST_VENDOR, "mimo", `mimo${EXE}`);
+	copyFile(src, dest);
+	chmodSync(dest, 0o755);
+	maybeSignMacBinary(dest, true);
+	return dest;
+}
+
+function stageMimoBinary(target: TargetInfo): string {
+	const installed = join(NODE_MODULES, target.mimoPkg, "bin", `mimo${EXE}`);
+	if (existsSync(installed)) {
+		return copyMimoBin(installed);
+	}
+
+	// Cross-arch: download the platform tarball from npm.
+	const version = readMimoVersion();
+	const plan = mimoArchivePlan(target, version);
+	ensureCacheDir();
+	const archive = join(ARCHIVE_CACHE, plan.archiveName);
+	downloadAndVerify(plan.url, archive, plan.sha256);
+
+	const extractDir = join(BUNDLE_CACHE, plan.slug);
+	freshExtractDir(extractDir);
+	execFileSync(TAR_BIN, ["-xzf", archive, "-C", extractDir], {
+		stdio: "inherit",
+	});
+
+	// npm tarballs nest everything under `package/`.
+	const binSrc = join(extractDir, "package", "bin", `mimo${EXE}`);
+	if (!existsSync(binSrc)) {
+		throw new Error(
+			`[stage-vendor] mimo binary missing after extract: ${binSrc}`,
+		);
+	}
+	return copyMimoBin(binSrc);
 }
 
 // ---------------------------------------------------------------------------
@@ -678,7 +797,7 @@ function downloadMaybeVerify(
 function stageLlamaCppBinaries(target: TargetInfo): string {
 	ensureCacheDir();
 	const plan = llamaArchivePlan(target);
-	const archive = join(BUNDLE_CACHE, plan.archiveName);
+	const archive = join(ARCHIVE_CACHE, plan.archiveName);
 
 	// Windows: upstream ships `llama-<ver>-bin-win-cpu-x64.zip` (server + CLIs +
 	// their `.dll`s, no `bin/` wrapper). Stage the whole tree as a unit (the
@@ -829,7 +948,7 @@ function stageNodeRuntime(target: TargetInfo): string {
 	const plan = nodeArchivePlan(target);
 	const dest = join(DIST_VENDOR, "node", `node${EXE}`);
 	ensureCacheDir();
-	const archive = join(BUNDLE_CACHE, plan.archiveName);
+	const archive = join(ARCHIVE_CACHE, plan.archiveName);
 	downloadAndVerify(plan.url, archive, plan.sha256);
 	const extractDir = join(BUNDLE_CACHE, `${plan.slug}-extract`);
 	freshExtractDir(extractDir);
@@ -894,8 +1013,9 @@ function stageCursorWorkerDeps(target: TargetInfo): string {
 	console.log(
 		`[stage-vendor] installing @cursor/sdk@${version} for ${npmOs}-${npmArch} (cursor worker)`,
 	);
+	const installCommand = IS_WINDOWS ? "npm.cmd" : process.execPath;
 	execFileSync(
-		process.execPath,
+		installCommand,
 		["install", `--cpu=${npmArch}`, `--os=${npmOs}`],
 		{
 			cwd: dest,
@@ -1066,6 +1186,9 @@ stageCodexBinary(target);
 // ----- opencode -----
 stageOptional("opencode", () => stageOpencodeBinary(target));
 
+// ----- mimo -----
+stageOptional("mimo", () => stageMimoBinary(target));
+
 // ----- kimi (Kimi Code CLI, ACP provider) -----
 stageOptional("kimi", () => stageKimiBinary(target));
 
@@ -1094,6 +1217,7 @@ console.log(`[stage-vendor] ✓ staged → ${DIST_VENDOR}`);
 console.log(`  claude-code ${humanSize(join(DIST_VENDOR, "claude-code"))}`);
 console.log(`  codex       ${humanSize(join(DIST_VENDOR, "codex"))}`);
 console.log(`  opencode    ${humanSize(join(DIST_VENDOR, "opencode"))}`);
+console.log(`  mimo        ${humanSize(join(DIST_VENDOR, "mimo"))}`);
 console.log(`  kimi        ${humanSize(join(DIST_VENDOR, "kimi"))}`);
 console.log(`  gh          ${humanSize(join(DIST_VENDOR, "gh"))}`);
 console.log(`  glab        ${humanSize(join(DIST_VENDOR, "glab"))}`);

@@ -42,6 +42,7 @@ pub fn static_model_sections() -> Vec<AgentModelSection> {
         super::custom_providers::configured_models(),
         load_cursor_prefs(),
         load_opencode_prefs(),
+        load_mimo_prefs(),
         load_kimi_prefs(),
     )
 }
@@ -52,6 +53,7 @@ fn model_sections_for_inputs(
     custom: Vec<super::custom_providers::ClaudeProviderModel>,
     cursor_prefs: Option<CursorPrefs>,
     opencode_prefs: Option<OpencodePrefs>,
+    mimo_prefs: Option<OpencodePrefs>,
     kimi_prefs: Option<KimiPrefs>,
 ) -> Vec<AgentModelSection> {
     let mut claude_section = official_claude_section();
@@ -61,6 +63,7 @@ fn model_sections_for_inputs(
     let mut sections = vec![claude_section];
     sections.push(codex_section());
     sections.push(opencode_section_from_prefs(opencode_prefs));
+    sections.push(mimo_section_from_prefs(mimo_prefs));
     sections.push(kimi_section_from_prefs(kimi_prefs));
     if let Some(cursor) = cursor_section_from_prefs(cursor_prefs) {
         sections.push(cursor);
@@ -75,12 +78,23 @@ fn official_claude_section() -> AgentModelSection {
         label: "Claude Code".to_string(),
         status: AgentModelSectionStatus::Ready,
         options: vec![
+            // Fable 5 leads the list as the most capable pick, but it burns
+            // limits ~2x faster than Opus — `useEnsureDefaultModel` therefore
+            // pins the app default to the `default` (Opus) entry below, NOT
+            // to options[0]. No fast mode (Opus 4.6+ only).
+            claude_model(
+                "claude-fable-5[1m]",
+                "Fable 5 1M",
+                &["low", "medium", "high", "xhigh", "max"],
+                false,
+            ),
             // `default` resolves to the newest Opus the bundled claude-code
-            // knows about — 2.1.154 maps it to Opus 4.8 (1M context, adaptive
+            // knows about — 2.1.170 maps it to Opus 4.8 (1M context, adaptive
             // thinking, default high effort, fast mode at 2x rate / 2.5x
             // speed). Kept as `default` so it stays the auto-latest pick and
-            // remains the first entry (the app's default selection). MUST stay
-            // in sync with `sidecar/src/model-catalog.ts`.
+            // remains the app's default selection (see
+            // `useEnsureDefaultModel`, which prefers id == "default"). MUST
+            // stay in sync with `sidecar/src/model-catalog.ts`.
             claude_model(
                 "default",
                 "Opus 4.8 1M",
@@ -117,7 +131,6 @@ fn codex_section() -> AgentModelSection {
             codex_model("gpt-5.5", "GPT-5.5"),
             codex_model("gpt-5.4", "GPT-5.4"),
             codex_model("gpt-5.4-mini", "GPT-5.4-Mini"),
-            codex_model("gpt-5.3-codex-spark", "GPT-5.3-Codex-Spark"),
         ],
     }
 }
@@ -196,21 +209,36 @@ fn kimi_section_from_prefs(prefs: Option<KimiPrefs>) -> AgentModelSection {
 
 // Fully dynamic from `app.opencode_provider`; no static seed. Empty `connected` → Unavailable.
 fn opencode_section_from_prefs(prefs: Option<OpencodePrefs>) -> AgentModelSection {
+    slug_section_from_prefs(prefs, "opencode", "OpenCode")
+}
+
+// MiMo Code (opencode fork) — same shape, driven by `app.mimo_provider`.
+fn mimo_section_from_prefs(prefs: Option<OpencodePrefs>) -> AgentModelSection {
+    slug_section_from_prefs(prefs, "mimo", "MiMo Code")
+}
+
+fn slug_section_from_prefs(
+    prefs: Option<OpencodePrefs>,
+    provider: &str,
+    label: &str,
+) -> AgentModelSection {
     let (status, options) = match prefs {
         Some(prefs) if !prefs.connected.is_empty() => (
             AgentModelSectionStatus::Ready,
-            expand_opencode_options(prefs),
+            expand_slug_options(provider, prefs),
         ),
         _ => (AgentModelSectionStatus::Unavailable, Vec::new()),
     };
     AgentModelSection {
-        id: "opencode".to_string(),
-        label: "OpenCode".to_string(),
+        id: provider.to_string(),
+        label: label.to_string(),
         status,
         options,
     }
 }
 
+/// Prefs shape shared by the opencode-protocol providers (opencode + mimo);
+/// both persist the same JSON under their own settings key.
 #[derive(Debug, Clone)]
 struct OpencodePrefs {
     connected: Vec<String>,
@@ -227,7 +255,15 @@ struct OpencodeCachedModelEntry {
 }
 
 fn load_opencode_prefs() -> Option<OpencodePrefs> {
-    let raw = crate::models::settings::load_setting_value("app.opencode_provider")
+    load_slug_prefs("app.opencode_provider")
+}
+
+fn load_mimo_prefs() -> Option<OpencodePrefs> {
+    load_slug_prefs("app.mimo_provider")
+}
+
+fn load_slug_prefs(setting_key: &str) -> Option<OpencodePrefs> {
+    let raw = crate::models::settings::load_setting_value(setting_key)
         .ok()
         .flatten()?;
     let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
@@ -287,12 +323,19 @@ fn load_opencode_prefs() -> Option<OpencodePrefs> {
 }
 
 // `enabledModelIds == null` → default-all cached models; explicit empty list → no options.
-fn expand_opencode_options(prefs: OpencodePrefs) -> Vec<AgentModelOption> {
+fn expand_slug_options(provider: &str, prefs: OpencodePrefs) -> Vec<AgentModelOption> {
     let cache = prefs.cached_models.unwrap_or_default();
     match prefs.enabled_ids {
         None => cache
             .iter()
-            .map(|entry| opencode_model(&entry.slug, &entry.label, entry.effort_levels.clone()))
+            .map(|entry| {
+                slug_model(
+                    provider,
+                    &entry.slug,
+                    &entry.label,
+                    entry.effort_levels.clone(),
+                )
+            })
             .collect(),
         Some(enabled) => enabled
             .iter()
@@ -302,7 +345,7 @@ fn expand_opencode_options(prefs: OpencodePrefs) -> Vec<AgentModelOption> {
                     .map(|e| e.label.clone())
                     .unwrap_or_else(|| slug.clone());
                 let effort_levels = entry.map(|e| e.effort_levels.clone()).unwrap_or_default();
-                opencode_model(slug, &label, effort_levels)
+                slug_model(provider, slug, &label, effort_levels)
             })
             .collect(),
     }
@@ -557,10 +600,15 @@ fn kimi_model(alias: &str, label: &str) -> AgentModelOption {
 }
 
 // `id`/`cli_model` are both the `provider/model` slug; `effort_levels` map to opencode `variants`.
-fn opencode_model(slug: &str, label: &str, effort_levels: Vec<String>) -> AgentModelOption {
+fn slug_model(
+    provider: &str,
+    slug: &str,
+    label: &str,
+    effort_levels: Vec<String>,
+) -> AgentModelOption {
     AgentModelOption {
         id: slug.to_string(),
-        provider: "opencode".to_string(),
+        provider: provider.to_string(),
         label: label.to_string(),
         cli_model: slug.to_string(),
         provider_key: None,
@@ -644,13 +692,17 @@ pub fn resolve_model(model_id: &str, provider_hint: Option<&str>) -> ResolvedMod
         Some("codex") => "codex",
         Some("claude") => "claude",
         Some("opencode") => "opencode",
+        Some("mimo") => "mimo",
         Some("kimi") => "kimi",
         // Namespaced kimi picker id — checked before the `/` opencode rule so a
         // custom-provider alias containing `/` still routes to kimi without a hint.
         _ if model_id.starts_with("kimi:") => "kimi",
         _ if model_id.starts_with("cursor-") => "cursor",
         _ if model_id.starts_with("composer-") => "cursor",
-        // `/` is unique to opencode slugs (claude uses `|`, codex/cursor have none).
+        // `/` marks an opencode-protocol slug (claude uses `|`, codex/cursor
+        // have none). Hint-less `/` ids default to opencode — mimo sessions
+        // always carry the provider hint, so this fallback never fires for
+        // them in practice.
         _ if model_id.contains('/') => "opencode",
         _ if model_id.starts_with("gpt-") => "codex",
         // Bare kimi aliases (`kimi-for-coding`, `kimi-k2`).
@@ -691,9 +743,9 @@ mod tests {
     #[test]
     fn static_model_sections_returns_hardcoded_catalog() {
         // `None` cursor_prefs (no API key) → cursor section omitted entirely.
-        let sections = model_sections_for_inputs(Vec::new(), None, None, None);
+        let sections = model_sections_for_inputs(Vec::new(), None, None, None, None);
 
-        assert_eq!(sections.len(), 4);
+        assert_eq!(sections.len(), 5);
         assert_eq!(sections[0].id, "claude");
         assert_eq!(sections[0].status, AgentModelSectionStatus::Ready);
         assert_eq!(
@@ -703,6 +755,7 @@ mod tests {
                 .map(|model| model.id.as_str())
                 .collect::<Vec<_>>(),
             vec![
+                "claude-fable-5[1m]",
                 "default",
                 "claude-opus-4-7[1m]",
                 "claude-opus-4-6[1m]",
@@ -723,7 +776,7 @@ mod tests {
                 .iter()
                 .map(|model| model.id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark",]
+            vec!["gpt-5.5", "gpt-5.4", "gpt-5.4-mini",]
         );
         assert!(sections[1]
             .options
@@ -735,11 +788,17 @@ mod tests {
         assert_eq!(sections[2].status, AgentModelSectionStatus::Unavailable);
         assert!(sections[2].options.is_empty());
 
+        // No mimo prefs row → Unavailable, no options.
+        assert_eq!(sections[3].id, "mimo");
+        assert_eq!(sections[3].label, "MiMo Code");
+        assert_eq!(sections[3].status, AgentModelSectionStatus::Unavailable);
+        assert!(sections[3].options.is_empty());
+
         // Kimi is a static one-entry section (the managed built-in default).
-        assert_eq!(sections[3].id, "kimi");
-        assert_eq!(sections[3].status, AgentModelSectionStatus::Ready);
+        assert_eq!(sections[4].id, "kimi");
+        assert_eq!(sections[4].status, AgentModelSectionStatus::Ready);
         assert_eq!(
-            sections[3]
+            sections[4]
                 .options
                 .iter()
                 .map(|model| model.id.as_str())
@@ -765,9 +824,10 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
-        assert_eq!(sections.len(), 4);
+        assert_eq!(sections.len(), 5);
         assert_eq!(sections[0].id, "claude");
         assert_eq!(sections[0].label, "Claude Code");
         assert_eq!(
@@ -777,6 +837,7 @@ mod tests {
                 .map(|model| model.id.as_str())
                 .collect::<Vec<_>>(),
             vec![
+                "claude-fable-5[1m]",
                 "default",
                 "claude-opus-4-7[1m]",
                 "claude-opus-4-6[1m]",
@@ -786,19 +847,20 @@ mod tests {
             ]
         );
         assert_eq!(
-            sections[0].options[5].provider_key.as_deref(),
+            sections[0].options[6].provider_key.as_deref(),
             Some("minimax")
         );
         assert_eq!(
-            sections[0].options[5].effort_levels,
+            sections[0].options[6].effort_levels,
             vec!["low", "medium", "high", "xhigh", "max"]
         );
-        assert!(!sections[0].options[5].supports_context_usage);
+        assert!(!sections[0].options[6].supports_context_usage);
         assert_eq!(sections[1].id, "codex");
     }
 
     #[test]
     fn resolve_claude_model() {
+        let _env = crate::testkit::TestEnv::new("resolve-claude-model");
         let m = resolve_model("default", None);
         assert_eq!(m.provider, "claude");
         assert_eq!(m.cli_model, "default");
@@ -808,6 +870,7 @@ mod tests {
 
     #[test]
     fn resolve_opus_model() {
+        let _env = crate::testkit::TestEnv::new("resolve-opus-model");
         let m = resolve_model("opus", None);
         assert_eq!(m.provider, "claude");
         assert_eq!(m.cli_model, "opus");
@@ -815,12 +878,14 @@ mod tests {
 
     #[test]
     fn resolve_sonnet_model() {
+        let _env = crate::testkit::TestEnv::new("resolve-sonnet-model");
         let m = resolve_model("sonnet", None);
         assert_eq!(m.provider, "claude");
     }
 
     #[test]
     fn resolve_gpt_model_routes_to_codex() {
+        let _env = crate::testkit::TestEnv::new("resolve-gpt-model-routes-to-codex");
         let m = resolve_model("gpt-4o", None);
         assert_eq!(m.provider, "codex");
         assert_eq!(m.cli_model, "gpt-4o");
@@ -828,12 +893,14 @@ mod tests {
 
     #[test]
     fn resolve_gpt_5_4_routes_to_codex() {
+        let _env = crate::testkit::TestEnv::new("resolve-gpt-5-4-routes-to-codex");
         let m = resolve_model("gpt-5.4", None);
         assert_eq!(m.provider, "codex");
     }
 
     #[test]
     fn resolve_unknown_model_defaults_to_claude() {
+        let _env = crate::testkit::TestEnv::new("resolve-unknown-model-defaults-to-claude");
         let m = resolve_model("some-future-model", None);
         assert_eq!(m.provider, "claude");
         assert_eq!(m.cli_model, "some-future-model");
@@ -841,6 +908,7 @@ mod tests {
 
     #[test]
     fn resolve_opencode_slug_routes_to_opencode() {
+        let _env = crate::testkit::TestEnv::new("resolve-opencode-slug-routes-to-opencode");
         // Explicit hint.
         let m = resolve_model("anthropic/claude-opus-4-5", Some("opencode"));
         assert_eq!(m.provider, "opencode");
@@ -849,6 +917,41 @@ mod tests {
         let m = resolve_model("openai/gpt-5-codex", None);
         assert_eq!(m.provider, "opencode");
         assert_eq!(m.cli_model, "openai/gpt-5-codex");
+    }
+
+    #[test]
+    fn resolve_mimo_hint_routes_to_mimo() {
+        let _env = crate::testkit::TestEnv::new("resolve-mimo-hint-routes-to-mimo");
+        let m = resolve_model("xiaomi/mimo-v2.5-pro", Some("mimo"));
+        assert_eq!(m.provider, "mimo");
+        assert_eq!(m.cli_model, "xiaomi/mimo-v2.5-pro");
+        assert_eq!(m.id, "xiaomi/mimo-v2.5-pro");
+        // Hint-less `/` slug falls back to opencode by design — mimo sessions
+        // always carry the hint (see resolve_model comment).
+        let m = resolve_model("xiaomi/mimo-v2.5-pro", None);
+        assert_eq!(m.provider, "opencode");
+    }
+
+    #[test]
+    fn mimo_section_emits_cached_models_when_connected() {
+        let prefs = OpencodePrefs {
+            connected: vec!["xiaomi".to_string()],
+            enabled_ids: None,
+            cached_models: Some(vec![opencode_cache(
+                "xiaomi/mimo-v2.5-pro",
+                "Xiaomi · MiMo V2.5 Pro",
+            )]),
+        };
+        let sections =
+            model_sections_for_inputs(Vec::new(), None, None, Some(prefs), None);
+        let mimo = sections.iter().find(|s| s.id == "mimo").unwrap();
+        assert_eq!(mimo.label, "MiMo Code");
+        assert_eq!(mimo.status, AgentModelSectionStatus::Ready);
+        let first = &mimo.options[0];
+        assert_eq!(first.provider, "mimo");
+        assert_eq!(first.cli_model, "xiaomi/mimo-v2.5-pro");
+        assert_eq!(first.label, "Xiaomi · MiMo V2.5 Pro");
+        assert!(first.supports_context_usage);
     }
 
     #[test]
@@ -965,7 +1068,7 @@ mod tests {
                 opencode_cache("hundun/deepseek-v4-pro", "Hundun · DeepSeek V4 Pro"),
             ]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs), None, None);
         let opencode = sections.iter().find(|s| s.id == "opencode").unwrap();
         assert_eq!(opencode.status, AgentModelSectionStatus::Ready);
         assert_eq!(
@@ -999,7 +1102,7 @@ mod tests {
                 ),
             ]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs), None, None);
         let opencode = sections.iter().find(|s| s.id == "opencode").unwrap();
         let zen = opencode
             .options
@@ -1028,7 +1131,7 @@ mod tests {
                 opencode_cache("hundun/deepseek-v4-pro", "Hundun · DeepSeek V4 Pro"),
             ]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs), None, None);
         let opencode = sections.iter().find(|s| s.id == "opencode").unwrap();
         assert_eq!(opencode.status, AgentModelSectionStatus::Ready);
         assert_eq!(opencode.options.len(), 1);
@@ -1046,7 +1149,7 @@ mod tests {
                 "OpenCode Zen · Big Pickle",
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs), None, None);
         let opencode = sections.iter().find(|s| s.id == "opencode").unwrap();
         assert_eq!(opencode.status, AgentModelSectionStatus::Ready);
         assert!(opencode.options.is_empty());
@@ -1062,7 +1165,7 @@ mod tests {
                 "OpenCode Zen · Big Pickle",
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs), None, None);
         let opencode = sections.iter().find(|s| s.id == "opencode").unwrap();
         assert_eq!(opencode.status, AgentModelSectionStatus::Unavailable);
         assert!(opencode.options.is_empty());
@@ -1075,7 +1178,7 @@ mod tests {
             enabled_ids: Some(vec!["mystery/model".to_string()]),
             cached_models: Some(Vec::new()),
         };
-        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs), None);
+        let sections = model_sections_for_inputs(Vec::new(), None, Some(prefs), None, None);
         let opencode = sections.iter().find(|s| s.id == "opencode").unwrap();
         assert_eq!(opencode.options.len(), 1);
         assert_eq!(opencode.options[0].id, "mystery/model");
@@ -1084,6 +1187,7 @@ mod tests {
 
     #[test]
     fn resolve_composer_routes_to_cursor() {
+        let _env = crate::testkit::TestEnv::new("resolve-composer-routes-to-cursor");
         let m = resolve_model("composer-2", None);
         assert_eq!(m.provider, "cursor");
         assert_eq!(m.cli_model, "composer-2");
@@ -1091,6 +1195,7 @@ mod tests {
 
     #[test]
     fn cursor_namespaced_id_strips_to_wire_for_cli_model() {
+        let _env = crate::testkit::TestEnv::new("cursor-namespaced-id-strips-to-wire-for-");
         // Composer's selected model id from the picker is `cursor-default`
         // (Helmor namespace). Resolver must emit `cli_model = "default"`
         // so the SDK's `Cursor.models.list` token survives the round-trip.
@@ -1116,20 +1221,37 @@ mod tests {
     }
 
     #[test]
-    fn official_claude_section_surfaces_opus_4_8_default_above_4_7_and_4_6() {
-        let sections = model_sections_for_inputs(Vec::new(), None, None, None);
+    fn official_claude_section_surfaces_fable_5_above_opus_lineage() {
+        let sections = model_sections_for_inputs(Vec::new(), None, None, None, None);
         let claude = sections.iter().find(|s| s.id == "claude").unwrap();
         let ids: Vec<&str> = claude.options.iter().map(|o| o.id.as_str()).collect();
-        // User-facing ordering: 4.8 (default) on top, then 4.7, then 4.6.
+        // User-facing ordering: Fable 5 on top, then 4.8 (default), 4.7, 4.6.
         assert_eq!(
-            &ids[..3],
-            &["default", "claude-opus-4-7[1m]", "claude-opus-4-6[1m]"],
-            "Opus 4.8 must lead, with explicit 4.7 / 4.6 beneath it"
+            &ids[..4],
+            &[
+                "claude-fable-5[1m]",
+                "default",
+                "claude-opus-4-7[1m]",
+                "claude-opus-4-6[1m]"
+            ],
+            "Fable 5 must lead, with Opus 4.8 (default) / 4.7 / 4.6 beneath it"
         );
 
-        // `default` → Opus 4.8: leads the list (so `useEnsureDefaultModel`
-        // picks it), supports fast mode, and keeps the xhigh effort tier.
-        let default = &claude.options[0];
+        // Fable 5: most capable, leads the list, but is NOT the app default
+        // (too expensive) — `useEnsureDefaultModel` pins to id == "default".
+        // No fast mode (Opus 4.6+ only); full effort tiers incl. xhigh.
+        let fable = &claude.options[0];
+        assert_eq!(fable.label, "Fable 5 1M");
+        assert_eq!(fable.cli_model, "claude-fable-5[1m]");
+        assert!(!fable.supports_fast_mode);
+        assert_eq!(
+            fable.effort_levels,
+            vec!["low", "medium", "high", "xhigh", "max"]
+        );
+
+        // `default` → Opus 4.8: stays the app default selection, supports
+        // fast mode, and keeps the xhigh effort tier.
+        let default = &claude.options[1];
         assert_eq!(default.label, "Opus 4.8 1M");
         assert_eq!(default.cli_model, "default");
         assert!(default.supports_fast_mode, "Opus 4.8 supports fast mode");
@@ -1139,7 +1261,7 @@ mod tests {
         );
 
         // Explicit 4.7 pin: same effort tiers as before, still no fast mode.
-        let opus47 = &claude.options[1];
+        let opus47 = &claude.options[2];
         assert_eq!(opus47.label, "Opus 4.7 1M");
         assert_eq!(opus47.cli_model, "claude-opus-4-7[1m]");
         assert!(!opus47.supports_fast_mode);
@@ -1149,13 +1271,14 @@ mod tests {
         );
 
         // 4.6 unchanged.
-        let opus46 = &claude.options[2];
+        let opus46 = &claude.options[3];
         assert_eq!(opus46.label, "Opus 4.6 1M");
         assert!(opus46.supports_fast_mode);
     }
 
     #[test]
     fn claude_default_no_longer_collides_with_cursor_auto() {
+        let _env = crate::testkit::TestEnv::new("claude-default-no-longer-collides-with-c");
         // `default` belongs to Claude (Opus 4.8 1M). Cursor's Auto is
         // `cursor-default`. They MUST resolve to different providers
         // even when the picker / persistence flow doesn't pass a hint —
@@ -1199,7 +1322,7 @@ mod tests {
             enabled_ids: Some(vec!["gpt-5.3-codex".to_string()]),
             cached_models: Some(vec![cursor_cache("gpt-5.3-codex", "Codex 5.3", None)]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None, None);
         assert!(sections.iter().all(|s| s.id != "cursor"));
     }
 
@@ -1212,7 +1335,7 @@ mod tests {
             enabled_ids: Some(Vec::new()),
             cached_models: Some(vec![cursor_cache("gpt-5.3-codex", "Codex 5.3", None)]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None, None);
         assert!(sections.iter().all(|s| s.id != "cursor"));
     }
 
@@ -1230,7 +1353,7 @@ mod tests {
                 Some(vec![cursor_param("reasoning", &["low", "medium", "high"])]),
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None, None);
         let cursor = sections.iter().find(|s| s.id == "cursor").unwrap();
         assert_eq!(cursor.options.len(), 1);
         let opt = &cursor.options[0];
@@ -1253,7 +1376,7 @@ mod tests {
                 Some(vec![cursor_param("fast", &["true", "false"])]),
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None, None);
         let cursor = sections.iter().find(|s| s.id == "cursor").unwrap();
         let opt = &cursor.options[0];
         assert!(opt.effort_levels.is_empty());
@@ -1275,7 +1398,7 @@ mod tests {
                 Some(vec![cursor_param("thinking", &["false", "true"])]),
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None, None);
         let opt = &sections.iter().find(|s| s.id == "cursor").unwrap().options[0];
         assert!(opt.effort_levels.is_empty());
         assert!(!opt.supports_fast_mode);
@@ -1299,7 +1422,7 @@ mod tests {
                 ]),
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None, None);
         let opt = &sections.iter().find(|s| s.id == "cursor").unwrap().options[0];
         assert_eq!(opt.effort_levels, vec!["low", "medium", "high", "max"]);
         assert!(opt.supports_fast_mode);
@@ -1321,7 +1444,7 @@ mod tests {
                 ]),
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None, None);
         let opt = &sections.iter().find(|s| s.id == "cursor").unwrap().options[0];
         assert_eq!(opt.effort_levels, vec!["max"]);
     }
@@ -1340,7 +1463,7 @@ mod tests {
                 ]),
             )]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None, None);
         let opt = &sections.iter().find(|s| s.id == "cursor").unwrap().options[0];
         assert_eq!(opt.effort_levels, vec!["low", "medium", "high"]);
         assert!(opt.supports_fast_mode);
@@ -1357,7 +1480,7 @@ mod tests {
             enabled_ids: Some(vec!["legacy".to_string()]),
             cached_models: Some(vec![cursor_cache("legacy", "Legacy Cached", None)]),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None, None);
         let opt = &sections.iter().find(|s| s.id == "cursor").unwrap().options[0];
         assert!(opt.effort_levels.is_empty());
         assert!(!opt.supports_fast_mode);
@@ -1373,7 +1496,7 @@ mod tests {
             enabled_ids: Some(vec!["mystery-model".to_string()]),
             cached_models: Some(Vec::new()),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None, None);
         let opt = &sections.iter().find(|s| s.id == "cursor").unwrap().options[0];
         assert_eq!(opt.cli_model, "mystery-model");
         assert_eq!(opt.label, "mystery-model");
@@ -1417,7 +1540,7 @@ mod tests {
             enabled_ids: Some(pick.iter().map(|s| s.to_string()).collect()),
             cached_models: Some(cached_models),
         };
-        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None);
+        let sections = model_sections_for_inputs(Vec::new(), Some(prefs), None, None, None);
         let cursor = sections.iter().find(|s| s.id == "cursor").unwrap();
         let by_wire: std::collections::HashMap<String, &AgentModelOption> = cursor
             .options
@@ -1464,6 +1587,7 @@ mod tests {
 
     #[test]
     fn provider_hint_disambiguates_overlapping_ids() {
+        let _env = crate::testkit::TestEnv::new("provider-hint-disambiguates-overlapping-");
         // A bare `gpt-`-prefixed id routes to Codex by prefix, but a
         // provider hint overrides that: the same id resolves to Cursor when
         // hinted. (Cursor's namespaced form `cursor-gpt-5.3-codex` obviates

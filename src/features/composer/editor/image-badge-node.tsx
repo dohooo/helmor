@@ -104,7 +104,11 @@ export class ImageBadgeNode extends DecoratorNode<ReactNode> {
 
 	createDOM(): HTMLElement {
 		const span = document.createElement("span");
-		span.style.display = "inline";
+		span.style.display = "inline-flex";
+		span.style.alignItems = "center";
+		span.style.justifyContent = "center";
+		span.style.lineHeight = "1";
+		span.style.verticalAlign = "-1px";
 		return span;
 	}
 

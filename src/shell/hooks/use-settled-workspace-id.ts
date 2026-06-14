@@ -17,6 +17,11 @@
 //     timer, so it fires after one window (~a frame or two) — imperceptible. A
 //     held burst keeps resetting the timer, so the cluster only fires for the id
 //     the user lands on.
+//   - While `selectedWorkspaceId` DIVERGES from `displayedWorkspaceId` (a
+//     deferred or held displayed flip is in flight) the gate keeps returning
+//     the previous settled id — the inspector must swap in the SAME commit as
+//     the held content, so neither warm targets nor the cold timer may advance
+//     it mid-hold. Convergence re-applies the warm/cold rules above.
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import type { WorkspaceDetail } from "@/lib/api";
@@ -29,8 +34,11 @@ const COLD_SETTLE_DELAY_MS = 140;
 
 export function useSettledWorkspaceId(
 	selectedWorkspaceId: string | null,
+	displayedWorkspaceId: string | null,
 ): string | null {
 	const queryClient = useQueryClient();
+
+	const isDiverged = selectedWorkspaceId !== displayedWorkspaceId;
 
 	// Warm = the cheap path (Start, or a workspace whose detail is already in the
 	// cache). Read synchronously in render so a warm/single/slow switch resolves
@@ -47,20 +55,21 @@ export function useSettledWorkspaceId(
 	// when the deferred load is finally allowed to start.
 	const coldFallbackRef = useRef(selectedWorkspaceId);
 	const [, setColdSettleTick] = useState(0);
-	if (isWarm) {
+	if (isWarm && !isDiverged) {
 		// A warm target is safe to load immediately — keep the cold fallback
 		// pointed at it so a subsequent cold switch falls back to the latest warm
 		// id. Ref write during render is a pure cache update (idempotent).
 		coldFallbackRef.current = selectedWorkspaceId;
 	}
 
-	const settledWorkspaceId = isWarm
-		? selectedWorkspaceId
-		: coldFallbackRef.current;
+	const settledWorkspaceId =
+		isWarm && !isDiverged ? selectedWorkspaceId : coldFallbackRef.current;
 
 	useEffect(() => {
 		// Warm targets already committed synchronously above — nothing to defer.
-		if (isWarm) return;
+		// A diverged target must not start the cold timer either: the settled id
+		// holds until the displayed flip lands (convergence re-runs this effect).
+		if (isWarm || isDiverged) return;
 		// Cold target: defer to the trailing edge. A newer keypress re-runs this
 		// effect and clears the pending timer, so only the settled id advances.
 		const timer = window.setTimeout(() => {
@@ -68,7 +77,7 @@ export function useSettledWorkspaceId(
 			setColdSettleTick((tick) => tick + 1);
 		}, COLD_SETTLE_DELAY_MS);
 		return () => window.clearTimeout(timer);
-	}, [selectedWorkspaceId, isWarm]);
+	}, [selectedWorkspaceId, isWarm, isDiverged]);
 
 	return settledWorkspaceId;
 }

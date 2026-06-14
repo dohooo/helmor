@@ -75,6 +75,24 @@ pub fn user_prompt_with_files_and_images(
     make_record(id, "user", &serde_json::to_string(&parsed).unwrap())
 }
 
+/// Post-migration user prompt with pasted-text tag ranges (UTF-16 code-unit
+/// offsets into `text`, as the composer computes them).
+pub fn user_prompt_with_pasted_texts(
+    id: &str,
+    text: &str,
+    pasted: &[(u64, u64)],
+) -> HistoricalRecord {
+    let parsed = json!({
+        "type": "user_prompt",
+        "text": text,
+        "pastedTexts": pasted
+            .iter()
+            .map(|(start, end)| json!({ "start": start, "end": end }))
+            .collect::<Vec<_>>(),
+    });
+    make_record(id, "user", &serde_json::to_string(&parsed).unwrap())
+}
+
 /// Mid-turn steer prompt. Same shape as `user_prompt` but with the
 /// `steer: true` marker written by `persist_steer_message`.
 pub fn user_prompt_steer(id: &str, text: &str) -> HistoricalRecord {

@@ -5,7 +5,7 @@
 
 use anyhow::{bail, Result};
 
-use crate::forge::branch::forge_head_branch_for;
+use crate::forge::branch::{forge_head_branch_for, ForgeHeadRef};
 use crate::forge::remote::{parse_remote, ParsedRemote};
 use crate::models::workspaces as workspace_models;
 use crate::workspace_state::WorkspaceState;
@@ -68,7 +68,7 @@ pub(super) fn load_gitlab_context(workspace_id: &str) -> Result<GitlabResolution
         return Ok(GitlabResolution::Unauthenticated);
     };
 
-    let (branch, published) = forge_head_branch_for(&record, &branch);
+    let ForgeHeadRef { branch, published } = forge_head_branch_for(&record, &branch);
     let full_path = format!("{}/{}", remote.namespace, remote.repo);
 
     Ok(GitlabResolution::Ready(GitlabContext {
@@ -343,5 +343,74 @@ mod tests {
         };
         assert_eq!(ctx.branch, "feature/remote-name");
         assert!(ctx.published);
+    }
+
+    /// Mirror of the GitHub `ready_with_remote_tracking_when_branch_published_…`
+    /// test: both providers share `forge_head_branch_for`, so the remote
+    /// fallback that rescues a published-but-local-ref-missing branch must
+    /// keep `published` true here too.
+    #[test]
+    fn ready_published_when_branch_on_remote_but_local_ref_missing() {
+        let env = crate::testkit::TestEnv::new("gitlab-ctx-published-no-local-ref");
+        let origin = crate::testkit::GitTestRepo::init();
+        let workspace_dir = crate::data_dir::workspace_dir("Repo", "workspace-dir").unwrap();
+        std::fs::create_dir_all(workspace_dir.parent().unwrap()).unwrap();
+        git_ops::run_git(
+            [
+                "clone",
+                &origin.path().display().to_string(),
+                &workspace_dir.display().to_string(),
+            ],
+            None,
+        )
+        .unwrap();
+        git_ops::run_git(
+            ["config", "user.email", "helmor@example.com"],
+            Some(&workspace_dir),
+        )
+        .unwrap();
+        git_ops::run_git(["config", "user.name", "Helmor Test"], Some(&workspace_dir)).unwrap();
+        git_ops::run_git(
+            ["checkout", "-b", "feature/published"],
+            Some(&workspace_dir),
+        )
+        .unwrap();
+        git_ops::run_git(
+            ["push", "origin", "HEAD:refs/heads/feature/published"],
+            Some(&workspace_dir),
+        )
+        .unwrap();
+        // Wipe the local remote-tracking ref so only the remote knows.
+        git_ops::run_git(
+            ["update-ref", "-d", "refs/remotes/origin/feature/published"],
+            Some(&workspace_dir),
+        )
+        .unwrap();
+
+        let conn = env.db_connection();
+        insert_repo(
+            &conn,
+            "r-published",
+            "Repo",
+            Some("git@gitlab.com:acme/repo.git"),
+            Some("alice"),
+        );
+        insert_workspace(
+            &conn,
+            "w-published",
+            "r-published",
+            "ready",
+            Some("feature/published"),
+        );
+        drop(conn);
+
+        let GitlabResolution::Ready(ctx) = load_gitlab_context("w-published").unwrap() else {
+            panic!("expected Ready");
+        };
+        assert_eq!(ctx.branch, "feature/published");
+        assert!(
+            ctx.published,
+            "remote fallback should recognise the published branch",
+        );
     }
 }

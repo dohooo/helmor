@@ -89,6 +89,7 @@ export function parseProvider(value: unknown): Provider {
 		value === "codex" ||
 		value === "cursor" ||
 		value === "opencode" ||
+		value === "mimo" ||
 		value === "kimi"
 	)
 		return value;

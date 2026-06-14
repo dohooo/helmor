@@ -18,7 +18,7 @@ import {
 	workspaceDetailQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
-import { useSettings } from "@/lib/settings";
+import { type ModelRef, useSettings } from "@/lib/settings";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import type { ContextCard } from "@/lib/sources/types";
 import { resolveSessionDisplayProvider } from "@/lib/workspace-helpers";
@@ -30,6 +30,7 @@ import { WorkspacePanel } from "./index";
 import type { SessionCloseRequest } from "./use-confirm-session-close";
 
 const EMPTY_MESSAGES: ThreadMessageLike[] = [];
+const EMPTY_SESSIONS: WorkspaceSessionSummary[] = [];
 
 /** Minimal shape the panel needs to render an optimistic user bubble for a
  *  freshly-created workspace whose first send is still queued behind
@@ -52,7 +53,7 @@ type WorkspacePanelContainerProps = {
 	sending: boolean;
 	busySessionIds?: Set<string>;
 	interactionRequiredSessionIds?: Set<string>;
-	modelSelections?: Record<string, string>;
+	modelSelections?: Record<string, ModelRef>;
 	workspaceChangeRequest?: ChangeRequestInfo | null;
 	onSelectSession: (sessionId: string | null) => void;
 	onSelectWorkspace?: (workspaceId: string) => void;
@@ -113,7 +114,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	});
 
 	const workspace = detailQuery.data ?? null;
-	const sessions = sessionsQuery.data ?? [];
+	const sessions = sessionsQuery.data ?? EMPTY_SESSIONS;
 	const rememberedSessionId = useMemo(() => {
 		if (sessionSelectionHistory.length === 0 || sessions.length === 0) {
 			return null;
@@ -334,15 +335,21 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 						session,
 						modelSelections,
 						modelSections,
-						settingsDefaultModelId: settings.defaultModelId,
+						settingsDefaultModel: settings.defaultModel,
 					});
 					return provider ? [session.id, provider] : null;
 				})
 				.filter((entry): entry is [string, AgentProvider] => entry !== null),
 		);
-	}, [modelSelections, queryClient, sessions, settings.defaultModelId]);
+	}, [modelSelections, queryClient, sessions, settings.defaultModel]);
 
-	const preferredPaneSessionId = selectedSessionId ?? threadSessionId;
+	// The router's session intent only applies once the workspace selection
+	// has converged onto the paint track. During a deferred flip / cold hold
+	// the router already points at the incoming workspace, whose session
+	// intent must not blank the still-displayed pane of the old one.
+	const sessionIntentId =
+		selectedWorkspaceId === displayedWorkspaceId ? selectedSessionId : null;
+	const preferredPaneSessionId = sessionIntentId ?? threadSessionId;
 	const sessionPanes = useMemo(() => {
 		if (!preferredPaneSessionId) {
 			return [];
@@ -540,7 +547,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	const handleWorkspaceChanged = useCallback(() => {
 		void invalidateWorkspaceQueries();
 	}, [invalidateWorkspaceQueries]);
-	const selectedSessionIdForPanel = selectedSessionId ?? threadSessionId;
+	const selectedSessionIdForPanel = sessionIntentId ?? threadSessionId;
 	const selectedSession =
 		sessions.find((session) => session.id === selectedSessionIdForPanel) ??
 		null;

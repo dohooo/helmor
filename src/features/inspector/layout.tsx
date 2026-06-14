@@ -152,10 +152,16 @@ export function getInitialTabsHeight(defaultHeight: number): number {
 export const INSPECTOR_SECTION_HEADER_CLASS =
 	"flex h-8 min-w-0 shrink-0 items-center justify-between border-b border-border/60 bg-inspector-section-header px-3";
 export const INSPECTOR_SECTION_TITLE_CLASS =
-	"text-ui leading-8 font-medium tracking-[-0.01em] text-muted-foreground";
+	"text-ui font-medium leading-none text-muted-foreground";
 /** `px-3` + `gap-0` on tablist → uniform 24px gap between any two tabs. */
 const INSPECTOR_TAB_BUTTON_CLASS =
-	"relative inline-flex h-full cursor-interactive items-center justify-center gap-1.5 px-3 text-small font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-0";
+	"relative inline-flex h-8 cursor-interactive items-center justify-center gap-1.5 px-3 pb-[2px] text-ui font-medium leading-none text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-0";
+const INSPECTOR_TAB_ACTIVE_INDICATOR_CLASS =
+	"pointer-events-none absolute inset-x-0 bottom-px h-[2px] bg-foreground opacity-0 transition-opacity";
+const INSPECTOR_INLINE_CONTROL_CLASS =
+	"hover:bg-accent/45 hover:text-foreground";
+const INSPECTOR_INLINE_CONTROL_OPEN_CLASS =
+	"data-[state=open]:bg-accent/45 data-[state=open]:text-foreground";
 
 /** Zoom state published to tab bodies (e.g. corner Stop/Rerun button). */
 type TabsZoomState = {
@@ -485,7 +491,7 @@ export function InspectorTabsSection({
 									<span
 										aria-hidden="true"
 										className={cn(
-											"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
+											INSPECTOR_TAB_ACTIVE_INDICATOR_CLASS,
 											activeTab === "setup" && "opacity-100",
 										)}
 									/>
@@ -493,7 +499,7 @@ export function InspectorTabsSection({
 								{/* Run tab + dropdown chevron share a wrapper so the
 								    active-tab underline can span both — covering the
 								    chevron too, not just the "Run" label. */}
-								<div className="relative flex shrink-0 items-stretch">
+								<div className="relative flex h-8 shrink-0 items-stretch">
 									<button
 										type="button"
 										role="tab"
@@ -538,7 +544,7 @@ export function InspectorTabsSection({
 									<span
 										aria-hidden="true"
 										className={cn(
-											"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
+											INSPECTOR_TAB_ACTIVE_INDICATOR_CLASS,
 											activeTab === "run" && "opacity-100",
 										)}
 									/>
@@ -587,7 +593,7 @@ export function InspectorTabsSection({
 														// stable on mask toggle). `transform-gpu` keeps it
 														// on its own compositing layer.
 														className={cn(
-															"group/tab relative flex h-full min-w-[5rem] shrink-0 transform-gpu cursor-interactive items-center overflow-hidden px-3 text-small font-medium text-muted-foreground focus-visible:outline-none focus-visible:ring-0",
+															"group/tab relative flex h-8 min-w-[5rem] shrink-0 transform-gpu cursor-interactive items-center overflow-hidden px-3 pb-[2px] text-ui font-medium leading-none text-muted-foreground focus-visible:outline-none focus-visible:ring-0",
 															isActive && "text-foreground",
 														)}
 														onClick={() => handleTabClick(instance.id)}
@@ -619,14 +625,14 @@ export function InspectorTabsSection({
 															}}
 															// Visibility-only toggle (no opacity transition) —
 															// matches session-tab + workspace-row patterns.
-															className="pointer-events-none invisible absolute inset-y-0 right-0 flex w-3 cursor-interactive items-center justify-center text-muted-foreground/70 hover:text-foreground group-hover/tab:pointer-events-auto group-hover/tab:visible focus-visible:pointer-events-auto focus-visible:visible"
+															className="pointer-events-none invisible absolute inset-y-0 right-0 flex w-3 cursor-interactive items-center justify-center pb-[2px] text-muted-foreground/70 hover:text-foreground group-hover/tab:pointer-events-auto group-hover/tab:visible focus-visible:pointer-events-auto focus-visible:visible"
 														>
 															<X className="size-3" strokeWidth={2} />
 														</button>
 														<span
 															aria-hidden="true"
 															className={cn(
-																"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
+																INSPECTOR_TAB_ACTIVE_INDICATOR_CLASS,
 																isActive && "opacity-100",
 															)}
 														/>
@@ -704,7 +710,10 @@ export function InspectorTabsSection({
 									onClick={onToggle}
 									variant="ghost"
 									size="icon-sm"
-									className="shrink-0 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+									className={cn(
+										"shrink-0 text-muted-foreground",
+										INSPECTOR_INLINE_CONTROL_CLASS,
+									)}
 								>
 									<ChevronDown
 										className="size-3.5"
@@ -830,13 +839,15 @@ function RunActionsDropdown({
 					//
 					// Hover feedback mirrors the inline-icon-button pattern
 					// already used in this file: muted → foreground text +
-					// a soft `bg-accent/60` halo so the affordance reads
+					// a soft accent halo so the affordance reads
 					// even when the chevron is already at full color
 					// (active-Run case). `data-[state=open]` keeps the bg
 					// pinned while the dropdown is open — Radix sets that
 					// attribute on the trigger automatically.
 					className={cn(
-						"-ml-0.5 flex h-full w-5 shrink-0 cursor-interactive items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-0 data-[state=open]:bg-accent/60 data-[state=open]:text-foreground",
+						"-ml-0.5 flex h-full w-5 shrink-0 cursor-interactive items-center justify-center rounded-sm pb-[2px] text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-0",
+						INSPECTOR_INLINE_CONTROL_CLASS,
+						INSPECTOR_INLINE_CONTROL_OPEN_CLASS,
 						activeTab === "run" && "text-foreground",
 					)}
 					// Don't bubble the click — the parent tablist would

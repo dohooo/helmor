@@ -156,7 +156,7 @@ export class KimiSessionManager implements SessionManager {
 			return;
 		}
 		if (this.turns.isAbortRequested(params.sessionId)) {
-			this.turns.end(params.sessionId);
+			this.turns.end(params.sessionId, requestId);
 			return;
 		}
 
@@ -182,7 +182,7 @@ export class KimiSessionManager implements SessionManager {
 			return;
 		}
 		if (this.turns.isAbortRequested(params.sessionId)) {
-			this.turns.end(params.sessionId);
+			this.turns.end(params.sessionId, requestId);
 			return;
 		}
 
@@ -233,7 +233,7 @@ export class KimiSessionManager implements SessionManager {
 		// Stop pressed — `requestStop` already emitted the terminal `aborted`
 		// and the Rust abort path flushes the in-flight turn.
 		if (this.turns.isAbortRequested(params.sessionId)) {
-			this.turns.end(params.sessionId);
+			this.turns.end(params.sessionId, requestId);
 			return;
 		}
 		if (turnError) {
@@ -260,7 +260,7 @@ export class KimiSessionManager implements SessionManager {
 			});
 		}
 		emitter.end(requestId);
-		this.turns.end(params.sessionId);
+		this.turns.end(params.sessionId, requestId);
 	}
 
 	/** Reuse the cached ctx, else resume (`session/load`) or create
@@ -586,7 +586,7 @@ export class KimiSessionManager implements SessionManager {
 			emitter.error(requestId, message);
 			emitter.end(requestId);
 		}
-		this.turns.end(sessionId);
+		this.turns.end(sessionId, requestId);
 	}
 
 	// Title generation flows through claude/codex/cursor (see index.ts title

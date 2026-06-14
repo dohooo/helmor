@@ -83,6 +83,15 @@ const DIFF_ROW_RENDER_STYLE = {
 	contentVisibility: "auto",
 	containIntrinsicSize: "auto 20px",
 } as const;
+const CHANGES_TREE_ROW_TEXT_CLASS =
+	"font-sans text-ui font-normal leading-none";
+const CHANGES_TREE_ICON_CLASS = "size-4 shrink-0 self-center";
+const CHANGES_ROW_STATE_CLASS =
+	"text-muted-foreground transition-colors hover:bg-accent/45";
+const CHANGES_ROW_SELECTED_CLASS = "bg-accent/70 text-foreground";
+const CHANGES_ROW_MUTED_SELECTED_CLASS = "bg-muted/50 text-foreground";
+const CHANGES_ROW_ICON_STATE_CLASS =
+	"text-muted-foreground hover:bg-accent/45 hover:text-foreground";
 
 function getCachedFileIcon(name: string): string {
 	const cached = fileIconCache.get(name);
@@ -343,7 +352,7 @@ function ChangesSectionImpl({
 
 			<ScrollArea
 				aria-label="Changes panel body"
-				className="min-h-0 flex-1 bg-muted/20 font-mono text-mini"
+				className="min-h-0 flex-1 bg-muted/20 font-sans text-ui leading-5"
 			>
 				{hasUncommittedChanges && (
 					<>
@@ -375,7 +384,7 @@ function ChangesSectionImpl({
 								label="Changes"
 								icon={
 									<LaptopIcon
-										className="size-3 shrink-0 text-muted-foreground"
+										className="size-3 shrink-0 text-muted-foreground/70"
 										strokeWidth={2}
 									/>
 								}
@@ -423,7 +432,7 @@ function ChangesSectionImpl({
 				)}
 
 				{changesLoaded && !hasChanges && !branchSwitching && (
-					<div className="px-3 py-3 text-mini leading-5 text-muted-foreground">
+					<div className="px-3 py-3 text-small leading-5 text-muted-foreground/70">
 						No changes on this branch yet.
 					</div>
 				)}
@@ -508,7 +517,7 @@ function ChangesGroup({
 		: null;
 	return (
 		<div>
-			<div className="group/header flex w-full items-center gap-1 py-1 pl-1 pr-2 text-mini font-semibold tracking-[-0.01em] text-muted-foreground">
+			<div className="group/header flex w-full items-center gap-1 py-1 pl-1 pr-2 text-ui font-medium text-muted-foreground/70">
 				<Button
 					type="button"
 					variant="ghost"
@@ -643,7 +652,7 @@ function BranchDiffSection({
 
 	return (
 		<div>
-			<div className="group/header flex w-full items-center gap-1 py-1 pl-1 pr-2 text-mini font-semibold tracking-[-0.01em] text-muted-foreground">
+			<div className="group/header flex w-full items-center gap-1 py-1 pl-1 pr-2 text-ui font-medium text-muted-foreground/70">
 				<Button
 					type="button"
 					variant="ghost"
@@ -661,7 +670,7 @@ function BranchDiffSection({
 						strokeWidth={2}
 					/>
 					<CloudIcon
-						className="size-3 shrink-0 text-muted-foreground"
+						className="size-3 shrink-0 text-muted-foreground/70"
 						strokeWidth={2}
 					/>
 					<span className="truncate">Remote</span>
@@ -686,7 +695,7 @@ function BranchDiffSection({
 					)}
 				>
 					{loading && changes.length === 0 ? (
-						<div className="px-2 py-2 text-micro text-muted-foreground">
+						<div className="px-2 py-2 text-micro text-muted-foreground/70">
 							Switching target branch…
 						</div>
 					) : treeView ? (
@@ -892,7 +901,11 @@ function TreeNodeList({
 					return (
 						<div key={node.path}>
 							<div
-								className="flex cursor-interactive items-center gap-1 py-[1.5px] pr-2 text-muted-foreground transition-colors hover:bg-accent/60"
+								className={cn(
+									"flex h-5 min-h-5 cursor-interactive items-center gap-1 pr-2",
+									CHANGES_TREE_ROW_TEXT_CLASS,
+									CHANGES_ROW_STATE_CLASS,
+								)}
 								style={{
 									...DIFF_ROW_RENDER_STYLE,
 									paddingLeft: `${depth * 12 + 8}px`,
@@ -909,7 +922,7 @@ function TreeNodeList({
 							>
 								<ChevronRightIcon
 									className={cn(
-										"size-3 shrink-0 transition-transform",
+										"size-3 shrink-0 self-center transition-transform",
 										isOpen && "rotate-90",
 									)}
 									strokeWidth={1.8}
@@ -917,9 +930,9 @@ function TreeNodeList({
 								<img
 									src={getCachedFolderIcon(node.name, isOpen)}
 									alt=""
-									className="size-4 shrink-0"
+									className={CHANGES_TREE_ICON_CLASS}
 								/>
-								<span className="truncate">{node.name}</span>
+								<span className="min-w-0 truncate">{node.name}</span>
 							</div>
 							{isOpen && (
 								<TreeNodeList
@@ -951,11 +964,13 @@ function TreeNodeList({
 					<div
 						key={node.path}
 						className={cn(
-							"group/row flex cursor-interactive items-center gap-1 py-[1.5px] pr-2 text-muted-foreground transition-colors hover:bg-accent/60",
+							"group/row flex h-5 min-h-5 cursor-interactive items-center gap-1 pr-2",
+							CHANGES_TREE_ROW_TEXT_CLASS,
+							CHANGES_ROW_STATE_CLASS,
 							selected &&
 								(editorMode
-									? "bg-accent text-foreground"
-									: "bg-muted/60 text-foreground"),
+									? CHANGES_ROW_SELECTED_CLASS
+									: CHANGES_ROW_MUTED_SELECTED_CLASS),
 						)}
 						style={{
 							...DIFF_ROW_RENDER_STYLE,
@@ -982,7 +997,7 @@ function TreeNodeList({
 						<img
 							src={getCachedFileIcon(node.name)}
 							alt=""
-							className="size-4 shrink-0"
+							className={CHANGES_TREE_ICON_CLASS}
 						/>
 						<ShinyFlash active={isFlashing}>{node.name}</ShinyFlash>
 						{file && (
@@ -1045,11 +1060,13 @@ function ChangesFlatView({
 						<div
 							key={change.path}
 							className={cn(
-								"group/row flex cursor-interactive items-center gap-1.5 py-[1.5px] pl-2 pr-2 text-muted-foreground transition-colors hover:bg-accent/60",
+								"group/row flex h-5 min-h-5 cursor-interactive items-center gap-1.5 pl-2 pr-2",
+								CHANGES_TREE_ROW_TEXT_CLASS,
+								CHANGES_ROW_STATE_CLASS,
 								change.absolutePath === activeEditorPath &&
 									(editorMode
-										? "bg-accent text-foreground"
-										: "bg-muted/60 text-foreground"),
+										? CHANGES_ROW_SELECTED_CLASS
+										: CHANGES_ROW_MUTED_SELECTED_CLASS),
 							)}
 							style={DIFF_ROW_RENDER_STYLE}
 							data-change-path={change.path}
@@ -1072,7 +1089,7 @@ function ChangesFlatView({
 							<img
 								src={getCachedFileIcon(change.name)}
 								alt=""
-								className="size-4 shrink-0"
+								className={CHANGES_TREE_ICON_CLASS}
 							/>
 							<span className="min-w-0 max-w-[60%] truncate">
 								<ShinyFlash active={flashingPaths.has(change.path)}>
@@ -1081,7 +1098,7 @@ function ChangesFlatView({
 							</span>
 							<span
 								className={cn(
-									"min-w-0 flex-1 truncate text-right text-micro text-muted-foreground",
+									"min-w-0 flex-1 truncate text-right text-micro text-muted-foreground/70",
 									hasHoverAction && "group-hover/row:hidden",
 								)}
 							>
@@ -1202,7 +1219,7 @@ function RowHoverActions({
 					aria-label="Open in editor"
 					title="Open in editor"
 					onClick={() => onOpenExternalEditor(absolutePath)}
-					className="text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+					className={CHANGES_ROW_ICON_STATE_CLASS}
 				>
 					<ExternalLinkIcon className="size-3.5" strokeWidth={2} />
 				</RowIconButton>
@@ -1212,7 +1229,7 @@ function RowHoverActions({
 					aria-label="Discard file changes"
 					title="Discard file changes"
 					onClick={() => onDiscard(path)}
-					className="text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+					className={CHANGES_ROW_ICON_STATE_CLASS}
 				>
 					<Undo2Icon className="size-3.5" strokeWidth={2} />
 				</RowIconButton>
@@ -1222,7 +1239,7 @@ function RowHoverActions({
 					aria-label={action === "stage" ? "Stage file" : "Unstage file"}
 					title={action === "stage" ? "Stage file" : "Unstage file"}
 					onClick={() => onStageAction(path)}
-					className="text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+					className={CHANGES_ROW_ICON_STATE_CLASS}
 				>
 					{action === "stage" ? (
 						<PlusIcon className="size-3.5" strokeWidth={2} />
@@ -1453,14 +1470,22 @@ function ShinyFlash({
 	}, [active]);
 
 	if (!shimmer) {
-		return <span className="truncate">{children}</span>;
+		return (
+			<span className={cn("min-w-0 truncate", CHANGES_TREE_ROW_TEXT_CLASS)}>
+				{children}
+			</span>
+		);
 	}
 
 	return (
 		<AnimatedShinyText
 			key={counterRef.current}
 			shimmerWidth={60}
-			className="!mx-0 !max-w-none truncate !text-neutral-500/80 ![animation-duration:1s] ![animation-iteration-count:3] ![animation-name:shiny-text-continuous] ![animation-timing-function:ease-in-out] dark:!text-neutral-500/80 dark:via-white via-black"
+			className={cn(
+				"!mx-0 !max-w-none truncate !text-neutral-500/80 ![animation-duration:1s] ![animation-iteration-count:3] ![animation-name:shiny-text-continuous] ![animation-timing-function:ease-in-out] dark:!text-neutral-500/80 dark:via-white via-black",
+				"min-w-0",
+				CHANGES_TREE_ROW_TEXT_CLASS,
+			)}
 		>
 			{children}
 		</AnimatedShinyText>

@@ -9,6 +9,7 @@ import { useEffect } from "react";
 import { $isCustomTagBadgeNode } from "../custom-tag-badge-node";
 import { $isFileBadgeNode } from "../file-badge-node";
 import { $isImageBadgeNode } from "../image-badge-node";
+import { $isTerminalDirectiveNode } from "../terminal-directive-node";
 
 function $isBadgeNode(node: import("lexical").LexicalNode): boolean {
 	return (
@@ -20,13 +21,18 @@ function $isBadgeNode(node: import("lexical").LexicalNode): boolean {
 
 function $hasContent(): boolean {
 	const root = $getRoot();
-	const text = root.getTextContent().trim();
-	if (text) return true;
 	for (const child of root.getChildren()) {
 		if ($isElementNode(child)) {
 			for (const desc of child.getChildren()) {
+				if ($isTerminalDirectiveNode(desc)) continue;
+				if (desc.getTextContent().trim()) return true;
 				if ($isBadgeNode(desc)) return true;
 			}
+		} else if (
+			!$isTerminalDirectiveNode(child) &&
+			child.getTextContent().trim()
+		) {
+			return true;
 		} else if ($isBadgeNode(child)) {
 			return true;
 		}

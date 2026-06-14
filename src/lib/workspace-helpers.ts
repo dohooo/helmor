@@ -4,6 +4,7 @@ import type {
 	AgentProvider,
 	ChangeRequestInfo,
 	MessagePart,
+	PastedTextRange,
 	ThreadMessageLike,
 	WorkspaceDetail,
 	WorkspaceGroup,
@@ -13,6 +14,7 @@ import type {
 	WorkspaceSummary,
 } from "./api";
 import { extractError } from "./errors";
+import type { ModelRef } from "./settings";
 
 export function createOptimisticCreatingWorkspaceDetail(
 	row: WorkspaceRow,
@@ -688,35 +690,35 @@ export function resolveSessionSelectedModelId({
 	session,
 	modelSelections,
 	modelSections,
-	settingsDefaultModelId,
+	settingsDefaultModel,
 	contextKey,
 }: {
 	session: Pick<
 		WorkspaceSessionSummary,
 		"id" | "agentType" | "model" | "lastUserMessageAt"
 	> | null;
-	modelSelections: Partial<Record<string, string>>;
+	modelSelections: Partial<Record<string, ModelRef>>;
 	modelSections: AgentModelSection[];
-	settingsDefaultModelId?: string | null;
+	settingsDefaultModel?: ModelRef | null;
 	contextKey?: string | null;
-}): string | null {
-	let selectedModelId = contextKey ? modelSelections[contextKey] : undefined;
-	if (!selectedModelId && session) {
-		selectedModelId = modelSelections[getComposerContextKey(null, session.id)];
+}): ModelRef | null {
+	let selected = contextKey ? modelSelections[contextKey] : undefined;
+	if (!selected && session) {
+		selected = modelSelections[getComposerContextKey(null, session.id)];
 	}
 	// A persisted pick can outlive its model (e.g. the Cursor key was removed,
-	// dropping that section). Once the catalog has loaded, drop an id that's no
+	// dropping that section). Once the catalog has loaded, drop a pick that's no
 	// longer in it so we fall back to a valid default instead of a dangling id.
 	if (
-		selectedModelId &&
+		selected &&
 		modelSections.length > 0 &&
-		!findModelOption(modelSections, selectedModelId)
+		!findModelOption(modelSections, selected.modelId, selected.provider)
 	) {
-		selectedModelId = undefined;
+		selected = undefined;
 	}
 	return (
-		selectedModelId ??
-		inferDefaultModelId(session, modelSections, settingsDefaultModelId)
+		selected ??
+		inferDefaultModelId(session, modelSections, settingsDefaultModel)
 	);
 }
 
@@ -724,32 +726,36 @@ export function resolveSessionDisplayProvider({
 	session,
 	modelSelections,
 	modelSections,
-	settingsDefaultModelId,
+	settingsDefaultModel,
 }: {
 	session: Pick<
 		WorkspaceSessionSummary,
 		"id" | "agentType" | "model" | "lastUserMessageAt"
 	>;
-	modelSelections: Partial<Record<string, string>>;
+	modelSelections: Partial<Record<string, ModelRef>>;
 	modelSections: AgentModelSection[];
-	settingsDefaultModelId?: string | null;
+	settingsDefaultModel?: ModelRef | null;
 }): AgentProvider | null {
-	// The Session Tab only has the four provider icons, so drive it from the
+	// The Session Tab only has the five provider icons, so drive it from the
 	// session's agent — not the composer model (an opencode session can run many
-	// sub-provider models whose own logos aren't one of our four).
+	// sub-provider models whose own logos aren't one of ours).
 	const agentProvider = agentTypeToProvider(session.agentType);
 	if (agentProvider) {
 		return agentProvider;
 	}
 	// New sessions without an assigned agent fall back to the selected model's
 	// provider so the icon still reflects what the next turn will use.
-	const selectedModelId = resolveSessionSelectedModelId({
+	const selected = resolveSessionSelectedModelId({
 		session,
 		modelSelections,
 		modelSections,
-		settingsDefaultModelId,
+		settingsDefaultModel,
 	});
-	return findModelOption(modelSections, selectedModelId)?.provider ?? null;
+	return (
+		agentTypeToProvider(selected?.provider) ??
+		findModelOption(modelSections, selected?.modelId ?? null)?.provider ??
+		null
+	);
 }
 
 function agentTypeToProvider(agentType?: string | null): AgentProvider | null {
@@ -759,6 +765,7 @@ function agentTypeToProvider(agentType?: string | null): AgentProvider | null {
 		case "cursor":
 		case "opencode":
 		case "kimi":
+		case "mimo":
 			return agentType;
 		default:
 			return null;
@@ -852,32 +859,46 @@ export function inferDefaultModelId(
 		"agentType" | "model" | "lastUserMessageAt"
 	> | null,
 	modelSections: AgentModelSection[],
-	settingsDefaultModelId?: string | null,
-): string | null {
+	settingsDefaultModel?: ModelRef | null,
+): ModelRef | null {
 	const allOptions = modelSections.flatMap((section) => section.options);
 
 	// If the session row carries an explicit model — either from history
 	// (streaming finalizer) or from a saveForLater pre-config — respect it.
+	// Provider comes from the session's pinned agent_type (authoritative for a
+	// run session); only fall back to the slug's first match when unset.
 	// Fresh sessions are created with `model = NULL` so this safely falls
 	// through to the user's current settings default below.
 	const sessionModel = session?.model ?? null;
-	if (sessionModel && findModelOption(modelSections, sessionModel)) {
-		return sessionModel;
+	if (sessionModel) {
+		const agentProvider = agentTypeToProvider(session?.agentType);
+		const option = findModelOption(modelSections, sessionModel, agentProvider);
+		if (option) {
+			return {
+				provider: agentProvider ?? option.provider,
+				modelId: sessionModel,
+			};
+		}
 	}
 
 	// New session or no valid session model → user setting is the only source.
 	// `useEnsureDefaultModel` is responsible for making sure this is non-null
 	// and valid once the catalog is loaded.
 	if (
-		settingsDefaultModelId &&
-		findModelOption(modelSections, settingsDefaultModelId)
+		settingsDefaultModel?.modelId &&
+		findModelOption(
+			modelSections,
+			settingsDefaultModel.modelId,
+			settingsDefaultModel.provider,
+		)
 	) {
-		return settingsDefaultModelId;
+		return settingsDefaultModel;
 	}
 
 	// Last-resort UI fallback so the composer never renders an empty model chip
 	// while settings bootstrap or self-heal catches up.
-	return allOptions[0]?.id ?? null;
+	const first = allOptions[0];
+	return first ? { provider: first.provider, modelId: first.id } : null;
 }
 
 export function describeUnknownError(error: unknown, fallback: string): string {
@@ -887,41 +908,96 @@ export function describeUnknownError(error: unknown, fallback: string): string {
 export function findModelOption(
 	modelSections: AgentModelSection[],
 	modelId: string | null,
+	provider?: string | null,
 ): AgentModelOption | null {
 	if (!modelId) {
 		return null;
 	}
 
-	return (
-		modelSections
-			.flatMap((section) => section.options)
-			.find((option) => option.id === modelId) ?? null
-	);
+	const options = modelSections.flatMap((section) => section.options);
+	// opencode and mimo share the `provider/model` slug namespace, so id alone
+	// is ambiguous when the same model is configured under both. When the
+	// provider is known, match it exactly; otherwise fall back to first-by-id.
+	if (provider) {
+		const exact = options.find(
+			(option) => option.id === modelId && option.provider === provider,
+		);
+		if (exact) return exact;
+	}
+	return options.find((option) => option.id === modelId) ?? null;
 }
 
 /**
- * Split `text` on `@<path>` substrings (longer paths win on overlap),
- * returning interleaved Text and FileMention parts. Mirrors the Rust
- * `split_user_text_with_files` so optimistic and persisted renders match.
+ * Split `text` on pasted-tag spans and `@<path>` substrings (longer paths
+ * win on overlap), returning interleaved Text, FileMention, and PastedText
+ * parts. Mirrors the Rust `split_user_text_with_files` so optimistic and
+ * persisted renders match.
  *
  * `msgId` namespaces the per-part ids to match the Rust side's
- * `{msgId}:txt:N` / `{msgId}:mention:N` scheme so optimistic ids survive
- * the round-trip through the adapter without remounting.
+ * `{msgId}:txt:N` / `{msgId}:mention:N` / `{msgId}:pasted:N` scheme so
+ * optimistic ids survive the round-trip through the adapter without
+ * remounting.
  *
  * `files` and `images` are merged into a single needle pool. Both must
  * be passed in — paths with whitespace can only round-trip when matched
  * against a structured needle, never via regex.
+ *
+ * `pastedTexts` carries the composer-computed ranges of pasted-text tag
+ * spans (see `locatePastedTextRanges`). Each becomes an opaque
+ * `pasted-text` part: needle matches inside one are ignored, and
+ * invalid/overlapping ranges are dropped so that span degrades to plain
+ * text rather than corrupting the split.
  */
+/** An offset inside a surrogate pair can never map to a char boundary —
+ *  the Rust adapter drops such ranges, so the TS split must too. */
+function isUtf16CharBoundary(text: string, index: number): boolean {
+	if (index === 0 || index === text.length) {
+		return true;
+	}
+	const code = text.charCodeAt(index);
+	if (code < 0xdc00 || code > 0xdfff) {
+		return true; // not a low surrogate
+	}
+	const prev = text.charCodeAt(index - 1);
+	return prev < 0xd800 || prev > 0xdbff; // mid-pair only after a high surrogate
+}
+
 export function splitTextWithFiles(
 	text: string,
 	files: readonly string[],
 	msgId: string,
 	images: readonly string[] = [],
+	pastedTexts: readonly PastedTextRange[] = [],
 ): MessagePart[] {
 	const textId = (idx: number): string => `${msgId}:txt:${idx}`;
 	const mentionId = (idx: number): string => `${msgId}:mention:${idx}`;
+	const pastedId = (idx: number): string => `${msgId}:pasted:${idx}`;
+
+	const pasted: { start: number; end: number }[] = [];
+	// Sorting by (start, end) — not just start — mirrors the Rust adapter's
+	// tuple ordering: when two ranges share a start, the smaller end wins.
+	const candidates = pastedTexts
+		.filter(
+			(range) =>
+				Number.isInteger(range.start) &&
+				Number.isInteger(range.end) &&
+				range.start >= 0 &&
+				range.end <= text.length &&
+				range.start < range.end &&
+				isUtf16CharBoundary(text, range.start) &&
+				isUtf16CharBoundary(text, range.end),
+		)
+		.sort((a, b) => a.start - b.start || a.end - b.end);
+	let lastPastedEnd = 0;
+	for (const range of candidates) {
+		if (range.start >= lastPastedEnd) {
+			pasted.push({ start: range.start, end: range.end });
+			lastPastedEnd = range.end;
+		}
+	}
+
 	const needles = [...files, ...images];
-	if (needles.length === 0 || text.length === 0) {
+	if ((needles.length === 0 && pasted.length === 0) || text.length === 0) {
 		return [{ type: "text", id: textId(0), text }];
 	}
 	const sorted = [...needles].sort((a, b) => b.length - a.length);
@@ -934,31 +1010,52 @@ export function splitTextWithFiles(
 			const idx = text.indexOf(needle, searchStart);
 			if (idx === -1) break;
 			const end = idx + needle.length;
-			const overlaps = matches.some((m) => !(end <= m.start || idx >= m.end));
+			const overlaps =
+				matches.some((m) => !(end <= m.start || idx >= m.end)) ||
+				pasted.some((p) => !(end <= p.start || idx >= p.end));
 			if (!overlaps) matches.push({ start: idx, end, path: file });
 			searchStart = end;
 		}
 	}
-	if (matches.length === 0) return [{ type: "text", id: textId(0), text }];
-	matches.sort((a, b) => a.start - b.start);
+	if (matches.length === 0 && pasted.length === 0) {
+		return [{ type: "text", id: textId(0), text }];
+	}
+	const segments: {
+		start: number;
+		end: number;
+		kind: "mention" | "pasted";
+		path?: string;
+	}[] = [
+		...matches.map((m) => ({ ...m, kind: "mention" as const })),
+		...pasted.map((p) => ({ ...p, kind: "pasted" as const })),
+	].sort((a, b) => a.start - b.start);
 	const parts: MessagePart[] = [];
 	let cursor = 0;
 	let textSeq = 0;
 	let mentionSeq = 0;
-	for (const m of matches) {
-		if (cursor < m.start) {
+	let pastedSeq = 0;
+	for (const segment of segments) {
+		if (cursor < segment.start) {
 			parts.push({
 				type: "text",
 				id: textId(textSeq++),
-				text: text.slice(cursor, m.start),
+				text: text.slice(cursor, segment.start),
 			});
 		}
-		parts.push({
-			type: "file-mention",
-			id: mentionId(mentionSeq++),
-			path: m.path,
-		});
-		cursor = m.end;
+		if (segment.kind === "mention" && segment.path !== undefined) {
+			parts.push({
+				type: "file-mention",
+				id: mentionId(mentionSeq++),
+				path: segment.path,
+			});
+		} else {
+			parts.push({
+				type: "pasted-text",
+				id: pastedId(pastedSeq++),
+				text: text.slice(segment.start, segment.end),
+			});
+		}
+		cursor = segment.end;
 	}
 	if (cursor < text.length) {
 		parts.push({ type: "text", id: textId(textSeq), text: text.slice(cursor) });
@@ -974,6 +1071,7 @@ export function createLiveThreadMessage({
 	createdAt,
 	files = [],
 	images = [],
+	pastedTexts = [],
 }: {
 	id: string;
 	role: "user" | "assistant" | "system";
@@ -981,12 +1079,13 @@ export function createLiveThreadMessage({
 	createdAt: string;
 	files?: readonly string[];
 	images?: readonly string[];
+	pastedTexts?: readonly PastedTextRange[];
 }): ThreadMessageLike {
 	return {
 		role,
 		id,
 		createdAt,
-		content: splitTextWithFiles(text, files, id, images),
+		content: splitTextWithFiles(text, files, id, images, pastedTexts),
 	};
 }
 

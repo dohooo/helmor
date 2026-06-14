@@ -15,6 +15,7 @@ import { useWorkspaceCommitLifecycle } from "@/features/commit/hooks/use-commit-
 import type { PendingCreatedWorkspaceSubmit } from "@/features/conversation";
 import { useFeedbackSubmit } from "@/features/feedback/use-feedback-submit";
 import { useConfirmSessionClose } from "@/features/panel/use-confirm-session-close";
+import { useTerminalResumeConfirm } from "@/features/terminal/use-terminal-resume-confirm";
 import type { WorkspaceGroup, WorkspaceRow } from "@/lib/api";
 import { usesActionModelOverride } from "@/lib/commit-button-prompts";
 import type { AppSettings } from "@/lib/settings";
@@ -131,8 +132,10 @@ export function useWorkspaceActionControllers({
 	const handleCommitAction = useCallback(
 		(mode: WorkspaceCommitButtonMode) => {
 			if (usesActionModelOverride(mode)) {
+				const actionModel = appSettings.prModel ?? appSettings.defaultModel;
 				return handleInspectorCommitAction(mode, {
-					modelId: appSettings.prModelId ?? appSettings.defaultModelId,
+					modelId: actionModel?.modelId ?? null,
+					provider: actionModel?.provider ?? null,
 					effort: appSettings.prEffort ?? appSettings.defaultEffort,
 					fastMode: appSettings.prFastMode ?? appSettings.defaultFastMode,
 				});
@@ -141,10 +144,10 @@ export function useWorkspaceActionControllers({
 		},
 		[
 			handleInspectorCommitAction,
-			appSettings.prModelId,
+			appSettings.prModel,
 			appSettings.prEffort,
 			appSettings.prFastMode,
-			appSettings.defaultModelId,
+			appSettings.defaultModel,
 			appSettings.defaultEffort,
 			appSettings.defaultFastMode,
 		],
@@ -159,6 +162,11 @@ export function useWorkspaceActionControllers({
 			queryClient,
 		});
 
+	const {
+		confirmResume: confirmTerminalResume,
+		dialogNode: terminalResumeDialog,
+	} = useTerminalResumeConfirm();
+
 	const handleReopenClosedSession = readStateActions.reopenClosedSession;
 
 	const {
@@ -169,6 +177,7 @@ export function useWorkspaceActionControllers({
 		queryClient,
 		selectionActions,
 		requestCloseSession,
+		confirmTerminalResume,
 		handleSelectSession,
 		pushWorkspaceToast,
 		workspaceViewMode,
@@ -226,6 +235,7 @@ export function useWorkspaceActionControllers({
 		handleCommitAction,
 		requestCloseSession,
 		closeConfirmDialog,
+		terminalResumeDialog,
 		handleReopenClosedSession,
 		getCloseableCurrentSession,
 		handleCloseSelectedSession,

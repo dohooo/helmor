@@ -41,7 +41,10 @@ type WatchAccumulator = {
 	pendingPartial: ThreadMessageLike | null;
 	needsFlush: boolean;
 	frameId: number | null;
+	fallbackTimerId: number | null;
 };
+
+const STREAM_FLUSH_FALLBACK_MS = 120;
 
 export function useWatchSessionStream({ sessionId, activeStreams }: Args) {
 	const queryClient = useQueryClient();
@@ -73,6 +76,7 @@ export function useWatchSessionStream({ sessionId, activeStreams }: Args) {
 			pendingPartial: null,
 			needsFlush: false,
 			frameId: null,
+			fallbackTimerId: null,
 		};
 		// Gate rendering until the user prompt is guaranteed persisted. The
 		// backend writes the prompt row BEFORE the first sidecar event, so by
@@ -92,6 +96,10 @@ export function useWatchSessionStream({ sessionId, activeStreams }: Args) {
 
 		const flush = () => {
 			accumulator.frameId = null;
+			if (accumulator.fallbackTimerId !== null) {
+				window.clearTimeout(accumulator.fallbackTimerId);
+				accumulator.fallbackTimerId = null;
+			}
 			if (!accumulator.needsFlush) return;
 			accumulator.needsFlush = false;
 
@@ -120,8 +128,18 @@ export function useWatchSessionStream({ sessionId, activeStreams }: Args) {
 
 		const scheduleFlush = () => {
 			accumulator.needsFlush = true;
-			if (accumulator.frameId !== null) return;
-			accumulator.frameId = window.requestAnimationFrame(flush);
+			if (accumulator.frameId === null) {
+				accumulator.frameId = window.requestAnimationFrame(flush);
+			}
+			if (accumulator.fallbackTimerId === null) {
+				accumulator.fallbackTimerId = window.setTimeout(() => {
+					if (accumulator.frameId !== null) {
+						window.cancelAnimationFrame(accumulator.frameId);
+						accumulator.frameId = null;
+					}
+					flush();
+				}, STREAM_FLUSH_FALLBACK_MS);
+			}
 		};
 
 		const handle = (event: AgentStreamEvent) => {
@@ -144,6 +162,10 @@ export function useWatchSessionStream({ sessionId, activeStreams }: Args) {
 				if (accumulator.frameId !== null) {
 					window.cancelAnimationFrame(accumulator.frameId);
 					accumulator.frameId = null;
+				}
+				if (accumulator.fallbackTimerId !== null) {
+					window.clearTimeout(accumulator.fallbackTimerId);
+					accumulator.fallbackTimerId = null;
 				}
 				flush();
 				// Reconcile to canonical DB rows now the turn is finalized.
@@ -195,6 +217,9 @@ export function useWatchSessionStream({ sessionId, activeStreams }: Args) {
 			disposed = true;
 			if (accumulator.frameId !== null) {
 				window.cancelAnimationFrame(accumulator.frameId);
+			}
+			if (accumulator.fallbackTimerId !== null) {
+				window.clearTimeout(accumulator.fallbackTimerId);
 			}
 			unlisten?.();
 			// On teardown (turn ended or navigated away), pull canonical DB

@@ -1,10 +1,4 @@
-import {
-	act,
-	cleanup,
-	fireEvent,
-	render,
-	screen,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { WorkspaceGroup, WorkspaceRow } from "@/lib/api";
@@ -44,9 +38,6 @@ const workspaceGroups: WorkspaceGroup[] = [
 ];
 
 describe("WorkspacesSidebarContainer", () => {
-	const originalRequestAnimationFrame = window.requestAnimationFrame;
-	const originalCancelAnimationFrame = window.cancelAnimationFrame;
-
 	beforeEach(() => {
 		useControllerMock.mockImplementation((args: ControllerArgs) => ({
 			addingRepository: false,
@@ -82,39 +73,15 @@ describe("WorkspacesSidebarContainer", () => {
 
 	afterEach(() => {
 		cleanup();
-		vi.useRealTimers();
 		vi.clearAllMocks();
-		Object.defineProperty(window, "requestAnimationFrame", {
-			configurable: true,
-			value: originalRequestAnimationFrame,
-		});
-		Object.defineProperty(window, "cancelAnimationFrame", {
-			configurable: true,
-			value: originalCancelAnimationFrame,
-		});
 	});
 
-	it("defers external workspace selection until after the next frame", () => {
-		vi.useFakeTimers();
+	// Stage A: the rAF+setTimeout deferral moved into the selection controller's
+	// `scheduleDisplayFlip` (one mechanism for mouse + keyboard). The container
+	// must forward the click synchronously so the router/highlight commit stays
+	// inside the input task.
+	it("forwards workspace selection synchronously on click", () => {
 		const onSelectWorkspace = vi.fn();
-		const frameCallbacks = new Map<number, FrameRequestCallback>();
-		let nextFrameId = 1;
-
-		Object.defineProperty(window, "requestAnimationFrame", {
-			configurable: true,
-			value: vi.fn((callback: FrameRequestCallback) => {
-				const id = nextFrameId;
-				nextFrameId += 1;
-				frameCallbacks.set(id, callback);
-				return id;
-			}),
-		});
-		Object.defineProperty(window, "cancelAnimationFrame", {
-			configurable: true,
-			value: vi.fn((id: number) => {
-				frameCallbacks.delete(id);
-			}),
-		});
 
 		render(
 			<TooltipProvider delayDuration={0}>
@@ -127,22 +94,6 @@ describe("WorkspacesSidebarContainer", () => {
 		);
 
 		fireEvent.click(screen.getByRole("button", { name: "Workspace 2" }));
-
-		expect(onSelectWorkspace).not.toHaveBeenCalled();
-		expect(frameCallbacks.size).toBe(1);
-
-		act(() => {
-			for (const [id, callback] of frameCallbacks) {
-				frameCallbacks.delete(id);
-				callback(performance.now());
-			}
-		});
-
-		expect(onSelectWorkspace).not.toHaveBeenCalled();
-
-		act(() => {
-			vi.runOnlyPendingTimers();
-		});
 
 		expect(onSelectWorkspace).toHaveBeenCalledTimes(1);
 		expect(onSelectWorkspace).toHaveBeenCalledWith("workspace-2");

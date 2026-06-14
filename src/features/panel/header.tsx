@@ -30,6 +30,7 @@ import {
 	ClaudeIcon,
 	CursorIcon,
 	KimiIcon,
+	MiMoCodeIcon,
 	OpenAIIcon,
 	OpenCodeIcon,
 } from "@/components/icons";
@@ -242,7 +243,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 				>
 					<TrafficLightSpacer
 						side="left"
-						width={60}
+						width={48}
 						className="hidden max-[960px]:block"
 					/>
 					{headerLeading}
@@ -415,10 +416,10 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 												if (previousDetail) {
 													queryClient.setQueryData<WorkspaceDetail | null>(
 														detailKey,
-														{
+														() => ({
 															...previousDetail,
 															intendedTargetBranch: branch,
-														},
+														}),
 													);
 												}
 
@@ -669,7 +670,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 															) : null}
 														</span>
 														{!isEditing ? (
-															<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible group-focus-within/tab:pointer-events-auto group-focus-within/tab:visible">
+															<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible">
 																<span
 																	role="button"
 																	aria-label="Rename session"
@@ -730,7 +731,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 					<TooltipTrigger asChild>
 						<Button
 							aria-label="New session"
-							onClick={sessionActions.createSession}
+							onClick={() => void sessionActions.createSession()}
 							variant="ghost"
 							size="icon-sm"
 							className="ml-0.5 shrink-0 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
@@ -871,6 +872,9 @@ function SessionProviderIcon({
 	}
 	if (agentType === "kimi") {
 		return <KimiIcon className="size-3 shrink-0 text-muted-foreground" />;
+	}
+	if (agentType === "mimo") {
+		return <MiMoCodeIcon className="size-3 shrink-0 text-muted-foreground" />;
 	}
 	return <ClaudeIcon className="size-3 shrink-0 text-muted-foreground" />;
 }

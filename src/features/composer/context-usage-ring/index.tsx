@@ -29,7 +29,14 @@ type Props = {
 	 *  right project config. */
 	cwd: string | null;
 	/** Only Claude supports the rich hover breakdown. */
-	agentType: "claude" | "codex" | "cursor" | "opencode" | "kimi" | null;
+	agentType:
+		| "claude"
+		| "codex"
+		| "cursor"
+		| "opencode"
+		| "mimo"
+		| "kimi"
+		| null;
 	/** Composer's current model id; used as the rich-fetch cache key. */
 	composerModelId: string | null;
 	alwaysShow: boolean;

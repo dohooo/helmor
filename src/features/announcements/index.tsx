@@ -6,6 +6,7 @@ import {
 	SettingsIcon,
 	SquarePenIcon,
 	XIcon,
+	ZapIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { GithubBrandIcon } from "@/components/brand-icon";
@@ -28,6 +29,7 @@ import {
 	writeLastSeenInstallVersion,
 } from "@/features/announcements/storage";
 import type { SettingsSection } from "@/features/settings";
+import { toggleQuickPanel } from "@/lib/api";
 import type { WorkspaceRightSidebarMode } from "@/lib/settings";
 import packageJson from "../../../package.json";
 
@@ -93,6 +95,9 @@ export function ReleaseAnnouncementToastHost({
 				break;
 			case "openStartPage":
 				onOpenStartPage();
+				break;
+			case "toggleQuickPanel":
+				void toggleQuickPanel();
 				break;
 		}
 	};
@@ -267,6 +272,8 @@ function ActionIcon({
 			return <SettingsIcon className={className} />;
 		case "openStartPage":
 			return <SquarePenIcon className={className} />;
+		case "toggleQuickPanel":
+			return <ZapIcon className={className} />;
 	}
 }
 

@@ -66,6 +66,7 @@ import { SettingsSelect } from "./components/settings-select";
 import { AccountPanel } from "./panels/account";
 import { AppUpdatesPanel } from "./panels/app-updates";
 import { AppearancePanel } from "./panels/appearance";
+import { ArchiveCleanupPanel } from "./panels/archive-cleanup";
 import { ComponentsPanel } from "./panels/components";
 import { ConductorImportPanel } from "./panels/conductor-import";
 import { DevToolsPanel } from "./panels/dev-tools";
@@ -344,6 +345,18 @@ export const SettingsDialog = memo(function SettingsDialog({
 										/>
 									</SettingsRow>
 									<SettingsRow
+										title="Terminal Mode"
+										releaseMarker={{ kind: "feature" }}
+										description="Adds a composer toggle that opens your prompt in the agent's terminal UI instead of a chat session. Claude and Codex only."
+									>
+										<Switch
+											checked={settings.enableTerminalMode}
+											onCheckedChange={(checked) =>
+												updateSettings({ enableTerminalMode: checked })
+											}
+										/>
+									</SettingsRow>
+									<SettingsRow
 										title="Always show context usage"
 										description="By default, context usage is only shown when more than 70% is used."
 									>
@@ -367,7 +380,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 									</SettingsRow>
 									<SettingsRow
 										title="Auto-archive on merge"
-										releaseMarker={{ kind: "feature" }}
 										description="When a workspace's linked PR/MR is merged, archive the workspace automatically."
 									>
 										<Switch
@@ -502,6 +514,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 											</ToggleGroupItem>
 										</ToggleGroup>
 									</SettingsRow>
+									<ArchiveCleanupPanel />
 									<AppUpdatesPanel />
 									<ComponentsPanel />
 								</SettingsGroup>
@@ -534,14 +547,17 @@ export const SettingsDialog = memo(function SettingsDialog({
 										// dialog open and `hasMaterialized` running — once the
 										// migration lands, stored values are explicit and these
 										// fallbacks no-op.
-										modelId={settings.defaultModelId}
+										modelId={settings.defaultModel?.modelId ?? null}
 										effort={settings.defaultEffort}
 										fastMode={settings.defaultFastMode}
 										ariaPrefix="Default"
 										onChange={(p) => {
 											const patch: Partial<AppSettings> = {};
 											if (p.modelId !== undefined)
-												patch.defaultModelId = p.modelId;
+												patch.defaultModel = {
+													provider: p.provider ?? null,
+													modelId: p.modelId,
+												};
 											if (p.effort !== undefined)
 												patch.defaultEffort = p.effort;
 											if (p.fastMode !== undefined)
@@ -555,7 +571,11 @@ export const SettingsDialog = memo(function SettingsDialog({
 										models={allModels}
 										modelSections={modelSections}
 										isLoadingModels={modelSectionsQuery.isPending}
-										modelId={settings.reviewModelId ?? settings.defaultModelId}
+										modelId={
+											settings.reviewModel?.modelId ??
+											settings.defaultModel?.modelId ??
+											null
+										}
 										effort={settings.reviewEffort ?? settings.defaultEffort}
 										fastMode={
 											settings.reviewFastMode ?? settings.defaultFastMode
@@ -564,7 +584,10 @@ export const SettingsDialog = memo(function SettingsDialog({
 										onChange={(p) => {
 											const patch: Partial<AppSettings> = {};
 											if (p.modelId !== undefined)
-												patch.reviewModelId = p.modelId;
+												patch.reviewModel = {
+													provider: p.provider ?? null,
+													modelId: p.modelId,
+												};
 											if (p.effort !== undefined) patch.reviewEffort = p.effort;
 											if (p.fastMode !== undefined)
 												patch.reviewFastMode = p.fastMode;
@@ -577,13 +600,21 @@ export const SettingsDialog = memo(function SettingsDialog({
 										models={allModels}
 										modelSections={modelSections}
 										isLoadingModels={modelSectionsQuery.isPending}
-										modelId={settings.prModelId ?? settings.defaultModelId}
+										modelId={
+											settings.prModel?.modelId ??
+											settings.defaultModel?.modelId ??
+											null
+										}
 										effort={settings.prEffort ?? settings.defaultEffort}
 										fastMode={settings.prFastMode ?? settings.defaultFastMode}
 										ariaPrefix="Action"
 										onChange={(p) => {
 											const patch: Partial<AppSettings> = {};
-											if (p.modelId !== undefined) patch.prModelId = p.modelId;
+											if (p.modelId !== undefined)
+												patch.prModel = {
+													provider: p.provider ?? null,
+													modelId: p.modelId,
+												};
 											if (p.effort !== undefined) patch.prEffort = p.effort;
 											if (p.fastMode !== undefined)
 												patch.prFastMode = p.fastMode;
@@ -664,6 +695,9 @@ function effortLabel(level: string): string {
 
 type ModelRowChange = {
 	modelId?: string;
+	/** Provider of the picked model — captured at selection so the stored
+	 *  pref carries it (slug-based providers can't be re-derived from the id). */
+	provider?: string | null;
 	effort?: string;
 	fastMode?: boolean;
 };
@@ -747,7 +781,9 @@ function ModelSettingRow({
 						{models.map((m) => (
 							<DropdownMenuItem
 								key={m.id}
-								onClick={() => onChange({ modelId: m.id })}
+								onClick={() =>
+									onChange({ modelId: m.id, provider: m.provider })
+								}
 								className="justify-between gap-2"
 							>
 								<span className="flex min-w-0 items-center gap-2">

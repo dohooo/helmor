@@ -32,6 +32,7 @@ import {
 	buildCursorMessage,
 	computeModelParameterValues,
 	extractCreatePlanText,
+	isAgentBusyError,
 	isRetryableCursorError,
 	modelInfoToProviderInfo,
 	namespaceEvent,
@@ -148,7 +149,7 @@ export class CursorCore {
 			try {
 				const agent = await withCursorRetry("Agent.create", () =>
 					params.resume
-						? Agent.resume(params.resume, { apiKey })
+						? Agent.resume(params.resume, { apiKey, local: { cwd } })
 						: Agent.create({
 								apiKey,
 								model: { id: modelId },
@@ -183,7 +184,7 @@ export class CursorCore {
 		// Stop pressed during Agent.create — `requestStop` already emitted
 		// `aborted`. Keep the freshly-minted agent for reuse; just bail.
 		if (this.turns.isAbortRequested(params.sessionId)) {
-			this.turns.end(params.sessionId);
+			this.turns.end(params.sessionId, requestId);
 			return;
 		}
 
@@ -203,28 +204,57 @@ export class CursorCore {
 		const { text, imagePaths } = parseImageRefs(params.prompt, params.images);
 		const message = await buildCursorMessage(text, imagePaths);
 		const activeSession = session;
+		// `local.force` expires a wedged active run (left non-terminal in the
+		// cwd-scoped store by a worker that died mid-turn) before starting this
+		// one. Only set on the recovery retry — never force-expire a run that's
+		// legitimately in flight.
+		const sendOptions = (force: boolean) => ({
+			// Pass mode every turn — Cursor sticks with the create-time mode
+			// otherwise, so toggling Plan on/off mid-conversation (incl.
+			// "Implement" → back to agent) wouldn't take effect.
+			mode: toCursorMode(params.permissionMode),
+			model: {
+				id: modelId,
+				...(modelParams.length > 0 ? { params: modelParams } : {}),
+			},
+			...(force ? { local: { force: true } } : {}),
+		});
 		let run: Run;
 		try {
 			run = await withCursorRetry("agent.send", () =>
-				activeSession.agent.send(message, {
-					// Pass mode every turn — Cursor sticks with the create-time
-					// mode otherwise, so toggling Plan on/off mid-conversation
-					// (incl. "Implement" → back to agent) wouldn't take effect.
-					mode: toCursorMode(params.permissionMode),
-					model: {
-						id: modelId,
-						...(modelParams.length > 0 ? { params: modelParams } : {}),
-					},
-				}),
+				activeSession.agent.send(message, sendOptions(false)),
 			);
 		} catch (error) {
-			const msg = error instanceof Error ? error.message : String(error);
-			logger.error(`[${requestId}] Cursor agent.send failed: ${msg}`, {
-				...errorDetails(error),
-			});
-			emitter.error(requestId, `Cursor: ${msg}`);
-			emitter.end(requestId);
-			return;
+			// A run wedged in the local store ("already has active run") blocks
+			// every follow-up send and survives app restarts. Retry once with
+			// `local.force` — the SDK's recovery path for agents left wedged by a
+			// crashed CLI/worker process — before surfacing a hard failure.
+			if (!isAgentBusyError(error)) {
+				const msg = error instanceof Error ? error.message : String(error);
+				logger.error(`[${requestId}] Cursor agent.send failed: ${msg}`, {
+					...errorDetails(error),
+				});
+				emitter.error(requestId, `Cursor: ${msg}`);
+				emitter.end(requestId);
+				return;
+			}
+			logger.info(
+				`[${requestId}] Cursor agent has a wedged active run; retrying agent.send with local.force`,
+			);
+			try {
+				run = await withCursorRetry("agent.send(force)", () =>
+					activeSession.agent.send(message, sendOptions(true)),
+				);
+			} catch (retryError) {
+				const msg =
+					retryError instanceof Error ? retryError.message : String(retryError);
+				logger.error(`[${requestId}] Cursor agent.send(force) failed: ${msg}`, {
+					...errorDetails(retryError),
+				});
+				emitter.error(requestId, `Cursor: ${msg}`);
+				emitter.end(requestId);
+				return;
+			}
 		}
 		session.currentRun = run;
 		session.currentRequestId = requestId;
@@ -232,7 +262,7 @@ export class CursorCore {
 		// Stop pressed during agent.send — the run now exists, so cancel it.
 		if (this.turns.isAbortRequested(params.sessionId)) {
 			void run.cancel().catch(() => {});
-			this.turns.end(params.sessionId);
+			this.turns.end(params.sessionId, requestId);
 			return;
 		}
 
@@ -291,7 +321,7 @@ export class CursorCore {
 		if (!this.turns.isAbortRequested(params.sessionId)) {
 			emitter.end(requestId);
 		}
-		this.turns.end(params.sessionId);
+		this.turns.end(params.sessionId, requestId);
 	}
 
 	async generateTitle(

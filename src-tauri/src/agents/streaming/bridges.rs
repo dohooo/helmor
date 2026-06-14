@@ -47,9 +47,9 @@ pub fn bridge_permission_request_event(raw: &Value) -> AgentStreamEvent {
 
 /// Pure constructor for `AgentStreamEvent::UserInputRequest` from the raw
 /// sidecar `userInputRequest` event payload plus the streaming context.
-/// The sidecar already produced the kind-specific `payload` (AUQ raw
-/// questions, MCP / Codex synthesized JSON Schema, or URL launcher), so
-/// Rust just plumbs it through unchanged.
+/// `ask-user-question` payloads carry provider-raw question arrays —
+/// normalized here (`pipeline::user_question`) into the one canonical
+/// shape the frontend renders; `form` / `url` payloads pass through.
 pub fn bridge_user_input_request_event(
     provider: &str,
     model_id: &str,
@@ -81,10 +81,12 @@ pub fn bridge_user_input_request_event(
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string(),
-        payload: raw
-            .get("payload")
-            .cloned()
-            .unwrap_or(Value::Object(Default::default())),
+        payload: crate::pipeline::user_question::normalize_user_input_payload(
+            provider,
+            raw.get("payload")
+                .cloned()
+                .unwrap_or(Value::Object(Default::default())),
+        ),
     }
 }
 
@@ -272,10 +274,10 @@ mod tests {
     }
 
     #[test]
-    fn build_user_input_request_event_passes_payload_through() {
-        // The sidecar pre-shapes the kind-specific `payload` (raw AUQ
-        // questions / synthesized form schema / URL launcher); Rust just
-        // plumbs it through verbatim.
+    fn build_user_input_request_event_normalizes_question_payload() {
+        // `ask-user-question` payloads carry provider-raw questions; the
+        // bridge rewrites them into the canonical item shape so the
+        // frontend renders one component for Claude/Codex/OpenCode.
         let event = bridge_user_input_request_event(
             "claude",
             "opus-1m",
@@ -289,7 +291,7 @@ mod tests {
                 "message": "Claude is asking for your input.",
                 "payload": {
                     "kind": "ask-user-question",
-                    "questions": [{ "question": "Pick one", "options": [] }],
+                    "questions": [{ "question": "Pick one", "options": [{"label": "A", "description": "first"}] }],
                 },
             }),
         );
@@ -303,7 +305,11 @@ mod tests {
         payload:
           kind: ask-user-question
           questions:
-            - options: []
+            - allowFreeText: true
+              multiSelect: false
+              options:
+                - description: first
+                  label: A
               question: Pick one
         permissionMode: default
         provider: claude
@@ -311,6 +317,56 @@ mod tests {
         sessionId: provider-session-1
         source: Claude
         userInputId: tool-1
+        workingDirectory: /tmp/helmor
+        "#
+        );
+    }
+
+    #[test]
+    fn build_user_input_request_event_normalizes_codex_questions() {
+        // Codex `requestUserInput` questions ride the same payload kind
+        // with their native field names — the bridge maps them (id /
+        // isOther / Yes-No confirmation fallback) into canonical items.
+        let event = bridge_user_input_request_event(
+            "codex",
+            "gpt-5.5",
+            "gpt-5.5",
+            None,
+            "/tmp/helmor",
+            None,
+            &serde_json::json!({
+                "userInputId": "codex-input-1",
+                "source": "Codex",
+                "message": "Codex needs your input.",
+                "payload": {
+                    "kind": "ask-user-question",
+                    "questions": [{ "id": "q0", "header": "Proceed", "question": "Apply the patch?" }],
+                },
+            }),
+        );
+
+        assert_yaml_snapshot!(
+            serde_json::to_value(&event).unwrap(),
+            @r#"
+        kind: userInputRequest
+        message: Codex needs your input.
+        modelId: gpt-5.5
+        payload:
+          kind: ask-user-question
+          questions:
+            - allowFreeText: false
+              header: Proceed
+              multiSelect: false
+              options:
+                - label: "Yes"
+                - label: "No"
+              question: Apply the patch?
+        permissionMode: ~
+        provider: codex
+        resolvedModel: gpt-5.5
+        sessionId: ~
+        source: Codex
+        userInputId: codex-input-1
         workingDirectory: /tmp/helmor
         "#
         );

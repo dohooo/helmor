@@ -49,7 +49,11 @@ export class AddDirTriggerNode extends DecoratorNode<ReactNode> {
 
 	createDOM(): HTMLElement {
 		const span = document.createElement("span");
-		span.style.display = "inline";
+		span.style.display = "inline-flex";
+		span.style.alignItems = "center";
+		span.style.justifyContent = "center";
+		span.style.lineHeight = "1";
+		span.style.verticalAlign = "-1px";
 		return span;
 	}
 
@@ -81,7 +85,7 @@ export class AddDirTriggerNode extends DecoratorNode<ReactNode> {
 		return (
 			<span
 				data-testid="add-dir-pill"
-				className="inline-flex items-center rounded-[4px] px-1.5 py-px font-mono text-small leading-none bg-[color-mix(in_srgb,var(--workspace-pr-merged-accent)_10%,transparent)] text-[var(--workspace-pr-merged-accent)]"
+				className="inline-flex h-5 items-center rounded-[5px] px-1 font-mono text-small leading-none bg-[color-mix(in_srgb,var(--workspace-pr-merged-accent)_10%,transparent)] text-[var(--workspace-pr-merged-accent)]"
 			>
 				/add-dir
 			</span>

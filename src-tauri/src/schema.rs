@@ -835,6 +835,16 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             "INTEGER NOT NULL DEFAULT 0",
         )?;
     }
+    if has_table(connection, "sessions") {
+        // Terminal sessions render a live PTY in the message area instead of an
+        // SDK chat thread. 'gui' = existing SDK sessions.
+        add_column_if_missing(
+            connection,
+            "sessions",
+            "session_kind",
+            "TEXT NOT NULL DEFAULT 'gui'",
+        )?;
+    }
     if has_table(connection, "triage_candidate") {
         // Why an item surfaced for the user (review_requested / assigned /
         // mentioned / author / owned_issue). Nullable — older rows + sources
@@ -1112,6 +1122,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     context_usage_meta TEXT,
     codex_goal_meta TEXT,
     draft_state TEXT,
+    session_kind TEXT NOT NULL DEFAULT 'gui',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

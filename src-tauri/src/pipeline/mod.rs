@@ -20,6 +20,7 @@ pub mod codex_collab;
 pub mod collapse;
 pub mod event_filter;
 pub mod types;
+pub mod user_question;
 
 use serde_json::Value;
 

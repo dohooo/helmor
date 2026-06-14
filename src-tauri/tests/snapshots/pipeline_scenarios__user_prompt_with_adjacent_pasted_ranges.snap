@@ -1,0 +1,18 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: user
+  id: msg-1
+  content_length: 3
+  content:
+    - type: text
+      text: "see "
+    - type: pasted-text
+      text_length: 2
+      text_preview: AA
+    - type: pasted-text
+      text_length: 3
+      text_preview: BBB
+  status: ~
+  streaming: ~

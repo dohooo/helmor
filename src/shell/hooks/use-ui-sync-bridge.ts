@@ -1,6 +1,12 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
-import { subscribeUiMutations, type UiMutationEvent } from "@/lib/api";
+import { buildTitleSeed } from "@/features/conversation/hooks/seed-session-title";
+import { useStreamingStore } from "@/features/conversation/state/streaming-store";
+import {
+	generateSessionTitle,
+	subscribeUiMutations,
+	type UiMutationEvent,
+} from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 
@@ -8,6 +14,12 @@ type Options = {
 	queryClient: QueryClient;
 	processPendingCliSends: () => Promise<void> | void;
 	reloadSettings: () => Promise<void> | void;
+	/**
+	 * "Open in Helmor" from the quick panel. Wired in the MAIN window only —
+	 * the event broadcasts to every webview, and the quick panel must not
+	 * navigate itself.
+	 */
+	onWorkspaceReveal?: (workspaceId: string, sessionId: string | null) => void;
 };
 
 function invalidateAllWorkspaceChanges(queryClient: QueryClient) {
@@ -79,6 +91,31 @@ function handleUiMutation(
 				queryKey: helmorQueryKeys.sessionMessages(event.sessionId),
 			});
 			return;
+		case "sessionTurnPersisted": {
+			// A turn's terminal rows landed in the DB. While THIS client has a
+			// live stream (or an in-flight send) for the session, the local
+			// dispatcher owns the cache snapshot — its streamed message IDs
+			// differ from the DB IDs, so a refetch would clobber it and
+			// flicker (the exact thing the dispatcher's done-path refuses to
+			// do). Deliberately NOT checked against `liveSessionsByContext`:
+			// that is a never-cleared resume-id map, not liveness.
+			const contextKey = `session:${event.sessionId}`;
+			const streaming = useStreamingStore.getState();
+			if (
+				streaming.activeSessionByContext[contextKey] !== undefined ||
+				streaming.sendingContextKeys.has(contextKey)
+			) {
+				return;
+			}
+			// Mark stale without an active refetch: background sessions have
+			// no observers anyway, and a late event for the on-screen session
+			// must not flash it. The next mount refetches.
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.sessionMessages(event.sessionId),
+				refetchType: "none",
+			});
+			return;
+		}
 		case "workspaceFilesChanged":
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceGitActionStatus(event.workspaceId),
@@ -105,6 +142,16 @@ function handleUiMutation(
 		case "workspaceForgeChanged":
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceForge(event.workspaceId),
+			});
+			// Auth verdicts are per (host, login) and shared repo-wide:
+			// when one workspace flips to unauthenticated, siblings on the
+			// same repo share the verdict. Refresh every action-status
+			// snapshot so the Connect CTA stays consistent across
+			// workspaces — refetches hit the backend's in-memory verdict
+			// cache, not the network.
+			void queryClient.invalidateQueries({
+				predicate: (query) =>
+					query.queryKey[0] === "workspaceForgeActionStatus",
 			});
 			// Per-account roster (Settings → Account) re-renders too, since
 			// auth flips can mean a new login appeared / disappeared.
@@ -247,6 +294,54 @@ function handleUiMutation(
 				queryKey: helmorQueryKeys.pairedDevices,
 			});
 			return;
+		case "terminalSessionIdle":
+			// Terminal turn finished (agent Stop hook). Re-dispatch as the
+			// window event the read-state controller already listens on, so
+			// the shared completion path (unread + notification) fires.
+			window.dispatchEvent(
+				new CustomEvent("helmor:terminal-session-idle", {
+					detail: {
+						sessionId: event.sessionId,
+						workspaceId: event.workspaceId,
+					},
+				}),
+			);
+			// The session tab's spinner also reads sessions.status from the DB;
+			// refetch now or it shows 'streaming' until some other event lands
+			// (the sidebar uses activeStreams and was already instant).
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceSessions(event.workspaceId),
+			});
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceDetail(event.workspaceId),
+			});
+			return;
+		case "terminalPromptCaptured": {
+			// Terminal session's first prompt (agent UserPromptSubmit hook).
+			// Run the same title + branch generator GUI sessions use; it's
+			// gated server-side so only the first turn actually renames.
+			const { sessionId, workspaceId, prompt } = event;
+			// Pass the same seed layer 1 wrote (buildTitleSeed is deterministic on
+			// the prompt) so `can_replace_session_title` lets the AI rename replace
+			// it — without the seed it would only overwrite a literal "Untitled".
+			void generateSessionTitle(sessionId, prompt, buildTitleSeed(prompt)).then(
+				(result) => {
+					if (result?.title || result?.branchRenamed) {
+						requestSidebarReconcile(queryClient);
+						void queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
+						});
+						void queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
+						});
+					}
+				},
+			);
+			return;
+		}
+		case "workspaceRevealRequested":
+			options.onWorkspaceReveal?.(event.workspaceId, event.sessionId);
+			return;
 	}
 }
 
@@ -254,14 +349,17 @@ export function useUiSyncBridge({
 	queryClient,
 	processPendingCliSends,
 	reloadSettings,
+	onWorkspaceReveal,
 }: Options) {
 	const processPendingCliSendsRef = useRef(processPendingCliSends);
 	const reloadSettingsRef = useRef(reloadSettings);
+	const onWorkspaceRevealRef = useRef(onWorkspaceReveal);
 
 	useEffect(() => {
 		processPendingCliSendsRef.current = processPendingCliSends;
 		reloadSettingsRef.current = reloadSettings;
-	}, [processPendingCliSends, reloadSettings]);
+		onWorkspaceRevealRef.current = onWorkspaceReveal;
+	}, [processPendingCliSends, reloadSettings, onWorkspaceReveal]);
 
 	useEffect(() => {
 		let disposed = false;
@@ -275,6 +373,8 @@ export function useUiSyncBridge({
 			handleUiMutation(event, queryClient, {
 				processPendingCliSends: () => processPendingCliSendsRef.current(),
 				reloadSettings: () => reloadSettingsRef.current(),
+				onWorkspaceReveal: (workspaceId, sessionId) =>
+					onWorkspaceRevealRef.current?.(workspaceId, sessionId),
 			});
 		}).then((cleanup) => {
 			if (disposed) {

@@ -44,12 +44,28 @@ pub enum ScriptEvent {
 /// Key = (repo_id, script_type, workspace_id)
 type ProcessKey = (String, String, Option<String>);
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptKillAttempt {
+    pub repo_id: String,
+    pub script_type: String,
+    pub workspace_id: Option<String>,
+    pub pid: i32,
+    pub pgid: i32,
+    pub gone: bool,
+}
+
 const PROCESS_TERM_TIMEOUT: Duration = Duration::from_millis(200);
 const PROCESS_KILL_TIMEOUT: Duration = Duration::from_millis(500);
 const PTY_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const PTY_WRITE_RETRY: Duration = Duration::from_millis(5);
 const PTY_WRITE_DEADLINE: Duration = Duration::from_millis(500);
 const STOP_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// PTY reader output coalescing: buffer bytes and emit one Stdout event per
+/// flush window or byte threshold (whichever first) to cut per-event IPC cost
+/// on high-throughput output.
+const PTY_FLUSH_INTERVAL: Duration = Duration::from_millis(8);
+const PTY_FLUSH_BYTES: usize = 16 * 1024;
+const PTY_READ_BUF_BYTES: usize = 16 * 1024;
 
 /// Graceful-stop bundle: the user-provided cleanup command + everything
 /// `graceful_kill` needs to spawn it (same env, same cwd, output piped
@@ -191,7 +207,8 @@ impl ScriptProcessManager {
     /// Signal every live script and terminal handle the manager currently
     /// owns. Used by the graceful-quit path so Run-tab scripts and
     /// embedded-terminal PTY sessions don't outlive Helmor as orphan
-    /// process trees. Returns the number of handles that were signaled.
+    /// process trees. Returns one attempt per handle so callers can persist
+    /// only the processes we actually proved gone.
     ///
     /// Mirrors `kill_others_in_repo`'s lock discipline: snapshot the
     /// handles under the map lock, drop the lock, then call
@@ -201,18 +218,28 @@ impl ScriptProcessManager {
     ///
     /// Does **not** reap — each `run_script` thread still owns its own
     /// `child.wait()`.
-    pub fn kill_all(&self) -> usize {
-        let victims: Vec<ProcessHandle> = {
+    pub fn kill_all(&self) -> Vec<ScriptKillAttempt> {
+        let victims: Vec<(ProcessKey, ProcessHandle)> = {
             let map = self.processes.lock().expect("process map poisoned");
-            map.values().cloned().collect()
+            map.iter()
+                .map(|(key, handle)| (key.clone(), handle.clone()))
+                .collect()
         };
-        let count = victims.len();
-        for h in victims {
+        let mut attempts = Vec::with_capacity(victims.len());
+        for (key, h) in victims {
             h.killed.store(true, Ordering::Release);
             kill_in_flight_stop_command(&h.stop_pgid);
-            escalating_kill(h.pid, h.pgid);
+            let gone = escalating_kill(h.pid, h.pgid);
+            attempts.push(ScriptKillAttempt {
+                repo_id: key.0,
+                script_type: key.1,
+                workspace_id: key.2,
+                pid: pid_to_registry_i32(h.pid),
+                pgid: pid_to_registry_i32(h.pgid),
+                gone,
+            });
         }
-        count
+        attempts
     }
 
     /// Signal the process group (and leader as a fallback) with SIGTERM,
@@ -253,6 +280,11 @@ impl ScriptProcessManager {
             }
             None => false,
         }
+    }
+
+    pub fn has_live_handle(&self, key: &ProcessKey) -> bool {
+        let map = self.processes.lock().expect("process map poisoned");
+        map.contains_key(key)
     }
 
     /// Write bytes into the PTY master (user typing, paste, Ctrl+C).
@@ -309,17 +341,48 @@ impl ScriptProcessManager {
 /// a separate thread. When the script owns a separate process group, also wait
 /// for that group to disappear so a fast leader exit cannot leave descendants
 /// running after Stop returns.
-fn escalating_kill(pid: Pid, pgid: Pid) {
+fn escalating_kill(pid: Pid, pgid: Pid) -> bool {
     let tree = crate::platform::process::ProcessTree::new(pid, pgid);
     crate::platform::process::terminate_tree(tree);
 
     if crate::platform::process::wait_for_tree_gone(tree, PROCESS_TERM_TIMEOUT, PTY_POLL_INTERVAL) {
-        return;
+        return true;
     }
 
     crate::platform::process::kill_tree(tree);
-    let _ =
-        crate::platform::process::wait_for_tree_gone(tree, PROCESS_KILL_TIMEOUT, PTY_POLL_INTERVAL);
+    crate::platform::process::wait_for_tree_gone(tree, PROCESS_KILL_TIMEOUT, PTY_POLL_INTERVAL)
+}
+
+pub fn kill_registered_runtime_process(
+    process: &super::runtime_registry::RuntimeProcessIdentity,
+) -> bool {
+    let Some(pid) = registry_i32_to_pid(process.pid) else {
+        return false;
+    };
+    let Some(pgid) = registry_i32_to_pid(process.pgid) else {
+        return false;
+    };
+    escalating_kill(pid, pgid)
+}
+
+#[cfg(unix)]
+fn pid_to_registry_i32(pid: Pid) -> i32 {
+    pid
+}
+
+#[cfg(windows)]
+fn pid_to_registry_i32(pid: Pid) -> i32 {
+    pid as i32
+}
+
+#[cfg(unix)]
+fn registry_i32_to_pid(pid: i32) -> Option<Pid> {
+    (pid > 0).then_some(pid)
+}
+
+#[cfg(windows)]
+fn registry_i32_to_pid(pid: i32) -> Option<Pid> {
+    u32::try_from(pid).ok().filter(|pid| *pid > 0)
 }
 
 /// SIGKILL any `stop.command` cleanup tree currently published in
@@ -343,6 +406,40 @@ enum StopOutcome {
     CleanExit,
     NonZeroExit(Option<i32>),
     SpawnFailed(String),
+}
+
+pub fn run_configured_stop_command(
+    command: &str,
+    working_dir: &str,
+    ctx: &ScriptContext,
+    event_tx: &Channel<ScriptEvent>,
+) -> bool {
+    let _ = event_tx.send(ScriptEvent::Stopping);
+    let _ = event_tx.send(ScriptEvent::Stdout {
+        data: format!(
+            "\r\n\x1b[2m[Helmor] Running stop.command: {}\x1b[0m\r\n",
+            command
+        ),
+    });
+    let pgid_slot = Mutex::new(None);
+    let started = Instant::now();
+    let outcome = run_stop_command(command, working_dir, ctx, event_tx, &pgid_slot);
+    let elapsed_ms = started.elapsed().as_millis();
+    let success = matches!(outcome, StopOutcome::CleanExit);
+    let footer = match outcome {
+        StopOutcome::CleanExit => {
+            format!("\r\n\x1b[2m[Helmor] stop.command exited cleanly in {elapsed_ms}ms\x1b[0m\r\n")
+        }
+        StopOutcome::NonZeroExit(code) => format!(
+            "\r\n\x1b[33m[Helmor] stop.command exited with code {} after {elapsed_ms}ms\x1b[0m\r\n",
+            code.map(|c| c.to_string()).unwrap_or_else(|| "?".to_string())
+        ),
+        StopOutcome::SpawnFailed(err) => format!(
+            "\r\n\x1b[33m[Helmor] stop.command failed to spawn ({err}) — proceeding with force-kill\x1b[0m\r\n"
+        ),
+    };
+    let _ = event_tx.send(ScriptEvent::Stdout { data: footer });
+    success
 }
 
 /// Spawn `command` via `/bin/sh -c`, stream its stdout/stderr into the
@@ -699,6 +796,7 @@ pub fn run_script(
         &shell,
         &args_ref,
         None,
+        None,
         stop,
     )
 }
@@ -724,6 +822,7 @@ pub fn run_terminal_session(
     context: &ScriptContext,
     channel: Channel<ScriptEvent>,
     boot_input: Option<&str>,
+    initial_size: Option<(u16, u16)>,
 ) -> Result<Option<i32>> {
     let (shell, args) = default_shell();
     let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -739,6 +838,7 @@ pub fn run_terminal_session(
         &shell,
         &args_ref,
         boot_input,
+        initial_size,
         None,
     )
 }
@@ -770,6 +870,7 @@ pub(crate) fn run_script_with_shell(
     shell_path: &str,
     shell_args: &[&str],
     boot_input: Option<&str>,
+    initial_size: Option<(u16, u16)>,
     stop: Option<ScriptStop>,
 ) -> Result<Option<i32>> {
     if let Some(s) = script {
@@ -782,7 +883,10 @@ pub(crate) fn run_script_with_shell(
     cmd.args(shell_args)
         .current_dir(working_dir)
         .env("TERM", "xterm-256color")
-        .env("FORCE_COLOR", "1")
+        // Truecolor advertisement — without it chalk/supports-color caps at
+        // 256 colors and CLIs quantize their palette (orange → pink).
+        .env("COLORTERM", "truecolor")
+        .env("FORCE_COLOR", "3")
         .env("CLICOLOR_FORCE", "1")
         .env("HELMOR_ROOT_PATH", &context.root_path);
 
@@ -815,7 +919,7 @@ pub(crate) fn run_script_with_shell(
     // Open a PTY, make the child a session + controlling-terminal leader, and
     // attach it. The OS-specific PTY mechanics live behind the
     // `platform::pty` seam; macOS/Unix is the reference, Windows fills ConPTY.
-    let session = crate::platform::pty::spawn(cmd)
+    let session = crate::platform::pty::spawn_with_size(cmd, initial_size)
         .with_context(|| format!("Failed to spawn {shell_path}"))?;
     // Writable PTY master, kept alive in `ProcessHandle` for the lifetime of
     // the child so `write_stdin` / `resize` can reach the PTY.
@@ -851,10 +955,7 @@ pub(crate) fn run_script_with_shell(
     // i32; on Windows it is u32, so reinterpret the bits. Crash recovery only
     // compares this against live PIDs read back through the same path. The
     // cfg-gated rebinds keep the cast a no-op on Unix (no `unnecessary_cast`).
-    #[cfg(unix)]
-    let (pid_i32, pgid_i32): (i32, i32) = (pid, pgid);
-    #[cfg(windows)]
-    let (pid_i32, pgid_i32): (i32, i32) = (pid as i32, pgid as i32);
+    let (pid_i32, pgid_i32): (i32, i32) = (pid_to_registry_i32(pid), pid_to_registry_i32(pgid));
     let registry_id = match super::runtime_registry::record_started(
         repo_id,
         workspace_id,
@@ -887,21 +988,79 @@ pub(crate) fn run_script_with_shell(
         .name("script-pty".into())
         .spawn(move || {
             let mut master = reader_file;
-            let mut buf = [0u8; 4096];
+            let mut buf = [0u8; PTY_READ_BUF_BYTES];
             // 100ms tick is just a stop-flag fallback — kill() also closes
             // the PTY which triggers EIO/POLLHUP and wakes us instantly.
             const POLL_TIMEOUT_MS: i32 = 100;
+
+            // Coalesce output: buffer bytes and emit one Stdout event per flush
+            // window instead of one per read, collapsing a chatty producer's
+            // hundreds of tiny IPC sends into a few large ones.
+            let mut pending: Vec<u8> = Vec::with_capacity(PTY_READ_BUF_BYTES);
+            let mut last_flush = Instant::now();
+
+            // Emit the valid UTF-8 prefix, keeping any trailing incomplete
+            // multi-byte sequence buffered until its remaining bytes arrive.
+            let flush_pending = |pending: &mut Vec<u8>, last_flush: &mut Instant| {
+                if pending.is_empty() {
+                    return;
+                }
+                let valid = match std::str::from_utf8(pending) {
+                    Ok(_) => pending.len(),
+                    Err(e) => e.valid_up_to(),
+                };
+                if valid == 0 {
+                    // Incomplete leading sequence — wait for the rest. Guard
+                    // against genuine garbage stalling the buffer by flushing
+                    // lossily once it exceeds the max UTF-8 sequence length.
+                    if pending.len() > 4 {
+                        let data = String::from_utf8_lossy(pending).into_owned();
+                        let _ = ch.send(ScriptEvent::Stdout { data });
+                        pending.clear();
+                        *last_flush = Instant::now();
+                    }
+                    return;
+                }
+                let data = String::from_utf8_lossy(&pending[..valid]).into_owned();
+                let _ = ch.send(ScriptEvent::Stdout { data });
+                pending.drain(..valid);
+                *last_flush = Instant::now();
+            };
             loop {
                 if stop_reader_in_thread.load(Ordering::Relaxed) {
                     break;
                 }
 
+                // While bytes are buffered, cap the wait at the time left in
+                // the flush window — otherwise a lone small burst (a keystroke
+                // echo, a spinner frame) sits unflushed for the full 100ms
+                // idle tick and typing feels laggy.
+                let timeout_ms: i32 = if pending.is_empty() {
+                    POLL_TIMEOUT_MS
+                } else {
+                    let elapsed = last_flush.elapsed();
+                    if elapsed >= PTY_FLUSH_INTERVAL {
+                        // Past the window with bytes still buffered — only an
+                        // unflushable incomplete UTF-8 tail does that (the loop
+                        // tail flushes everything else). Wait for its rest at
+                        // the idle tick instead of spinning at 0ms.
+                        POLL_TIMEOUT_MS
+                    } else {
+                        (PTY_FLUSH_INTERVAL - elapsed).as_millis().max(1) as i32
+                    }
+                };
+
                 // POLLHUP / POLLERR fire when the slave fd is closed (child
                 // exited). We still try to read first so any pending bytes
                 // ahead of the hangup are delivered.
-                let hung_up = match master.poll_readable(POLL_TIMEOUT_MS) {
-                    Ok(crate::platform::pty::PollResult::TimedOut)
-                    | Ok(crate::platform::pty::PollResult::Interrupted) => continue,
+                let hung_up = match master.poll_readable(timeout_ms) {
+                    Ok(crate::platform::pty::PollResult::TimedOut) => {
+                        // Idle wake — flush any buffered tail so a quiet PTY
+                        // doesn't sit on coalesced bytes until the next read.
+                        flush_pending(&mut pending, &mut last_flush);
+                        continue;
+                    }
+                    Ok(crate::platform::pty::PollResult::Interrupted) => continue,
                     Ok(crate::platform::pty::PollResult::Ready { hung_up }) => hung_up,
                     Err(err) => {
                         tracing::debug!(error = %err, "PTY poll failed");
@@ -918,8 +1077,12 @@ pub(crate) fn run_script_with_shell(
                             break;
                         }
                         Ok(n) => {
-                            let data = String::from_utf8_lossy(&buf[..n]).into_owned();
-                            let _ = ch.send(ScriptEvent::Stdout { data });
+                            pending.extend_from_slice(&buf[..n]);
+                            // Bound buffer growth within one drain so a fast
+                            // producer can't balloon memory before the timer.
+                            if pending.len() >= PTY_FLUSH_BYTES {
+                                flush_pending(&mut pending, &mut last_flush);
+                            }
                         }
                         Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                             // Drained for now — back to poll().
@@ -935,9 +1098,22 @@ pub(crate) fn run_script_with_shell(
                         }
                     }
                 }
+
+                // Time-based flush once this wake cycle is drained.
+                if last_flush.elapsed() >= PTY_FLUSH_INTERVAL {
+                    flush_pending(&mut pending, &mut last_flush);
+                }
+
                 if should_exit {
                     break;
                 }
+            }
+
+            // Final flush — emit remaining bytes (lossy for an incomplete
+            // trailing sequence) so the tail isn't dropped on exit.
+            if !pending.is_empty() {
+                let data = String::from_utf8_lossy(&pending).into_owned();
+                let _ = ch.send(ScriptEvent::Stdout { data });
             }
         })
         .ok();
@@ -1183,8 +1359,11 @@ mod tests {
         let (mut c3, _, _, k3) = spawn_and_register(&mgr, b_terminal.clone());
         let (mut c4, _, _, k4) = spawn_and_register(&mgr, auth.clone());
 
-        let signaled = mgr.kill_all();
-        assert_eq!(signaled, 4);
+        let attempts = mgr.kill_all();
+        assert_eq!(attempts.len(), 4);
+        assert!(attempts.iter().any(|attempt| attempt.repo_id == "A"));
+        assert!(attempts.iter().any(|attempt| attempt.repo_id == "B"));
+        assert!(attempts.iter().any(|attempt| attempt.repo_id == "__auth__"));
 
         // Reap each child to release pid resources, then prove the
         // killed flag was flipped on every handle.
@@ -1201,7 +1380,7 @@ mod tests {
     #[test]
     fn kill_all_with_empty_manager_is_zero() {
         let mgr = ScriptProcessManager::new();
-        assert_eq!(mgr.kill_all(), 0);
+        assert!(mgr.kill_all().is_empty());
     }
 
     /// Regression: `kill_all` must drop the process-map lock BEFORE
@@ -1215,6 +1394,7 @@ mod tests {
     /// invariant.
     #[test]
     fn kill_all_does_not_deadlock_against_concurrent_unregister() {
+        let _env = crate::testkit::TestEnv::new("kill-all-does-not-deadlock-against-concu");
         let mgr = std::sync::Arc::new(ScriptProcessManager::new());
         let ctx = ScriptContext {
             root_path: std::env::temp_dir().display().to_string(),
@@ -1235,12 +1415,13 @@ mod tests {
                 &key_c.0,
                 &key_c.1,
                 key_c.2.as_deref(),
-                Some("sleep 60"),
+                Some("/bin/sleep 60"),
                 &tempdir,
                 &ctx,
                 make_channel(),
                 "/bin/sh",
                 &[],
+                None,
                 None,
                 None,
             )
@@ -1261,7 +1442,9 @@ mod tests {
         }
 
         let start = Instant::now();
-        assert_eq!(mgr.kill_all(), 1);
+        let attempts = mgr.kill_all();
+        assert_eq!(attempts.len(), 1);
+        assert!(attempts[0].gone);
         // run_script's reaper must have unregistered + returned. If
         // kill_all held the map lock past the signal, the unregister
         // would have blocked and this join would hang.
@@ -1339,6 +1522,7 @@ mod tests {
 
     #[test]
     fn kill_terminates_running_script_quickly() {
+        let _env = crate::testkit::TestEnv::new("kill-terminates-running-script-quickly");
         let mgr = Arc::new(ScriptProcessManager::new());
         let ctx = ScriptContext {
             root_path: std::env::temp_dir().display().to_string(),
@@ -1360,12 +1544,13 @@ mod tests {
                 &key_c.0,
                 &key_c.1,
                 key_c.2.as_deref(),
-                Some("sleep 60"),
+                Some("/bin/sleep 60"),
                 &tempdir,
                 &ctx,
                 make_channel(),
                 "/bin/sh",
                 &[],
+                None,
                 None,
                 None,
             )
@@ -1405,6 +1590,7 @@ mod tests {
 
     #[test]
     fn write_stdin_delivers_bytes_to_running_script() {
+        let _env = crate::testkit::TestEnv::new("write-stdin-delivers-bytes-to-running-sc");
         let mgr = Arc::new(ScriptProcessManager::new());
         let ctx = ScriptContext {
             root_path: std::env::temp_dir().display().to_string(),
@@ -1452,6 +1638,7 @@ mod tests {
                 &[],
                 None,
                 None,
+                None,
             )
         });
 
@@ -1496,6 +1683,7 @@ mod tests {
 
     #[test]
     fn resize_updates_pty_winsize() {
+        let _env = crate::testkit::TestEnv::new("resize-updates-pty-winsize");
         let mgr = Arc::new(ScriptProcessManager::new());
         let ctx = ScriptContext {
             root_path: std::env::temp_dir().display().to_string(),
@@ -1543,6 +1731,7 @@ mod tests {
                 &[],
                 None,
                 None,
+                None,
             )
         });
 
@@ -1572,6 +1761,77 @@ mod tests {
         assert!(
             combined.contains("33 77"),
             "expected 33 77 from stty size; got: {combined:?}"
+        );
+    }
+
+    // ── initial PTY size threads to the spawned shell ─────────────────────
+    // The renderer's real cols/rows must reach the PTY at spawn time so an
+    // inline TUI paints its first frame correctly (no fit/SIGWINCH ghosting).
+    #[test]
+    fn initial_size_sets_pty_winsize() {
+        let _env = crate::testkit::TestEnv::new("initial-size-sets-pty-winsize");
+        let mgr = Arc::new(ScriptProcessManager::new());
+        let ctx = ScriptContext {
+            root_path: std::env::temp_dir().display().to_string(),
+            workspace_path: None,
+            workspace_name: None,
+            default_branch: None,
+            port_base: None,
+            port_count: None,
+        };
+        let key: ProcessKey = ("repo".into(), "run".into(), Some("ws".into()));
+
+        let (tx, rx) = mpsc::channel::<String>();
+        let ch = Channel::<ScriptEvent>::new(move |msg| {
+            if let tauri::ipc::InvokeResponseBody::Json(json) = msg {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
+                    if v.get("type").and_then(|t| t.as_str()) == Some("stdout") {
+                        if let Some(data) = v.get("data").and_then(|d| d.as_str()) {
+                            let _ = tx.send(data.to_string());
+                        }
+                    }
+                }
+            }
+            Ok(())
+        });
+
+        let mgr_c = mgr.clone();
+        let key_c = key.clone();
+        let tempdir = std::env::temp_dir().display().to_string();
+        let handle = std::thread::spawn(move || {
+            run_script_with_shell(
+                &mgr_c,
+                &key_c.0,
+                &key_c.1,
+                key_c.2.as_deref(),
+                // No resize — `stty size` must report the spawn-time winsize.
+                Some("/bin/stty size"),
+                &tempdir,
+                &ctx,
+                ch,
+                "/bin/sh",
+                &[],
+                None,
+                Some((90, 40)),
+                None,
+            )
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut combined = String::new();
+        while Instant::now() < deadline {
+            if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(100)) {
+                combined.push_str(&chunk);
+                // `stty size` prints "<rows> <cols>" — 40 rows, 90 cols.
+                if combined.contains("40 90") {
+                    break;
+                }
+            }
+        }
+        let _ = handle.join();
+        assert!(
+            combined.contains("40 90"),
+            "expected 40 90 from stty size; got: {combined:?}"
         );
     }
 
@@ -1609,6 +1869,7 @@ mod tests {
             shell_args,
             None,
             None,
+            None,
         )
         .unwrap()
     }
@@ -1621,11 +1882,13 @@ mod tests {
 
     #[test]
     fn run_script_true_exits_zero() {
+        let _env = crate::testkit::TestEnv::new("run-script-true-exits-zero");
         assert_eq!(run_simple("true"), Some(0));
     }
 
     #[test]
     fn run_script_failing_command_exits_nonzero() {
+        let _env = crate::testkit::TestEnv::new("run-script-failing-command-exits-nonzero");
         assert_eq!(run_simple("exit 42"), Some(42));
     }
 
@@ -1657,6 +1920,7 @@ mod tests {
     /// keep working alongside the new ones.
     #[test]
     fn script_env_includes_helmor_port_vars_when_range_present() {
+        let _env = crate::testkit::TestEnv::new("script-env-includes-helmor-port-vars-whe");
         let mgr = ScriptProcessManager::new();
         let dir = std::env::temp_dir();
         let ctx = ScriptContext {
@@ -1702,6 +1966,7 @@ mod tests {
             &[],
             None,
             None,
+            None,
         )
         .unwrap();
         assert_eq!(exit, Some(0));
@@ -1734,6 +1999,7 @@ mod tests {
     /// `${HELMOR_PORT:-3000}` keep their default.
     #[test]
     fn script_env_omits_helmor_port_vars_when_range_missing() {
+        let _env = crate::testkit::TestEnv::new("script-env-omits-helmor-port-vars-when-r");
         let mgr = ScriptProcessManager::new();
         let dir = std::env::temp_dir();
         let ctx = ScriptContext {
@@ -1775,6 +2041,7 @@ mod tests {
             ch,
             "/bin/sh",
             &[],
+            None,
             None,
             None,
         )
@@ -1881,6 +2148,7 @@ mod tests {
     #[test]
     #[ignore = "fork-heavy; run via `cargo test graceful_kill -- --ignored`"]
     fn graceful_kill_runs_stop_command_then_escalates() {
+        let _env = crate::testkit::TestEnv::new("graceful-kill-stop-command");
         let mgr = Arc::new(ScriptProcessManager::new());
         let ctx = empty_ctx();
         let key: ProcessKey = ("repo".into(), "run".into(), Some("ws".into()));
@@ -1904,12 +2172,13 @@ mod tests {
                 &key_c.0,
                 &key_c.1,
                 key_c.2.as_deref(),
-                Some("sleep 60"),
+                Some("/bin/sleep 60"),
                 &tempdir,
                 &ctx_for_thread,
                 ch,
                 "/bin/sh",
                 &[],
+                None,
                 None,
                 Some(stop),
             )
@@ -1961,6 +2230,7 @@ mod tests {
     #[test]
     #[ignore = "fork-heavy; run via `cargo test graceful_kill -- --ignored`"]
     fn graceful_kill_force_stop_on_second_click_short_circuits() {
+        let _env = crate::testkit::TestEnv::new("graceful-kill-force-stop");
         let mgr = Arc::new(ScriptProcessManager::new());
         let ctx = empty_ctx();
         let key: ProcessKey = ("repo".into(), "run".into(), Some("ws".into()));
@@ -1986,12 +2256,13 @@ mod tests {
                 &key_c.0,
                 &key_c.1,
                 key_c.2.as_deref(),
-                Some("sleep 60"),
+                Some("/bin/sleep 60"),
                 &tempdir,
                 &ctx_for_thread,
                 ch,
                 "/bin/sh",
                 &[],
+                None,
                 None,
                 Some(stop),
             )

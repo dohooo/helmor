@@ -103,6 +103,9 @@ struct OwnedSessionOverrides {
     model: Option<String>,
     effort_level: Option<String>,
     fast_mode: Option<bool>,
+    /// Provider pinned from the model pref so a slug-based provider (mimo /
+    /// opencode) isn't misresolved from the bare model id.
+    agent_type: Option<String>,
 }
 
 impl OwnedSessionOverrides {
@@ -112,6 +115,8 @@ impl OwnedSessionOverrides {
             effort_level: self.effort_level.as_deref(),
             fast_mode: self.fast_mode,
             seed_session_id: None,
+            session_kind: None,
+            agent_type: self.agent_type.as_deref(),
         }
     }
 }
