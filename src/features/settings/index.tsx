@@ -13,7 +13,10 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
+	DropdownMenuGroup,
 	DropdownMenuItem,
+	DropdownMenuLabel,
+	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -38,7 +41,6 @@ import { getShortcut } from "@/features/shortcuts/registry";
 import { ShortcutsSettingsPanel } from "@/features/shortcuts/settings-panel";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import {
-	type AgentModelOption,
 	type AgentModelSection,
 	isConductorAvailable,
 	type RepositoryCreateOption,
@@ -157,12 +159,14 @@ export const SettingsDialog = memo(function SettingsDialog({
 		enabled: open,
 	});
 	const repositories = reposQuery.data ?? [];
+	// Same source as the composer picker, so the Default/Review/PR rows show
+	// exactly the user's selected models, grouped by section (the section header
+	// distinguishes a custom `gpt-5.5` from the official one).
 	const modelSectionsQuery = useQuery({
 		...agentModelSectionsQueryOptions(),
 		enabled: open,
 	});
 	const modelSections = modelSectionsQuery.data ?? [];
-	const allModels = modelSections.flatMap((s) => s.options);
 
 	// Note: null review/pr model fields used to be promoted to default
 	// values here on every dialog open. That migration now runs once in
@@ -539,7 +543,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 									<ModelSettingRow
 										title="Default model"
 										description="Model for new chats"
-										models={allModels}
 										modelSections={modelSections}
 										isLoadingModels={modelSectionsQuery.isPending}
 										// Each row reads its own state directly. The `?? default*`
@@ -568,7 +571,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 									<ModelSettingRow
 										title="Review model"
 										description="Model for code review"
-										models={allModels}
 										modelSections={modelSections}
 										isLoadingModels={modelSectionsQuery.isPending}
 										modelId={
@@ -597,7 +599,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 									<ModelSettingRow
 										title="Action model"
 										description="Model for PRs/MRs and commit-and-push"
-										models={allModels}
 										modelSections={modelSections}
 										isLoadingModels={modelSectionsQuery.isPending}
 										modelId={
@@ -710,7 +711,6 @@ type ModelRowChange = {
 function ModelSettingRow({
 	title,
 	description,
-	models,
 	modelSections,
 	isLoadingModels,
 	modelId,
@@ -721,7 +721,6 @@ function ModelSettingRow({
 }: {
 	title: string;
 	description: string;
-	models: AgentModelOption[];
 	modelSections: AgentModelSection[];
 	isLoadingModels: boolean;
 	modelId: string | null;
@@ -776,27 +775,37 @@ function ModelSettingRow({
 					<DropdownMenuContent
 						align="end"
 						sideOffset={4}
-						className="min-w-[10rem]"
+						className="max-h-[320px] min-w-[10rem] overflow-y-auto"
 					>
-						{models.map((m) => (
-							<DropdownMenuItem
-								key={m.id}
-								onClick={() =>
-									onChange({ modelId: m.id, provider: m.provider })
-								}
-								className="justify-between gap-2"
-							>
-								<span className="flex min-w-0 items-center gap-2">
-									<ModelIcon model={m} className="size-4" />
-									{m.label}
-								</span>
-								<CheckCircle2
-									className={cn(
-										"size-3.5 shrink-0 text-emerald-500",
-										m.id !== modelId && "invisible",
-									)}
-								/>
-							</DropdownMenuItem>
+						{/* Grouped by section like the composer, so a custom `gpt-5.5`
+						    sits under its provider header, not next to the official one. */}
+						{modelSections.map((section, index) => (
+							<DropdownMenuGroup key={section.id}>
+								{index > 0 ? <DropdownMenuSeparator /> : null}
+								<DropdownMenuLabel className="text-mini text-muted-foreground">
+									{section.label}
+								</DropdownMenuLabel>
+								{section.options.map((m) => (
+									<DropdownMenuItem
+										key={m.id}
+										onClick={() =>
+											onChange({ modelId: m.id, provider: m.provider })
+										}
+										className="justify-between gap-2"
+									>
+										<span className="flex min-w-0 items-center gap-2">
+											<ModelIcon model={m} className="size-4" />
+											{m.label}
+										</span>
+										<CheckCircle2
+											className={cn(
+												"size-3.5 shrink-0 text-emerald-500",
+												m.id !== modelId && "invisible",
+											)}
+										/>
+									</DropdownMenuItem>
+								))}
+							</DropdownMenuGroup>
 						))}
 					</DropdownMenuContent>
 				</DropdownMenu>

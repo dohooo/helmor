@@ -135,7 +135,12 @@ function AddProviderMenu({
 					<ChevronDown className="size-3 opacity-50" />
 				</Button>
 			</DropdownMenuTrigger>
-			<DropdownMenuContent align="start" className="max-h-[320px] w-[300px]">
+			{/* Don't refocus the trigger on close — that scroll-jumps the panel. */}
+			<DropdownMenuContent
+				align="start"
+				className="max-h-[320px] w-[300px]"
+				onCloseAutoFocus={(e) => e.preventDefault()}
+			>
 				{/* Custom always leads — most prominent, family-agnostic. */}
 				{customItem}
 				<DropdownMenuSeparator />
