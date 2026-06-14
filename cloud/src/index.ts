@@ -38,20 +38,29 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export default {
 	async fetch(request: Request, env: Env): Promise<Response> {
+		// Security (EVERY path): strip any client-supplied X-Helmor-Member-Id up
+		// front — before proxyToSandbox — so the "never client-asserted" invariant
+		// holds on the SDK preview path too, not only the derived proxy hop. The
+		// companion trusts this header as author_id, so a client must never set it.
+		const req = request.headers.has("X-Helmor-Member-Id")
+			? new Request(request, { headers: withoutMemberHeader(request.headers) })
+			: request;
+
 		// Preview-URL passthrough (port-subdomain hostnames). Returns null for
 		// the Worker's own hostname, which we proxy transparently below.
-		const proxied = await proxyToSandbox(request, env);
+		const proxied = await proxyToSandbox(req, env);
 		if (proxied) return proxied;
 
 		// Team registry (`/team/*`): D1-backed JSON routes. Returns null for any
 		// other path, which falls through to the container proxy below.
-		const url = new URL(request.url);
-		const teamResp = await handleTeamRoute(request, env, url);
+		const url = new URL(req.url);
+		const teamResp = await handleTeamRoute(req, env, url);
 		if (teamResp) return teamResp;
 
-		// Derive the member identity for the proxied hop. On a bad token this
-		// short-circuits with 401 (we must not proxy an unknown caller).
-		const forwarded = await deriveForwardedRequest(request, env);
+		// Derive the member identity + companion-token swap for the proxied hop.
+		// Unauthenticated calls pass through unswapped (the companion gates them:
+		// /rpc -> 401, /v1/health stays public); unknown tokens -> 401 (see fn).
+		const forwarded = await deriveForwardedRequest(req, env);
 		if (forwarded instanceof Response) return forwarded;
 
 		const port = Number(env.HELMOR_COMPANION_PORT ?? "8080");
@@ -100,7 +109,15 @@ async function deriveForwardedRequest(
 ): Promise<Request | Response> {
 	const bearer = readBearer(request);
 	let memberId: string | null = null;
-	if (bearer && bearer !== env.HELMOR_COMPANION_TOKEN) {
+	// Only swap in the shared companion token for an AUTHENTICATED caller — admin
+	// (shared token) or a member (valid invite token). An UNauthenticated caller
+	// must NOT receive the shared token (that would bypass the companion's own
+	// bearer auth); pass it through unswapped so the companion gates it
+	// (/rpc -> 401, /v1/health stays public). An unknown token -> 401 here.
+	let injectCompanionToken = false;
+	if (bearer === env.HELMOR_COMPANION_TOKEN) {
+		injectCompanionToken = true; // admin / local (no member id)
+	} else if (bearer) {
 		memberId = await lookupMemberId(env, bearer);
 		if (!memberId) {
 			return new Response(JSON.stringify({ code: "Unauthorized" }), {
@@ -108,6 +125,7 @@ async function deriveForwardedRequest(
 				headers: { "content-type": "application/json" },
 			});
 		}
+		injectCompanionToken = true; // member: invite token -> shared token
 	}
 
 	const forwarded = new Request(request, {
@@ -115,10 +133,12 @@ async function deriveForwardedRequest(
 	});
 	forwarded.headers.delete("X-Helmor-Member-Id"); // never client-asserted
 	if (memberId) forwarded.headers.set("X-Helmor-Member-Id", memberId);
-	forwarded.headers.set(
-		"Authorization",
-		`Bearer ${env.HELMOR_COMPANION_TOKEN}`,
-	);
+	if (injectCompanionToken) {
+		forwarded.headers.set(
+			"Authorization",
+			`Bearer ${env.HELMOR_COMPANION_TOKEN}`,
+		);
+	}
 	return forwarded;
 }
 
@@ -128,6 +148,13 @@ function readBearer(request: Request): string | null {
 	if (!header) return null;
 	const match = /^Bearer\s+(.+)$/i.exec(header);
 	return match ? match[1] : null;
+}
+
+/** Clone request headers with the trusted member-id header removed. */
+function withoutMemberHeader(headers: Headers): Headers {
+	const next = new Headers(headers);
+	next.delete("X-Helmor-Member-Id");
+	return next;
 }
 
 /** Ensure the companion server is up. Fast-path on a health hit; otherwise

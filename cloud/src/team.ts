@@ -134,14 +134,24 @@ async function acceptInvite(request: Request, env: Env): Promise<Response> {
 	}
 
 	const invite = await env.DB.prepare(
-		"SELECT expires_at FROM invites WHERE token = ?1",
+		"SELECT expires_at, member_id FROM invites WHERE token = ?1",
 	)
 		.bind(token)
-		.first<{ expires_at: string | null }>();
+		.first<{ expires_at: string | null; member_id: string | null }>();
 	if (!invite)
 		return json({ code: "NotFound", message: "unknown invite" }, 404);
-	if (invite.expires_at && Date.parse(invite.expires_at) < Date.now()) {
-		return json({ code: "Gone", message: "invite expired" }, 410);
+	if (invite.expires_at) {
+		// Fail-closed: an unparseable expires_at counts as expired (Date.parse ->
+		// NaN, and `NaN < now` is false, which would otherwise never expire).
+		const expiry = Date.parse(invite.expires_at);
+		if (!Number.isFinite(expiry) || expiry < Date.now()) {
+			return json({ code: "Gone", message: "invite expired" }, 410);
+		}
+	}
+	// An already-claimed invite may be refreshed by the SAME member, but never
+	// re-bound to a different id — no seat takeover via a leaked invite link.
+	if (invite.member_id && invite.member_id !== githubId) {
+		return json({ code: "Conflict", message: "invite already claimed" }, 409);
 	}
 
 	const avatarUrl = typeof body.avatarUrl === "string" ? body.avatarUrl : null;
