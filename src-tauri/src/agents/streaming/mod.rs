@@ -764,6 +764,12 @@ pub(super) fn stream_via_sidecar(
                                         cloud_autopush::maybe_autopush_after_turn(
                                             &turn_session.ctx.working_directory,
                                         );
+                                        // Cloud serve mode only (env-gated):
+                                        // fold the WAL into helmor.db NOW
+                                        // (synchronously, before `done`) so the
+                                        // Worker's post-stream backup snapshots
+                                        // a consistent, self-contained DB.
+                                        cloud_autopush::maybe_checkpoint_db_after_turn();
                                     }
                                     Err(error) => {
                                         tracing::error!(rid = %rid, "Failed to finalize exchange: {error}");

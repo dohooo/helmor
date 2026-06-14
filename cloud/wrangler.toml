@@ -41,6 +41,13 @@ binding = "DB"
 database_name = "helmor-team"
 database_id = "8eb39746-fda1-47e3-8006-2dab22175b53"
 
+# R2 bucket for Sandbox backups (Phase 2b sleep persistence). The Sandbox DO
+# resolves BACKUP_BUCKET as a native R2 binding for localBucket-mode backup/
+# restore (R2 binding + squashfs, no presigned creds / FUSE).
+[[r2_buckets]]
+binding = "BACKUP_BUCKET"
+bucket_name = "helmor-team-backups"
+
 [vars]
 # Fixed sandbox id for Phase 0 (B2 single-backend model). Phase 1 derives it
 # from the team / token.

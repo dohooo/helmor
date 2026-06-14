@@ -10,6 +10,7 @@
 //   - `/team/accept` is OPEN — the token itself is the credential.
 // All queries are parameterized (`prepare().bind()`) — never interpolated.
 
+import type { DirectoryBackup } from "@cloudflare/sandbox";
 import type { Env } from "./index";
 
 const TEAM_ID = "team-0";
@@ -45,6 +46,47 @@ export async function lookupMemberId(
 		.bind(token)
 		.first<{ member_id: string | null }>();
 	return row?.member_id ?? null;
+}
+
+/**
+ * Read the stored Sandbox backup handle for this Worker's sandbox (Phase 2b).
+ * Returns null when no backup has been taken yet (cold start → empty DB), or
+ * when the stored value can't be parsed (treated as absent — re-snapshot next
+ * turn). Keyed by `HELMOR_SANDBOX_ID` so it tracks the routing key, not TEAM_ID.
+ */
+export async function readBackupHandle(
+	env: Env,
+): Promise<DirectoryBackup | null> {
+	const row = await env.DB.prepare(
+		"SELECT backup_handle FROM teams WHERE sandbox_id = ?1",
+	)
+		.bind(env.HELMOR_SANDBOX_ID)
+		.first<{ backup_handle: string | null }>();
+	if (!row?.backup_handle) return null;
+	try {
+		return JSON.parse(row.backup_handle) as DirectoryBackup;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Persist the latest Sandbox backup handle (Phase 2b). UPSERTs the single team
+ * row keyed by `id` (the PK), recording the handle JSON so the next cold start's
+ * `readBackupHandle` can restore it. Mirrors `bootstrap`'s upsert shape.
+ */
+export async function writeBackupHandle(
+	env: Env,
+	handle: DirectoryBackup,
+): Promise<void> {
+	await env.DB.prepare(
+		`INSERT INTO teams (id, sandbox_id, backup_handle) VALUES (?1, ?2, ?3)
+		 ON CONFLICT(id) DO UPDATE SET
+		   sandbox_id    = excluded.sandbox_id,
+		   backup_handle = excluded.backup_handle`,
+	)
+		.bind(TEAM_ID, env.HELMOR_SANDBOX_ID, JSON.stringify(handle))
+		.run();
 }
 
 function json(body: unknown, status = 200): Response {

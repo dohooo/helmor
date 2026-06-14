@@ -22,6 +22,11 @@ HELMOR_HOME="${HELMOR_HOME:-/opt/helmor}"
 export PATH="${HELMOR_HOME}/vendor/gh:${HELMOR_HOME}:${PATH}"
 HELMOR_CLI="${HELMOR_HOME}/helmor-cli"
 
+# Phase 2b: write to the SAME data dir as `helmor serve` (under /home for backup
+# eligibility). Without this, helmor-cli would default to $HOME/helmor while serve
+# uses /home/helmor — two divergent DBs. The Worker may override via env.
+export HELMOR_DATA_DIR="${HELMOR_DATA_DIR:-/home/helmor}"
+
 : "${HELMOR_REPO_URL:?HELMOR_REPO_URL must be set (the git repo to clone)}"
 REPO_BRANCH="${HELMOR_REPO_BRANCH:-}"
 WORK_ROOT="${HELMOR_WORK_ROOT:-/workspace}"

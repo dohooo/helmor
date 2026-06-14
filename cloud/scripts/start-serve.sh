@@ -22,6 +22,12 @@ export DISPLAY=":${DISPLAY_NUM}"
 export PATH="${HELMOR_HOME}/vendor/gh:${HELMOR_HOME}:${PATH}"
 export HELMOR_SIDECAR_PATH="${HELMOR_SIDECAR_PATH:-${HELMOR_HOME}/helmor-sidecar}"
 
+# Phase 2b: the data dir must live under an allowed backup root (/home, /workspace,
+# /tmp, /var/tmp, /app) so the Sandbox backup API can snapshot it. Default to
+# /home/helmor; the Worker may override via startProcess env. `helmor serve` AND
+# boot.sh both honor this default so they share ONE database.
+export HELMOR_DATA_DIR="${HELMOR_DATA_DIR:-/home/helmor}"
+
 # Cloud workflow closure (PR6): commit + push each finished agent turn so the
 # ephemeral sandbox disk never loses code. On by default in the container.
 export HELMOR_CLOUD_AUTOPUSH="${HELMOR_CLOUD_AUTOPUSH:-1}"
