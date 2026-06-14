@@ -44,7 +44,8 @@ pub async fn fetch_provider_models(
     family: String,
     base_url: String,
     api_key: String,
+    api_style: Option<String>,
 ) -> CmdResult<Vec<CustomProviderModel>> {
     let family = parse_family(&family)?;
-    Ok(provider::fetch_models(family, &base_url, &api_key).await?)
+    Ok(provider::fetch_models(family, &base_url, &api_key, api_style.as_deref()).await?)
 }

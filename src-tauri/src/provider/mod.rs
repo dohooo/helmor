@@ -43,6 +43,7 @@ pub async fn fetch_models(
     family: ProviderFamily,
     base_url: &str,
     api_key: &str,
+    api_style: Option<&str>,
 ) -> anyhow::Result<Vec<CustomProviderModel>> {
     match family {
         ProviderFamily::Claude => claude::fetch_models(base_url, api_key).await,
@@ -50,6 +51,6 @@ pub async fn fetch_models(
         ProviderFamily::Opencode | ProviderFamily::Mimo => {
             opencode::fetch_models(base_url, api_key).await
         }
-        ProviderFamily::Kimi => kimi::fetch_models(base_url, api_key).await,
+        ProviderFamily::Kimi => kimi::fetch_models(base_url, api_key, api_style).await,
     }
 }

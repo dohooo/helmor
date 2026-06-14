@@ -590,7 +590,7 @@ impl StreamAccumulator {
             }
             Some("kimi/plan") => kimi::handle_plan(self, value),
             // The sidecar's `session/prompt` response → finalize the turn.
-            Some("kimi/turn_complete") => kimi::handle_turn_complete(self),
+            Some("kimi/turn_complete") => kimi::handle_turn_complete(self, value),
 
             // ── Codex informational notifications (no render) ────────
             Some("thread/status/changed")

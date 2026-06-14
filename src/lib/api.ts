@@ -1222,12 +1222,23 @@ export async function fetchProviderModels(
 	family: ProviderFamily,
 	baseUrl: string,
 	apiKey: string,
+	apiStyle?: string,
 ): Promise<CustomProviderModel[]> {
-	return await invoke<CustomProviderModel[]>("fetch_provider_models", {
-		family,
-		baseUrl,
-		apiKey,
-	});
+	try {
+		return await invoke<CustomProviderModel[]>("fetch_provider_models", {
+			family,
+			baseUrl,
+			apiKey,
+			apiStyle,
+		});
+	} catch (error) {
+		// Surface the real reason (e.g. "models endpoint returned HTTP 401")
+		// as an Error — the raw IPC rejection is a plain object that would
+		// otherwise render as "[object Object]" in the card.
+		throw new Error(
+			describeInvokeError(error, "Unable to fetch models from the endpoint."),
+		);
+	}
 }
 
 /** Static provider-capability table. Backed by the Rust source of truth

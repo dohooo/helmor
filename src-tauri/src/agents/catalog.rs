@@ -378,20 +378,18 @@ fn load_kimi_prefs() -> Option<KimiPrefs> {
 }
 
 // Kimi Code resolves models from the user's `~/.kimi-code` config (managed via
-// the Settings "Custom Providers" panel → `kimi provider`). The managed
-// `kimi-code/kimi-for-coding` alias is the always-available built-in default
-// and leads the list; the user's configured/enabled models follow. The selected
-// model is applied per session via ACP `session/set_model`.
+// the Settings "Custom Providers" + "Models" panels). Like every other
+// provider, the composer shows ONLY the models the user enabled in the Settings
+// "Models" picker — there is no forced built-in seed. The selected model is
+// applied per session via ACP `session/set_model`. An empty section is dropped
+// by `drop_empty_sections` so an unconfigured Kimi never clutters the picker.
 fn kimi_section_from_prefs(prefs: Option<KimiPrefs>) -> AgentModelSection {
-    // Always offer the built-in coding default first. The alias is the managed
-    // model key (`kimi-code/<modelId>`) — bare `kimi-for-coding` is NOT a valid
-    // `session/set_model` target, and the synced list dedupes against this key.
-    let mut options = vec![kimi_model("kimi-code/kimi-for-coding", "Kimi for Coding")];
-    let mut seen = std::collections::HashSet::from(["kimi-code/kimi-for-coding".to_string()]);
+    let mut options = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     if let Some(prefs) = prefs {
         let show = |alias: &str| match &prefs.enabled_ids {
             Some(ids) => ids.iter().any(|id| id == alias),
-            None => true, // null → show all cached models
+            None => true, // null = first-sync default: show all cached models
         };
         for (alias, label) in &prefs.cached_models {
             if show(alias) && seen.insert(alias.clone()) {
@@ -1043,17 +1041,10 @@ mod tests {
         assert_eq!(sections[3].status, AgentModelSectionStatus::Unavailable);
         assert!(sections[3].options.is_empty());
 
-        // Kimi is a static one-entry section (the managed built-in default).
+        // No kimi prefs row → no enabled models → empty section (dropped from
+        // the composer by `drop_empty_sections`; only the enabled picks show).
         assert_eq!(sections[4].id, "kimi");
-        assert_eq!(sections[4].status, AgentModelSectionStatus::Ready);
-        assert_eq!(
-            sections[4]
-                .options
-                .iter()
-                .map(|model| model.id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["kimi:kimi-code/kimi-for-coding"]
-        );
+        assert!(sections[4].options.is_empty());
 
         // No `app.cursor_provider` row → no API key → no Cursor section.
         assert!(sections.iter().all(|s| s.id != "cursor"));
@@ -1398,20 +1389,13 @@ mod tests {
     }
 
     #[test]
-    fn kimi_section_leads_with_default_then_enabled_models() {
-        // No prefs → just the built-in default.
+    fn kimi_section_shows_only_enabled_models() {
+        // No prefs → empty (no forced built-in seed; the composer drops it).
         let none = kimi_section_from_prefs(None);
         assert_eq!(none.id, "kimi");
-        assert_eq!(none.status, AgentModelSectionStatus::Ready);
-        assert_eq!(
-            none.options
-                .iter()
-                .map(|o| o.id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["kimi:kimi-code/kimi-for-coding"]
-        );
+        assert!(none.options.is_empty());
 
-        // enabled_ids = null → all cached models follow the default (deduped).
+        // enabled_ids = null (first-sync default) → every cached model shows.
         let all = kimi_section_from_prefs(Some(KimiPrefs {
             cached_models: vec![
                 (
@@ -1422,8 +1406,6 @@ mod tests {
             ],
             enabled_ids: None,
         }));
-        // The synced managed alias dedupes against the lead default — no
-        // duplicate "Kimi for Coding" in the picker.
         assert_eq!(
             all.options
                 .iter()
@@ -1436,7 +1418,7 @@ mod tests {
         assert_eq!(opus.cli_model, "claude-opus-4-8");
         assert_eq!(opus.label, "Claude Opus 4.8");
 
-        // Explicit subset → only the picked alias (plus the always-on default).
+        // Explicit subset → ONLY the picked alias, nothing force-added.
         let subset = kimi_section_from_prefs(Some(KimiPrefs {
             cached_models: vec![
                 ("a".to_string(), "A".to_string()),
@@ -1450,7 +1432,7 @@ mod tests {
                 .iter()
                 .map(|o| o.id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["kimi:kimi-code/kimi-for-coding", "kimi:b"]
+            vec!["kimi:b"]
         );
     }
 

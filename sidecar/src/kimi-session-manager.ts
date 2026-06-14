@@ -199,6 +199,8 @@ export class KimiSessionManager implements SessionManager {
 			params.images,
 		);
 
+		// ACP carries no turn timing, so measure it here for the duration footer.
+		const turnStartedAt = Date.now();
 		let turnError: Error | null = null;
 		let result: AcpPromptResult | null = null;
 		try {
@@ -257,6 +259,7 @@ export class KimiSessionManager implements SessionManager {
 			emitter.passthrough(requestId, {
 				type: "kimi/turn_complete",
 				session_id: ctx.acpSessionId,
+				duration_ms: Date.now() - turnStartedAt,
 			});
 		}
 		emitter.end(requestId);

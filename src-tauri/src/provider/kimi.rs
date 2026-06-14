@@ -163,35 +163,34 @@ pub fn parse_provider_config(raw: &str) -> Result<KimiProviderConfig> {
 /// schema carries no preset marker; the card just shows the base URL field).
 fn read_custom_providers() -> Result<Vec<CustomProvider>> {
     let doc = read_document()?;
-    let json = toml_doc_to_json(&doc)?;
-    let value: Value = serde_json::from_str(if json.trim().is_empty() { "{}" } else { &json })
-        .context("parsing kimi config.toml")?;
 
-    // provider id → its models.
+    // provider id → its models, from `[models."<provider>/<model>"]`.
     let mut models_by_provider: std::collections::HashMap<String, Vec<CustomProviderModel>> =
         Default::default();
-    if let Some(map) = value.get("models").and_then(Value::as_object) {
-        for (key, entry) in map {
+    if let Some(models) = doc.get("models").and_then(Item::as_table) {
+        for (key, item) in models.iter() {
+            let Some(entry) = item.as_table() else {
+                continue;
+            };
             let provider_id = entry
                 .get("provider")
-                .and_then(Value::as_str)
+                .and_then(|v| v.as_str())
                 .unwrap_or_default();
-            // Wire model name is the part after `<provider>/`, falling back to
-            // the explicit `model` field then the bare key.
+            // Wire model name is the explicit `model`, else the part after `/`.
             let slug = entry
                 .get("model")
-                .and_then(Value::as_str)
+                .and_then(|v| v.as_str())
                 .map(str::to_string)
                 .unwrap_or_else(|| key.rsplit('/').next().unwrap_or(key).to_string());
-            let label = entry
-                .get("display_name")
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-                .unwrap_or(&slug)
-                .to_string();
             if provider_id.is_empty() || slug.is_empty() {
                 continue;
             }
+            let label = entry
+                .get("display_name")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&slug)
+                .to_string();
             models_by_provider
                 .entry(provider_id.to_string())
                 .or_default()
@@ -203,37 +202,60 @@ fn read_custom_providers() -> Result<Vec<CustomProvider>> {
         }
     }
 
+    // Iterate in document (insertion) order so a freshly-added provider lands
+    // at the bottom of the list — matching every other family's card order.
     let mut providers = Vec::new();
-    if let Some(map) = value.get("providers").and_then(Value::as_object) {
-        for (id, entry) in map {
+    if let Some(table) = doc.get("providers").and_then(Item::as_table) {
+        for (id, item) in table.iter() {
+            let Some(entry) = item.as_table() else {
+                continue;
+            };
+            let field = |key: &str, alt: &str| {
+                entry
+                    .get(key)
+                    .or_else(|| entry.get(alt))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string()
+            };
             providers.push(CustomProvider {
-                id: id.clone(),
-                name: id.clone(),
+                id: id.to_string(),
+                // Empty (not the id) when unnamed → the card shows its placeholder.
+                name: field("name", "display_name"),
                 preset_key: None,
-                base_url: entry
-                    .get("base_url")
-                    .or_else(|| entry.get("baseUrl"))
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                api_key: entry
-                    .get("api_key")
-                    .or_else(|| entry.get("apiKey"))
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                api_style: None,
+                base_url: field("base_url", "baseUrl"),
+                api_key: field("api_key", "apiKey"),
+                // Surface the provider `type` so the card's style selector reflects config.
+                api_style: entry
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
                 headers: None,
                 models: models_by_provider.remove(id).unwrap_or_default(),
                 enabled_model_ids: None,
             });
         }
     }
-    providers.sort_by_cached_key(|p| p.id.to_lowercase());
     Ok(providers)
 }
 
 // ── Write ─────────────────────────────────────────────────────────────────
+
+/// Kimi provider `type` values that fit the unified card (api_key + optional
+/// base_url). Mirrors the frontend adapter's `styleOptions`. `google-genai` /
+/// `vertexai` need a different input flow (env table / no key) and aren't here.
+const KIMI_WIRE_TYPES: &[&str] = &["openai", "openai_responses", "anthropic", "kimi"];
+
+/// Map the card's selected style to a valid Kimi `type` (default `openai`).
+fn kimi_wire_type(api_style: Option<&str>) -> &'static str {
+    let want = api_style.map(str::trim).unwrap_or("openai");
+    KIMI_WIRE_TYPES
+        .iter()
+        .copied()
+        .find(|&t| t == want)
+        .unwrap_or("openai")
+}
 
 /// Valid as a TOML bare-ish table key + Kimi provider id.
 fn is_valid_id(id: &str) -> bool {
@@ -288,11 +310,16 @@ fn merge_provider(doc: &mut DocumentMut, provider: &CustomProvider) -> Result<()
     if !is_valid_id(id) {
         anyhow::bail!("provider id may only contain letters, digits, `-` and `_`");
     }
-    let wire = "openai"; // v1: manual endpoints are OpenAI-compatible.
+    let wire = kimi_wire_type(provider.api_style.as_deref());
 
     let providers = ensure_table(doc, "providers")?;
     let mut block = Table::new();
     block["type"] = toml_edit::value(wire);
+    // Persist the display name so it round-trips (Kimi ignores unknown keys).
+    let name = provider.name.trim();
+    if !name.is_empty() {
+        block["name"] = toml_edit::value(name);
+    }
     block["api_key"] = toml_edit::value(provider.api_key.trim());
     block["base_url"] = toml_edit::value(provider.base_url.trim());
     providers.insert(id, Item::Table(block));
@@ -383,9 +410,37 @@ impl CustomProviderBackend for KimiBackend {
     }
 }
 
-/// Identical to the OpenAI-compatible `/v1/models` fetch used by Codex/OpenCode.
-pub async fn fetch_models(base_url: &str, api_key: &str) -> Result<Vec<CustomProviderModel>> {
-    super::codex::fetch_models(base_url, api_key).await
+/// Which model-listing API a provider `type` speaks. The two shapes differ in
+/// path AND auth, so picking wrong yields a 404 (or 401).
+#[derive(Debug, PartialEq, Eq)]
+enum ModelsApi {
+    /// `GET {base}/v1/models` + `x-api-key` / `anthropic-version`.
+    Anthropic,
+    /// `GET {base}/models` + `Authorization: Bearer` (base_url includes `/v1`).
+    OpenAiCompatible,
+}
+
+/// Map a Kimi wire `type` to its model-listing API. `openai`, `openai_responses`
+/// (Responses API shares `/v1/models`), and `kimi` (Moonshot's OpenAI-shaped
+/// API) all list models the OpenAI way; only `anthropic` differs.
+fn models_api_for(wire_type: &str) -> ModelsApi {
+    match wire_type {
+        "anthropic" => ModelsApi::Anthropic,
+        _ => ModelsApi::OpenAiCompatible,
+    }
+}
+
+/// Fetch a custom provider's models, using the listing API that matches its
+/// configured `type` (see [`models_api_for`]).
+pub async fn fetch_models(
+    base_url: &str,
+    api_key: &str,
+    api_style: Option<&str>,
+) -> Result<Vec<CustomProviderModel>> {
+    match models_api_for(kimi_wire_type(api_style)) {
+        ModelsApi::Anthropic => super::claude::fetch_models(base_url, api_key).await,
+        ModelsApi::OpenAiCompatible => super::codex::fetch_models(base_url, api_key).await,
+    }
 }
 
 #[cfg(test)]
@@ -573,5 +628,50 @@ keep = true
         assert!(!models.contains_key("hundun/deepseek-v4-pro"));
         // The unrelated provider's model survives.
         assert!(models.contains_key("anthropic/claude-opus-4-8"));
+    }
+
+    #[test]
+    fn merge_writes_selected_type_and_persists_name() {
+        let mut doc = DocumentMut::new();
+        let mut p = hundun();
+        p.api_style = Some("anthropic".to_string());
+        merge_provider(&mut doc, &p).unwrap();
+        assert_eq!(
+            doc["providers"]["hundun"]["type"].as_str(),
+            Some("anthropic")
+        );
+        // Name persists so it round-trips instead of falling back to the id.
+        assert_eq!(doc["providers"]["hundun"]["name"].as_str(), Some("Hundun"));
+
+        // Unknown / unset style falls back to openai.
+        let mut q = hundun();
+        q.id = "q".into();
+        q.api_style = Some("bogus".into());
+        merge_provider(&mut doc, &q).unwrap();
+        assert_eq!(doc["providers"]["q"]["type"].as_str(), Some("openai"));
+    }
+
+    #[test]
+    fn wire_type_validates_against_known_set() {
+        assert_eq!(kimi_wire_type(Some("anthropic")), "anthropic");
+        assert_eq!(kimi_wire_type(Some("openai_responses")), "openai_responses");
+        assert_eq!(kimi_wire_type(Some("vertexai")), "openai"); // unsupported → default
+        assert_eq!(kimi_wire_type(None), "openai");
+    }
+
+    #[test]
+    fn models_api_routes_each_supported_type() {
+        // anthropic uses the Anthropic listing API; every other supported type
+        // (openai / openai_responses / kimi) uses the OpenAI-compatible one.
+        assert_eq!(models_api_for("anthropic"), ModelsApi::Anthropic);
+        for t in ["openai", "openai_responses", "kimi"] {
+            assert_eq!(models_api_for(t), ModelsApi::OpenAiCompatible, "{t}");
+        }
+        // Routing is driven through the same clamp fetch_models uses, so an
+        // unknown style falls back to the OpenAI shape (not anthropic).
+        assert_eq!(
+            models_api_for(kimi_wire_type(Some("google-genai"))),
+            ModelsApi::OpenAiCompatible,
+        );
     }
 }

@@ -70,8 +70,9 @@ pub(super) fn handle_plan(acc: &mut StreamAccumulator, value: &Value) -> PushOut
     PushOutcome::StreamingDelta
 }
 
-pub(super) fn handle_turn_complete(acc: &mut StreamAccumulator) -> PushOutcome {
-    finalize(acc)
+pub(super) fn handle_turn_complete(acc: &mut StreamAccumulator, value: &Value) -> PushOutcome {
+    let duration_ms = value.get("duration_ms").and_then(Value::as_f64);
+    finalize(acc, duration_ms)
 }
 
 /// Drain the in-flight kimi message when no `turn_complete` will arrive
@@ -89,7 +90,7 @@ pub(super) fn flush_in_progress(acc: &mut StreamAccumulator) {
             part["status"] = json!("failed");
         }
     }
-    finalize(acc);
+    finalize(acc, None);
 }
 
 // ── Internals ───────────────────────────────────────────────────────────────
@@ -184,7 +185,7 @@ fn rebuild_collected(acc: &mut StreamAccumulator) {
     }
 }
 
-fn finalize(acc: &mut StreamAccumulator) -> PushOutcome {
+fn finalize(acc: &mut StreamAccumulator, duration_ms: Option<f64>) -> PushOutcome {
     if acc.kimi_state.parts.is_empty() {
         acc.kimi_state = KimiRunState::default();
         return PushOutcome::NoOp;
@@ -221,6 +222,21 @@ fn finalize(acc: &mut StreamAccumulator) -> PushOutcome {
         });
     }
 
+    // Synthesize a turn-result row so the adapter renders the duration footer,
+    // matching Claude/Codex/OpenCode. ACP supplies no timing, so the sidecar
+    // measures the turn and passes `duration_ms` on `kimi/turn_complete`; gating
+    // on it keeps timing-free fixtures (and aborts) byte-identical.
+    if let Some(duration) = duration_ms {
+        if duration > 0.0 {
+            let enriched = json!({ "type": "turn/completed", "duration_ms": duration });
+            let enriched_str = enriched.to_string();
+            let id = uuid::Uuid::new_v4().to_string();
+            acc.result_id = Some(id.clone());
+            acc.result_json = Some(enriched_str.clone());
+            acc.collect_message(&enriched_str, &enriched, MessageRole::Assistant, Some(&id));
+        }
+    }
+
     // Reset per-turn state (fresh turn_id minted on the next event).
     acc.kimi_state = KimiRunState::default();
     PushOutcome::Finalized
@@ -254,6 +270,43 @@ mod tests {
         assert_eq!(parsed["parts"][0]["type"], "text");
         assert_eq!(parsed["parts"][0]["text"], "Hello");
         assert_eq!(acc.session_id(), Some("ses_1"));
+    }
+
+    #[test]
+    fn turn_complete_with_duration_synthesizes_footer() {
+        let mut acc = StreamAccumulator::new("kimi", "");
+        acc.push_event(&chunk("agent_message_chunk", "Hi"), "");
+        acc.push_event(
+            &json!({ "type": "kimi/turn_complete", "session_id": "ses_1", "duration_ms": 1500.0 }),
+            "",
+        );
+        let msgs = acc.collected();
+        let has_footer = msgs.iter().any(|m| {
+            m.parsed
+                .as_ref()
+                .is_some_and(|p| p["type"] == "turn/completed" && p["duration_ms"] == 1500.0)
+        });
+        assert!(has_footer, "duration footer row should be synthesized");
+        assert!(
+            acc.take_result_id().is_some(),
+            "result id wired for persistence"
+        );
+    }
+
+    #[test]
+    fn turn_complete_without_duration_has_no_footer() {
+        let mut acc = StreamAccumulator::new("kimi", "");
+        acc.push_event(&chunk("agent_message_chunk", "Hi"), "");
+        acc.push_event(
+            &json!({ "type": "kimi/turn_complete", "session_id": "ses_1" }),
+            "",
+        );
+        let msgs = acc.collected();
+        assert_eq!(msgs.len(), 1, "only the kimi_message, no footer");
+        assert!(!msgs.iter().any(|m| m
+            .parsed
+            .as_ref()
+            .is_some_and(|p| p["type"] == "turn/completed")));
     }
 
     #[test]

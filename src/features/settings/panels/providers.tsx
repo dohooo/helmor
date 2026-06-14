@@ -24,6 +24,7 @@ import {
 import { CursorCardBody } from "./providers/cursor-card-body";
 import { CustomProvidersList } from "./providers/custom-providers-list";
 import { KimiModels } from "./providers/kimi-models";
+import { LoginGate } from "./providers/login-gate";
 import {
 	SlugProviderModels,
 	type SlugProviderModelsHandle,
@@ -125,18 +126,25 @@ export function ProvidersPanel() {
 					}}
 					collapsible
 				>
-					<ProviderConfigRow
-						label="Models"
-						description="Pick which Kimi models appear in the composer's picker."
+					{/* Kimi runs over ACP, which rejects every session until you sign in
+					    — even custom providers. Lock the whole section until then. */}
+					<LoginGate
+						locked={!statusLoading && !status?.kimi}
+						message="Sign in to Kimi to use it — even custom providers require login. Use the “Log in” button above."
 					>
-						<KimiModels />
-					</ProviderConfigRow>
-					<ProviderConfigRow
-						label="Custom Providers"
-						description={KIMI_CONFIG_ADAPTER.customProvidersDescription}
-					>
-						<CustomProvidersList adapter={KIMI_CONFIG_ADAPTER} />
-					</ProviderConfigRow>
+						<ProviderConfigRow
+							label="Models"
+							description="Pick which Kimi models appear in the composer's picker."
+						>
+							<KimiModels />
+						</ProviderConfigRow>
+						<ProviderConfigRow
+							label="Custom Providers"
+							description={KIMI_CONFIG_ADAPTER.customProvidersDescription}
+						>
+							<CustomProvidersList adapter={KIMI_CONFIG_ADAPTER} />
+						</ProviderConfigRow>
+					</LoginGate>
 				</ProviderRow>
 				<ProviderRow
 					icon={CursorIcon}

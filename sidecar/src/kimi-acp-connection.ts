@@ -10,7 +10,10 @@
  */
 
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import readline from "node:readline";
+import { fileURLToPath } from "node:url";
 import {
 	ACP_PROTOCOL_VERSION,
 	type AcpInitializeResult,
@@ -51,9 +54,31 @@ const INITIALIZE_TIMEOUT_MS = 20_000;
 /** Last stderr bytes kept for diagnostics on launch/handshake/exit failures. */
 const STDERR_TAIL_BYTES = 2_048;
 
-/** Resolve the `kimi` binary: release env override → bare PATH lookup. */
+/**
+ * Resolve the `kimi` binary, the spawn target for `kimi acp`.
+ *
+ * Order:
+ *   1. `HELMOR_KIMI_BIN_PATH` — set by the Tauri host in release builds.
+ *   2. Staged dev binary at `<sidecar>/dist/vendor/kimi/<bin>` — produced by
+ *      `stage-vendor` (run via `bun run dev:prepare`). Kimi ships no npm
+ *      sub-package, so unlike codex/opencode there is no node_modules fallback;
+ *      without this probe `bun run dev` can't find the binary.
+ *   3. Bare `"kimi"` from PATH — last resort.
+ */
 export function resolveKimiBinPath(): string {
-	return process.env.HELMOR_KIMI_BIN_PATH || "kimi";
+	const override = process.env.HELMOR_KIMI_BIN_PATH;
+	if (override) return override;
+	const binName = process.platform === "win32" ? "kimi.exe" : "kimi";
+	const staged = join(
+		dirname(fileURLToPath(import.meta.url)),
+		"..",
+		"dist",
+		"vendor",
+		"kimi",
+		binName,
+	);
+	if (existsSync(staged)) return staged;
+	return "kimi";
 }
 
 export interface KimiAcpConnectionOptions {

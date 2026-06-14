@@ -155,6 +155,7 @@ async fn dispatch(
                 arg_string(&args, "family")?,
                 arg_string(&args, "baseUrl")?,
                 arg_opt_string(&args, "apiKey").unwrap_or_default(),
+                arg_opt_string(&args, "apiStyle"),
             )
             .await?,
         ),

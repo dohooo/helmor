@@ -11,10 +11,40 @@ export const KIMI_CONFIG_ADAPTER: ProviderConfigAdapter = {
 	family: "kimi",
 	displayName: "Kimi",
 	presets: [],
-	caps: { baseUrlEditable: true, apiStyleSelectable: false },
+	caps: { baseUrlEditable: true, apiStyleSelectable: true },
+	// Kimi's `type` field — the wire protocol. `google-genai` / `vertexai` need
+	// a different input flow (no api_key / env table) and aren't offered here.
+	styleLabel: "Provider type",
+	styleOptions: [
+		{
+			value: "openai",
+			label: "OpenAI",
+			hint: "OpenAI Chat Completions (/v1/chat/completions).",
+		},
+		{
+			value: "openai_responses",
+			label: "OpenAI Responses",
+			hint: "OpenAI Responses API (/v1/responses).",
+		},
+		{
+			value: "anthropic",
+			label: "Anthropic",
+			hint: "Anthropic Messages API.",
+		},
+		{
+			value: "kimi",
+			label: "Kimi / Moonshot",
+			hint: "Moonshot's OpenAI-compatible API.",
+		},
+	],
 	customProvidersDescription:
-		"Add an OpenAI-compatible endpoint (base URL + key), then fetch its models. Saved to ~/.kimi-code/config.toml.",
+		"Add an endpoint (provider type + base URL + key), then fetch its models. Saved to ~/.kimi-code/config.toml.",
 	useCustomProviders: () => useKimiBackedProviders(),
 	fetchModels: (provider) =>
-		fetchProviderModels("kimi", provider.baseUrl, provider.apiKey),
+		fetchProviderModels(
+			"kimi",
+			provider.baseUrl,
+			provider.apiKey,
+			provider.apiStyle,
+		),
 };

@@ -717,7 +717,11 @@ function stageMimoBinary(target: TargetInfo): string {
 function stageKimiBinary(target: TargetInfo): string {
 	ensureCacheDir();
 	const plan = kimiArchivePlan(target, KIMI_VERSION);
-	const archive = join(BUNDLE_CACHE, plan.archiveName);
+	// Shared cross-worktree archive cache (like every other vendor) so a new
+	// worktree reuses the downloaded zip (~43 MB) instead of re-fetching it.
+	// kimi ships no npm package, so it ALWAYS hits this download path — unlike
+	// mimo/codex/claude, which come from node_modules on a native-arch host.
+	const archive = join(ARCHIVE_CACHE, plan.archiveName);
 	downloadAndVerify(plan.url, archive, plan.sha256);
 
 	const extractDir = join(BUNDLE_CACHE, plan.slug);
