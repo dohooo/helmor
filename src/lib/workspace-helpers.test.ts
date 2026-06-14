@@ -986,6 +986,21 @@ describe("resolveSessionDisplayProvider", () => {
 		).toBe("claude");
 	});
 
+	it("returns a custom Codex provider id (codex:<id>) from the session agent", () => {
+		expect(
+			resolveSessionDisplayProvider({
+				session: {
+					id: "session-codex-custom",
+					agentType: "codex:hundun",
+					model: null,
+					lastUserMessageAt: null,
+				},
+				modelSelections: {},
+				modelSections: MODEL_SECTIONS,
+			}),
+		).toBe("codex:hundun");
+	});
+
 	it("keeps the opencode icon regardless of the selected sub-provider model", () => {
 		expect(
 			resolveSessionDisplayProvider({

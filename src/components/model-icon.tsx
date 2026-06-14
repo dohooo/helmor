@@ -13,7 +13,7 @@ import {
 	XiaomiMiMoIcon,
 	ZhipuIcon,
 } from "@/components/icons";
-import type { AgentModelOption } from "@/lib/api";
+import { type AgentModelOption, isCodexProvider } from "@/lib/api";
 import catalog from "@/shared/provider-catalog.json";
 
 /// opencode-protocol slug `<providerID>/<modelID>`: map providerID via the
@@ -34,7 +34,7 @@ export function ModelIcon({
 	className?: string;
 }) {
 	if (model?.provider === "cursor") return <CursorIcon className={className} />;
-	if (model?.provider === "codex")
+	if (isCodexProvider(model?.provider))
 		return <OpenAIColorIcon className={className} />;
 	if (model?.provider === "opencode" || model?.provider === "mimo") {
 		const providerId = model.cliModel.split("/")[0] ?? "";

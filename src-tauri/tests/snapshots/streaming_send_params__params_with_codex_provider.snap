@@ -1,0 +1,19 @@
+---
+source: tests/streaming_send_params.rs
+expression: "&params"
+---
+codexProvider:
+  apiKey: sk-secret
+  baseUrl: "http://dollar.hundun.cn/v1"
+  id: hundun
+  model: gpt-5.5
+  wireApi: responses
+cwd: /abs/workspace
+effortLevel: high
+fastMode: false
+model: gpt-5.5
+permissionMode: bypassPermissions
+prompt: hello
+provider: codex
+resume: ~
+sessionId: sidecar-sess-1

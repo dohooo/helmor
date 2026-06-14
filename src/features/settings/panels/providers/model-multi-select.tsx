@@ -82,22 +82,33 @@ export function ModelMultiSelect({
 		return [...map.entries()];
 	}, [available, grouped]);
 
-	const renderItem = (model: MultiSelectOption) => (
-		<CommandItem
-			key={model.id}
-			value={`${model.label} ${model.id}`}
-			data-checked={enabledSet.has(model.id)}
-			onSelect={() => onToggle(model.id)}
-			className="items-start"
-		>
-			<div className="flex min-w-0 flex-1 flex-col gap-0.5">
-				<span className="text-ui leading-tight">{model.label}</span>
-				<span className="font-mono text-micro leading-tight text-muted-foreground">
-					{model.id}
-				</span>
-			</div>
-		</CommandItem>
-	);
+	const renderItem = (model: MultiSelectOption) => {
+		// No real name → show just the id (avoid two identical lines).
+		const name = model.label.trim();
+		const hasName = name.length > 0 && name !== model.id;
+		return (
+			<CommandItem
+				key={model.id}
+				value={`${model.label} ${model.id}`}
+				data-checked={enabledSet.has(model.id)}
+				onSelect={() => onToggle(model.id)}
+				className="items-start"
+			>
+				<div className="flex min-w-0 flex-1 flex-col gap-0.5">
+					{hasName ? (
+						<>
+							<span className="text-ui leading-tight">{model.label}</span>
+							<span className="font-mono text-micro leading-tight text-muted-foreground">
+								{model.id}
+							</span>
+						</>
+					) : (
+						<span className="font-mono text-ui leading-tight">{model.id}</span>
+					)}
+				</div>
+			</CommandItem>
+		);
+	};
 
 	return (
 		<Popover>
