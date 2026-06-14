@@ -6,6 +6,7 @@ import {
 	expect,
 	test,
 } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -47,14 +48,34 @@ process.stdin.on("data", (chunk) => {
 });
 `;
 
+// Make the fake agent spawnable. POSIX honors the shebang on a 0755 script;
+// Windows can't exec a shebang/extensionless file, and spawn() rejects
+// .cmd/.bat without a shell — so compile a real .exe. Done at module load so
+// the (multi-second) compile isn't bound by the per-test timeout.
+function buildFakeKimiBin(): string {
+	const dir = mkdtempSync(join(tmpdir(), "fake-acp-"));
+	if (process.platform === "win32") {
+		const scriptPath = join(dir, "fake-kimi.ts");
+		writeFileSync(scriptPath, FAKE_AGENT);
+		const binPath = join(dir, "fake-kimi.exe");
+		execFileSync(
+			process.execPath,
+			["build", scriptPath, "--compile", "--outfile", binPath],
+			{ stdio: "ignore" },
+		);
+		return binPath;
+	}
+	const binPath = join(dir, "fake-kimi");
+	writeFileSync(binPath, FAKE_AGENT, { mode: 0o755 });
+	return binPath;
+}
+
+const fakeKimiBin = buildFakeKimiBin();
 const previousBinPath = process.env.HELMOR_KIMI_BIN_PATH;
 const connections: KimiAcpConnection[] = [];
 
 beforeAll(() => {
-	const dir = mkdtempSync(join(tmpdir(), "fake-acp-"));
-	const binPath = join(dir, "fake-kimi");
-	writeFileSync(binPath, FAKE_AGENT, { mode: 0o755 });
-	process.env.HELMOR_KIMI_BIN_PATH = binPath;
+	process.env.HELMOR_KIMI_BIN_PATH = fakeKimiBin;
 });
 
 afterAll(() => {
