@@ -53,6 +53,7 @@ impl ForgeAccountBackend for GithubAccountBackend {
             avatar_url: profile.avatar_url,
             email: profile.email,
             active: false,
+            id: profile.id.map(|id| id.to_string()),
         })
     }
 
@@ -351,6 +352,7 @@ fn list_github_accounts_full() -> Result<Vec<ForgeAccount>> {
                         login: slot.login.clone(),
                         name: profile.as_ref().and_then(|p| p.name.clone()),
                         avatar_url: profile.as_ref().and_then(|p| p.avatar_url.clone()),
+                        id: profile.as_ref().and_then(|p| p.id.map(|id| id.to_string())),
                         email: profile.and_then(|p| p.email),
                         active: slot.active,
                     }
@@ -594,6 +596,10 @@ struct GhHostStatusFullEntry {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
 struct GithubUserResponse {
+    /// GitHub's stable numeric account id. Surfaced as `ForgeAccount.id`
+    /// (string form) for team-mode member identity — a login can rename,
+    /// the id can't.
+    id: Option<u64>,
     name: Option<String>,
     avatar_url: Option<String>,
     email: Option<String>,
@@ -622,6 +628,32 @@ fn looks_like_not_found(message: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn github_user_response_captures_numeric_id() {
+        // `gh api /user` returns a numeric `id` that survives a login
+        // rename — the durable identity team-mode member registration
+        // keys on. Lock the parse so the field can't silently drop.
+        let stdout = r#"{
+            "id": 583231,
+            "login": "octocat",
+            "name": "The Octocat",
+            "avatar_url": "https://avatars.example/u/583231",
+            "email": "octo@example.com"
+        }"#;
+        let parsed: GithubUserResponse = serde_json::from_str(stdout).unwrap();
+        assert_eq!(parsed.id, Some(583231));
+        assert_eq!(parsed.name.as_deref(), Some("The Octocat"));
+    }
+
+    #[test]
+    fn github_user_response_id_optional_when_absent() {
+        // Defensive: a payload missing `id` must parse (id → None)
+        // rather than erroring the whole profile fetch.
+        let stdout = r#"{ "login": "octocat" }"#;
+        let parsed: GithubUserResponse = serde_json::from_str(stdout).unwrap();
+        assert_eq!(parsed.id, None);
+    }
 
     #[test]
     fn looks_like_not_found_matches_canonical_phrases() {

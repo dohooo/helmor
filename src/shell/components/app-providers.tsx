@@ -6,6 +6,7 @@ import { SplashScreen } from "@/components/splash-screen";
 import { AppOnboarding } from "@/features/onboarding";
 import type { SettingsSection } from "@/features/settings";
 import { SettingsDialog } from "@/features/settings";
+import { InviteAcceptHost } from "@/features/team/invite-accept-host";
 import { getPendingPairingToken } from "@/lib/ipc";
 import { helmorQueryPersister, QUERY_CACHE_BUSTER } from "@/lib/query-client";
 import { SettingsContext } from "@/lib/settings";
@@ -116,6 +117,12 @@ export function AppProviders({
 						});
 					}}
 				/>
+				{/* Raises the team invite-accept prompt when the app was opened
+				    with `?invite=<token>`. Renders nothing otherwise. Gated to
+				    the main window post-onboarding. */}
+				{appSettings?.onboardingCompleted === true && !isQuickPanelWindow ? (
+					<InviteAcceptHost />
+				) : null}
 			</PersistQueryClientProvider>
 		</SettingsContext.Provider>
 	);

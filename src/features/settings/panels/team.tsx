@@ -3,9 +3,12 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { useInviteAccept } from "@/features/team/use-invite-accept";
+import { useTeamIdentity } from "@/features/team/use-team-identity";
 import {
 	getTeamConfig,
 	isTeamModeActive,
+	parseInviteLink,
 	pingTeamBackend,
 	saveTeamConfig,
 	setTeamModeActive,
@@ -23,7 +26,28 @@ export function TeamPanel() {
 	const [url, setUrl] = useState(initial?.url ?? "");
 	const [token, setToken] = useState(initial?.token ?? "");
 	const [testing, setTesting] = useState(false);
+	const [inviteLink, setInviteLink] = useState("");
 	const active = isTeamModeActive();
+	const { identity } = useTeamIdentity();
+	const { status: acceptStatus, accept } = useInviteAccept();
+	const joining = acceptStatus === "accepting";
+
+	const handleJoinWithInvite = async () => {
+		const invite = parseInviteLink(inviteLink);
+		if (!invite) {
+			toast.error("That doesn't look like a valid invite link");
+			return;
+		}
+		if (!identity) {
+			toast.error("Connect a GitHub account first (Settings → Accounts)");
+			return;
+		}
+		// On success the hook persists config, flips team mode on, and
+		// reloads — so there's no follow-up here. On failure it returns the
+		// message, which we surface as a toast.
+		const outcome = await accept(invite, identity);
+		if (!outcome.ok && outcome.error) toast.error(outcome.error);
+	};
 
 	const handleTest = async () => {
 		setTesting(true);
@@ -56,6 +80,32 @@ export function TeamPanel() {
 
 	return (
 		<SettingsGroup>
+			<SettingsRow
+				title="Join with invite link"
+				description="Paste an invite link to register with your GitHub identity and switch to the team workspace. The app reloads on success."
+				align="start"
+			>
+				<div className="flex items-center gap-2">
+					<Input
+						value={inviteLink}
+						onChange={(event) => setInviteLink(event.target.value)}
+						placeholder="https://…/?invite=…"
+						className="w-[280px]"
+						autoComplete="off"
+						autoCapitalize="off"
+						spellCheck={false}
+						disabled={joining}
+					/>
+					<Button
+						size="sm"
+						onClick={() => void handleJoinWithInvite()}
+						disabled={joining || !inviteLink.trim()}
+					>
+						{joining ? "Joining…" : "Join"}
+					</Button>
+				</div>
+			</SettingsRow>
+
 			<SettingsRow
 				title="Team mode"
 				description="Run against a shared cloud backend instead of this machine. The app reloads when you switch."

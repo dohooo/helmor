@@ -344,6 +344,11 @@ export type ForgeAccount = {
 	/** True for the gh account currently marked active by `gh auth
 	 * switch`. Always true for GitLab (one account per host). */
 	active: boolean;
+	/** Stable numeric account id (string form) — GitHub's `gh api /user`
+	 * `.id`. The durable identity team-mode member registration keys on
+	 * (a login can rename). `null` for GitLab or when the profile fetch
+	 * failed. */
+	id?: string | null;
 };
 
 export type ForgeProvider = "github" | "gitlab" | "unknown";

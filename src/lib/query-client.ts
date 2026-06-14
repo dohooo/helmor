@@ -58,6 +58,8 @@ import {
 	getSessionThreadPaginationState,
 	setSessionThreadPaginationState,
 } from "./session-thread-pagination";
+import { listTeamMembers, listTeamWorkspaces } from "./team-api";
+import { getTeamConfig, type TeamConfig } from "./team-mode";
 
 const CHANGES_STALE_TIME = 3_000;
 const CHANGES_REFETCH_INTERVAL = 10_000;
@@ -165,6 +167,10 @@ export const helmorQueryKeys = {
 	triageConfig: ["triage", "config"] as const,
 	triageActiveStatus: ["triage", "activeStatus"] as const,
 	pairedDevices: ["pairedDevices"] as const,
+	// Team cloud control-plane reads, keyed by Worker URL so switching
+	// backends doesn't serve a stale roster.
+	teamMembers: (url: string) => ["teamMembers", url] as const,
+	teamWorkspaces: (url: string) => ["teamWorkspaces", url] as const,
 };
 
 /** Persistence is opt-in per `queryOptions` via `meta: { persist: true }`.
@@ -1025,5 +1031,46 @@ export function workspaceFilesQueryOptions(workspaceRootPath: string) {
 		staleTime: 60_000,
 		gcTime: DEFAULT_GC_TIME,
 		retry: 0,
+	});
+}
+
+const TEAM_DATA_STALE_TIME = 30_000;
+
+/**
+ * Team roster (`GET /team/members`) for the sidebar team section. Only
+ * meaningful in team mode — pass the resolved {@link TeamConfig} (or `null`
+ * to disable). Keyed by Worker URL so switching backends serves a fresh
+ * list. Not persisted: it's remote, per-session, and re-fetched on focus.
+ */
+export function teamMembersQueryOptions(cfg: TeamConfig | null) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.teamMembers(cfg?.url ?? "__none__"),
+		queryFn: () => {
+			// `enabled` keeps this off when cfg is null; the resolve here is
+			// just to satisfy the type — it never runs disabled.
+			const resolved = cfg ?? getTeamConfig();
+			if (!resolved) return Promise.resolve([]);
+			return listTeamMembers(resolved);
+		},
+		enabled: cfg !== null,
+		staleTime: TEAM_DATA_STALE_TIME,
+		refetchOnWindowFocus: true,
+		retry: 1,
+	});
+}
+
+/** Team workspaces (`GET /team/workspaces`) for the sidebar team section. */
+export function teamWorkspacesQueryOptions(cfg: TeamConfig | null) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.teamWorkspaces(cfg?.url ?? "__none__"),
+		queryFn: () => {
+			const resolved = cfg ?? getTeamConfig();
+			if (!resolved) return Promise.resolve([]);
+			return listTeamWorkspaces(resolved);
+		},
+		enabled: cfg !== null,
+		staleTime: TEAM_DATA_STALE_TIME,
+		refetchOnWindowFocus: true,
+		retry: 1,
 	});
 }

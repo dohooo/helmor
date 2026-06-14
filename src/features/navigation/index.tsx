@@ -33,6 +33,7 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
+import { TeamSection } from "@/features/team/team-section";
 import type {
 	RepositoryCreateOption,
 	StackRowMeta,
@@ -1150,6 +1151,10 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				<TrafficLightSpacer side="left" width={94} />
 				<div data-tauri-drag-region className="h-full flex-1" />
 			</div>
+
+			{/* Team roster + shared workspaces — renders only in team mode,
+			    so local single-user mode is unchanged. */}
+			<TeamSection />
 
 			<div className="mt-1 flex items-center justify-between px-3">
 				<h2 className="text-title font-medium text-muted-foreground">

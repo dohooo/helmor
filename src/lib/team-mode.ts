@@ -94,3 +94,72 @@ export async function pingTeamBackend(
 		return false;
 	}
 }
+
+/** A parsed team invite: the Worker origin to register against and the
+ * one-time invite token (which doubles as the member's bearer once
+ * accepted — trust-on-first-use). */
+export interface ParsedInvite {
+	/** Worker base URL (origin only, trailing slash stripped). */
+	url: string;
+	/** The invite token from the link's `?invite=` query param. */
+	token: string;
+}
+
+/**
+ * Parse an invite from a pasted link. The control plane mints links shaped
+ * like `https://helmor-team.example.workers.dev/?invite=<token>` — the
+ * Worker origin is where we register, the `invite` query param is the
+ * capability token. Returns `null` when the input isn't a URL carrying a
+ * non-empty `invite` param (so callers can show "not a valid invite link").
+ *
+ * Pure + input-only (no `window`) so it's unit-testable; the location-based
+ * convenience wrapper is {@link getInviteFromLocation}.
+ */
+export function parseInviteLink(input: string): ParsedInvite | null {
+	const trimmed = input.trim();
+	if (!trimmed) return null;
+	let parsed: URL;
+	try {
+		parsed = new URL(trimmed);
+	} catch {
+		return null;
+	}
+	const token = parsed.searchParams.get("invite")?.trim();
+	if (!token) return null;
+	// Origin only — drop the path/query so the saved backend URL is the
+	// bare Worker root the `/team/*` routes hang off.
+	return { url: normalizeUrl(parsed.origin), token };
+}
+
+/**
+ * Read an invite out of the current `window.location` (the app was opened
+ * via an invite deep-link). `null` outside a browser context or when no
+ * valid `?invite=` is present.
+ */
+export function getInviteFromLocation(): ParsedInvite | null {
+	if (typeof window === "undefined") return null;
+	try {
+		return parseInviteLink(window.location.href);
+	} catch {
+		return null;
+	}
+}
+
+/** Strip the `?invite=` param from the address bar after handling it, so a
+ * reload doesn't re-trigger the accept flow and the token isn't left
+ * lingering in the URL. No-op outside a browser / when History is absent. */
+export function clearInviteFromLocation(): void {
+	if (typeof window === "undefined") return;
+	try {
+		const url = new URL(window.location.href);
+		if (!url.searchParams.has("invite")) return;
+		url.searchParams.delete("invite");
+		window.history.replaceState(
+			window.history.state,
+			"",
+			`${url.pathname}${url.search}${url.hash}`,
+		);
+	} catch {
+		// History API unavailable / locked-down context — harmless to skip.
+	}
+}

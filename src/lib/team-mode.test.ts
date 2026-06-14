@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	clearInviteFromLocation,
+	getInviteFromLocation,
 	getTeamConfig,
 	isTeamModeActive,
+	parseInviteLink,
 	pingTeamBackend,
 	saveTeamConfig,
 	setTeamModeActive,
@@ -89,5 +92,68 @@ describe("pingTeamBackend", () => {
 		vi.stubGlobal("fetch", fetchMock);
 		await expect(pingTeamBackend("   ", "tok")).resolves.toBe(false);
 		expect(fetchMock).not.toHaveBeenCalled();
+	});
+});
+
+describe("parseInviteLink", () => {
+	it("extracts origin + token from a control-plane invite link", () => {
+		expect(
+			parseInviteLink("https://helmor-team.example.workers.dev/?invite=abc123"),
+		).toEqual({
+			url: "https://helmor-team.example.workers.dev",
+			token: "abc123",
+		});
+	});
+
+	it("drops any path and extra query params, keeping only the origin", () => {
+		const parsed = parseInviteLink(
+			"https://team.example.com/join/x?invite=tok&foo=bar",
+		);
+		expect(parsed?.url).toBe("https://team.example.com");
+		expect(parsed?.token).toBe("tok");
+	});
+
+	it("trims surrounding whitespace", () => {
+		expect(
+			parseInviteLink("  https://t.example.com/?invite=tok  ")?.token,
+		).toBe("tok");
+	});
+
+	it("returns null when the invite param is missing or blank", () => {
+		expect(parseInviteLink("https://team.example.com/")).toBeNull();
+		expect(parseInviteLink("https://team.example.com/?invite=")).toBeNull();
+		expect(parseInviteLink("https://team.example.com/?invite=%20")).toBeNull();
+	});
+
+	it("returns null for a non-URL string (e.g. a bare token)", () => {
+		expect(parseInviteLink("abc123")).toBeNull();
+		expect(parseInviteLink("")).toBeNull();
+	});
+});
+
+describe("invite location helpers", () => {
+	const originalHref = window.location.href;
+
+	afterEach(() => {
+		window.history.replaceState(null, "", originalHref);
+	});
+
+	it("getInviteFromLocation reads the invite out of window.location", () => {
+		window.history.replaceState(null, "", "/?invite=loc-token");
+		const parsed = getInviteFromLocation();
+		expect(parsed?.token).toBe("loc-token");
+		expect(parsed?.url).toBe(window.location.origin);
+	});
+
+	it("getInviteFromLocation returns null when no invite param is present", () => {
+		window.history.replaceState(null, "", "/");
+		expect(getInviteFromLocation()).toBeNull();
+	});
+
+	it("clearInviteFromLocation strips the invite param", () => {
+		window.history.replaceState(null, "", "/?invite=loc-token&keep=1");
+		clearInviteFromLocation();
+		expect(window.location.search).toBe("?keep=1");
+		expect(getInviteFromLocation()).toBeNull();
 	});
 });

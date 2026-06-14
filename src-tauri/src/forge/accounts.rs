@@ -31,6 +31,12 @@ pub struct ForgeAccount {
     pub avatar_url: Option<String>,
     pub email: Option<String>,
     pub active: bool,
+    /// Stable numeric account id (string form), e.g. GitHub's `gh api
+    /// /user` `.id`. A login can rename, so the numeric id is the durable
+    /// identity used by team-mode member registration. `None` for GitLab
+    /// (a separate id space team mode doesn't key on) or when the profile
+    /// fetch failed.
+    pub id: Option<String>,
 }
 
 /// Tristate auth probe result. `LoggedOut` only when we definitively
