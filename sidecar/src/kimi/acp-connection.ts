@@ -66,8 +66,11 @@ export function resolveKimiBinPath(): string {
 	const override = process.env.HELMOR_KIMI_BIN_PATH;
 	if (override) return override;
 	const binName = process.platform === "win32" ? "kimi.exe" : "kimi";
+	// This file lives at src/kimi/, so climb two levels to the sidecar root
+	// (src/kimi → src → sidecar) before descending into dist/vendor.
 	const staged = join(
 		dirname(fileURLToPath(import.meta.url)),
+		"..",
 		"..",
 		"dist",
 		"vendor",
