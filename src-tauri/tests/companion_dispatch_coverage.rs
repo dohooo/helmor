@@ -41,6 +41,15 @@ const BROWSER_UNSUPPORTED: &[&str] = &[
     "subscribe_local_llm_downloads",
 ];
 
+/// Frontend commands that always run on the LOCAL Tauri backend, even in
+/// team/companion mode (see `LOCAL_ONLY_INVOKES` in `src/lib/ipc.ts`). They route
+/// to the desktop host, never the container, so they are intentionally absent
+/// from the companion dispatch. `authorize_cloud_codex_identity` runs
+/// `codex login` + captures the OAuth refresh_token on the user's own machine,
+/// which cannot happen in the cloud container — the desktop runs it and uploads
+/// the token to the Worker over the team-api route.
+const LOCAL_ONLY: &[&str] = &["authorize_cloud_codex_identity"];
+
 #[test]
 fn every_frontend_invoke_is_reachable_in_the_companion() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -73,7 +82,11 @@ fn every_frontend_invoke_is_reachable_in_the_companion() {
         extract_quoted_names(&src, &mut handled);
     }
 
-    let allow: BTreeSet<&str> = BROWSER_UNSUPPORTED.iter().copied().collect();
+    let allow: BTreeSet<&str> = BROWSER_UNSUPPORTED
+        .iter()
+        .chain(LOCAL_ONLY)
+        .copied()
+        .collect();
 
     let missing: Vec<&String> = frontend
         .iter()
@@ -101,12 +114,13 @@ fn every_frontend_invoke_is_reachable_in_the_companion() {
     // got wired into the dispatch) is dead and should be removed.
     let stale: Vec<&str> = BROWSER_UNSUPPORTED
         .iter()
+        .chain(LOCAL_ONLY)
         .filter(|cmd| !frontend.contains(**cmd) || handled.contains(**cmd))
         .copied()
         .collect();
     assert!(
         stale.is_empty(),
-        "BROWSER_UNSUPPORTED has stale entries (no longer invoked, or now handled): {stale:?} — \
+        "BROWSER_UNSUPPORTED / LOCAL_ONLY has stale entries (no longer invoked, or now handled): {stale:?} — \
          remove them.",
     );
 }

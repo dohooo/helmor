@@ -5,12 +5,8 @@ import {
 	InviteAcceptFailure,
 	type TeamIdentity,
 } from "@/lib/team-api";
-import {
-	clearInviteFromLocation,
-	type ParsedInvite,
-	saveTeamConfig,
-	setTeamModeActive,
-} from "@/lib/team-mode";
+import { clearInviteFromLocation, type ParsedInvite } from "@/lib/team-mode";
+import { switchTeamMode } from "@/lib/team-switch";
 
 /** Human-readable copy for each accept-failure reason. Centralised so the
  * dialog and any future surface phrase 404 / 410 / 409 consistently. */
@@ -38,8 +34,8 @@ export interface UseInviteAcceptResult {
 	/** Set when `status === "error"`; one of the {@link ACCEPT_ERROR_MESSAGES}. */
 	errorMessage: string | null;
 	/** Redeem `invite` with `identity`, then (on success) persist the
-	 * config, switch into team mode, and reload so the IPC transport is
-	 * rebuilt against the Worker. */
+	 * config and switch into team mode IN PLACE — the IPC transport is
+	 * repointed at the Worker with no reload. */
 	accept: (
 		invite: ParsedInvite,
 		identity: TeamIdentity,
@@ -49,11 +45,11 @@ export interface UseInviteAcceptResult {
 /**
  * Drive the invite → accept → activate-team-mode handshake. The token in the
  * link becomes the member's saved bearer (trust-on-first-use); on success we
- * `saveTeamConfig({ url, token })`, flip team mode on, and reload.
+ * `switchTeamMode({ url, token })`, which persists the config, flips team mode
+ * on, and repoints the live transport in place (no reload).
  *
- * Reload is the same mechanism the Team panel / sidebar switch already use
- * (`ipc.ts` resolves its transport synchronously at module load), so this
- * stays consistent with the Phase-0 design.
+ * `switchTeamMode` is the same mechanism the Team panel / sidebar switch use,
+ * so this stays consistent with the in-place transport-switch design.
  */
 export function useInviteAccept(): UseInviteAcceptResult {
 	const [status, setStatus] = useState<InviteAcceptStatus>("idle");
@@ -68,12 +64,14 @@ export function useInviteAccept(): UseInviteAcceptResult {
 			setErrorMessage(null);
 			try {
 				await acceptInvite(invite.url, invite.token, identity);
-				// Token doubles as the member's bearer — persist it and turn
-				// the mode on, then drop the param so a reload can't replay it.
-				saveTeamConfig({ url: invite.url, token: invite.token });
-				setTeamModeActive(true);
+				// Strip the `?invite=` param BEFORE switching: there's no reload to
+				// implicitly drop the in-flight URL state now, so clear it
+				// explicitly or a later manual reload could replay the accept.
 				clearInviteFromLocation();
-				window.location.reload();
+				// Token doubles as the member's bearer — `switchTeamMode` persists
+				// the config, flips team mode on, and repoints the transport in
+				// place (no reload).
+				switchTeamMode({ url: invite.url, token: invite.token });
 				return { ok: true, error: null };
 			} catch (error) {
 				const reason: AcceptInviteError =

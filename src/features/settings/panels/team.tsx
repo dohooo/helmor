@@ -10,16 +10,17 @@ import {
 	isTeamModeActive,
 	parseInviteLink,
 	pingTeamBackend,
-	saveTeamConfig,
-	setTeamModeActive,
 } from "@/lib/team-mode";
+import { switchTeamMode } from "@/lib/team-switch";
+import { useTransportGeneration } from "@/lib/transport-generation";
 import { SettingsGroup, SettingsRow } from "../components/settings-row";
 
 /**
  * Team mode panel: point Helmor at a shared cloud backend (the CF Worker) and
- * switch between Local and Team. Switching reloads the app so `ipc.ts` re-reads
- * the transport at module load (the T2 reload-style dynamic transport). The UI
- * is otherwise identical — "zero new concepts".
+ * switch between Local and Team. Switching repoints the IPC transport in place
+ * via {@link switchTeamMode} — instant, no reload — and the shell shows a
+ * "connecting" banner while a cold team backend wakes. The UI is otherwise
+ * identical — "zero new concepts".
  */
 export function TeamPanel() {
 	const initial = getTeamConfig();
@@ -27,8 +28,13 @@ export function TeamPanel() {
 	const [token, setToken] = useState(initial?.token ?? "");
 	const [testing, setTesting] = useState(false);
 	const [inviteLink, setInviteLink] = useState("");
+	// Subscribe to the transport generation so this panel re-renders after a
+	// switch and `active` re-reads the flipped state. The panel lives inside
+	// SettingsDialog, which the keyed remount may close, but this keeps the
+	// toggle's `checked` correct for the moment the panel is still mounted.
+	useTransportGeneration();
 	const active = isTeamModeActive();
-	const { identity } = useTeamIdentity();
+	const { identity, isLoading: identityLoading } = useTeamIdentity();
 	const { status: acceptStatus, accept } = useInviteAccept();
 	const joining = acceptStatus === "accepting";
 
@@ -39,12 +45,20 @@ export function TeamPanel() {
 			return;
 		}
 		if (!identity) {
-			toast.error("Connect a GitHub account first (Settings → Accounts)");
+			// The forge-account roster fans out a `gh api /user` per account, so
+			// it can still be in flight when this panel first opens. Don't mistake
+			// "still loading" for "no GitHub account" — that misfires the
+			// connect-an-account error even though one is present.
+			toast.error(
+				identityLoading
+					? "Still loading your GitHub account — try again in a moment."
+					: "Connect a GitHub account first (Settings → Accounts)",
+			);
 			return;
 		}
-		// On success the hook persists config, flips team mode on, and
-		// reloads — so there's no follow-up here. On failure it returns the
-		// message, which we surface as a toast.
+		// On success the hook persists config and switches into team mode in
+		// place (no reload) — so there's no follow-up here. On failure it
+		// returns the message, which we surface as a toast.
 		const outcome = await accept(invite, identity);
 		if (!outcome.ok && outcome.error) toast.error(outcome.error);
 	};
@@ -69,20 +83,19 @@ export function TeamPanel() {
 				toast.error("Enter a Worker URL first");
 				return;
 			}
-			saveTeamConfig({ url, token });
-			setTeamModeActive(true);
+			// Repoint the IPC transport in place — no reload. The shell shows a
+			// connecting banner while a cold team backend wakes.
+			switchTeamMode({ url, token });
 		} else {
-			setTeamModeActive(false);
+			switchTeamMode(null);
 		}
-		// Reload so the IPC transport is rebuilt for the chosen mode.
-		window.location.reload();
 	};
 
 	return (
 		<SettingsGroup>
 			<SettingsRow
 				title="Join with invite link"
-				description="Paste an invite link to register with your GitHub identity and switch to the team workspace. The app reloads on success."
+				description="Paste an invite link to register with your GitHub identity and switch to the team workspace instantly."
 				align="start"
 			>
 				<div className="flex items-center gap-2">
@@ -99,7 +112,7 @@ export function TeamPanel() {
 					<Button
 						size="sm"
 						onClick={() => void handleJoinWithInvite()}
-						disabled={joining || !inviteLink.trim()}
+						disabled={joining || identityLoading || !inviteLink.trim()}
 					>
 						{joining ? "Joining…" : "Join"}
 					</Button>
@@ -108,7 +121,7 @@ export function TeamPanel() {
 
 			<SettingsRow
 				title="Team mode"
-				description="Run against a shared cloud backend instead of this machine. The app reloads when you switch."
+				description="Run against a shared cloud backend instead of this machine. Switches instantly."
 			>
 				<Switch
 					checked={active}

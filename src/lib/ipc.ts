@@ -68,25 +68,52 @@ export function isCompanionClient(): boolean {
 	return !isTauriRuntime() && companionConfig() !== null;
 }
 
-// Resolved once at module load; the runtime never switches mid-session.
-const COMPANION = isCompanionClient();
+// ---------------------------------------------------------------------------
+// Transport mode (runtime-switchable for the desktop team ↔ local axis only)
+// ---------------------------------------------------------------------------
+//
+// Replaces the former frozen `COMPANION` / `TEAM` / `REMOTE` module consts. The
+// desktop-local path and the browser-companion path stay BYTE-EQUIVALENT to the
+// old consts at a cold boot — `companion` is still resolved exactly once (a
+// browser can never become a Tauri runtime, so it never changes), and `team` /
+// `remote` start with the same value the old consts had. Only the *desktop
+// TEAM* dimension becomes mutable: `applyTransportSwitch()` flips it in place so
+// switching team ↔ local takes effect for subscriptions created after the
+// switch, with NO `window.location.reload`.
 
-// Team mode: the *desktop* Tauri app pointing its transport at a remote
-// companion (a CF Worker), chosen synchronously at boot from localStorage. Only
-// meaningful in the Tauri runtime — a browser served by the companion is
-// already remote (COMPANION above). Switching mode persists + reloads, so this
-// constant is stable for the whole session.
-const TEAM = isTauriRuntime() && isTeamModeActive();
+interface TransportState {
+	/** Browser served by the companion server. Resolved ONCE at module load —
+	 *  a browser can never become a Tauri runtime, so this never changes. */
+	readonly companion: boolean;
+	/** Desktop Tauri app pointing at a remote Worker. MUTABLE: flipped by
+	 *  {@link recomputeTransportMode} when the user switches, with no reload. */
+	team: boolean;
+	/** Derived: any remote HTTP transport. Recomputed whenever `team` flips. */
+	remote: boolean;
+}
 
-// Any remote HTTP transport (browser companion OR desktop team mode). The
-// pairing / cookie / browser-auth-gate side effects below stay keyed on
-// COMPANION (browser-only); only the request transport keys on REMOTE.
-const REMOTE = COMPANION || TEAM;
+const transport: TransportState = (() => {
+	const companion = isCompanionClient();
+	const team = isTauriRuntime() && isTeamModeActive();
+	return { companion, team, remote: companion || team };
+})();
+
+/**
+ * Re-derive `team` + `remote` from the current localStorage flag. Called by
+ * {@link applyTransportSwitch} AFTER the switch action has persisted config +
+ * flipped the mode flag. No-op in a companion browser (there is no local
+ * transport to toggle to — `companion` is fixed remote).
+ */
+function recomputeTransportMode(): void {
+	if (transport.companion) return; // browser companion is fixed remote
+	transport.team = isTauriRuntime() && isTeamModeActive();
+	transport.remote = transport.companion || transport.team;
+}
 
 // On first companion load, a pairing link may carry the token in the URL hash
 // (`#pair=<token>`). Persist it, then strip it so the secret doesn't linger in
 // history or get shared.
-if (COMPANION && typeof window !== "undefined") {
+if (transport.companion && typeof window !== "undefined") {
 	stagePairingFromHash();
 	syncCompanionCookie();
 	// A pairing link opened in the *same* tab (e.g. pasted into the address bar)
@@ -163,7 +190,7 @@ function stripPairingHash(): void {
 
 /** The scanned-but-unconfirmed pairing token, if any. */
 export function getPendingPairingToken(): string | null {
-	if (!COMPANION) return null;
+	if (!transport.companion) return null;
 	try {
 		return sessionStorage.getItem(PENDING_KEY);
 	} catch {
@@ -213,7 +240,7 @@ function syncCompanionCookie(): void {
 
 function baseUrl(): string {
 	// Team mode targets the configured Worker URL directly.
-	if (TEAM) return getTeamConfig()?.url ?? "";
+	if (transport.team) return getTeamConfig()?.url ?? "";
 	const configured = companionConfig()?.base;
 	if (configured) return configured.replace(/\/$/, "");
 	return typeof location !== "undefined" ? location.origin : "";
@@ -221,7 +248,7 @@ function baseUrl(): string {
 
 function authToken(): string | null {
 	// Team mode authenticates with the manually entered team token.
-	if (TEAM) return getTeamConfig()?.token || null;
+	if (transport.team) return getTeamConfig()?.token || null;
 	try {
 		if (typeof localStorage !== "undefined") {
 			const stored = localStorage.getItem(TOKEN_KEY);
@@ -252,8 +279,11 @@ type CompanionAuthState = "ok" | "unknown" | "unauthed";
 
 function initialCompanionAuthState(): CompanionAuthState {
 	// Native desktop is always authed; a companion browser with no token can't
-	// be, so skip the doomed request round-trip and gate immediately.
-	if (!COMPANION) return "ok";
+	// be, so skip the doomed request round-trip and gate immediately. The
+	// browser "pair this device" gate is companion-only — desktop team mode
+	// validates its token via the Settings health check, not this gate — so we
+	// key on `companion`, never `team`.
+	if (!transport.companion) return "ok";
 	return authToken() ? "unknown" : "unauthed";
 }
 
@@ -286,11 +316,21 @@ export function subscribeCompanionAuth(listener: () => void): () => void {
 // A team / companion sandbox can go to sleep; the next request wakes it via a
 // cold start the Worker blocks on (~120s) while it restores from R2 and serves.
 // During that window the shared `/v1/stream` SSE channel ({@link runEventStream})
-// drops and keeps retrying. We surface that as a *loading* state — "reconnecting",
-// never an error and never a local fallback — so the shell can show a banner
-// instead of a frozen UI. Mirrors the {@link CompanionAuthState} store idiom.
+// drops and keeps retrying. We surface that as a *loading* state — never an
+// error and never a local fallback — so the shell can show a banner instead of
+// a frozen UI. Mirrors the {@link CompanionAuthState} store idiom.
+//
+// Three states:
+//   "online"       — a stream is open; the shell shows real data.
+//   "connecting"   — a fresh entry into a remote transport (the user just
+//                    switched to team, or a companion tab just loaded). The new
+//                    Worker is presumed cold; the banner shows "Connecting to
+//                    your team workspace…" up front, before the first connect.
+//   "reconnecting" — a previously-online stream dropped and is retrying (a
+//                    sleeping sandbox cold-starting mid-session, a network blip).
+// Both non-online states render the loading banner; only the copy differs.
 
-type CompanionConnectionState = "online" | "reconnecting";
+export type CompanionConnectionState = "online" | "connecting" | "reconnecting";
 
 let companionConnectionState: CompanionConnectionState = "online";
 const companionConnectionListeners = new Set<() => void>();
@@ -320,9 +360,10 @@ export function subscribeCompanionConnection(listener: () => void): () => void {
 
 /** True when the request transport is a remote HTTP one (team mode or a
  *  browser companion). Lets team-gated UI render only where reconnect can
- *  actually happen; single-user / native desktop is always `false`. */
+ *  actually happen; single-user / native desktop is always `false`. Reads the
+ *  LIVE transport, so it reflects an in-place team↔local switch immediately. */
 export function isRemoteTransport(): boolean {
-	return REMOTE;
+	return transport.remote;
 }
 
 function jsonHeaders(): Record<string, string> {
@@ -385,9 +426,39 @@ export function closeChannel(channel: unknown): void {
 // Mirror Tauri's `Channel`, which is both a value (constructor) and a type.
 // `api.ts` uses both forms (`new Channel<T>()` and `channel: Channel<T>`).
 export type Channel<T = unknown> = TauriChannel<T>;
-export const Channel = (REMOTE
-	? CompanionChannel
-	: TauriChannel) as unknown as typeof TauriChannel;
+
+/**
+ * A constructor Proxy that picks the concrete Channel class at `new` time from
+ * the LIVE transport mode — not at module load. This is what lets an in-place
+ * transport switch (team ↔ local) take effect for streaming subscriptions
+ * created AFTER the switch, with no reload: before the switch
+ * `new Channel<T>()` returns a real `TauriChannel`; after a switch into a remote
+ * transport it returns a `CompanionChannel`.
+ *
+ * On the NATIVE Tauri path the construct trap returns
+ * `Reflect.construct(TauriChannel, args)`, which is observably identical to
+ * `new TauriChannel(...args)`: with no `newTarget` argument, `Reflect.construct`
+ * uses the target constructor itself as `new.target`, so the produced instance
+ * has `TauriChannel.prototype` and the constructor sees the same `this`. The
+ * Rust streaming round-trip snapshots (`pipeline_streams.rs`) are the contract
+ * check that this stays byte-equivalent.
+ *
+ * `instanceof` against this Proxy still works (the default `getPrototypeOf` /
+ * `has` traps forward to the target `TauriChannel`), but every internal check in
+ * this module tests `value instanceof CompanionChannel` against the concrete
+ * class directly, so they are unaffected by the Proxy.
+ *
+ * Why a Proxy and not `export let Channel` reassigned on switch: `export const`
+ * can't be reassigned, and `export let` live-binding semantics across the
+ * `import { Channel }` boundary are bundler-fragile. The Proxy is the minimal,
+ * robust choice.
+ */
+export const Channel = new Proxy(TauriChannel, {
+	construct(_target, args) {
+		const Ctor = transport.remote ? CompanionChannel : TauriChannel;
+		return Reflect.construct(Ctor as new (...a: unknown[]) => object, args);
+	},
+}) as unknown as typeof TauriChannel;
 
 /**
  * Convert a local file path to a webview-loadable asset URL.
@@ -401,7 +472,7 @@ export const Channel = (REMOTE
  * endpoint; until then these images just don't load.)
  */
 export function convertFileSrc(filePath: string, protocol?: string): string {
-	if (!REMOTE) return tauriConvertFileSrc(filePath, protocol);
+	if (!transport.remote) return tauriConvertFileSrc(filePath, protocol);
 	// Serve the file through the companion's restricted `/v1/asset` endpoint
 	// (avatar / generated-image / paste-cache dirs only). The PAT cookie set in
 	// `syncCompanionCookie` authenticates the `<img>` request. Files outside
@@ -414,12 +485,23 @@ export function convertFileSrc(filePath: string, protocol?: string): string {
 // invoke
 // ---------------------------------------------------------------------------
 
+/**
+ * Commands that ALWAYS run on the local Tauri backend, even in team/companion
+ * mode. `authorize_cloud_codex_identity` runs `codex login` on the user's own
+ * machine and captures the OAuth refresh_token, then uploads it to the Worker —
+ * it fundamentally cannot run inside the cloud container (no local browser /
+ * codex login there), so it must NOT be routed to the companion like other
+ * invokes. Keep in sync with `LOCAL_ONLY` in
+ * `src-tauri/tests/companion_dispatch_coverage.rs`.
+ */
+const LOCAL_ONLY_INVOKES = new Set<string>(["authorize_cloud_codex_identity"]);
+
 export function invoke<T>(
 	cmd: string,
 	args?: InvokeArgs,
 	options?: InvokeOptions,
 ): Promise<T> {
-	if (!REMOTE) {
+	if (!transport.remote || LOCAL_ONLY_INVOKES.has(cmd)) {
 		// Preserve the original call arity so tests asserting
 		// `invoke).toHaveBeenCalledWith("cmd")` (no trailing undefineds) keep
 		// matching.
@@ -473,7 +555,8 @@ async function companionInvoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
 		// The browser "pair this device" gate is companion-only; a team-mode
 		// 401 surfaces as a normal error (the Settings health check is the
 		// place to validate the token), not the pairing screen.
-		if (res.status === 401 && COMPANION) setCompanionAuthState("unauthed");
+		if (res.status === 401 && transport.companion)
+			setCompanionAuthState("unauthed");
 		throw await parseHttpError(res);
 	}
 	setCompanionAuthState("ok");
@@ -526,14 +609,22 @@ type CompanionEventHandler = (event: {
 	payload: unknown;
 }) => void;
 const eventListeners = new Map<string, Set<CompanionEventHandler>>();
-let eventStreamStarted = false;
+
+// The shared SSE loop is cancellable + re-startable so an in-place transport
+// switch can kill the old loop (bound to the old `baseUrl()`/`authToken()`) and
+// start a fresh one against the new backend. `eventStreamController` is the
+// abort handle for the live loop (null when no loop is running);
+// `eventStreamGeneration` is a monotonic guard so a late-resolving fetch from a
+// torn-down loop can't flip connection state or reopen a stream after teardown.
+let eventStreamController: AbortController | null = null;
+let eventStreamGeneration = 0;
 
 export function listen<T>(
 	event: EventName,
 	handler: EventCallback<T>,
 	options?: ListenOptions,
 ): Promise<UnlistenFn> {
-	if (!REMOTE) return tauriListen<T>(event, handler, options);
+	if (!transport.remote) return tauriListen<T>(event, handler, options);
 	return companionListen(event, handler as CompanionEventHandler);
 }
 
@@ -562,11 +653,33 @@ function dispatchEvent(name: string, payload: unknown): void {
 	}
 }
 
-/** Single shared SSE connection to `/v1/stream`, reconnecting on drop. */
+/** Single shared SSE connection to `/v1/stream`, reconnecting on drop. Started
+ *  lazily by the first `companionListen`; re-armed by the next `companionListen`
+ *  from the remounted tree after {@link teardownEventStream}. */
 function ensureEventStream(): void {
-	if (eventStreamStarted) return;
-	eventStreamStarted = true;
-	void runEventStream();
+	if (eventStreamController) return; // already running for the current transport
+	startEventStream();
+}
+
+function startEventStream(): void {
+	const controller = new AbortController();
+	eventStreamController = controller;
+	const generation = ++eventStreamGeneration;
+	void runEventStream(controller.signal, generation);
+}
+
+/**
+ * Tear down the live SSE loop: abort its in-flight fetch (cancelling the
+ * long-lived ~120s cold-start request instead of orphaning it) and stop its
+ * retry loop. Idempotent. Called by {@link applyTransportSwitch} before
+ * repointing the transport. Bumping the generation makes any in-flight
+ * `runEventStream` iteration that races past the abort check exit on its next
+ * guard, so it can't reopen a stream or flip connection state after teardown.
+ */
+function teardownEventStream(): void {
+	eventStreamController?.abort();
+	eventStreamController = null;
+	eventStreamGeneration++;
 }
 
 // Reconnect backoff: full-jitter exponential, base 1s, ×2 per attempt, capped
@@ -585,18 +698,31 @@ function reconnectDelayMs(attempt: number): number {
 	return Math.random() * windowMs;
 }
 
-async function runEventStream(): Promise<void> {
+async function runEventStream(
+	signal: AbortSignal,
+	generation: number,
+): Promise<void> {
+	// True while this loop owns the connection state: a torn-down loop must not
+	// flip `online`/`reconnecting` on the new transport, so every state write is
+	// gated on `isCurrent()` (signal + generation) checked AFTER each await.
+	const isCurrent = () =>
+		!signal.aborted && generation === eventStreamGeneration;
 	let attempt = 0;
 	for (;;) {
+		if (!isCurrent()) return;
 		try {
 			const res = await fetch(`${baseUrl()}/v1/stream`, {
 				headers: authHeaders(),
+				signal,
 			});
+			if (!isCurrent()) return; // switched away while the fetch resolved
 			if (!res.ok || !res.body) {
-				if (res.status === 401 && COMPANION) setCompanionAuthState("unauthed");
+				if (res.status === 401 && transport.companion)
+					setCompanionAuthState("unauthed");
 				throw new Error(`stream status ${res.status}`);
 			}
-			// Stream (re)opened: clear any reconnecting state and reset backoff.
+			// Stream (re)opened: clear any connecting/reconnecting state and reset
+			// backoff.
 			setCompanionConnectionState("online");
 			attempt = 0;
 			// `pumpSse` returns on a clean close too, not only on throw — both are
@@ -604,15 +730,65 @@ async function runEventStream(): Promise<void> {
 			await pumpSse(res.body, dispatchEvent);
 		} catch {
 			// Connection dropped (sleeping sandbox cold start, backgrounded tab,
-			// network blip) — fall through to back off and reconnect.
+			// network blip) — fall through to back off and reconnect. A switch-away
+			// aborts the fetch, which lands here too: exit silently.
+			if (!isCurrent()) return;
 		}
+		if (!isCurrent()) return;
 		// We only reach here after a drop (throw or clean return). Surface the
 		// loading state on the first drop — not on the initial healthy connect,
 		// which would flash the banner — then wait out the jittered backoff.
 		setCompanionConnectionState("reconnecting");
-		await delay(reconnectDelayMs(attempt));
+		await delay(reconnectDelayMs(attempt), signal);
+		if (!isCurrent()) return;
 		attempt += 1;
 	}
+}
+
+// ---------------------------------------------------------------------------
+// In-place transport switch (team ↔ local, no reload)
+// ---------------------------------------------------------------------------
+
+/**
+ * Drop every companion event handler. The remounting app subtree re-registers
+ * fresh handlers via `companionListen` as its effects mount, so this isn't
+ * strictly required (the remount churns handlers). We do it defensively so a
+ * handler from a component that fails to unmount cleanly can't survive the
+ * switch and double-fire against the new transport's stream.
+ */
+function resetCompanionListeners(): void {
+	eventListeners.clear();
+}
+
+/**
+ * Repoint the live transport after the team-mode flag + config have been
+ * persisted to localStorage (by `switchTeamMode` in `team-mode.ts`). Keeping the
+ * transport mutation inside `ipc.ts` preserves this module's invariant that only
+ * it knows about the transport.
+ *
+ * Order:
+ *   1. Tear down the old SSE loop (abort its fetch, stop its retries) and drop
+ *      companion listeners.
+ *   2. Recompute the transport mode from the now-updated localStorage flag.
+ *   3. Reset companion auth state for the new transport (native is always "ok";
+ *      a fresh team backend hasn't been probed, but team mode doesn't use the
+ *      pairing gate so it resolves "ok" too).
+ *   4. Seed the connection state: "connecting" when switching INTO a remote
+ *      transport (the new Worker is presumed cold — the shell shows the loading
+ *      banner immediately, before the remounted tree's first SSE connect),
+ *      "online" when switching to local (synchronous native backend, no wait).
+ *
+ * Native ↔ native is impossible (companion is fixed remote); this only ever
+ * flips the desktop team axis. The caller bumps the remount generation AFTER
+ * this returns, so the remounted subtree reads the already-updated transport.
+ */
+export function applyTransportSwitch(): void {
+	teardownEventStream();
+	resetCompanionListeners();
+	recomputeTransportMode();
+	companionAuthState = initialCompanionAuthState();
+	for (const listener of companionAuthListeners) listener();
+	setCompanionConnectionState(transport.remote ? "connecting" : "online");
 }
 
 // ---------------------------------------------------------------------------
@@ -692,6 +868,25 @@ function safeJson(text: string): unknown {
 	}
 }
 
-function delay(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * A `setTimeout` Promise that also short-circuits on abort, so a transport
+ * teardown completes promptly instead of waiting out a (possibly 30s) reconnect
+ * backoff. Resolves (never rejects) on either the timer or the abort.
+ */
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+	return new Promise((resolve) => {
+		if (signal?.aborted) {
+			resolve();
+			return;
+		}
+		const id = setTimeout(resolve, ms);
+		signal?.addEventListener(
+			"abort",
+			() => {
+				clearTimeout(id);
+				resolve();
+			},
+			{ once: true },
+		);
+	});
 }

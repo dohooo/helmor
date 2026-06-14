@@ -7,7 +7,7 @@ import { renderWithProviders } from "@/test/render-with-providers";
 // is fed by the SSE loop, which doesn't run under jsdom).
 const ipcState = {
 	remote: true,
-	connection: "online" as "online" | "reconnecting",
+	connection: "online" as "online" | "connecting" | "reconnecting",
 };
 
 vi.mock("@/lib/ipc", () => ({
@@ -48,6 +48,27 @@ describe("ReconnectingBanner", () => {
 		expect(
 			screen.getByText(/take a moment while the sandbox wakes up/i),
 		).toBeInTheDocument();
+	});
+
+	it("renders the switch-specific connecting copy when remote + connecting", async () => {
+		ipcState.remote = true;
+		ipcState.connection = "connecting";
+		const ReconnectingBanner = await importBanner();
+		renderWithProviders(<ReconnectingBanner />);
+
+		// Fresh entry into team mode (the user just switched) gets the friendlier
+		// "Connecting to your team workspace…" copy, per the in-app loading state.
+		expect(screen.getByRole("status")).toBeInTheDocument();
+		expect(
+			screen.getByText("Connecting to your team workspace…"),
+		).toBeInTheDocument();
+		expect(
+			screen.getByText(/take a moment while the sandbox wakes up/i),
+		).toBeInTheDocument();
+		// NOT the reconnecting copy.
+		expect(
+			screen.queryByText("Reconnecting to the team sandbox…"),
+		).not.toBeInTheDocument();
 	});
 
 	it("renders nothing in single-user / native mode, even if state were reconnecting", async () => {
@@ -100,6 +121,23 @@ describe("ReconnectingBanner", () => {
 		// Recovery: the SSE stream re-opened. The fallback invalidate must fire so
 		// `use-watch-session-stream` re-attaches to the R2-restored sandbox DB even
 		// if the backend's `ActiveStreamsChanged` re-emit is missed.
+		ipcState.connection = "online";
+		rerender(<ReconnectingBanner />);
+
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["activeStreams"] });
+	});
+
+	it("re-fetches active streams on the connecting → online transition (first connect after a switch)", async () => {
+		ipcState.remote = true;
+		ipcState.connection = "connecting";
+		const ReconnectingBanner = await importBanner();
+		const { queryClient, rerender } = renderWithProviders(
+			<ReconnectingBanner />,
+		);
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+
+		// First successful connect after switching into team mode must also
+		// re-attach active streams (same fallback path as a reconnect).
 		ipcState.connection = "online";
 		rerender(<ReconnectingBanner />);
 

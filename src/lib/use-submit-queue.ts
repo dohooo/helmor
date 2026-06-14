@@ -206,9 +206,19 @@ export function useSubmitQueueForSession(
 }
 
 /**
- * Test-only — wipe the queue. Production code never resets imperatively
- * (use `clear(sessionId)` for legitimate session-deletion paths).
+ * Wipe the entire queue. This is a MODULE-LEVEL singleton (it intentionally
+ * survives session/workspace navigation), so it also survives the app-subtree
+ * remount on a team↔local transport switch — where its `sessionId`-keyed
+ * entries reference the OLD backend's sessions. A queued follow-up for the old
+ * backend must not linger (let alone drain) against the new transport, so the
+ * transport-switch effect in `app-providers.tsx` clears it. Outside that, normal
+ * session-deletion uses `clear(sessionId)`.
  */
-export function __resetSubmitQueueForTests(): void {
+export function resetSubmitQueue(): void {
 	useSubmitQueueStore.setState({ queuesBySessionId: INITIAL_QUEUES });
+}
+
+/** Test-only alias for {@link resetSubmitQueue}. */
+export function __resetSubmitQueueForTests(): void {
+	resetSubmitQueue();
 }

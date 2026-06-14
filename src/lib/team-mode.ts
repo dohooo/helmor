@@ -6,13 +6,19 @@
  *
  * Config lives in `localStorage` (not Tauri app-settings) because `ipc.ts` must
  * decide the transport SYNCHRONOUSLY at module load, before any async settings
- * read could resolve. Switching mode persists here and reloads the app (the T2
- * "reload-style dynamic transport" decision); on the next boot `ipc.ts` reads
- * {@link isTeamModeActive} and routes every `invoke`/`listen`/`Channel` to the
- * Worker URL with the team token.
+ * read could resolve. {@link switchTeamMode} persists here, flips the mode flag,
+ * then repoints the live transport IN PLACE — no `window.location.reload`. The
+ * cold-boot path is unchanged: `ipc.ts` reads {@link isTeamModeActive} at module
+ * load and routes every `invoke`/`listen`/`Channel` accordingly.
  *
  * Only `ipc.ts` (transport) and the Team settings panel / sidebar switch (UI)
  * import this module.
+ *
+ * The in-place switch action `switchTeamMode` lives in the sibling
+ * `team-switch.ts` module (it imports `ipc.ts`), deliberately NOT here:
+ * `ipc.ts` eagerly reads {@link isTeamModeActive} at module init, so importing
+ * `ipc.ts` from `team-mode.ts` would force `ipc.ts` to evaluate
+ * mid-`team-mode`-init and hit `MODE_KEY` in its temporal dead zone.
  */
 
 const MODE_KEY = "helmor.team.mode";
@@ -63,7 +69,9 @@ export function isTeamModeActive(): boolean {
 	return store.getItem(MODE_KEY) === "1" && getTeamConfig() !== null;
 }
 
-/** Flip the team-mode flag (caller reloads the app to swap the transport). */
+/** Flip the team-mode flag. Persistence only — use {@link switchTeamMode} to
+ *  actually repoint the live transport (it flips this flag, then swaps the
+ *  transport in place). */
 export function setTeamModeActive(active: boolean): void {
 	const store = storage();
 	if (!store) return;

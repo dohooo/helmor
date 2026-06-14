@@ -1138,8 +1138,10 @@ function stageOptional(label: string, fn: () => void): void {
 rmSync(DIST_VENDOR, { recursive: true, force: true });
 mkdirSync(DIST_VENDOR, { recursive: true });
 
-// ----- Claude Code (desktop only — skipped in the Linux serve image) -----
-if (!IS_LINUX) stageClaudeCodeBinary(target);
+// ----- Claude Code (staged on EVERY target, incl. the Linux serve image, so the
+// cloud sandbox can run Claude turns — the SDK needs the native binary via
+// pathToClaudeCodeExecutable / HELMOR_CLAUDE_CODE_BIN_PATH, already wired in serve) -----
+stageClaudeCodeBinary(target);
 
 // ----- Codex (staged on every target, including Linux) -----
 stageCodexBinary(target);

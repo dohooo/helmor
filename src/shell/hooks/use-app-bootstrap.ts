@@ -1,5 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { hydrateDraftCache } from "@/features/composer/draft-storage";
 import type { ContextProviderTab, SettingsSection } from "@/features/settings";
 import { exitOnboardingWindowMode } from "@/lib/api";
@@ -11,6 +11,7 @@ import {
 	loadSettings,
 	saveSettings,
 } from "@/lib/settings";
+import { useTransportGeneration } from "@/lib/transport-generation";
 import { isQuickPanelWindow } from "@/lib/window-role";
 import {
 	SPLASH_FADE_MS,
@@ -27,6 +28,10 @@ export interface AppBootstrap {
 	settingsInitialSection: SettingsSection | undefined;
 	settingsInitialInboxProvider: ContextProviderTab | undefined;
 	queryClient: QueryClient;
+	/** Transport generation — bumped on an in-place team↔local switch. The
+	 *  provider subtree in `AppProviders` keys on it to remount against the new
+	 *  transport, and the QueryClient is recreated each generation. */
+	transportGeneration: number;
 	settingsContextValue: {
 		settings: AppSettings;
 		isLoaded: boolean;
@@ -54,7 +59,27 @@ export function useAppBootstrap(): AppBootstrap {
 		useState<SettingsSection>();
 	const [settingsInitialInboxProvider, setSettingsInitialInboxProvider] =
 		useState<ContextProviderTab | undefined>();
-	const [queryClient] = useState(() => createHelmorQueryClient());
+	// Derive the QueryClient from the transport generation: a team↔local switch
+	// bumps the generation, and a new backend has a disjoint data namespace
+	// (different workspace/session ids). Recreating the client gives a brand-new
+	// empty cache — the airtight guarantee against cross-transport data bleed
+	// (vs `clear()` + invalidate, which would keep stale rows visible until the
+	// ~120s cold-start refetch resolves). A ref keyed on the generation recreates
+	// it EXACTLY once per generation, which is StrictMode-safe (unlike
+	// `useState(() => create())`, which StrictMode would call twice and discard
+	// one of, leaking the discarded client's focus listener).
+	const transportGeneration = useTransportGeneration();
+	const clientRef = useRef<{ gen: number; client: QueryClient } | null>(null);
+	if (
+		clientRef.current === null ||
+		clientRef.current.gen !== transportGeneration
+	) {
+		clientRef.current = {
+			gen: transportGeneration,
+			client: createHelmorQueryClient(),
+		};
+	}
+	const queryClient = clientRef.current.client;
 	const preloadSettings = useMemo<AppSettings>(
 		() => getPreloadedSettings(),
 		[],
@@ -147,6 +172,35 @@ export function useAppBootstrap(): AppBootstrap {
 		void loadSettings().then(setAppSettings);
 	});
 
+	// After an in-place transport switch, settings now resolve from the NEW
+	// backend (`loadSettings` routes through `invoke`). Reconcile in the
+	// background WITHOUT resetting `appSettings` first — keeping the current
+	// settings in state means no splash flash and no theme flicker; the new
+	// backend's values fold in once they resolve. Skipped on the initial mount
+	// (generation 0) since `loadSettings` already runs in the boot effect above.
+	//
+	// `onboardingCompleted` is deliberately NOT overwritten from the reconcile: a
+	// fresh team backend may report it false (or a default map), which would bounce
+	// an already-onboarded user back into the splash. Onboarding is a one-time,
+	// device-local milestone for the purpose of this gate — preserve it.
+	const prevGenerationRef = useRef(transportGeneration);
+	useEffect(() => {
+		if (prevGenerationRef.current === transportGeneration) return;
+		prevGenerationRef.current = transportGeneration;
+		void loadSettings()
+			.then((next) => {
+				setAppSettings((previous) =>
+					previous
+						? { ...next, onboardingCompleted: previous.onboardingCompleted }
+						: next,
+				);
+			})
+			.catch(() => {
+				// A backend without settings IPC keeps the current in-memory
+				// settings — harmless; the UI stays on the preserved values.
+			});
+	}, [transportGeneration]);
+
 	return {
 		appSettings,
 		settingsOpen,
@@ -155,6 +209,7 @@ export function useAppBootstrap(): AppBootstrap {
 		settingsInitialSection,
 		settingsInitialInboxProvider,
 		queryClient,
+		transportGeneration,
 		settingsContextValue,
 		splashVisible,
 		splashMounted,

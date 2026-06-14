@@ -15,11 +15,8 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { isTauriRuntime } from "@/lib/platform";
-import {
-	getTeamConfig,
-	isTeamModeActive,
-	setTeamModeActive,
-} from "@/lib/team-mode";
+import { getTeamConfig, isTeamModeActive } from "@/lib/team-mode";
+import { switchTeamMode } from "@/lib/team-switch";
 import { publishShellEvent } from "@/shell/event-bus";
 
 /**
@@ -28,10 +25,13 @@ import { publishShellEvent } from "@/shell/event-bus";
  * of the Settings → Team panel: the panel owns config entry (Worker URL +
  * token + reachability test); this dropdown is the one-click flip.
  *
- * Switching persists the flag in `localStorage` and reloads, because `ipc.ts`
- * resolves the transport synchronously at module load (the T2 "reload-style
- * dynamic transport" decision). Selecting the mode you're already in is a
- * no-op — no needless reload.
+ * Switching repoints the IPC transport in place via {@link switchTeamMode} —
+ * instant, no reload; the shell shows a connecting banner while a cold team
+ * backend wakes. Selecting the mode you're already in is a no-op.
+ *
+ * This component renders in the sidebar, INSIDE the router subtree that remounts
+ * on a switch, so `active = isTeamModeActive()` re-reads correctly after the
+ * remount — no extra generation subscription needed here.
  *
  * Rendered `null` outside the Tauri runtime: a browser served by the companion
  * is already remote, and there is no local backend to toggle back to.
@@ -46,8 +46,7 @@ export function TeamModeSwitch() {
 
 	const selectLocal = () => {
 		if (!active) return;
-		setTeamModeActive(false);
-		window.location.reload();
+		switchTeamMode(null);
 	};
 
 	const selectTeam = () => {
@@ -58,8 +57,8 @@ export function TeamModeSwitch() {
 			publishShellEvent({ type: "open-settings", section: "team" });
 			return;
 		}
-		setTeamModeActive(true);
-		window.location.reload();
+		// `configured` guarantees a non-null config here.
+		switchTeamMode(getTeamConfig());
 	};
 
 	return (

@@ -42,6 +42,7 @@ import type {
 	WorkspaceStatus,
 } from "@/lib/api";
 import type { SidebarGrouping, SidebarSort } from "@/lib/settings";
+import { isTeamModeActive } from "@/lib/team-mode";
 import { cn } from "@/lib/utils";
 import { workspaceStatusFromGroupId } from "@/lib/workspace-helpers";
 import { useShellEvent } from "@/shell/event-bus";
@@ -1225,14 +1226,19 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							</TooltipContent>
 						</Tooltip>
 						<DropdownMenuContent align="end" className="min-w-40">
-							<DropdownMenuItem
-								onSelect={() => {
-									onAddRepository?.();
-								}}
-							>
-								<Folder strokeWidth={2} />
-								<span>Open project</span>
-							</DropdownMenuItem>
+							{/* "Open project" adds a LOCAL folder; meaningless in team mode
+							    (the cloud container has no access to your disk). Team mode
+							    uses "Clone from URL" → clones into the container. */}
+							{isTeamModeActive() ? null : (
+								<DropdownMenuItem
+									onSelect={() => {
+										onAddRepository?.();
+									}}
+								>
+									<Folder strokeWidth={2} />
+									<span>Open project</span>
+								</DropdownMenuItem>
+							)}
 							<DropdownMenuItem
 								onSelect={() => {
 									onOpenCloneDialog?.();

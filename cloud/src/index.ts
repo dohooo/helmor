@@ -64,81 +64,284 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  *  a backup taken now snapshots a consistent DB. */
 const AGENT_STREAM_PATH = "/rpc-stream/send_agent_message_stream";
 
+/** CORS for the desktop team-mode webview, which calls this Worker over browser
+ *  `fetch` from a cross-origin context (http://localhost:1420 in dev,
+ *  tauri://localhost in a release build). team-api `fetch` is CORS-gated, so
+ *  without reflecting the caller's Origin + answering the OPTIONS preflight every
+ *  team-mode request fails as a "network" error (TypeError: Load failed). The
+ *  bearer (Authorization header, not a cookie) is the real gate; reflecting the
+ *  Origin just lets the webview READ the response. */
+function corsHeaders(origin: string): Record<string, string> {
+	return {
+		"Access-Control-Allow-Origin": origin,
+		"Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,PATCH,OPTIONS",
+		"Access-Control-Allow-Headers":
+			"Authorization, Content-Type, X-Helmor-Member-Id",
+		"Access-Control-Allow-Credentials": "true",
+		"Access-Control-Max-Age": "86400",
+		Vary: "Origin",
+	};
+}
+
 export default {
 	async fetch(
 		request: Request,
 		env: Env,
 		ctx: ExecutionContext,
 	): Promise<Response> {
-		// Security (EVERY path): strip any client-supplied X-Helmor-Member-Id up
-		// front — before proxyToSandbox — so the "never client-asserted" invariant
-		// holds on the SDK preview path too, not only the derived proxy hop. The
-		// companion trusts this header as author_id, so a client must never set it.
-		const req = request.headers.has("X-Helmor-Member-Id")
-			? new Request(request, { headers: withoutMemberHeader(request.headers) })
-			: request;
-
-		// Preview-URL passthrough (port-subdomain hostnames). Returns null for
-		// the Worker's own hostname, which we proxy transparently below.
-		const proxied = await proxyToSandbox(req, env);
-		if (proxied) return proxied;
-
-		// Team registry (`/team/*`): D1-backed JSON routes. Returns null for any
-		// other path, which falls through to the container proxy below.
-		const url = new URL(req.url);
-		const teamResp = await handleTeamRoute(req, env, url);
-		if (teamResp) return teamResp;
-
-		// Derive the member identity + companion-token swap for the proxied hop.
-		// Unauthenticated calls pass through unswapped (the companion gates them:
-		// /rpc -> 401, /v1/health stays public); unknown tokens -> 401 (see fn).
-		const forwarded = await deriveForwardedRequest(req, env);
-		if (forwarded instanceof Response) return forwarded;
-
-		const port = Number(env.HELMOR_COMPANION_PORT ?? "8080");
-		const sandbox = getSandbox(
-			env.Sandbox,
-			env.HELMOR_SANDBOX_ID ?? "helmor-team-0",
-		);
-
+		const origin = request.headers.get("Origin");
+		// Answer the CORS preflight before any auth/proxy work — the webview's
+		// preflighted POST/PUT (Authorization + JSON body) must clear first.
+		if (request.method === "OPTIONS" && origin) {
+			return new Response(null, { status: 204, headers: corsHeaders(origin) });
+		}
+		let response: Response;
 		try {
-			await ensureServe(sandbox, env, port);
+			response = await route(request, env, ctx);
 		} catch (error) {
-			return new Response(
+			// A throw from route() would otherwise produce the runtime's bare 500
+			// OUTSIDE the CORS block below, which the cross-origin webview reads as
+			// an opaque "network error". Convert it to a CORS-able JSON 500 so the
+			// real message reaches the client.
+			response = new Response(
 				JSON.stringify({
-					code: "Unavailable",
-					message: `serve host not ready: ${(error as Error).message}`,
+					code: "Internal",
+					message: `worker error: ${(error as Error).message}`,
 				}),
-				{ status: 503, headers: { "content-type": "application/json" } },
+				{ status: 500, headers: { "content-type": "application/json" } },
 			);
 		}
-
-		// WebSocket upgrades (future-proofs the streaming transport).
-		if (forwarded.headers.get("Upgrade")?.toLowerCase() === "websocket") {
-			return sandbox.wsConnect(forwarded, port);
+		// Reflect CORS on the real response so the webview can read it. Skip
+		// WebSocket upgrades (status 101 / `.webSocket`): CORS doesn't apply to the
+		// handshake and re-wrapping would drop the socket.
+		if (
+			origin &&
+			response.status !== 101 &&
+			!(response as { webSocket?: unknown }).webSocket
+		) {
+			const headers = new Headers(response.headers);
+			for (const [key, value] of Object.entries(corsHeaders(origin))) {
+				headers.set(key, value);
+			}
+			return new Response(response.body, {
+				status: response.status,
+				statusText: response.statusText,
+				headers,
+			});
 		}
-
-		// Transparent HTTP proxy: method, path, body, and streaming responses
-		// pass straight through; headers carry the derived member id + shared
-		// companion token (see `deriveForwardedRequest`).
-		const response = await sandbox.containerFetch(forwarded, port);
-
-		// Phase 2b sleep persistence: ONLY for the agent-stream path, snapshot
-		// /home/helmor to R2 after the turn so the session survives sandbox
-		// sleep. We don't block the client — `waitUntil` keeps the Worker alive
-		// past the response while the backup runs. The backup must start AFTER
-		// the stream drains (the in-container WAL checkpoint runs just before the
-		// terminal `done`), so we tee the body and await the clone's completion
-		// before snapshotting. All other paths return byte-unchanged.
-		if (url.pathname === AGENT_STREAM_PATH && response.body) {
-			const [toClient, toDrain] = response.body.tee();
-			ctx.waitUntil(backupAfterStream(toDrain, sandbox, env));
-			return new Response(toClient, response);
-		}
-
 		return response;
 	},
 };
+
+/** The request handler proper. `fetch` (above) wraps this with CORS. */
+async function route(
+	request: Request,
+	env: Env,
+	ctx: ExecutionContext,
+): Promise<Response> {
+	// Security (EVERY path): strip any client-supplied X-Helmor-Member-Id up
+	// front — before proxyToSandbox — so the "never client-asserted" invariant
+	// holds on the SDK preview path too, not only the derived proxy hop. The
+	// companion trusts this header as author_id, so a client must never set it.
+	const req = request.headers.has("X-Helmor-Member-Id")
+		? new Request(request, { headers: withoutMemberHeader(request.headers) })
+		: request;
+
+	// Preview-URL passthrough (port-subdomain hostnames). Returns null for
+	// the Worker's own hostname, which we proxy transparently below.
+	const proxied = await proxyToSandbox(req, env);
+	if (proxied) return proxied;
+
+	// Team registry (`/team/*`): D1-backed JSON routes. Returns null for any
+	// other path, which falls through to the container proxy below.
+	const url = new URL(req.url);
+	const teamResp = await handleTeamRoute(req, env, url);
+	if (teamResp) return teamResp;
+
+	// Derive the member identity + companion-token swap for the proxied hop.
+	// Unauthenticated calls pass through unswapped (the companion gates them:
+	// /rpc -> 401, /v1/health stays public); unknown tokens -> 401 (see fn).
+	const forwarded = await deriveForwardedRequest(req, env);
+	if (forwarded instanceof Response) return forwarded;
+
+	const port = Number(env.HELMOR_COMPANION_PORT ?? "8080");
+	const sandbox = getSandbox(
+		env.Sandbox,
+		env.HELMOR_SANDBOX_ID ?? "helmor-team-0",
+	);
+
+	try {
+		await ensureServe(sandbox, env, port);
+	} catch (error) {
+		return new Response(
+			JSON.stringify({
+				code: "Unavailable",
+				message: `serve host not ready: ${(error as Error).message}`,
+			}),
+			{ status: 503, headers: { "content-type": "application/json" } },
+		);
+	}
+
+	// Team-mode "add repository" (BUG-3): the serve subprocess cannot write the
+	// persistent volume, so the Worker clones via the Sandbox SDK into /workspace
+	// then registers through serve. A plain proxy would EROFS in the container.
+	if (url.pathname === "/rpc/clone_repository_from_url") {
+		return handleTeamClone(forwarded, sandbox, port);
+	}
+
+	// WebSocket upgrades (future-proofs the streaming transport).
+	if (forwarded.headers.get("Upgrade")?.toLowerCase() === "websocket") {
+		return sandbox.wsConnect(forwarded, port);
+	}
+
+	// Transparent HTTP proxy: method, path, body, and streaming responses
+	// pass straight through; headers carry the derived member id + shared
+	// companion token (see `deriveForwardedRequest`).
+	const response = await sandbox.containerFetch(forwarded, port);
+
+	// Phase 2b sleep persistence: ONLY for the agent-stream path, snapshot
+	// /home/helmor to R2 after the turn so the session survives sandbox
+	// sleep. We don't block the client — `waitUntil` keeps the Worker alive
+	// past the response while the backup runs. The backup must start AFTER
+	// the stream drains (the in-container WAL checkpoint runs just before the
+	// terminal `done`), so we tee the body and await the clone's completion
+	// before snapshotting. All other paths return byte-unchanged.
+	if (url.pathname === AGENT_STREAM_PATH && response.body) {
+		const [toClient, toDrain] = response.body.tee();
+		ctx.waitUntil(backupAfterStream(toDrain, sandbox, env));
+		return new Response(toClient, response);
+	}
+
+	return response;
+}
+
+/**
+ * Derive the repo folder name from a clone URL, mirroring the Rust
+ * `infer_repo_name_from_url` so a cloud clone lands at the same name a local
+ * clone would (`…/foo.git` → `foo`). Returns null when none can be derived.
+ */
+function inferRepoName(url: string): string | null {
+	const trimmed = url.trim().replace(/[/\\]+$/, "");
+	const withoutGit = trimmed.endsWith(".git")
+		? trimmed.slice(0, -".git".length)
+		: trimmed;
+	const segments = withoutGit.split(/[/\\:]/);
+	const last = (segments[segments.length - 1] ?? "").trim();
+	return last.length > 0 ? last : null;
+}
+
+/**
+ * Team-mode "add repository" (BUG-3). A plain `git clone` inside the container
+ * fails: the serve subprocess sees /workspace as EROFS (only the Sandbox SDK can
+ * write the persistent volume) and /home as ENOTSUP. So the Worker performs the
+ * clone via `sandbox.gitCheckout` into the persistent /workspace, then forwards
+ * the existing `add_repository_from_local_path` RPC to serve to register the
+ * now-on-disk repo in the container DB. The serve response (an
+ * `AddRepositoryResponse`) is returned verbatim — the frontend sees the same
+ * shape it gets from a local clone, so no client change is needed.
+ */
+async function handleTeamClone(
+	forwarded: Request,
+	sandbox: Sandbox,
+	port: number,
+): Promise<Response> {
+	const jsonError = (status: number, message: string) =>
+		new Response(
+			JSON.stringify({
+				code: status === 400 ? "InvalidArgument" : "Internal",
+				message,
+			}),
+			{ status, headers: { "content-type": "application/json" } },
+		);
+
+	let body: { gitUrl?: unknown; cloneDirectory?: unknown };
+	try {
+		body = (await forwarded.clone().json()) as typeof body;
+	} catch {
+		return jsonError(400, "clone: malformed request body");
+	}
+
+	const gitUrl = typeof body.gitUrl === "string" ? body.gitUrl.trim() : "";
+	if (!gitUrl) return jsonError(400, "clone: missing gitUrl");
+
+	const name = inferRepoName(gitUrl);
+	if (
+		!name ||
+		name === "." ||
+		name === ".." ||
+		!/^[A-Za-z0-9._-]+$/.test(name)
+	) {
+		return jsonError(
+			400,
+			`clone: cannot derive a safe repo name from "${gitUrl}"`,
+		);
+	}
+
+	// The persistent volume is always /workspace; never honor a caller path that
+	// would escape it. targetDir mirrors a local clone: <root>/<name>.
+	const requested =
+		typeof body.cloneDirectory === "string" ? body.cloneDirectory.trim() : "";
+	const root = requested.startsWith("/workspace")
+		? requested.replace(/\/+$/, "")
+		: "/workspace";
+	const targetDir = `${root}/${name}`;
+
+	// 1. Clone onto the persistent volume via the SDK (serve cannot write it).
+	//    The SDK THROWS on a failed clone (it does not return success:false), so
+	//    catch it — an uncaught throw escapes as a bare CORS-less 500 and the
+	//    webview only sees an opaque "network error". The likely cases are a
+	//    private/unreachable URL and a re-add where targetDir already exists.
+	try {
+		const checkout = await sandbox.gitCheckout(gitUrl, {
+			targetDir,
+			cloneTimeoutMs: 120_000,
+		});
+		if (!checkout.success) {
+			return jsonError(
+				502,
+				`git clone failed (exit ${checkout.exitCode ?? "?"}) for "${gitUrl}" → ${targetDir}.`,
+			);
+		}
+	} catch (error) {
+		return jsonError(
+			502,
+			`git clone failed for "${gitUrl}" → ${targetDir}: ${(error as Error).message}. ` +
+				"The path may already exist, or the URL is private/unreachable.",
+		);
+	}
+
+	// 2. Register the now-on-disk repo via the EXISTING companion RPC, which owns
+	//    the container DB. Reuse the derived member auth from `forwarded`; build
+	//    fresh headers so a stale content-length can't corrupt the new body.
+	const headers = new Headers({ "content-type": "application/json" });
+	const auth = forwarded.headers.get("Authorization");
+	if (auth) headers.set("Authorization", auth);
+	const memberId = forwarded.headers.get("X-Helmor-Member-Id");
+	if (memberId) headers.set("X-Helmor-Member-Id", memberId);
+
+	const origin = new URL(forwarded.url).origin;
+	const registerReq = new Request(
+		`${origin}/rpc/add_repository_from_local_path`,
+		{
+			method: "POST",
+			headers,
+			body: JSON.stringify({ folderPath: targetDir }),
+		},
+	);
+	const registerRes = await sandbox.containerFetch(registerReq, port);
+	if (!registerRes.ok) {
+		// The clone landed but registration failed (transient serve error).
+		// Leaving the dir behind wedges a retry on the "already exists" clone
+		// error (the local Rust path cleans up on failure for the same reason),
+		// so remove it best-effort. targetDir is sanitized (/workspace/<safe-name>).
+		try {
+			await sandbox.exec(`rm -rf '${targetDir}'`);
+		} catch {
+			// best-effort — surface the original register error regardless
+		}
+	}
+	return registerRes;
+}
 
 /**
  * Wait for the agent-stream body to fully drain (so the in-container WAL

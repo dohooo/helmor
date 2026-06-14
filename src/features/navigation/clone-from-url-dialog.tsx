@@ -10,7 +10,17 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { isTeamModeActive } from "@/lib/team-mode";
 import { describeUnknownError } from "@/lib/workspace-helpers";
+
+// In team mode the clone runs in the cloud sandbox, where the serve subprocess
+// cannot write the persistent volume (/workspace is EROFS to serve, /home is
+// ENOTSUP). So the Worker intercepts this clone, runs it via the Sandbox SDK's
+// gitCheckout into the persistent /workspace, then registers the repo through
+// the existing add_repository_from_local_path RPC (see cloud/src/index.ts
+// `handleTeamClone`). Default the location to /workspace and drop the local
+// folder picker — it can't see the container FS.
+const CONTAINER_WORK_ROOT = "/workspace";
 
 type SubmitArgs = {
 	gitUrl: string;
@@ -38,6 +48,7 @@ export function CloneFromUrlDialog({
 	// only seeds the field once per open session — reopening after a manual
 	// change shouldn't wipe their choice.
 	const cloneDirectoryTouchedRef = useRef(false);
+	const teamMode = isTeamModeActive();
 
 	useEffect(() => {
 		if (!isOpen) {
@@ -46,9 +57,11 @@ export function CloneFromUrlDialog({
 		setIsSubmitting(false);
 		setErrorMessage(null);
 		if (!cloneDirectoryTouchedRef.current) {
-			setCloneDirectory(defaultCloneDirectory ?? "");
+			setCloneDirectory(
+				teamMode ? CONTAINER_WORK_ROOT : (defaultCloneDirectory ?? ""),
+			);
 		}
-	}, [isOpen, defaultCloneDirectory]);
+	}, [isOpen, defaultCloneDirectory, teamMode]);
 
 	const handleBrowse = useCallback(async () => {
 		try {
@@ -164,18 +177,25 @@ export function CloneFromUrlDialog({
 								disabled={isSubmitting}
 								className="h-7 text-ui"
 							/>
-							<Button
-								type="button"
-								variant="outline"
-								size="sm"
-								onClick={() => {
-									void handleBrowse();
-								}}
-								disabled={isSubmitting}
-							>
-								Browse…
-							</Button>
+							{teamMode ? null : (
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									onClick={() => {
+										void handleBrowse();
+									}}
+									disabled={isSubmitting}
+								>
+									Browse…
+								</Button>
+							)}
 						</div>
+						{teamMode ? (
+							<p className="text-muted-foreground text-small leading-snug">
+								Path inside the cloud sandbox.
+							</p>
+						) : null}
 					</div>
 					{errorMessage ? (
 						<p
