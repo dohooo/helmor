@@ -69,14 +69,6 @@ async fn dispatch(
         "create_repo_run_action" => to_value(crate::commands::script_commands::create_repo_run_action(app.clone(), arg_string(&args, "repoId")?, arg_string(&args, "name")?, arg_string(&args, "command")?, arg_string(&args, "mode")?, arg_opt_string(&args, "stopCommand")).await?),
         "create_session" => to_value(crate::commands::session_commands::create_session(arg_string(&args, "workspaceId")?, arg_opt_json(&args, "actionKind")?, arg_opt_string(&args, "permissionMode"), arg_opt_string(&args, "model"), arg_opt_string(&args, "effortLevel"), arg_opt_bool(&args, "fastMode"), arg_opt_string(&args, "seedSessionId"), arg_opt_string(&args, "sessionKind"), arg_opt_string(&args, "agentType")).await?),
         "create_workspace_from_repo" => to_value(crate::commands::workspace_commands::create_workspace_from_repo(app.clone(), arg_string(&args, "repoId")?).await?),
-        "delete_mimo_custom_provider" => {
-            crate::commands::mimo_config_commands::delete_mimo_custom_provider(arg_string(&args, "id")?).await?;
-            Ok(Value::Null)
-        }
-        "delete_opencode_custom_provider" => {
-            crate::commands::opencode_config_commands::delete_opencode_custom_provider(arg_string(&args, "id")?).await?;
-            Ok(Value::Null)
-        }
         "delete_query_cache" => {
             crate::commands::system_commands::delete_query_cache(arg_string(&args, "key")?).await?;
             Ok(Value::Null)
@@ -113,8 +105,6 @@ async fn dispatch(
         "get_helmor_skills_status" => to_value(crate::commands::system_commands::get_helmor_skills_status().await?),
         "get_inbox_item_detail" => to_value(crate::commands::forge_commands::get_inbox_item_detail(arg_json(&args, "provider")?, arg_string(&args, "login")?, arg_opt_string(&args, "host"), arg_json(&args, "source")?, arg_string(&args, "externalId")?).await?),
         "get_live_context_usage" => to_value(crate::commands::session_commands::get_live_context_usage(app.state::<crate::sidecar::ManagedSidecar>(), arg_json(&args, "request")?).await?),
-        "get_opencode_custom_providers" => to_value(crate::commands::opencode_config_commands::get_opencode_custom_providers().await?),
-        "get_mimo_custom_providers" => to_value(crate::commands::mimo_config_commands::get_mimo_custom_providers().await?),
         "get_repo_current_branch" => to_value(crate::commands::workspace_commands::get_repo_current_branch(arg_string(&args, "repoId")?).await?),
         "get_session_codex_goal" => to_value(crate::commands::session_commands::get_session_codex_goal(arg_string(&args, "sessionId")?).await?),
         "get_session_context_usage" => to_value(crate::commands::session_commands::get_session_context_usage(arg_string(&args, "sessionId")?).await?),
@@ -136,6 +126,37 @@ async fn dispatch(
         }
         "list_active_streams" => to_value(crate::agents::list_active_streams(app.state::<crate::agents::ActiveStreams>()).await?),
         "list_agent_model_sections" => to_value(crate::agents::list_agent_model_sections().await?),
+        "list_all_agent_model_sections" => {
+            to_value(crate::agents::list_all_agent_model_sections().await?)
+        }
+        "list_custom_providers" => to_value(
+            crate::commands::provider_commands::list_custom_providers(arg_string(&args, "family")?)
+                .await?,
+        ),
+        "upsert_custom_provider" => {
+            crate::commands::provider_commands::upsert_custom_provider(
+                arg_string(&args, "family")?,
+                arg_json(&args, "provider")?,
+            )
+            .await?;
+            Ok(Value::Null)
+        }
+        "remove_custom_provider" => {
+            crate::commands::provider_commands::remove_custom_provider(
+                arg_string(&args, "family")?,
+                arg_string(&args, "id")?,
+            )
+            .await?;
+            Ok(Value::Null)
+        }
+        "fetch_provider_models" => to_value(
+            crate::commands::provider_commands::fetch_provider_models(
+                arg_string(&args, "family")?,
+                arg_string(&args, "baseUrl")?,
+                arg_opt_string(&args, "apiKey").unwrap_or_default(),
+            )
+            .await?,
+        ),
         "list_archived_workspaces" => to_value(crate::commands::workspace_commands::list_archived_workspaces().await?),
         "list_branches_for_local_picker" => to_value(crate::commands::workspace_commands::list_branches_for_local_picker(arg_string(&args, "repoId")?).await?),
         "list_branches_for_workspace_picker" => to_value(crate::commands::workspace_commands::list_branches_for_workspace_picker(arg_string(&args, "repoId")?).await?),
@@ -364,14 +385,6 @@ async fn dispatch(
         "update_repository_remote" => to_value(crate::commands::repository_commands::update_repository_remote(app.clone(), arg_string(&args, "repoId")?, arg_string(&args, "remote")?).await?),
         "update_session_settings" => {
             crate::commands::session_commands::update_session_settings(arg_string(&args, "sessionId")?, arg_opt_string(&args, "model"), arg_opt_string(&args, "effortLevel"), arg_opt_string(&args, "permissionMode"), arg_opt_bool(&args, "fastMode")).await?;
-            Ok(Value::Null)
-        }
-        "upsert_mimo_custom_provider" => {
-            crate::commands::mimo_config_commands::upsert_mimo_custom_provider(arg_json(&args, "provider")?, arg_bool(&args, "preset")?).await?;
-            Ok(Value::Null)
-        }
-        "upsert_opencode_custom_provider" => {
-            crate::commands::opencode_config_commands::upsert_opencode_custom_provider(arg_json(&args, "provider")?, arg_bool(&args, "preset")?).await?;
             Ok(Value::Null)
         }
         "validate_archive_workspace" => to_value(crate::commands::workspace_commands::validate_archive_workspace(arg_string(&args, "workspaceId")?).await?),

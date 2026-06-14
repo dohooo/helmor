@@ -6,6 +6,7 @@
 
 import type { AgentProxySettings } from "./agent-proxy.js";
 import type {
+	CodexProviderConfig,
 	GetContextUsageParams,
 	ListSlashCommandsParams,
 	Provider,
@@ -111,6 +112,7 @@ export function parseSendMessageParams(
 			params.claudeThinkingDisplay,
 		),
 		claudeEnvironment: parseOptionalStringRecord(params, "claudeEnvironment"),
+		codexProvider: parseCodexProvider(params, "codexProvider"),
 		agentProxy: parseAgentProxySettings(params, "agentProxy"),
 		additionalDirectories: parseOptionalStringArray(
 			params,
@@ -123,6 +125,26 @@ export function parseSendMessageParams(
 		// list is the single source of truth (see `parseImageRefs`).
 		images: parseOptionalStringArray(params, "images") ?? [],
 	};
+}
+
+/** Narrows the optional `codexProvider` block; throws on a malformed shape.
+ *  `apiKey` may be empty; `wireApi` defaults to "responses". */
+export function parseCodexProvider(
+	params: Record<string, unknown>,
+	key: string,
+): CodexProviderConfig | undefined {
+	const value = params[key];
+	if (value === undefined || value === null) return undefined;
+	if (typeof value !== "object" || Array.isArray(value)) {
+		throw new Error(`params.${key} must be an object`);
+	}
+	const obj = value as Record<string, unknown>;
+	const id = requireString(obj, "id");
+	const baseUrl = requireString(obj, "baseUrl");
+	const model = requireString(obj, "model");
+	const apiKey = optionalString(obj, "apiKey") ?? "";
+	const wireApi = optionalString(obj, "wireApi") ?? "responses";
+	return { id, baseUrl, apiKey, model, wireApi };
 }
 
 export function parseAgentProxySettings(

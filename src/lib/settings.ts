@@ -107,13 +107,6 @@ export type InboxKindDefaults = {
 	prLabels: string;
 };
 
-export type ClaudeCustomProviderSettings = {
-	builtinProviderApiKeys: Record<string, string>;
-	customBaseUrl: string;
-	customApiKey: string;
-	customModels: string;
-};
-
 /** Mirrors SDK `ModelParameterDefinition` shape. */
 export type CursorCachedModelParameterValue = {
 	value: string;
@@ -282,6 +275,9 @@ export type AppSettings = {
 	/** Shows the Terminal-Mode toggle in the composer; sending with it on
 	 *  opens the prompt in an agent TUI instead of a GUI session. */
 	enableTerminalMode: boolean;
+	/** When true, skip the heads-up dialog shown before sending a conversation
+	 *  with history to the terminal (new Terminal session + resume). */
+	suppressTerminalResumeWarning: boolean;
 	lastWorkspaceId: string | null;
 	lastSessionId: string | null;
 	lastSurface: AppSurface;
@@ -330,7 +326,10 @@ export type AppSettings = {
 	allowNonGitDirectories: boolean;
 	onboardingCompleted: boolean;
 	shortcuts: ShortcutOverrides;
-	claudeCustomProviders: ClaudeCustomProviderSettings;
+	/** Claude model ids in the picker. `null` = all (default), `[]` = none. */
+	claudeEnabledModelIds: string[] | null;
+	/** Codex model ids in the picker. Same `null`/`[]` semantics. */
+	codexEnabledModelIds: string[] | null;
 	cursorProvider: CursorProviderSettings;
 	opencodeProvider: OpencodeProviderSettings;
 	/** MiMo Code (opencode-protocol fork) — same settings shape. */
@@ -404,6 +403,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	notificationSound: "off",
 	terminalHoverExpansion: true,
 	enableTerminalMode: false,
+	suppressTerminalResumeWarning: false,
 	lastWorkspaceId: null,
 	lastSessionId: null,
 	lastSurface: "workspace",
@@ -427,12 +427,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	allowNonGitDirectories: false,
 	onboardingCompleted: false,
 	shortcuts: {},
-	claudeCustomProviders: {
-		builtinProviderApiKeys: {},
-		customBaseUrl: "",
-		customApiKey: "",
-		customModels: "",
-	},
+	claudeEnabledModelIds: null,
+	codexEnabledModelIds: null,
 	cursorProvider: {
 		apiKey: "",
 		enabledModelIds: null,
@@ -590,6 +586,7 @@ const SETTINGS_KEY_MAP: Record<
 	notificationSound: "app.notification_sound",
 	terminalHoverExpansion: "app.terminal_hover_expansion",
 	enableTerminalMode: "app.enable_terminal_mode",
+	suppressTerminalResumeWarning: "app.suppress_terminal_resume_warning",
 	lastWorkspaceId: "app.last_workspace_id",
 	lastSessionId: "app.last_session_id",
 	lastSurface: "app.last_surface",
@@ -613,7 +610,8 @@ const SETTINGS_KEY_MAP: Record<
 	allowNonGitDirectories: "app.allow_non_git_directories",
 	onboardingCompleted: "app.onboarding_completed",
 	shortcuts: "app.shortcuts",
-	claudeCustomProviders: "app.claude_custom_providers",
+	claudeEnabledModelIds: "app.claude_enabled_model_ids",
+	codexEnabledModelIds: "app.codex_enabled_model_ids",
 	cursorProvider: "app.cursor_provider",
 	opencodeProvider: "app.opencode_provider",
 	mimoProvider: "app.mimo_provider",
@@ -1093,33 +1091,13 @@ function parseCachedModelParameters(
 	return out;
 }
 
-function parseClaudeCustomProviderSettings(
-	raw: string | undefined,
-): ClaudeCustomProviderSettings {
-	if (!raw) return DEFAULT_SETTINGS.claudeCustomProviders;
+// Absent → null (all enabled); JSON array → that subset.
+function parseEnabledModelIdsSetting(raw: string | undefined): string[] | null {
+	if (!raw) return null;
 	try {
-		const parsed = JSON.parse(raw) as Record<string, unknown>;
-		const builtinProviderApiKeys =
-			parsed.builtinProviderApiKeys &&
-			typeof parsed.builtinProviderApiKeys === "object" &&
-			!Array.isArray(parsed.builtinProviderApiKeys)
-				? Object.fromEntries(
-						Object.entries(parsed.builtinProviderApiKeys).filter(
-							([, value]) => typeof value === "string",
-						),
-					)
-				: {};
-		return {
-			builtinProviderApiKeys,
-			customBaseUrl:
-				typeof parsed.customBaseUrl === "string" ? parsed.customBaseUrl : "",
-			customApiKey:
-				typeof parsed.customApiKey === "string" ? parsed.customApiKey : "",
-			customModels:
-				typeof parsed.customModels === "string" ? parsed.customModels : "",
-		};
+		return parseEnabledModelIds(JSON.parse(raw) as unknown);
 	} catch {
-		return DEFAULT_SETTINGS.claudeCustomProviders;
+		return null;
 	}
 }
 
@@ -1286,6 +1264,8 @@ export async function loadSettings(): Promise<AppSettings> {
 					? raw[SETTINGS_KEY_MAP.terminalHoverExpansion] === "true"
 					: DEFAULT_SETTINGS.terminalHoverExpansion,
 			enableTerminalMode: raw[SETTINGS_KEY_MAP.enableTerminalMode] === "true",
+			suppressTerminalResumeWarning:
+				raw[SETTINGS_KEY_MAP.suppressTerminalResumeWarning] === "true",
 			lastWorkspaceId: raw[SETTINGS_KEY_MAP.lastWorkspaceId] || null,
 			lastSessionId: raw[SETTINGS_KEY_MAP.lastSessionId] || null,
 			lastSurface:
@@ -1365,8 +1345,11 @@ export async function loadSettings(): Promise<AppSettings> {
 					? raw[SETTINGS_KEY_MAP.onboardingCompleted] === "true"
 					: DEFAULT_SETTINGS.onboardingCompleted,
 			shortcuts: parseShortcutOverrides(raw[SETTINGS_KEY_MAP.shortcuts]),
-			claudeCustomProviders: parseClaudeCustomProviderSettings(
-				raw[SETTINGS_KEY_MAP.claudeCustomProviders],
+			claudeEnabledModelIds: parseEnabledModelIdsSetting(
+				raw[SETTINGS_KEY_MAP.claudeEnabledModelIds],
+			),
+			codexEnabledModelIds: parseEnabledModelIdsSetting(
+				raw[SETTINGS_KEY_MAP.codexEnabledModelIds],
 			),
 			cursorProvider: parseCursorProviderSettings(
 				raw[SETTINGS_KEY_MAP.cursorProvider],
@@ -1424,7 +1407,8 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 		if (value !== undefined) {
 			const isJsonKey =
 				key === "shortcuts" ||
-				key === "claudeCustomProviders" ||
+				key === "claudeEnabledModelIds" ||
+				key === "codexEnabledModelIds" ||
 				key === "cursorProvider" ||
 				key === "opencodeProvider" ||
 				key === "mimoProvider" ||

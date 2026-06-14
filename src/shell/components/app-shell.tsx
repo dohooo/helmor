@@ -199,6 +199,7 @@ export function AppShell({
 				quickSwitch: data.quickSwitch,
 				liveWorkspaceRowMap: data.liveWorkspaceRowMap,
 				closeConfirmDialog: data.closeConfirmDialog,
+				terminalResumeDialog: data.terminalResumeDialog,
 				editorDiscardConfirmDialog: data.editorDiscardConfirmDialog,
 				mergeConfirmDialogNode: data.mergeConfirmDialogNode,
 			}}

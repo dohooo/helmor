@@ -25,6 +25,7 @@ import {
 	errorMessage,
 	optionalObject,
 	parseAgentProxySettings,
+	parseCodexProvider,
 	parseGetContextUsageParams,
 	parseListSlashCommandsParams,
 	parseProvider,
@@ -35,6 +36,7 @@ import {
 	requireString,
 } from "./request-parser.js";
 import type {
+	CodexProviderConfig,
 	Provider,
 	SessionManager,
 	UserInputResolution,
@@ -238,6 +240,7 @@ interface TitleAttempt {
 	readonly provider: Provider;
 	readonly model?: string;
 	readonly claudeEnvironment?: Record<string, string>;
+	readonly codexProvider?: CodexProviderConfig;
 }
 
 function asStringRecord(v: unknown): Record<string, string> | undefined {
@@ -250,8 +253,8 @@ function asStringRecord(v: unknown): Record<string, string> | undefined {
 }
 
 // Parse Rust's ordered title-generation attempt chain. Each entry is a
-// { provider, model?, claudeEnvironment? }. Always yields at least one entry
-// so a missing/empty list still tries claude's default.
+// { provider, model?, claudeEnvironment?, codexProvider? }. Always yields at
+// least one entry so a missing/empty list still tries claude's default.
 function parseTitleAttempts(raw: unknown): TitleAttempt[] {
 	const out: TitleAttempt[] = [];
 	if (Array.isArray(raw)) {
@@ -271,6 +274,7 @@ function parseTitleAttempts(raw: unknown): TitleAttempt[] {
 				provider,
 				model: typeof obj.model === "string" ? obj.model : undefined,
 				claudeEnvironment: asStringRecord(obj.claudeEnvironment),
+				codexProvider: parseCodexProvider(obj, "codexProvider"),
 			});
 		}
 	}
@@ -307,7 +311,7 @@ async function handleGenerateTitle(
 		let lastError: unknown = null;
 		for (const attempt of attempts) {
 			logger.debug(
-				`[${id}] generateTitle attempt provider=${attempt.provider} model=${attempt.model ?? "(default)"} customEnv=${Boolean(attempt.claudeEnvironment)}`,
+				`[${id}] generateTitle attempt provider=${attempt.provider} model=${attempt.model ?? "(default)"} customEnv=${Boolean(attempt.claudeEnvironment)} customCodex=${Boolean(attempt.codexProvider)}`,
 			);
 			try {
 				await managers[attempt.provider].generateTitle(
@@ -319,6 +323,7 @@ async function handleGenerateTitle(
 					{
 						model: attempt.model,
 						claudeEnvironment: attempt.claudeEnvironment,
+						codexProvider: attempt.codexProvider,
 						agentProxy,
 						generateBranch,
 					},

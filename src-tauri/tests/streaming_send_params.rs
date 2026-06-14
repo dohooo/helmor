@@ -10,7 +10,9 @@
 
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
-use helmor_lib::agents::{build_send_message_params, BuildSendMessageParamsInput};
+use helmor_lib::agents::{
+    build_send_message_params, BuildSendMessageParamsInput, CodexProviderConfig,
+};
 use helmor_lib::data_dir;
 use helmor_lib::db;
 use helmor_lib::workspace::sidebar_order;
@@ -109,7 +111,30 @@ fn base_input<'a>(session_id: Option<&'a str>) -> BuildSendMessageParamsInput<'a
         agent_proxy: None,
         claude_thinking_display: None,
         images: &[],
+        codex_provider: None,
     }
+}
+
+#[test]
+fn injects_codex_provider_for_custom_codex() {
+    let env = TestEnv::new();
+    seed_workspace_session(&env.connection(), "w-c", "s-c", None);
+
+    let codex = CodexProviderConfig {
+        id: "hundun".to_string(),
+        base_url: "http://dollar.hundun.cn/v1".to_string(),
+        api_key: "sk-secret".to_string(),
+        wire_api: "responses".to_string(),
+        wire_model: "gpt-5.5".to_string(),
+    };
+    let mut input = base_input(Some("s-c"));
+    // Mirrors the streaming path: provider collapses to `codex`.
+    input.provider = "codex";
+    input.cli_model = "gpt-5.5";
+    input.codex_provider = Some(&codex);
+
+    let params = build(input);
+    assert_yaml_snapshot!("params_with_codex_provider", &params);
 }
 
 #[test]

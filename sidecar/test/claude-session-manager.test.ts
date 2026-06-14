@@ -493,8 +493,9 @@ describe("ClaudeSessionManager.sendMessage", () => {
 			models.map((m) => [m.id, m.supportsFastMode]),
 		);
 
-		// `default` now resolves to Opus 4.8, which supports fast mode.
-		expect(bySupports.default).toBe(true);
+		// Opus 4.8 1M supports fast mode.
+		expect(bySupports["claude-opus-4-8[1m]"]).toBe(true);
+		expect(bySupports.default).toBeUndefined();
 		expect(bySupports.sonnet).toBeUndefined();
 		expect(bySupports["claude-opus-4-7[1m]"]).toBeUndefined();
 		expect(bySupports["claude-opus-4-6[1m]"]).toBe(true);
@@ -539,7 +540,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 			{
 				sessionId: `helmor-sess-effort-${level}`,
 				prompt: "test",
-				model: "default",
+				model: "claude-opus-4-8[1m]",
 				cwd: undefined,
 				resume: undefined,
 				permissionMode: undefined,
@@ -562,7 +563,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 			{
 				sessionId: "helmor-sess-effort-bogus",
 				prompt: "test",
-				model: "default",
+				model: "claude-opus-4-8[1m]",
 				cwd: undefined,
 				resume: undefined,
 				permissionMode: undefined,
@@ -585,7 +586,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 			{
 				sessionId: "helmor-sess-mcp-blocking",
 				prompt: "test",
-				model: "default",
+				model: "claude-opus-4-8[1m]",
 				cwd: undefined,
 				resume: undefined,
 				permissionMode: undefined,
@@ -637,7 +638,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 			{
 				sessionId: "helmor-sess-fm",
 				prompt: "hi",
-				model: "default",
+				model: "claude-opus-4-8[1m]",
 				cwd: undefined,
 				resume: undefined,
 				permissionMode: undefined,
@@ -679,7 +680,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 			{
 				sessionId: "helmor-sess-fm-init",
 				prompt: "hi",
-				model: "default",
+				model: "claude-opus-4-8[1m]",
 				cwd: undefined,
 				resume: undefined,
 				permissionMode: undefined,
@@ -718,7 +719,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 			{
 				sessionId: "helmor-sess-fm-on",
 				prompt: "hi",
-				model: "default",
+				model: "claude-opus-4-8[1m]",
 				cwd: undefined,
 				resume: undefined,
 				permissionMode: undefined,
@@ -1775,9 +1776,9 @@ describe("ClaudeSessionManager.listModels", () => {
 				effortLevels: ["low", "medium", "high", "xhigh", "max"],
 			},
 			{
-				id: "default",
+				id: "claude-opus-4-8[1m]",
 				label: "Opus 4.8 1M",
-				cliModel: "default",
+				cliModel: "claude-opus-4-8[1m]",
 				effortLevels: ["low", "medium", "high", "xhigh", "max"],
 				supportsFastMode: true,
 			},

@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.39.1
+
+### Patch Changes
+
+- [#848](https://github.com/dohooo/helmor/pull/848) [`eac697c`](https://github.com/dohooo/helmor/commit/eac697c62d0bbf434433421db09d63ac11f25893) Thanks [@natllian](https://github.com/natllian)! - Improve Claude model handling:
+  - The default Claude model is pinned to Opus 4.8 (1M context) so it can't silently switch to a different model when the bundled Claude CLI updates; existing sessions and settings keep the same model.
+  - Terminal mode is now limited to official Claude models — custom (BYOK) Claude models run in GUI mode instead, since the terminal can't carry their custom provider settings.
+
+## 0.39.0
+
+### Minor Changes
+
+- [#846](https://github.com/dohooo/helmor/pull/846) [`533228a`](https://github.com/dohooo/helmor/commit/533228a8a1278fe76abc9bbff14160b32c4a8270) Thanks [@natllian](https://github.com/natllian)! - Unify custom AI provider configuration across Claude Code, Codex, OpenCode, and MiMo Code.
+
+  - Configure multiple custom providers per agent in Settings — pick a built-in preset or add an OpenAI-compatible endpoint; models are auto-fetched from the endpoint with a manual fallback.
+  - Claude Code custom providers are now multi-slot, matching Codex, OpenCode, and MiMo Code.
+  - Pick which official and custom models appear in the composer's model picker; deselecting all of a provider hides its section.
+
+### Patch Changes
+
+- [#844](https://github.com/dohooo/helmor/pull/844) [`e8dbade`](https://github.com/dohooo/helmor/commit/e8dbade1bfd0600f98472c0b57fc96250d796c74) Thanks [@lncitador](https://github.com/lncitador)! - Fix Intel (x86_64) builds shipping an arm64 `helmor-sidecar`, which made the app fail to launch its sidecar with "Failed to start sidecar binary" / "bad CPU type in executable" on Intel Macs. The sidecar is now cross-compiled to the release target triple, and the bundle arch check covers it so the mismatch can't ship again.
+
+## 0.38.0
+
+### Minor Changes
+
+- [#826](https://github.com/dohooo/helmor/pull/826) [`602f452`](https://github.com/dohooo/helmor/commit/602f4523c65cf4df2b0e6c2cf0a61c204a5a64ae) Thanks [@natllian](https://github.com/natllian)! - Sending a conversation with history to the terminal now opens a new Terminal session that resumes the same Claude or Codex conversation, after a quick heads-up that messages typed in the terminal won't sync back to the chat.
+
+- [#833](https://github.com/dohooo/helmor/pull/833) [`0ed0a6a`](https://github.com/dohooo/helmor/commit/0ed0a6ab8a24fc54f445461ec806f5ec0ea25621) Thanks [@natllian](https://github.com/natllian)! - Add MiMo Code (Xiaomi's MiMo-Code) as a built-in agent — sign in with `mimo auth login`, pick MiMo models in the composer, and manage custom providers in Settings, just like OpenCode.
+
+### Patch Changes
+
+- [#822](https://github.com/dohooo/helmor/pull/822) [`be5954c`](https://github.com/dohooo/helmor/commit/be5954ccf14e0c30e29bd3fe82f0100c50fa234d) Thanks [@natllian](https://github.com/natllian)! - Fix the session tab's rename and close icons staying visible after you click to select a tab and move the mouse away.
+
+- [#835](https://github.com/dohooo/helmor/pull/835) [`584658b`](https://github.com/dohooo/helmor/commit/584658bbcd42369208f6c791dbaf7132220c272e) Thanks [@dohooo](https://github.com/dohooo)! - Fix a quit path where Helmor could exit without stopping your Run-tab scripts and embedded terminals, leaving them running as orphan processes.
+
+- [#834](https://github.com/dohooo/helmor/pull/834) [`4c07cd1`](https://github.com/dohooo/helmor/commit/4c07cd161bfb4ab20b091d9b261425fcc52cc90d) Thanks [@dohooo](https://github.com/dohooo)! - Retire two shell actions and polish session injection chips:
+
+  - Remove the workspace header action for exporting a session as an image.
+  - Hide the mini-window phone icon from the left sidebar.
+  - Make injected-session chips more compact in the composer.
+
+- [#839](https://github.com/dohooo/helmor/pull/839) [`a03fe90`](https://github.com/dohooo/helmor/commit/a03fe90f3878cbb914065e8253257b36c5ae2c20) Thanks [@dohooo](https://github.com/dohooo)! - Recover run-action Stop, Cleanup, and Run flows when a prior Helmor launch left the action process alive outside the in-memory script manager.
+
+- [#836](https://github.com/dohooo/helmor/pull/836) [`e48fcb8`](https://github.com/dohooo/helmor/commit/e48fcb89f35431b7d7dcd7027c2a657408374e9e) Thanks [@natllian](https://github.com/natllian)! - Fix the Stop button doing nothing on a follow-up turn that auto-sends from the queue right after you stop the previous turn.
+
+- [#832](https://github.com/dohooo/helmor/pull/832) [`7f09c45`](https://github.com/dohooo/helmor/commit/7f09c45d2a15f88c568e1a95e522cc84d1f05d81) Thanks [@natllian](https://github.com/natllian)! - Fix the start-screen branch picker not showing freshly pushed remote branches until a restart — it now syncs from the remote each time you open it.
+
+- [#827](https://github.com/dohooo/helmor/pull/827) [`15db201`](https://github.com/dohooo/helmor/commit/15db2013b80028d4fd6feb70320cce7560337b7b) Thanks [@natllian](https://github.com/natllian)! - Fix Cursor agents getting stuck after a transient authentication or network error, so a single blip no longer stops every running Cursor session and wedged chats recover on the next message.
+
+- [#831](https://github.com/dohooo/helmor/pull/831) [`4a7de58`](https://github.com/dohooo/helmor/commit/4a7de58e155995b6236f44c62b75f6f0e89d246f) Thanks [@dohooo](https://github.com/dohooo)! - Fix Terminal mode composer hints overlapping file mentions after inserting files with @.
+
 ## 0.37.0
 
 ### Minor Changes
