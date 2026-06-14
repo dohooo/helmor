@@ -277,7 +277,7 @@ fn official_claude_section() -> AgentModelSection {
         options: vec![
             // Fable 5 leads the list as the most capable pick, but it burns
             // limits ~2x faster than Opus — `useEnsureDefaultModel` therefore
-            // pins the app default to the `default` (Opus) entry below, NOT
+            // pins the app default to the Opus 4.8 entry below, NOT
             // to options[0]. No fast mode (Opus 4.6+ only).
             claude_model(
                 "claude-fable-5[1m]",
@@ -285,22 +285,21 @@ fn official_claude_section() -> AgentModelSection {
                 &["low", "medium", "high", "xhigh", "max"],
                 false,
             ),
-            // `default` resolves to the newest Opus the bundled claude-code
-            // knows about — 2.1.170 maps it to Opus 4.8 (1M context, adaptive
-            // thinking, default high effort, fast mode at 2x rate / 2.5x
-            // speed). Kept as `default` so it stays the auto-latest pick and
-            // remains the app's default selection (see
-            // `useEnsureDefaultModel`, which prefers id == "default"). MUST
-            // stay in sync with `sidecar/src/model-catalog.ts`.
+            // App default selection (see `useEnsureDefaultModel`, which pins
+            // this id). Pinned to the explicit `claude-opus-4-8[1m]` wire id —
+            // the `[1m]` suffix selects the 1M-context variant, matching the
+            // label. We do NOT use the CLI's `default` sentinel: it resolves to
+            // whatever the bundled claude-code decides (non-deterministic
+            // across CLI bumps), whereas a pinned id is stable. Bump when a
+            // newer Opus ships. MUST stay in sync with
+            // `sidecar/src/model-catalog.ts`.
             claude_model(
-                "default",
+                "claude-opus-4-8[1m]",
                 "Opus 4.8 1M",
                 &["low", "medium", "high", "xhigh", "max"],
                 true,
             ),
-            // Explicit 4.7 pin — this slot used to BE `default`; now that
-            // `default` advanced to 4.8 we surface 4.7 as its own selectable
-            // entry, above 4.6.
+            // Explicit 4.7 pin, above 4.6.
             claude_model(
                 "claude-opus-4-7[1m]",
                 "Opus 4.7 1M",
@@ -900,7 +899,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "claude-fable-5[1m]",
-                "default",
+                "claude-opus-4-8[1m]",
                 "claude-opus-4-7[1m]",
                 "claude-opus-4-6[1m]",
                 "sonnet",
@@ -970,7 +969,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "claude-fable-5[1m]",
-                "default",
+                "claude-opus-4-8[1m]",
                 "claude-opus-4-7[1m]",
                 "claude-opus-4-6[1m]",
                 "sonnet",
@@ -993,10 +992,11 @@ mod tests {
     #[test]
     fn resolve_claude_model() {
         let _env = crate::testkit::TestEnv::new("resolve-claude-model");
-        let m = resolve_model("default", None);
+        // The pinned Opus 4.8 1M id resolves to itself.
+        let m = resolve_model("claude-opus-4-8[1m]", None);
         assert_eq!(m.provider, "claude");
-        assert_eq!(m.cli_model, "default");
-        assert_eq!(m.id, "default");
+        assert_eq!(m.cli_model, "claude-opus-4-8[1m]");
+        assert_eq!(m.id, "claude-opus-4-8[1m]");
         assert!(m.supports_effort);
     }
 
@@ -1441,7 +1441,7 @@ mod tests {
             &ids[..4],
             &[
                 "claude-fable-5[1m]",
-                "default",
+                "claude-opus-4-8[1m]",
                 "claude-opus-4-7[1m]",
                 "claude-opus-4-6[1m]"
             ],
@@ -1449,7 +1449,7 @@ mod tests {
         );
 
         // Fable 5: most capable, leads the list, but is NOT the app default
-        // (too expensive) — `useEnsureDefaultModel` pins to id == "default".
+        // (too expensive) — `useEnsureDefaultModel` pins to the Opus 4.8 id.
         // No fast mode (Opus 4.6+ only); full effort tiers incl. xhigh.
         let fable = &claude.options[0];
         assert_eq!(fable.label, "Fable 5 1M");
@@ -1460,11 +1460,11 @@ mod tests {
             vec!["low", "medium", "high", "xhigh", "max"]
         );
 
-        // `default` → Opus 4.8: stays the app default selection, supports
-        // fast mode, and keeps the xhigh effort tier.
+        // Opus 4.8: the app default selection, supports fast mode, and keeps
+        // the xhigh effort tier. Pinned to its explicit `[1m]` wire id.
         let default = &claude.options[1];
         assert_eq!(default.label, "Opus 4.8 1M");
-        assert_eq!(default.cli_model, "default");
+        assert_eq!(default.cli_model, "claude-opus-4-8[1m]");
         assert!(default.supports_fast_mode, "Opus 4.8 supports fast mode");
         assert_eq!(
             default.effort_levels,
@@ -1490,10 +1490,12 @@ mod tests {
     #[test]
     fn claude_default_no_longer_collides_with_cursor_auto() {
         let _env = crate::testkit::TestEnv::new("claude-default-no-longer-collides-with-c");
-        // `default` belongs to Claude (Opus 4.8 1M). Cursor's Auto is
-        // `cursor-default`. They MUST resolve to different providers
-        // even when the picker / persistence flow doesn't pass a hint —
-        // this is the regression the namespace prefix exists to prevent.
+        // A hint-less bare `default` still infers to claude; cursor's Auto is
+        // the namespaced `cursor-default`. They MUST resolve to different
+        // providers even without a hint — the regression the namespace prefix
+        // exists to prevent. (Claude no longer ships a `default` model id; any
+        // legacy occurrence is normalized by the DB migration before it gets
+        // here, so resolve_model just passes it through.)
         let claude = resolve_model("default", None);
         assert_eq!(claude.provider, "claude");
         assert_eq!(claude.cli_model, "default");

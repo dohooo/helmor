@@ -414,9 +414,11 @@ fn import_workspace_db_records(conn: &Connection, workspace_id: &str) -> Result<
     )
     .context("Failed to import sessions")?;
 
-    // 3b. Remap legacy "opus-1m" model ID (CLI no longer accepts it)
+    // 3b. Remap legacy "opus-1m" model ID to the pinned Opus 4.8 1M wire id
+    // (CLI no longer accepts "opus-1m"; claude no longer uses the "default"
+    // sentinel).
     conn.execute(
-        "UPDATE main.sessions SET model = 'default' WHERE model = 'opus-1m' AND workspace_id = ?1",
+        "UPDATE main.sessions SET model = 'claude-opus-4-8[1m]' WHERE model = 'opus-1m' AND workspace_id = ?1",
         [workspace_id],
     )
     .ok();
