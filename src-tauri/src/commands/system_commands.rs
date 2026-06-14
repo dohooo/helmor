@@ -2279,7 +2279,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn parse_auth_list_credentials_counts_only_credentials_section() {
         // 0 credentials + an env var present → signed OUT (env ≠ login).
@@ -2297,6 +2296,7 @@ mod tests {
         assert!(!parse_auth_list_credentials("garbage with no count"));
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn applescript_shell_arg_quotes_plain_path() {
         assert_eq!(

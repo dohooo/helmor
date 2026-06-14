@@ -166,8 +166,17 @@ class MockCodexAppServer {
 	}
 }
 
+// Capture real fns first (consts survive mock.module's in-place namespace
+// rewrite) and pass them through, overriding only CodexAppServer — otherwise
+// codex-app-server.test.ts imports this stub and can't find buildCodexEnv /
+// buildCodexAppServerArgs (load order surfaces this on Windows CI).
+const realCodexAppServer = await import("../src/codex/app-server.js");
+const realBuildCodexAppServerArgs = realCodexAppServer.buildCodexAppServerArgs;
+const realBuildCodexEnv = realCodexAppServer.buildCodexEnv;
 mock.module("../src/codex/app-server.js", () => ({
 	CodexAppServer: MockCodexAppServer,
+	buildCodexAppServerArgs: realBuildCodexAppServerArgs,
+	buildCodexEnv: realBuildCodexEnv,
 }));
 
 // `mock.module` is global to the whole `bun test` process and is NOT undone by
