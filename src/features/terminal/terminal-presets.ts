@@ -65,11 +65,10 @@ function shellQuotePrompt(value: string): string {
 	return `$'${escaped}'`;
 }
 
-/** Helmor's catalog uses the literal id "default" for "follow the CLI's own
- * default model" — that placeholder must never reach a real --model flag. */
+/** Empty/whitespace model id → no `--model` flag (the CLI falls back to its
+ * own default). Every catalog model is a real wire id, so nothing to strip. */
 function cliModelOrNull(modelId?: string | null): string | null {
-	const model = modelId?.trim();
-	return model && model !== "default" ? model : null;
+	return modelId?.trim() || null;
 }
 
 function claudeAddDirFlags(addDirs?: readonly string[] | null): string[] {

@@ -59,13 +59,14 @@ export function useEnsureDefaultModel() {
 		// Repair the default when it's never been set, or was set but is now
 		// definitively gone (wait for every provider to settle first).
 		if (!defaultOption && (settled || !settings.defaultModel)) {
-			// Prefer the Claude `default` entry (auto-latest Opus) over the
-			// first listed option — pricier models (Fable 5) sit above it in
-			// the picker but must not become the app default.
+			// Prefer the pinned Opus 4.8 1M entry over the first listed option —
+			// pricier models (Fable 5) sit above it in the picker but must not
+			// become the app default. A legacy stored "default" id no longer
+			// matches any option, so this re-pins it to the explicit wire id.
 			const claudeOptions =
 				sections.find((s) => s.id === "claude")?.options ?? [];
 			const pickOption =
-				claudeOptions.find((o) => o.id === "default") ??
+				claudeOptions.find((o) => o.id === "claude-opus-4-8[1m]") ??
 				claudeOptions[0] ??
 				allOptions[0] ??
 				null;
