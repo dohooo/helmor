@@ -15,6 +15,7 @@ export const providerLabels: Record<AgentLoginProvider, string> = {
 	// Cursor never reaches the login terminal; here for the exhaustive Record.
 	cursor: "Cursor",
 	opencode: "OpenCode",
+	kimi: "Kimi",
 	mimo: "MiMo Code",
 };
 

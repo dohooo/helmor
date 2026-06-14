@@ -73,6 +73,7 @@ export const helmorQueryKeys = {
 	agentModelSections: ["agentModelSections"] as const,
 	allAgentModelSections: ["allAgentModelSections"] as const,
 	customProviders: (family: string) => ["customProviders", family] as const,
+	kimiProviderConfig: ["kimiProviderConfig"] as const,
 	agentLoginStatus: ["agentLoginStatus"] as const,
 	agentVersions: ["agentVersions"] as const,
 	providerCapabilities: ["providerCapabilities"] as const,

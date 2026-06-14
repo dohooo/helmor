@@ -21,16 +21,21 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { openUrl } from "@/lib/platform-bridge";
 import type {
-	ApiStyle,
 	CustomProvider,
 	CustomProviderModel,
 } from "@/lib/provider-config";
 import { cn } from "@/lib/utils";
-import type { ProviderConfigAdapter, ProviderPreset } from "./provider-config";
+import type {
+	ProviderConfigAdapter,
+	ProviderPreset,
+	StyleOption,
+} from "./provider-config";
 
 type FetchState = { loading: boolean; error: string | null };
 
-const API_STYLES: Array<{ value: ApiStyle; label: string; hint: string }> = [
+// Default wire-protocol options (OpenCode/MiMo). Adapters override via
+// `styleOptions` — e.g. Kimi supplies openai/anthropic/… .
+const DEFAULT_STYLE_OPTIONS: StyleOption[] = [
 	{
 		value: "chat",
 		label: "Chat Completions",
@@ -234,8 +239,14 @@ export function CustomProviderCard({
 			</div>
 
 			{adapter.caps.apiStyleSelectable && isManual ? (
-				<ApiStyleSelect
-					value={draft.apiStyle ?? "chat"}
+				<StyleSelect
+					label={adapter.styleLabel ?? "API style"}
+					options={adapter.styleOptions ?? DEFAULT_STYLE_OPTIONS}
+					value={
+						draft.apiStyle ??
+						(adapter.styleOptions ?? DEFAULT_STYLE_OPTIONS)[0]?.value ??
+						"chat"
+					}
 					onChange={(apiStyle) => commit({ apiStyle })}
 				/>
 			) : null}
@@ -270,34 +281,40 @@ export function CustomProviderCard({
 	);
 }
 
-function ApiStyleSelect({
+function StyleSelect({
+	label,
+	options,
 	value,
 	onChange,
 }: {
-	value: ApiStyle;
-	onChange: (value: ApiStyle) => void;
+	label: string;
+	options: readonly StyleOption[];
+	value: string;
+	onChange: (value: string) => void;
 }) {
-	const current = API_STYLES.find((s) => s.value === value) ?? API_STYLES[0];
+	const current = options.find((s) => s.value === value) ?? options[0];
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger className="flex h-8 cursor-interactive items-center justify-between rounded-lg border border-border/50 bg-background/40 px-3 text-[13px] text-foreground hover:bg-muted/40">
 				<span className="flex min-w-0 items-center gap-2">
-					<span className="text-muted-foreground">API style</span>
-					<span className="truncate">{current.label}</span>
+					<span className="text-muted-foreground">{label}</span>
+					<span className="truncate">{current?.label}</span>
 				</span>
 				<ChevronDown className="size-3 shrink-0 opacity-40" />
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="start" className="w-[320px]">
-				{API_STYLES.map((style) => (
+				{options.map((style) => (
 					<DropdownMenuItem
 						key={style.value}
 						onClick={() => onChange(style.value)}
 						className="flex flex-col items-start gap-0.5"
 					>
 						<span className="text-[13px] text-foreground">{style.label}</span>
-						<span className="text-[11px] text-muted-foreground">
-							{style.hint}
-						</span>
+						{style.hint ? (
+							<span className="text-[11px] text-muted-foreground">
+								{style.hint}
+							</span>
+						) : null}
 					</DropdownMenuItem>
 				))}
 			</DropdownMenuContent>

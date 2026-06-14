@@ -4,6 +4,7 @@ import {
 	ClaudeColorIcon,
 	type ClaudeIcon,
 	CursorIcon,
+	KimiIcon,
 	MiMoCodeIcon,
 	OpenAIIcon,
 	OpenCodeIcon,
@@ -16,11 +17,14 @@ import { AgentProxyPanel } from "./model-providers";
 import {
 	CLAUDE_ADAPTER,
 	CODEX_ADAPTER,
+	KIMI_CONFIG_ADAPTER,
 	MIMO_CONFIG_ADAPTER,
 	OPENCODE_CONFIG_ADAPTER,
 } from "./providers/adapters";
 import { CursorCardBody } from "./providers/cursor-card-body";
 import { CustomProvidersList } from "./providers/custom-providers-list";
+import { KimiModels } from "./providers/kimi-models";
+import { LoginGate } from "./providers/login-gate";
 import {
 	SlugProviderModels,
 	type SlugProviderModelsHandle,
@@ -33,6 +37,7 @@ import {
 	OPENCODE_ADAPTER,
 	type SlugProviderAdapter,
 } from "./providers/slug-provider-adapter";
+import { useKimiModelSync } from "./providers/use-kimi-model-sync";
 
 // SettingsDialog renders outside AppShell's TooltipProvider, so wrap our own.
 export function ProvidersPanel() {
@@ -54,6 +59,10 @@ export function ProvidersPanel() {
 	// sync (server boot) runs, since their readiness is derived from that
 	// fetch's cache.
 	const statusLoading = statusQuery.isLoading;
+	// Kimi's isSyncing is already global (useIsMutating inside the hook), so a
+	// sync from any panel spins this row too; sync after login so the models
+	// panel isn't empty until a manual Sync.
+	const { sync: syncKimiModels, isSyncing: kimiSyncing } = useKimiModelSync();
 
 	const refetchStatus = () => {
 		void statusQuery.refetch();
@@ -103,6 +112,39 @@ export function ProvidersPanel() {
 					collapsible
 				>
 					<ProviderConfigSection adapter={CODEX_ADAPTER} />
+				</ProviderRow>
+				<ProviderRow
+					icon={KimiIcon}
+					name="Kimi"
+					version={versions?.kimi}
+					ready={Boolean(status?.kimi)}
+					connecting={statusLoading || kimiSyncing}
+					loginProvider="kimi"
+					onLoginExit={() => {
+						refetchStatus();
+						void syncKimiModels().catch(() => {});
+					}}
+					collapsible
+				>
+					{/* Kimi runs over ACP, which rejects every session until you sign in
+					    — even custom providers. Lock the whole section until then. */}
+					<LoginGate
+						locked={!statusLoading && !status?.kimi}
+						message="Sign in to Kimi to use it — even custom providers require login. Use the “Log in” button above."
+					>
+						<ProviderConfigRow
+							label="Models"
+							description="Pick which Kimi models appear in the composer's picker."
+						>
+							<KimiModels />
+						</ProviderConfigRow>
+						<ProviderConfigRow
+							label="Custom Providers"
+							description={KIMI_CONFIG_ADAPTER.customProvidersDescription}
+						>
+							<CustomProvidersList adapter={KIMI_CONFIG_ADAPTER} />
+						</ProviderConfigRow>
+					</LoginGate>
 				</ProviderRow>
 				<ProviderRow
 					icon={CursorIcon}

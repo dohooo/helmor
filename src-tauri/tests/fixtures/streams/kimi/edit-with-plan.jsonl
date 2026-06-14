@@ -1,0 +1,10 @@
+{"type":"kimi/session_init","session_id":"ses_kimi_1","model":"kimi-for-coding"}
+{"type":"kimi/agent_thought_chunk","session_id":"ses_kimi_1","text":"Let me inspect the config before editing it."}
+{"type":"kimi/agent_message_chunk","session_id":"ses_kimi_1","text":"I'll read "}
+{"type":"kimi/agent_message_chunk","session_id":"ses_kimi_1","text":"the config, then bump the timeout."}
+{"type":"kimi/tool_call","session_id":"ses_kimi_1","tool_call_id":"call_1","title":"Read config.toml","kind":"read","status":"pending","raw_input":{"path":"config.toml"}}
+{"type":"kimi/tool_call_update","session_id":"ses_kimi_1","tool_call_id":"call_1","status":"completed","output_text":"timeout = 30"}
+{"type":"kimi/tool_call","session_id":"ses_kimi_1","tool_call_id":"call_2","title":"Edit config.toml","kind":"edit","status":"completed","raw_input":{"path":"config.toml"},"diffs":[{"path":"config.toml","old_text":"timeout = 30","new_text":"timeout = 60"}],"output_text":"Edit applied."}
+{"type":"kimi/plan","session_id":"ses_kimi_1","entries":[{"content":"Read the config","priority":"high","status":"completed"},{"content":"Bump the timeout","priority":"medium","status":"completed"}]}
+{"type":"kimi/agent_message_chunk","session_id":"ses_kimi_1","text":"Done — timeout bumped to 60s."}
+{"type":"kimi/turn_complete","session_id":"ses_kimi_1"}

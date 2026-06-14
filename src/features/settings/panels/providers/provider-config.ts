@@ -54,9 +54,14 @@ export type CustomProvidersController = {
 
 export type ProviderCaps = {
 	baseUrlEditable: boolean;
-	/** Chat/Responses API-style switch (OpenCode/MiMo). */
+	/** Show the wire-protocol / API-style selector (OpenCode/MiMo/Kimi). */
 	apiStyleSelectable: boolean;
 };
+
+/** One choice in the wire-protocol / API-style selector. `value` is stored
+ *  verbatim in `CustomProvider.apiStyle` and interpreted by the family backend
+ *  (OpenCode: chat|responses; Kimi: openai|anthropic|…). */
+export type StyleOption = { value: string; label: string; hint?: string };
 
 export type ProviderConfigAdapter = {
 	family: ProviderFamily;
@@ -64,6 +69,11 @@ export type ProviderConfigAdapter = {
 	presets: readonly ProviderPreset[];
 	caps: ProviderCaps;
 	customProvidersDescription: string;
+	/** Options for the wire-protocol selector (shown when `caps.apiStyleSelectable`).
+	 *  Omitted → OpenCode's default Chat/Responses pair. */
+	styleOptions?: readonly StyleOption[];
+	/** Selector heading — "API style" (default) vs e.g. "Provider type". */
+	styleLabel?: string;
 	useCustomProviders: () => CustomProvidersController;
 	fetchModels: (provider: CustomProvider) => Promise<CustomProviderModel[]>;
 	/** Omitted by families that render their own Models row (OpenCode/MiMo). */

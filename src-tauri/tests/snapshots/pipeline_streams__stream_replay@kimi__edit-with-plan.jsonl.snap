@@ -1,0 +1,47 @@
+---
+source: tests/pipeline_streams.rs
+expression: snapshot
+input_file: tests/fixtures/streams/kimi/edit-with-plan.jsonl
+---
+line_count: 10
+checkpoint_count: 1
+checkpoints:
+  - line_index: 9
+    event_type: kimi/turn_complete
+    roles:
+      - assistant
+    last_part_types:
+      - reasoning
+      - text
+      - tool-call
+      - tool-call
+      - todo-list
+      - text
+final_state:
+  message_count: 1
+  roles:
+    - assistant
+  total_parts: 6
+persisted_turns:
+  turn_count: 1
+  total_blocks: 6
+  turns:
+    - role: assistant
+      block_types:
+        - reasoning
+        - text
+        - tool
+        - tool
+        - plan
+        - text
+historical_render:
+  message_count: 1
+  messages:
+    - role: assistant
+      part_types:
+        - reasoning
+        - text
+        - tool-call
+        - tool-call
+        - todo-list
+        - text

@@ -17,6 +17,7 @@ import { CodexAppServerManager } from "./codex-app-server-manager.js";
 import { CursorSessionManager } from "./cursor-session-manager.js";
 import { createSidecarEmitter } from "./emitter.js";
 import { resolveHostResponse, setHostWriter } from "./host-bridge.js";
+import { KimiSessionManager } from "./kimi-session-manager.js";
 import { errorDetails, logger } from "./logger.js";
 import { MIMO_PROTOCOL_CONFIG } from "./opencode-protocol/mimo.js";
 import { OPENCODE_PROTOCOL_CONFIG } from "./opencode-protocol/opencode.js";
@@ -51,12 +52,14 @@ const opencodeManager = new OpencodeProtocolSessionManager(
 	OPENCODE_PROTOCOL_CONFIG,
 );
 const mimoManager = new OpencodeProtocolSessionManager(MIMO_PROTOCOL_CONFIG);
+const kimiManager = new KimiSessionManager();
 const managers: Record<Provider, SessionManager> = {
 	claude: claudeManager,
 	codex: codexManager,
 	cursor: cursorManager,
 	opencode: opencodeManager,
 	mimo: mimoManager,
+	kimi: kimiManager,
 };
 
 // `parentGone` flips to true only when stdin EOFs — that's the
@@ -652,13 +655,15 @@ for await (const line of rl) {
 				const message =
 					typeof params.message === "string" ? params.message : undefined;
 				logger.debug(`[${id}] permissionResponse`, { permissionId, behavior });
-				// Route by id prefix: `codex-`, `opencode-`, `mimo-`, else Claude.
+				// Route by id prefix: `codex-`, `opencode-`, `mimo-`, `kimi-`, else Claude.
 				if (permissionId.startsWith("codex-")) {
 					codexManager.resolvePermission(permissionId, behavior);
 				} else if (permissionId.startsWith("opencode-")) {
 					opencodeManager.resolvePermission(permissionId, behavior);
 				} else if (permissionId.startsWith("mimo-")) {
 					mimoManager.resolvePermission(permissionId, behavior);
+				} else if (permissionId.startsWith("kimi-")) {
+					kimiManager.resolvePermission(permissionId, behavior);
 				} else {
 					claudeManager.resolvePermission(
 						permissionId,
@@ -701,7 +706,8 @@ for await (const line of rl) {
 					claudeManager.resolveUserInput(userInputId, resolution) ||
 					codexManager.resolveUserInput(userInputId, resolution) ||
 					opencodeManager.resolveUserInput(userInputId, resolution) ||
-					mimoManager.resolveUserInput(userInputId, resolution);
+					mimoManager.resolveUserInput(userInputId, resolution) ||
+					kimiManager.resolveUserInput(userInputId, resolution);
 				if (!claimed) {
 					// No live waiter — the parked promise was lost (sidecar
 					// restart, session ended, or duplicate submit). Surface

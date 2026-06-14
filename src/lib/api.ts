@@ -172,6 +172,7 @@ export type AgentProvider =
 	| "cursor"
 	| "opencode"
 	| "mimo"
+	| "kimi"
 	// Custom Codex providers: `codex:<id>` per instance.
 	| `codex:${string}`;
 
@@ -972,7 +973,8 @@ export type AgentLoginProvider =
 	| "codex"
 	| "cursor"
 	| "opencode"
-	| "mimo";
+	| "mimo"
+	| "kimi";
 
 export type AgentLoginStatusResult = {
 	claude: boolean;
@@ -980,6 +982,7 @@ export type AgentLoginStatusResult = {
 	cursor: boolean;
 	opencode: boolean;
 	mimo: boolean;
+	kimi: boolean;
 	codexProvider?: string | null;
 	codexAuthMethod?: "login" | "apiKey" | string | null;
 };
@@ -994,6 +997,7 @@ export type AgentVersionsResult = {
 	codex: string | null;
 	opencode: string | null;
 	mimo: string | null;
+	kimi: string | null;
 };
 
 export async function getAgentVersions(): Promise<AgentVersionsResult> {
@@ -1218,12 +1222,23 @@ export async function fetchProviderModels(
 	family: ProviderFamily,
 	baseUrl: string,
 	apiKey: string,
+	apiStyle?: string,
 ): Promise<CustomProviderModel[]> {
-	return await invoke<CustomProviderModel[]>("fetch_provider_models", {
-		family,
-		baseUrl,
-		apiKey,
-	});
+	try {
+		return await invoke<CustomProviderModel[]>("fetch_provider_models", {
+			family,
+			baseUrl,
+			apiKey,
+			apiStyle,
+		});
+	} catch (error) {
+		// Surface the real reason (e.g. "models endpoint returned HTTP 401")
+		// as an Error — the raw IPC rejection is a plain object that would
+		// otherwise render as "[object Object]" in the card.
+		throw new Error(
+			describeInvokeError(error, "Unable to fetch models from the endpoint."),
+		);
+	}
 }
 
 /** Static provider-capability table. Backed by the Rust source of truth
@@ -1294,6 +1309,16 @@ export const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities[] = [
 		supportsActiveGoal: false,
 		supportsContextUsage: true,
 		supportsSteer: true,
+		supportsSlashCommands: true,
+		requiresApiKey: false,
+	},
+	{
+		provider: "kimi",
+		displayName: "Kimi",
+		supportsPlanMode: false,
+		supportsActiveGoal: false,
+		supportsContextUsage: false,
+		supportsSteer: false,
 		supportsSlashCommands: true,
 		requiresApiKey: false,
 	},
@@ -1383,6 +1408,34 @@ export async function listMimoModels(
 		});
 	} catch (error) {
 		throw new Error(describeInvokeError(error, "Unable to list mimo models."));
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Kimi — model picker config. Custom-provider CRUD goes through the unified
+// `provider` commands (family = "kimi"); this read feeds the "Models" row.
+// ---------------------------------------------------------------------------
+
+export type KimiProviderInfo = {
+	id: string;
+	label: string;
+	modelCount: number;
+};
+/** `id` is the Kimi model alias (what the model picker / `session/set_model` use). */
+export type KimiModelInfo = { id: string; label: string; providerId: string };
+export type KimiProviderConfig = {
+	providers: KimiProviderInfo[];
+	models: KimiModelInfo[];
+};
+
+/** Parsed `~/.kimi-code/config.toml` → configured providers + models. */
+export async function getKimiProviderConfig(): Promise<KimiProviderConfig> {
+	try {
+		return await invoke<KimiProviderConfig>("get_kimi_provider_config");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to read Kimi providers."),
+		);
 	}
 }
 

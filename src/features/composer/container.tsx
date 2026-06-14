@@ -774,7 +774,10 @@ export const WorkspaceComposerContainer = memo(
 		// Custom Codex providers (`codex:<id>`) collapse to "codex".
 		const slashProvider: AgentProvider = isCodexProvider(provider)
 			? "codex"
-			: provider === "cursor" || provider === "opencode" || provider === "mimo"
+			: provider === "cursor" ||
+					provider === "opencode" ||
+					provider === "mimo" ||
+					provider === "kimi"
 				? provider
 				: "claude";
 		// Prefer the repoId from a real workspace; on the start page there's no
