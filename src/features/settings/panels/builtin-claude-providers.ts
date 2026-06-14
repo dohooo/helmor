@@ -3,17 +3,11 @@ import catalog from "@/shared/provider-catalog.json";
 
 export type BuiltinClaudeProviderKey = string;
 
-export type BuiltinClaudeProviderModel = {
-	id: string;
-	label: string;
-};
-
 export type BuiltinClaudeProvider = {
 	key: BuiltinClaudeProviderKey;
 	label: string;
 	baseUrl: string;
 	apiKeyUrl: string;
-	models: readonly BuiltinClaudeProviderModel[];
 	icon: ProviderBrandIconKey;
 };
 

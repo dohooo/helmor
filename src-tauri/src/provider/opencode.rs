@@ -9,8 +9,10 @@ const NPM_CHAT: &str = "@ai-sdk/openai-compatible";
 const NPM_RESPONSES: &str = "@ai-sdk/openai";
 
 fn to_custom(p: OpencodeCustomProvider) -> CustomProvider {
-    // No baseURL → registry preset (apiKey-only); id is the models.dev key.
-    let is_preset = p.base_url.trim().is_empty();
+    // Registry presets (apiKey-only) never carry `npm`; manual providers always
+    // do. A freshly-added manual slot starts with an empty baseURL, so key off
+    // `npm` — else it'd be misread as a preset and lose its Base URL field.
+    let is_preset = p.npm.trim().is_empty();
     let api_style = if p.npm == NPM_RESPONSES {
         "responses"
     } else {
@@ -156,5 +158,21 @@ mod tests {
         };
         let custom = to_custom(oc);
         assert_eq!(custom.preset_key.as_deref(), Some("deepseek"));
+    }
+
+    #[test]
+    fn fresh_manual_block_without_base_url_stays_manual() {
+        // Regression: a just-added manual slot has no baseURL yet but does carry
+        // `npm`. It must stay manual so the card keeps showing the Base URL field.
+        let oc = OpencodeCustomProvider {
+            id: "a1b2c3d4".to_string(),
+            name: String::new(),
+            npm: NPM_CHAT.to_string(),
+            base_url: String::new(),
+            api_key: String::new(),
+            headers: Default::default(),
+            models: Vec::new(),
+        };
+        assert_eq!(to_custom(oc).preset_key, None);
     }
 }
