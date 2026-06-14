@@ -1271,4 +1271,43 @@ export const ZH_CN_MESSAGES = {
 		"⚡ 再次提速：切换工作区现在更轻快、更顺滑。",
 	"⚡ Major performance improvements across the app.":
 		"⚡ 全应用重大性能改进。",
+	"No models returned by the endpoint.": "端点未返回任何模型。",
+	"Fetching models…": "正在获取模型…",
+	"1 model": "1 个模型",
+	"{count} models": "{count} 个模型",
+	"Add models manually": "手动添加模型",
+	"Couldn't fetch models ({error}). Add them manually instead.":
+		"无法获取模型（{error}）。请改为手动添加。",
+	"Fetch models": "获取模型",
+	"Remove provider": "移除提供商",
+	"Display name (e.g. My Provider)": "显示名称（例如 My Provider）",
+	"Get key": "获取密钥",
+	"Base URL (https://…/anthropic)": "Base URL（https://…/anthropic）",
+	"Add provider": "添加提供商",
+	"Custom (Anthropic-compatible)": "自定义（Anthropic 兼容）",
+	"No models picked": "未选择模型",
+	"Remove {label}": "移除 {label}",
+	"+{count} more": "+{count} 个",
+	"{count} selected": "已选 {count} 个",
+	"Sync models — re-reads {path}": "同步模型 — 重新读取 {path}",
+	"Sync {name} models?": "同步 {name} 模型？",
+	"Re-reading your config restarts {name} and will stop 1 running chat.":
+		"重新读取配置会重启 {name}，并停止 1 个正在运行的聊天。",
+	"Re-reading your config restarts {name} and will stop {count} running chats.":
+		"重新读取配置会重启 {name}，并停止 {count} 个正在运行的聊天。",
+	"Routes all provider traffic — Claude Code, Codex, OpenCode, MiMo Code, and Cursor.":
+		"为所有提供商的流量做路由 — Claude Code、Codex、OpenCode、MiMo Code 和 Cursor。",
+	"Add third-party Anthropic-compatible models. They run alongside Claude Code's official models.":
+		"添加第三方 Anthropic 兼容模型。它们会与 Claude Code 的官方模型一同使用。",
+	"Add an OpenAI-compatible endpoint (Responses API only).":
+		"添加一个 OpenAI 兼容端点（仅支持 Responses API）。",
+	"Add a registry provider by API key, or an OpenAI-compatible endpoint. Saved to ~/.config/opencode.":
+		"通过 API key 添加注册表提供商，或添加 OpenAI 兼容端点。保存到 ~/.config/opencode。",
+	"Add a registry provider by API key, or an OpenAI-compatible endpoint. Saved to ~/.config/mimocode.":
+		"通过 API key 添加注册表提供商，或添加 OpenAI 兼容端点。保存到 ~/.config/mimocode。",
+	"Archive cleanup failed": "归档清理失败",
+	"Choose local project": "选择本地项目",
+	"No archived workspaces to clean up": "没有需要清理的已归档工作区",
+	Resets: "重置于",
+	"This will open an issue in {slug}.": "这将在 {slug} 中创建一个 issue。",
 } satisfies Record<string, string>;

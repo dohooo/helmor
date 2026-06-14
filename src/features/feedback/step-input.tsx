@@ -6,7 +6,7 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type { ExistingHelmorRepo } from "@/lib/api";
-import { I18nText } from "@/lib/i18n";
+import { I18nText, useI18n } from "@/lib/i18n";
 
 import { HELMOR_UPSTREAM_SLUG } from "./constants";
 
@@ -41,6 +41,7 @@ export function StepInput({
 	onQuickFix,
 	onOpenSettings,
 }: StepInputProps) {
+	const { f } = useI18n();
 	const hasInput = input.trim().length > 0;
 	const canCreateIssue = hasInput && githubConnected;
 	// Quick fix additionally waits for the existing-repo lookup so it
@@ -80,8 +81,10 @@ export function StepInput({
 				<p className="text-small text-muted-foreground">
 					{confirming ? (
 						<>
-							<I18nText source={"This will open an issue in"} />{" "}
-							{HELMOR_UPSTREAM_SLUG}. <I18nText source={"Confirm?"} />
+							{f("This will open an issue in {slug}.", {
+								slug: HELMOR_UPSTREAM_SLUG,
+							})}{" "}
+							<I18nText source={"Confirm?"} />
 						</>
 					) : null}
 				</p>

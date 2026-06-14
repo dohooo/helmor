@@ -15,7 +15,7 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "@/components/ui/popover";
-import { I18nText } from "@/lib/i18n";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 export type MultiSelectOption = { id: string; label: string };
@@ -63,6 +63,7 @@ export function ModelMultiSelect({
 	grouped?: boolean;
 	triggerClassName?: string;
 }) {
+	const { f } = useI18n();
 	// Render picks in user-saved order; popup list keeps catalog order.
 	const enabled = enabledIds.map(
 		(id) => available.find((m) => m.id === id) ?? { id, label: id },
@@ -144,7 +145,7 @@ export function ModelMultiSelect({
 										<span className="truncate">{model.label}</span>
 										<button
 											type="button"
-											aria-label={`Remove ${model.label}`}
+											aria-label={f("Remove {label}", { label: model.label })}
 											onClick={(event) => {
 												event.preventDefault();
 												event.stopPropagation();
@@ -158,7 +159,7 @@ export function ModelMultiSelect({
 								))}
 								{overflow > 0 ? (
 									<span className="px-1 text-mini text-muted-foreground">
-										+{overflow} <I18nText source={"more"} />
+										{f("+{count} more", { count: overflow })}
 									</span>
 								) : null}
 							</>
@@ -176,7 +177,7 @@ export function ModelMultiSelect({
 					{enabledIds.length > 0 ? (
 						<div className="flex items-center justify-between gap-2 px-2 pt-0.5 pb-1">
 							<span className="text-mini text-muted-foreground">
-								{enabledIds.length} <I18nText source={"selected"} />
+								{f("{count} selected", { count: enabledIds.length })}
 							</span>
 							<Button type="button" variant="ghost" size="xs" onClick={onClear}>
 								Unselect all
