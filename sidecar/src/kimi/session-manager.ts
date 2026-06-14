@@ -11,31 +11,11 @@
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
-import { ActiveTurnRegistry } from "./active-turn-registry.js";
-import type { SidecarEmitter } from "./emitter.js";
-import {
-	type JsonRpcNotification,
-	type JsonRpcRequest,
-	KimiAcpConnection,
-} from "./kimi-acp-connection.js";
-import type {
-	AcpNewSessionResult,
-	AcpPromptResult,
-	AcpReadTextFileParams,
-	AcpRequestPermissionParams,
-	AcpSessionNotification,
-	AcpWriteTextFileParams,
-} from "./kimi-acp-types.js";
-import {
-	buildPromptBlocks,
-	firstAnswerLabel,
-	isSelectionRequest,
-	toolContentText,
-	translateSessionUpdate,
-} from "./kimi-session-update.js";
-import { prependLinkedDirectoriesContext } from "./linked-directories-context.js";
-import { errorDetails, logger } from "./logger.js";
-import { listProviderModels } from "./model-catalog.js";
+import { ActiveTurnRegistry } from "../active-turn-registry.js";
+import type { SidecarEmitter } from "../emitter.js";
+import { prependLinkedDirectoriesContext } from "../linked-directories-context.js";
+import { errorDetails, logger } from "../logger.js";
+import { listProviderModels } from "../model-catalog.js";
 import type {
 	GenerateTitleOptions,
 	ListSlashCommandsParams,
@@ -44,12 +24,32 @@ import type {
 	SessionManager,
 	SlashCommandInfo,
 	UserInputResolution,
-} from "./session-manager.js";
+} from "../session-manager.js";
 import {
 	buildTitlePrompt,
 	parseTitleAndBranchWithDiagnostics,
 	TITLE_GENERATION_TIMEOUT_MS,
-} from "./title.js";
+} from "../title.js";
+import {
+	type JsonRpcNotification,
+	type JsonRpcRequest,
+	KimiAcpConnection,
+} from "./acp-connection.js";
+import type {
+	AcpNewSessionResult,
+	AcpPromptResult,
+	AcpReadTextFileParams,
+	AcpRequestPermissionParams,
+	AcpSessionNotification,
+	AcpWriteTextFileParams,
+} from "./acp-types.js";
+import {
+	buildPromptBlocks,
+	firstAnswerLabel,
+	isSelectionRequest,
+	toolContentText,
+	translateSessionUpdate,
+} from "./session-update.js";
 
 const KIMI_PERMISSION_PREFIX = "kimi-";
 const AUTH_REQUIRED_CODE = -32000;

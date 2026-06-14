@@ -7,11 +7,11 @@ import type { Dirent } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { logger } from "./logger.js";
+import { logger } from "../logger.js";
 import type {
 	ListSlashCommandsParams,
 	SlashCommandInfo,
-} from "./session-manager.js";
+} from "../session-manager.js";
 
 /// Symlink-loop cap.
 const MAX_DEPTH = 6;

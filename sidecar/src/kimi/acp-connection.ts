@@ -14,11 +14,8 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
-import {
-	ACP_PROTOCOL_VERSION,
-	type AcpInitializeResult,
-} from "./kimi-acp-types.js";
-import { errorDetails, logger } from "./logger.js";
+import { errorDetails, logger } from "../logger.js";
+import { ACP_PROTOCOL_VERSION, type AcpInitializeResult } from "./acp-types.js";
 
 interface PendingRequest {
 	method: string;

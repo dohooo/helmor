@@ -9,12 +9,11 @@ import {
 	type Run,
 	type SDKAgent,
 } from "@cursor/sdk";
-import { ActiveTurnRegistry } from "../active-turn-registry.js";
-import { scanCursorSkills } from "../cursor-skill-scanner.js";
-import type { SidecarEmitter } from "../emitter.js";
-import { parseImageRefs } from "../images.js";
-import { errorDetails, logger } from "../logger.js";
-import { listProviderModels } from "../model-catalog.js";
+import { ActiveTurnRegistry } from "../../active-turn-registry.js";
+import type { SidecarEmitter } from "../../emitter.js";
+import { parseImageRefs } from "../../images.js";
+import { errorDetails, logger } from "../../logger.js";
+import { listProviderModels } from "../../model-catalog.js";
 import type {
 	CursorModelParameter,
 	GenerateTitleOptions,
@@ -22,12 +21,13 @@ import type {
 	ProviderModelInfo,
 	SendMessageParams,
 	SlashCommandInfo,
-} from "../session-manager.js";
+} from "../../session-manager.js";
 import {
 	buildTitlePrompt,
 	parseTitleAndBranchWithDiagnostics,
 	TITLE_GENERATION_TIMEOUT_MS,
-} from "../title.js";
+} from "../../title.js";
+import { scanCursorSkills } from "../skill-scanner.js";
 import {
 	buildCursorMessage,
 	computeModelParameterValues,
