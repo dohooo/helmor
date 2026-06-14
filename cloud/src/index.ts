@@ -8,11 +8,14 @@
 // `Authorization` header through. Blueprint: cloudflare/claude-managed-agents.
 
 import { getSandbox, proxyToSandbox, type Sandbox } from "@cloudflare/sandbox";
+import { handleTeamRoute, lookupMemberId } from "./team";
 
 export { Sandbox } from "@cloudflare/sandbox";
 
-interface Env {
+export interface Env {
 	Sandbox: DurableObjectNamespace<Sandbox>;
+	/** Team registry: members / invites / teams / workspaces mirror (Phase 3). */
+	DB: D1Database;
 	/** Fixed sandbox id for Phase 0 (one team → one sandbox). */
 	HELMOR_SANDBOX_ID: string;
 	/** Companion port inside the container (matches HELMOR_SERVE_PORT). */
@@ -40,6 +43,17 @@ export default {
 		const proxied = await proxyToSandbox(request, env);
 		if (proxied) return proxied;
 
+		// Team registry (`/team/*`): D1-backed JSON routes. Returns null for any
+		// other path, which falls through to the container proxy below.
+		const url = new URL(request.url);
+		const teamResp = await handleTeamRoute(request, env, url);
+		if (teamResp) return teamResp;
+
+		// Derive the member identity for the proxied hop. On a bad token this
+		// short-circuits with 401 (we must not proxy an unknown caller).
+		const forwarded = await deriveForwardedRequest(request, env);
+		if (forwarded instanceof Response) return forwarded;
+
 		const port = Number(env.HELMOR_COMPANION_PORT ?? "8080");
 		const sandbox = getSandbox(
 			env.Sandbox,
@@ -59,15 +73,62 @@ export default {
 		}
 
 		// WebSocket upgrades (future-proofs the streaming transport).
-		if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
-			return sandbox.wsConnect(request, port);
+		if (forwarded.headers.get("Upgrade")?.toLowerCase() === "websocket") {
+			return sandbox.wsConnect(forwarded, port);
 		}
 
-		// Transparent HTTP proxy: method, path, headers (incl. the bearer
-		// token), body, and streaming responses pass straight through.
-		return sandbox.containerFetch(request, port);
+		// Transparent HTTP proxy: method, path, body, and streaming responses
+		// pass straight through; headers carry the derived member id + shared
+		// companion token (see `deriveForwardedRequest`).
+		return sandbox.containerFetch(forwarded, port);
 	},
 };
+
+/**
+ * Build the request forwarded to the companion, deriving member identity from
+ * the client's bearer (the invite token doubles as the member's capability
+ * token). Returns a 401 Response if the token is unknown.
+ *
+ * Security: the client-supplied `X-Helmor-Member-Id` is ALWAYS stripped, and
+ * the bearer is swapped to the shared `HELMOR_COMPANION_TOKEN` for the
+ * companion hop (the companion stamps the derived id onto the persisted
+ * message as `author_id`). Admin/local callers (shared token) carry no member.
+ */
+async function deriveForwardedRequest(
+	request: Request,
+	env: Env,
+): Promise<Request | Response> {
+	const bearer = readBearer(request);
+	let memberId: string | null = null;
+	if (bearer && bearer !== env.HELMOR_COMPANION_TOKEN) {
+		memberId = await lookupMemberId(env, bearer);
+		if (!memberId) {
+			return new Response(JSON.stringify({ code: "Unauthorized" }), {
+				status: 401,
+				headers: { "content-type": "application/json" },
+			});
+		}
+	}
+
+	const forwarded = new Request(request, {
+		headers: new Headers(request.headers),
+	});
+	forwarded.headers.delete("X-Helmor-Member-Id"); // never client-asserted
+	if (memberId) forwarded.headers.set("X-Helmor-Member-Id", memberId);
+	forwarded.headers.set(
+		"Authorization",
+		`Bearer ${env.HELMOR_COMPANION_TOKEN}`,
+	);
+	return forwarded;
+}
+
+/** Read the `Authorization: Bearer <token>` value, or null if absent. */
+function readBearer(request: Request): string | null {
+	const header = request.headers.get("Authorization");
+	if (!header) return null;
+	const match = /^Bearer\s+(.+)$/i.exec(header);
+	return match ? match[1] : null;
+}
 
 /** Ensure the companion server is up. Fast-path on a health hit; otherwise
  *  launch the boot script and poll until it answers (Xvfb + serve cold start). */

@@ -32,6 +32,15 @@ name = "Sandbox"
 tag = "v1"
 new_sqlite_classes = ["Sandbox"]
 
+# D1 control-plane registry (Phase 3 / action item ①): members / workspaces /
+# invites / teams. Additive — the Phase 0 stateless proxy is untouched. Schema
+# lives in ./schema.sql (apply: `wrangler d1 execute helmor-team --remote --file
+# ./schema.sql`).
+[[d1_databases]]
+binding = "DB"
+database_name = "helmor-team"
+database_id = "8eb39746-fda1-47e3-8006-2dab22175b53"
+
 [vars]
 # Fixed sandbox id for Phase 0 (B2 single-backend model). Phase 1 derives it
 # from the team / token.
