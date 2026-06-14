@@ -1,0 +1,11 @@
+{
+	"items": [
+		{
+			"text": "Kimi Code is now a built-in agent provider — sign in and configure it (custom providers supported) in Settings → Providers.",
+			"action": {
+				"label": "Open Providers",
+				"value": { "type": "openSettings", "section": "providers" }
+			}
+		}
+	]
+}
