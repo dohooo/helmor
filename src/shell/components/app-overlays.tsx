@@ -11,6 +11,7 @@ import type { SettingsSection } from "@/features/settings";
 import type { WorkspaceRow } from "@/lib/api";
 import type { AppSettings, WorkspaceRightSidebarMode } from "@/lib/settings";
 import { resolveTheme } from "@/lib/settings";
+import { ReconnectingBanner } from "./reconnecting-banner";
 
 type Props = {
 	theme: AppSettings["theme"];
@@ -41,6 +42,7 @@ export function AppOverlays({
 }: Props) {
 	return (
 		<>
+			<ReconnectingBanner />
 			<Toaster
 				theme={resolveTheme(theme)}
 				position="bottom-right"

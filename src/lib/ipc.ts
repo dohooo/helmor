@@ -279,6 +279,52 @@ export function subscribeCompanionAuth(listener: () => void): () => void {
 	};
 }
 
+// ---------------------------------------------------------------------------
+// Connection state (remote transports only)
+// ---------------------------------------------------------------------------
+//
+// A team / companion sandbox can go to sleep; the next request wakes it via a
+// cold start the Worker blocks on (~120s) while it restores from R2 and serves.
+// During that window the shared `/v1/stream` SSE channel ({@link runEventStream})
+// drops and keeps retrying. We surface that as a *loading* state — "reconnecting",
+// never an error and never a local fallback — so the shell can show a banner
+// instead of a frozen UI. Mirrors the {@link CompanionAuthState} store idiom.
+
+type CompanionConnectionState = "online" | "reconnecting";
+
+let companionConnectionState: CompanionConnectionState = "online";
+const companionConnectionListeners = new Set<() => void>();
+
+function setCompanionConnectionState(next: CompanionConnectionState): void {
+	if (companionConnectionState === next) return;
+	companionConnectionState = next;
+	for (const listener of companionConnectionListeners) listener();
+}
+
+/**
+ * Current transport connection state. Always `"online"` on a native (non-remote)
+ * transport — {@link runEventStream} only runs under a remote transport, so the
+ * desktop Tauri path never flips this.
+ */
+export function getCompanionConnectionState(): CompanionConnectionState {
+	return companionConnectionState;
+}
+
+/** Subscribe to connection-state changes (for `useSyncExternalStore`). */
+export function subscribeCompanionConnection(listener: () => void): () => void {
+	companionConnectionListeners.add(listener);
+	return () => {
+		companionConnectionListeners.delete(listener);
+	};
+}
+
+/** True when the request transport is a remote HTTP one (team mode or a
+ *  browser companion). Lets team-gated UI render only where reconnect can
+ *  actually happen; single-user / native desktop is always `false`. */
+export function isRemoteTransport(): boolean {
+	return REMOTE;
+}
+
 function jsonHeaders(): Record<string, string> {
 	return { "Content-Type": "application/json", ...authHeaders() };
 }
@@ -523,7 +569,24 @@ function ensureEventStream(): void {
 	void runEventStream();
 }
 
+// Reconnect backoff: full-jitter exponential, base 1s, ×2 per attempt, capped
+// at 30s. No attempt ceiling — a sleeping sandbox legitimately takes ~120s to
+// cold-start (the `fetch` itself blocks that long inside the Worker's
+// `ensureServe`), so giving up would be wrong. The backoff only paces the gap
+// *between* attempts; `attempt` resets to 0 the moment a stream (re)opens.
+const RECONNECT_BASE_MS = 1000;
+const RECONNECT_CEIL_MS = 30000;
+
+function reconnectDelayMs(attempt: number): number {
+	const windowMs = Math.min(
+		RECONNECT_CEIL_MS,
+		RECONNECT_BASE_MS * 2 ** attempt,
+	);
+	return Math.random() * windowMs;
+}
+
 async function runEventStream(): Promise<void> {
+	let attempt = 0;
 	for (;;) {
 		try {
 			const res = await fetch(`${baseUrl()}/v1/stream`, {
@@ -533,11 +596,22 @@ async function runEventStream(): Promise<void> {
 				if (res.status === 401 && COMPANION) setCompanionAuthState("unauthed");
 				throw new Error(`stream status ${res.status}`);
 			}
+			// Stream (re)opened: clear any reconnecting state and reset backoff.
+			setCompanionConnectionState("online");
+			attempt = 0;
+			// `pumpSse` returns on a clean close too, not only on throw — both are
+			// a "drop" that must trigger a reconnect.
 			await pumpSse(res.body, dispatchEvent);
 		} catch {
-			// Connection dropped (backgrounded tab, network blip) — reconnect.
+			// Connection dropped (sleeping sandbox cold start, backgrounded tab,
+			// network blip) — fall through to back off and reconnect.
 		}
-		await delay(2000);
+		// We only reach here after a drop (throw or clean return). Surface the
+		// loading state on the first drop — not on the initial healthy connect,
+		// which would flash the banner — then wait out the jittered backoff.
+		setCompanionConnectionState("reconnecting");
+		await delay(reconnectDelayMs(attempt));
+		attempt += 1;
 	}
 }
 
