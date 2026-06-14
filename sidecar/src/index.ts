@@ -269,7 +269,8 @@ function parseTitleAttempts(raw: unknown): TitleAttempt[] {
 				obj.provider === "codex" ||
 				obj.provider === "cursor" ||
 				obj.provider === "opencode" ||
-				obj.provider === "mimo"
+				obj.provider === "mimo" ||
+				obj.provider === "kimi"
 					? obj.provider
 					: null;
 			if (!provider) continue;
@@ -737,4 +738,15 @@ for await (const line of rl) {
 	}
 }
 
+// Parent (Rust) is gone. opencode/mimo run as DETACHED children whose live
+// SSE/HTTP connections keep our event loop alive, so falling off the end here
+// would NOT exit — we'd linger as an orphan (ppid=1) holding a `serve`, which
+// `reapOrphans` can't reap (the serve's parent, us, is still alive). Tear the
+// servers down and exit explicitly; a backstop timer guards a stalled shutdown.
 logger.info("stdin closed — sidecar exiting");
+setTimeout(() => process.exit(0), 3000);
+try {
+	await Promise.allSettled(Object.values(managers).map((m) => m.shutdown()));
+} finally {
+	process.exit(0);
+}
