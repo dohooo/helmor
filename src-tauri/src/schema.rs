@@ -711,6 +711,39 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         .execute_batch("UPDATE sessions SET model = 'default' WHERE model = 'opus-1m'")
         .ok();
 
+    // Migration: claude retired the floating `default` sentinel — every model
+    // is now pinned to its explicit wire id, and the app default is
+    // `claude-opus-4-8[1m]` (same Opus 4.8 1M the CLI's `default` resolved to,
+    // so historical users see no change). This block is the ONE place that
+    // knows about the legacy id; runtime code never special-cases it. Three
+    // storage surfaces, all idempotent:
+    //
+    //   1. sessions.model — the pinned model of past runs.
+    //   2. The "Models" settings (`default`/`review`/`pr` model) — stored as
+    //      either a `{provider,modelId}` JSON object or a bare legacy id.
+    //   3. The provider "enabled models" list (`claude_enabled_model_ids`,
+    //      a JSON array) — else the picker drops Opus / shows a stale chip.
+    //
+    // Scoped to claude: cursor's `default` is its real "Auto" id (and appears
+    // only as the quote-safe `cursor-default`), so it is never touched. The
+    // `"default"` substring is precise — no other claude id contains it.
+    connection
+        .execute_batch(
+            "UPDATE sessions SET model = 'claude-opus-4-8[1m]' \
+             WHERE model = 'default' \
+             AND (agent_type IS NULL OR agent_type = '' OR agent_type = 'claude');\n\
+             UPDATE settings \
+             SET value = REPLACE(value, '\"default\"', '\"claude-opus-4-8[1m]\"') \
+             WHERE key IN ('app.claude_enabled_model_ids', 'app.default_model_id', \
+                           'app.review_model_id', 'app.pr_model_id') \
+             AND value LIKE '%\"default\"%';\n\
+             UPDATE settings SET value = 'claude-opus-4-8[1m]' \
+             WHERE key IN ('app.default_model_id', 'app.review_model_id', \
+                           'app.pr_model_id') \
+             AND value = 'default';",
+        )
+        .ok();
+
     // Migration: drop the old OAuth identity rows. The device-flow login
     // is gone — auth is now per-repo via the bundled `gh` CLI's own
     // credential store. Idempotent: DELETE on absent rows is a no-op.
@@ -1552,6 +1585,94 @@ mod tests {
         assert_eq!(
             read("m2"),
             r#"{"type":"user_prompt","text":"{\"foo\":\"bar\"}"}"#
+        );
+    }
+
+    #[test]
+    fn migration_remaps_claude_default_sentinel_to_pinned_opus_id() {
+        let (connection, _dir) = open_test_db();
+        ensure_schema(&connection).unwrap();
+
+        connection
+            .execute_batch(
+                r#"
+                -- Claude session pinned to the legacy "default" sentinel.
+                INSERT INTO sessions (id, model, agent_type) VALUES
+                  ('claude-sess', 'default', 'claude');
+                -- Legacy claude session with no agent_type (infers to claude).
+                INSERT INTO sessions (id, model, agent_type) VALUES
+                  ('legacy-sess', 'default', NULL);
+                -- Cursor's "default" is its real Auto id — must stay put.
+                INSERT INTO sessions (id, model, agent_type) VALUES
+                  ('cursor-sess', 'default', 'cursor');
+                -- Provider "enabled models" list still holding the sentinel.
+                INSERT INTO settings (key, value) VALUES
+                  ('app.claude_enabled_model_ids',
+                   '["claude-fable-5[1m]","default","sonnet"]');
+                -- "Models" settings: new JSON form, legacy bare form, and a
+                -- cursor value that must survive ("cursor-default" has no
+                -- quote-adjacent "default" substring).
+                INSERT INTO settings (key, value) VALUES
+                  ('app.default_model_id',
+                   '{"provider":"claude","modelId":"default"}'),
+                  ('app.review_model_id', 'default'),
+                  ('app.pr_model_id',
+                   '{"provider":"cursor","modelId":"cursor-default"}');
+                "#,
+            )
+            .unwrap();
+
+        run_migrations(&connection).unwrap();
+
+        let model = |id: &str| -> String {
+            connection
+                .query_row("SELECT model FROM sessions WHERE id = ?1", [id], |r| {
+                    r.get(0)
+                })
+                .unwrap()
+        };
+        let setting = |key: &str| -> String {
+            connection
+                .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+                    r.get(0)
+                })
+                .unwrap()
+        };
+
+        assert_eq!(model("claude-sess"), "claude-opus-4-8[1m]");
+        assert_eq!(model("legacy-sess"), "claude-opus-4-8[1m]");
+        assert_eq!(model("cursor-sess"), "default", "cursor Auto untouched");
+
+        assert_eq!(
+            setting("app.claude_enabled_model_ids"),
+            r#"["claude-fable-5[1m]","claude-opus-4-8[1m]","sonnet"]"#
+        );
+        assert_eq!(
+            setting("app.default_model_id"),
+            r#"{"provider":"claude","modelId":"claude-opus-4-8[1m]"}"#,
+            "JSON modelId rewritten"
+        );
+        assert_eq!(
+            setting("app.review_model_id"),
+            "claude-opus-4-8[1m]",
+            "bare legacy id rewritten"
+        );
+        assert_eq!(
+            setting("app.pr_model_id"),
+            r#"{"provider":"cursor","modelId":"cursor-default"}"#,
+            "cursor model preference untouched"
+        );
+
+        // Idempotent: re-running is a no-op on already-migrated rows.
+        run_migrations(&connection).unwrap();
+        assert_eq!(model("claude-sess"), "claude-opus-4-8[1m]");
+        assert_eq!(
+            setting("app.claude_enabled_model_ids"),
+            r#"["claude-fable-5[1m]","claude-opus-4-8[1m]","sonnet"]"#
+        );
+        assert_eq!(
+            setting("app.default_model_id"),
+            r#"{"provider":"claude","modelId":"claude-opus-4-8[1m]"}"#
         );
     }
 

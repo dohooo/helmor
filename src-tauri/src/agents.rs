@@ -810,9 +810,12 @@ mod tests {
     #[test]
     fn resolve_model_infers_provider() {
         let _env = crate::testkit::TestEnv::new("resolve-model-infers-provider");
-        let claude = resolve_model("default", None);
+        // Hint-less ids that match no other provider infer to claude and pass
+        // through verbatim (legacy "default" rows are normalized by the DB
+        // migration, so resolve_model needs no special case for it).
+        let claude = resolve_model("claude-opus-4-8[1m]", None);
         assert_eq!(claude.provider, "claude");
-        assert_eq!(claude.cli_model, "default");
+        assert_eq!(claude.cli_model, "claude-opus-4-8[1m]");
 
         let codex = resolve_model("gpt-5.4", None);
         assert_eq!(codex.provider, "codex");

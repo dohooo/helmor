@@ -73,13 +73,14 @@ describe("terminal agent specs", () => {
 		expect(slow).not.toContain("service_tier");
 	});
 
-	it("never passes the 'default' placeholder as a real model", () => {
+	it("omits --model when no model id is given", () => {
 		for (const provider of ["claude", "codex"]) {
 			const cmd = buildTerminalBootCommand(provider, {
 				prompt: "hi",
-				modelId: "default",
+				modelId: "  ",
 			});
-			expect(cmd, provider).not.toContain("default");
+			expect(cmd, provider).not.toContain("--model");
+			expect(cmd, provider).not.toContain("-m ");
 		}
 	});
 
