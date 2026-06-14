@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.39.1
+
+### Patch Changes
+
+- [#848](https://github.com/dohooo/helmor/pull/848) [`eac697c`](https://github.com/dohooo/helmor/commit/eac697c62d0bbf434433421db09d63ac11f25893) Thanks [@natllian](https://github.com/natllian)! - Improve Claude model handling:
+  - The default Claude model is pinned to Opus 4.8 (1M context) so it can't silently switch to a different model when the bundled Claude CLI updates; existing sessions and settings keep the same model.
+  - Terminal mode is now limited to official Claude models — custom (BYOK) Claude models run in GUI mode instead, since the terminal can't carry their custom provider settings.
+
 ## 0.39.0
 
 ### Minor Changes
