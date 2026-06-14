@@ -11,6 +11,7 @@ pub enum ProviderFamily {
     Codex,
     Opencode,
     Mimo,
+    Kimi,
 }
 
 impl ProviderFamily {
@@ -20,6 +21,7 @@ impl ProviderFamily {
             "codex" => Some(Self::Codex),
             "opencode" => Some(Self::Opencode),
             "mimo" => Some(Self::Mimo),
+            "kimi" => Some(Self::Kimi),
             _ => None,
         }
     }

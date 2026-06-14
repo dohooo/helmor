@@ -10,7 +10,6 @@ use crate::error::CommandError;
 pub mod action_kind;
 mod catalog;
 pub(crate) mod claude_project_files;
-pub(crate) mod kimi_config;
 pub(crate) mod model_ref;
 mod persistence;
 pub mod provider_capabilities;

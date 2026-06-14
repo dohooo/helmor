@@ -46,18 +46,6 @@ async fn dispatch(
             to_value(settings)
         }
         // ============ generated: data + control commands ============
-        "add_kimi_catalog_provider" => {
-            crate::commands::kimi_provider_commands::add_kimi_catalog_provider(arg_string(&args, "providerId")?, arg_string(&args, "apiKey")?).await?;
-            Ok(Value::Null)
-        }
-        "add_kimi_custom_provider" => {
-            crate::commands::kimi_provider_commands::add_kimi_custom_provider(arg_json(&args, "input")?).await?;
-            Ok(Value::Null)
-        }
-        "add_kimi_registry" => {
-            crate::commands::kimi_provider_commands::add_kimi_registry(arg_string(&args, "url")?, arg_string(&args, "apiKey")?).await?;
-            Ok(Value::Null)
-        }
         "add_repository_from_local_path" => to_value(crate::commands::repository_commands::add_repository_from_local_path(arg_string(&args, "folderPath")?).await?),
         "backfill_forge_repo_bindings" => to_value(crate::commands::forge_commands::backfill_forge_repo_bindings(app.clone()).await?),
         "cache_forge_avatar" => to_value(crate::commands::forge_commands::cache_forge_avatar(arg_string(&args, "url")?).await?),
@@ -253,10 +241,6 @@ async fn dispatch(
         "read_query_cache" => to_value(crate::commands::system_commands::read_query_cache(arg_string(&args, "key")?).await?),
         "recheck_helmor_components" => to_value(crate::commands::system_commands::recheck_helmor_components().await?),
         "refresh_workspace_change_request" => to_value(crate::commands::forge_commands::refresh_workspace_change_request(arg_string(&args, "workspaceId")?, app.clone()).await?),
-        "remove_kimi_provider" => {
-            crate::commands::kimi_provider_commands::remove_kimi_provider(arg_string(&args, "providerId")?).await?;
-            Ok(Value::Null)
-        }
         "rename_session" => {
             crate::commands::session_commands::rename_session(arg_string(&args, "sessionId")?, arg_string(&args, "title")?).await?;
             Ok(Value::Null)

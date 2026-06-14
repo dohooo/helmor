@@ -17,12 +17,12 @@ import { AgentProxyPanel } from "./model-providers";
 import {
 	CLAUDE_ADAPTER,
 	CODEX_ADAPTER,
+	KIMI_CONFIG_ADAPTER,
 	MIMO_CONFIG_ADAPTER,
 	OPENCODE_CONFIG_ADAPTER,
 } from "./providers/adapters";
 import { CursorCardBody } from "./providers/cursor-card-body";
 import { CustomProvidersList } from "./providers/custom-providers-list";
-import { KimiCustomProvidersPanel } from "./providers/kimi-custom-providers";
 import { KimiModels } from "./providers/kimi-models";
 import {
 	SlugProviderModels,
@@ -133,9 +133,9 @@ export function ProvidersPanel() {
 					</ProviderConfigRow>
 					<ProviderConfigRow
 						label="Custom Providers"
-						description="Add a models.dev provider by API key, or a custom api.json registry. Saved to ~/.kimi-code/config.toml."
+						description={KIMI_CONFIG_ADAPTER.customProvidersDescription}
 					>
-						<KimiCustomProvidersPanel />
+						<CustomProvidersList adapter={KIMI_CONFIG_ADAPTER} />
 					</ProviderConfigRow>
 				</ProviderRow>
 				<ProviderRow

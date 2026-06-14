@@ -1,6 +1,6 @@
 // Pure provider-config domain types, shared across all four agent families.
 
-export type ProviderFamily = "claude" | "codex" | "opencode" | "mimo";
+export type ProviderFamily = "claude" | "codex" | "opencode" | "mimo" | "kimi";
 
 export type CustomProviderModel = {
 	slug: string;

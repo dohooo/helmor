@@ -1401,7 +1401,8 @@ export async function listMimoModels(
 }
 
 // ---------------------------------------------------------------------------
-// Kimi custom providers — manage `~/.kimi-code` via the `kimi provider` CLI.
+// Kimi — model picker config. Custom-provider CRUD goes through the unified
+// `provider` commands (family = "kimi"); this read feeds the "Models" row.
 // ---------------------------------------------------------------------------
 
 export type KimiProviderInfo = {
@@ -1416,76 +1417,13 @@ export type KimiProviderConfig = {
 	models: KimiModelInfo[];
 };
 
-/** `kimi provider list --json` → configured providers + models. */
+/** Parsed `~/.kimi-code/config.toml` → configured providers + models. */
 export async function getKimiProviderConfig(): Promise<KimiProviderConfig> {
 	try {
 		return await invoke<KimiProviderConfig>("get_kimi_provider_config");
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to read Kimi providers."),
-		);
-	}
-}
-
-export type KimiCustomModelInput = {
-	id: string;
-	/** Kimi requires a positive context window per model; backend defaults it. */
-	maxContextSize?: number;
-};
-export type KimiCustomProviderInput = {
-	id: string;
-	baseUrl: string;
-	apiKey: string;
-	/** `"openai"` (default) or `"anthropic"`. */
-	wireType: string;
-	models: KimiCustomModelInput[];
-};
-
-/** Add a raw OpenAI/Anthropic-compatible endpoint (base URL + key + model) —
- *  written straight into `~/.kimi-code/config.toml`. */
-export async function addKimiCustomProvider(
-	input: KimiCustomProviderInput,
-): Promise<void> {
-	try {
-		await invoke("add_kimi_custom_provider", { input });
-	} catch (error) {
-		throw new Error(describeInvokeError(error, "Unable to add Kimi provider."));
-	}
-}
-
-/** Import a models.dev catalog provider by id (`kimi provider catalog add`). */
-export async function addKimiCatalogProvider(
-	providerId: string,
-	apiKey: string,
-): Promise<void> {
-	try {
-		await invoke("add_kimi_catalog_provider", { providerId, apiKey });
-	} catch (error) {
-		throw new Error(describeInvokeError(error, "Unable to add Kimi provider."));
-	}
-}
-
-/** Import a custom registry (`api.json` URL) via `kimi provider add <url>`.
- *  The key is required — the CLI hard-fails without one. */
-export async function addKimiRegistry(
-	url: string,
-	apiKey: string,
-): Promise<void> {
-	try {
-		await invoke("add_kimi_registry", { url, apiKey });
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to import Kimi registry."),
-		);
-	}
-}
-
-export async function removeKimiProvider(providerId: string): Promise<void> {
-	try {
-		await invoke("remove_kimi_provider", { providerId });
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to remove Kimi provider."),
 		);
 	}
 }

@@ -1292,7 +1292,7 @@ fn cursor_login_ready() -> bool {
 /// Kimi "ready" = a non-empty credentials store under the kimi-code home
 /// (`$KIMI_CODE_HOME`, else `~/.kimi-code`), which `kimi login` populates.
 fn kimi_login_ready() -> bool {
-    let Some(home) = agents::kimi_config::kimi_code_home() else {
+    let Some(home) = crate::provider::kimi::kimi_code_home() else {
         return false;
     };
     std::fs::read_dir(home.join("credentials"))
