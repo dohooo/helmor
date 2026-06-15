@@ -16,8 +16,9 @@ import { useCloudClaudeIdentity } from "./use-cloud-claude-identity";
  * Cloud sessions run Claude under a dedicated subscription identity held
  * server-side (a per-member `ClaudeIdentity` Durable Object). This panel shows
  * whether that identity is set and offers a one-time `Authorize` flow that runs
- * `claude setup-token` locally and uploads only the long-lived OAuth token to
- * the control plane — the token never touches this UI.
+ * a local Claude OAuth (PKCE) flow — the Rust command opens the browser, awaits the
+ * loopback exchange, and uploads only the long-lived OAuth token to the control
+ * plane. The token never touches this UI.
  *
  * The Claude credential is self-contained, ~1-year, inference-only, so there is
  * no expiry / account / bricked state to render (unlike the Codex panel) — just
@@ -32,8 +33,15 @@ export function CloudClaudeIdentityPanel() {
 }
 
 function CloudClaudeIdentityPanelContent({ cfg }: { cfg: TeamConfig }) {
-	const { status, isLoading, isError, isAuthorizing, authorize, refetch } =
-		useCloudClaudeIdentity(cfg);
+	const {
+		status,
+		isLoading,
+		isError,
+		isAuthorizing,
+		error,
+		authorize,
+		refetch,
+	} = useCloudClaudeIdentity(cfg);
 
 	return (
 		<SettingsGroup>
@@ -50,6 +58,7 @@ function CloudClaudeIdentityPanelContent({ cfg }: { cfg: TeamConfig }) {
 						status={status}
 						isLoading={isLoading}
 						isError={isError}
+						error={error}
 					/>
 				}
 			>
@@ -86,7 +95,8 @@ function CloudClaudeIdentityPanelContent({ cfg }: { cfg: TeamConfig }) {
 	);
 }
 
-/** Button copy: first-time "Authorize Claude (cloud)", else "Re-authorize". */
+/** Button copy reflects the lifecycle: first-time "Authorize Claude (cloud)",
+ *  "Authorizing…" while the browser flow runs, else "Re-authorize". */
 function authorizeLabel(
 	status: CloudClaudeIdentityStatus | undefined,
 	isAuthorizing: boolean,
@@ -100,10 +110,12 @@ function CloudClaudeIdentityDescription({
 	status,
 	isLoading,
 	isError,
+	error,
 }: {
 	status: CloudClaudeIdentityStatus | undefined;
 	isLoading: boolean;
 	isError: boolean;
+	error: string | null;
 }) {
 	const intro =
 		"Cloud sessions authenticate Claude with a subscription identity held in the team control plane — never stored on this machine or in the container. Authorize once to bind it.";
@@ -138,6 +150,11 @@ function CloudClaudeIdentityDescription({
 		return (
 			<>
 				<div>{intro}</div>
+				{error ? (
+					<SettingsNotice tone="error" className="mt-2">
+						{error}
+					</SettingsNotice>
+				) : null}
 				<SettingsNotice tone="info" className="mt-2">
 					No cloud Claude identity yet — authorize to enable Claude on cloud
 					runs.
@@ -149,6 +166,11 @@ function CloudClaudeIdentityDescription({
 	return (
 		<>
 			<div>{intro}</div>
+			{error ? (
+				<SettingsNotice tone="error" className="mt-2">
+					{error}
+				</SettingsNotice>
+			) : null}
 			<SettingsNotice tone="ok" className="mt-2">
 				Cloud Claude is authorized and active.
 			</SettingsNotice>

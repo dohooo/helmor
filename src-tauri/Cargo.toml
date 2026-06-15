@@ -30,6 +30,17 @@ dunce = "1"
 # the Tauri IPC commands over HTTP/SSE so the same responsive frontend can be
 # served to a phone browser. See `src/companion/`.
 axum = "0.8"
+# Cloud-identity OAuth loopback (commands/cloud_identity/claude_oauth.rs) serves
+# the `/callback` on raw hyper instead of `axum::serve` because it needs an
+# explicit `max_headers(...)` on the HTTP/1 connection builder — cookie-bloated
+# loopback requests otherwise 431 before the handler runs, and `axum::serve`
+# exposes no builder configuration. HTTP/1 only (a browser OAuth callback is
+# h1), so we avoid the `http2`/`h2` pull-in. All three are already in the
+# dependency graph (transitive via axum); declaring them direct just makes the
+# http1 server builder reachable.
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
 tower-http = { version = "0.6", features = ["cors"] }
 tokio-stream = { version = "0.1", features = ["time"] }
 futures = "0.3"

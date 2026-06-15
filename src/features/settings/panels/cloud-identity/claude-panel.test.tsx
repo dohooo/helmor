@@ -1,4 +1,5 @@
 import { cleanup, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/test/render-with-providers";
 import { CloudClaudeIdentityPanel } from "./claude-panel";
@@ -55,7 +56,7 @@ describe("CloudClaudeIdentityPanel", () => {
 		teamApiMocks.getCloudClaudeIdentityStatus.mockResolvedValue({
 			hasToken: true,
 		});
-		apiMocks.authorizeCloudClaudeIdentity.mockResolvedValue({ changed: false });
+		apiMocks.authorizeCloudClaudeIdentity.mockResolvedValue(undefined);
 	});
 
 	afterEach(() => {
@@ -100,6 +101,59 @@ describe("CloudClaudeIdentityPanel", () => {
 		expect(
 			screen.getByRole("button", { name: /authorize claude \(cloud\)/i }),
 		).toBeInTheDocument();
+	});
+
+	it("authorizes in one click: forwards the resolved Worker URL + bearer", async () => {
+		const user = userEvent.setup();
+		teamApiMocks.getCloudClaudeIdentityStatus.mockResolvedValue({
+			hasToken: false,
+		});
+		renderWithProviders(<CloudClaudeIdentityPanel />);
+
+		await waitFor(() =>
+			expect(
+				screen.getByText(/no cloud claude identity yet/i),
+			).toBeInTheDocument(),
+		);
+
+		// One click → the local command runs the browser flow + upload. No paste
+		// step: the URL + bearer are forwarded straight to Rust.
+		await user.click(
+			screen.getByRole("button", { name: /authorize claude \(cloud\)/i }),
+		);
+		await waitFor(() =>
+			expect(apiMocks.authorizeCloudClaudeIdentity).toHaveBeenCalledWith(
+				CFG.url,
+				CFG.token,
+			),
+		);
+	});
+
+	it("surfaces an authorize error", async () => {
+		const user = userEvent.setup();
+		teamApiMocks.getCloudClaudeIdentityStatus.mockResolvedValue({
+			hasToken: false,
+		});
+		apiMocks.authorizeCloudClaudeIdentity.mockRejectedValueOnce(
+			new Error("Claude authorization failed."),
+		);
+		renderWithProviders(<CloudClaudeIdentityPanel />);
+
+		await waitFor(() =>
+			expect(
+				screen.getByText(/no cloud claude identity yet/i),
+			).toBeInTheDocument(),
+		);
+		await user.click(
+			screen.getByRole("button", { name: /authorize claude \(cloud\)/i }),
+		);
+
+		// The failure surfaces as a non-sensitive error notice in the panel.
+		await waitFor(() =>
+			expect(
+				screen.getByText(/claude authorization failed/i),
+			).toBeInTheDocument(),
+		);
 	});
 
 	it("renders nothing when team mode is off", () => {

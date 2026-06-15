@@ -6,10 +6,9 @@
 //!   * [`codex`] — captures the ChatGPT OAuth `refresh_token` + `id_token` via
 //!     an interactive `codex login` (loopback callback) and reads the throwaway
 //!     `auth.json`.
-//!   * [`claude`] — captures the long-lived `CLAUDE_CODE_OAUTH_TOKEN` via
-//!     `claude setup-token`. That command is an Ink raw-mode TUI that prints the
-//!     token to the terminal ONLY (it saves nothing to disk), so capture needs a
-//!     PTY, not piped stdio.
+//!   * [`claude_oauth`] — captures the long-lived `sk-ant-oat01…` inference
+//!     token by driving our OWN OAuth (PKCE) flow: a loopback `/callback` + a
+//!     code→token exchange. [`claude`] owns the Worker upload half.
 //!
 //! Each provider uploads over its OWN authenticated sibling route — Codex to
 //! `PUT {worker_url}/team/cloud-identity`, Claude to
@@ -27,6 +26,7 @@ use std::path::Path;
 use std::time::Duration;
 
 mod claude;
+mod claude_oauth;
 mod codex;
 
 // Re-export the Tauri commands so the existing registration paths
@@ -34,8 +34,10 @@ mod codex;
 // after the file→directory split. Globs (not named re-exports) are required:
 // `#[tauri::command]` generates sibling `__cmd__*` / `__tauri_command_name_*`
 // items in the defining module that `tauri::generate_handler!` resolves through
-// this path, so they must come along with the function.
-pub use claude::*;
+// this path, so they must come along with the function. `claude` itself exposes
+// no command (it is the upload half); the Claude OAuth command lives in
+// `claude_oauth`.
+pub use claude_oauth::*;
 pub use codex::*;
 
 /// Worker route the **Codex** broker PUTs the cloud identity through, appended to

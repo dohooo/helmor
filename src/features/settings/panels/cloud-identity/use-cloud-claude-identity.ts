@@ -13,20 +13,21 @@ import { getTeamConfig, type TeamConfig } from "@/lib/team-mode";
  * Reads the cloud Claude identity status from the team control plane (the
  * Worker's `GET /team/claude-identity` → the member's `ClaudeIdentity` Durable
  * Object `status()`), and drives the one-time `Authorize` flow through the local
- * Rust command (`authorize_cloud_claude_identity`), which runs `claude
- * setup-token` in a throwaway 0700 `CLAUDE_CONFIG_DIR`, captures the long-lived
- * `CLAUDE_CODE_OAUTH_TOKEN` over a PTY, and uploads it to that member's DO over
- * the team bearer.
+ * Rust command (`authorize_cloud_claude_identity`), which drives our own Claude
+ * OAuth (PKCE) flow (opening the browser + awaiting the loopback `/callback` +
+ * code→token exchange), captures the long-lived
+ * `CLAUDE_CODE_OAUTH_TOKEN`, and uploads it to that member's DO over the team
+ * bearer.
  *
  * The Claude credential is self-contained and inference-only (no refresh, no
- * JWT, no account claim — see claude-cloud-auth-VERIFIED.md §1.7), so unlike the
- * Codex hook there is NO expiry / bricked / account state to surface: status is
+ * JWT, no account claim — see claude-cloud-auth-VERIFIED.md §1.7), so status is
  * `{ hasToken }` only, and the token never reaches the frontend. After a
- * successful authorize we invalidate the status query so the panel re-fetches.
+ * successful authorize we invalidate the status query so the panel re-fetches
+ * the freshly-bound identity.
  *
- * `cfg` is the resolved team backend config — the caller (the outer panel) gates
- * on team mode and passes `null` in single-user mode, which disables the status
- * query so this hook stays inert outside team mode.
+ * `cfg` is the resolved team backend config — the caller (the outer panel)
+ * gates on team mode and passes `null` in single-user mode, which disables the
+ * status query so this hook stays inert outside team mode.
  */
 export interface UseCloudClaudeIdentity {
 	status: CloudClaudeIdentityStatus | undefined;
@@ -34,8 +35,10 @@ export interface UseCloudClaudeIdentity {
 	isLoading: boolean;
 	/** Status fetch failed (couldn't reach the control plane). */
 	isError: boolean;
-	/** The local `claude setup-token` → upload round-trip is running. */
+	/** The local OAuth (PKCE) → upload round-trip is running. */
 	isAuthorizing: boolean;
+	/** Human-readable error from the authorize round-trip, or `null`. */
+	error: string | null;
 	authorize: () => void;
 	refetch: () => void;
 }
@@ -96,6 +99,12 @@ export function useCloudClaudeIdentity(
 		isLoading: statusQuery.isLoading,
 		isError: statusQuery.isError,
 		isAuthorizing: authorizeMutation.isPending,
+		error:
+			authorizeMutation.error instanceof Error
+				? authorizeMutation.error.message
+				: authorizeMutation.error
+					? String(authorizeMutation.error)
+					: null,
 		authorize: () => authorizeMutation.mutate(),
 		refetch: () => {
 			void statusQuery.refetch();

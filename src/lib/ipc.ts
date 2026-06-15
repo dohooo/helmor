@@ -488,8 +488,9 @@ export function convertFileSrc(filePath: string, protocol?: string): string {
 /**
  * Commands that ALWAYS run on the local Tauri backend, even in team/companion
  * mode. `authorize_cloud_codex_identity` runs `codex login` and
- * `authorize_cloud_claude_identity` runs `claude setup-token` on the user's own
- * machine, capturing the subscription OAuth credential and uploading it to the
+ * `authorize_cloud_claude_identity` drives our own Claude OAuth (PKCE) flow on
+ * the user's own machine (browser sign-in + loopback callback), capturing the
+ * subscription OAuth credential and uploading it to the
  * Worker — they fundamentally cannot run inside the cloud container (no local
  * browser / CLI login there), so they must NOT be routed to the companion like
  * other invokes. Keep in sync with `LOCAL_ONLY` in

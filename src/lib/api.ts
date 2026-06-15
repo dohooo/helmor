@@ -1026,19 +1026,13 @@ export async function authorizeCloudCodexIdentity(
 // (`team-api.getCloudCodexIdentityStatus`, a plain fetch) — there is no Rust
 // status command / invoke wrapper.
 
-/** Result of authorizing a cloud Claude subscription identity. Carries NO token
- *  material — only the non-sensitive hygiene signal the panel renders. */
-export interface CloudClaudeAuthResult {
-	/** True when the Worker reports a token already existed and was replaced. */
-	changed: boolean;
-}
-
 /**
  * Authorize a Claude **subscription** identity for the team's cloud sandbox.
- * Runs `claude setup-token` locally against a throwaway 0700 `CLAUDE_CONFIG_DIR`,
- * captures the long-lived `CLAUDE_CODE_OAUTH_TOKEN` (an `sk-ant-…` inference-only
- * token) over a PTY, and PUTs it to the team Worker authenticated with the team
- * bearer. The token NEVER enters the webview — only `{changed}` is returned.
+ * Runs a local Claude OAuth (PKCE) flow: the Rust command opens the
+ * browser for consent, awaits the loopback callback + token exchange, captures
+ * the long-lived `CLAUDE_CODE_OAUTH_TOKEN` (an `sk-ant-…` inference-only token),
+ * and PUTs it to the team Worker authenticated with the team bearer. The token
+ * NEVER enters the webview — the command resolves to void on success.
  *
  * `workerUrl` + `teamToken` come from the frontend's saved team config
  * (`getTeamConfig()` in `src/lib/team-mode.ts`) — the Rust backend can't read
@@ -1048,14 +1042,11 @@ export interface CloudClaudeAuthResult {
 export async function authorizeCloudClaudeIdentity(
 	workerUrl: string,
 	teamToken: string,
-): Promise<CloudClaudeAuthResult> {
-	return await invoke<CloudClaudeAuthResult>(
-		"authorize_cloud_claude_identity",
-		{
-			workerUrl,
-			teamToken,
-		},
-	);
+): Promise<void> {
+	return await invoke<void>("authorize_cloud_claude_identity", {
+		workerUrl,
+		teamToken,
+	});
 }
 
 // Cloud Claude identity STATUS is read directly from the Worker by the frontend

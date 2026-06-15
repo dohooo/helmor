@@ -45,10 +45,11 @@ const BROWSER_UNSUPPORTED: &[&str] = &[
 /// team/companion mode (see `LOCAL_ONLY_INVOKES` in `src/lib/ipc.ts`). They route
 /// to the desktop host, never the container, so they are intentionally absent
 /// from the companion dispatch. `authorize_cloud_codex_identity` runs
-/// `codex login` and `authorize_cloud_claude_identity` runs `claude setup-token`,
-/// capturing the subscription OAuth credential on the user's own machine — which
-/// cannot happen in the cloud container — and uploading it to the Worker over the
-/// team-api route.
+/// `codex login` and `authorize_cloud_claude_identity` drives our own Claude
+/// OAuth (PKCE) flow — both capture the subscription OAuth credential on the
+/// user's own machine (a browser sign-in + loopback callback), which cannot
+/// happen in the cloud container — and upload it to the Worker over the team-api
+/// route.
 const LOCAL_ONLY: &[&str] = &[
     "authorize_cloud_codex_identity",
     "authorize_cloud_claude_identity",
