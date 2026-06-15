@@ -4,7 +4,7 @@ import {
 	parseWindowsRegistryPathValue,
 	prependPathSegment,
 } from "../src/agent-path-env.js";
-import { buildClaudeBaseEnv } from "../src/claude-session-manager.js";
+import { buildClaudeBaseEnv } from "../src/claude/session-manager.js";
 import { buildOpencodeEnv } from "../src/opencode-protocol/server.js";
 
 describe("agent PATH env helpers", () => {
