@@ -1155,7 +1155,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 
 			{/* Team roster + shared workspaces — renders only in team mode,
 			    so local single-user mode is unchanged. */}
-			<TeamSection />
+			<TeamSection onOpenWorkspace={onSelectWorkspace} />
 
 			<div className="mt-1 flex items-center justify-between px-3">
 				<h2 className="text-title font-medium text-muted-foreground">

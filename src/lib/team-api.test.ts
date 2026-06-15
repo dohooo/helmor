@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	acceptInvite,
+	createTeam,
 	InviteAcceptFailure,
 	listTeamMembers,
 	listTeamWorkspaces,
+	mintInvite,
 } from "./team-api";
 
 const IDENTITY = {
@@ -152,5 +154,96 @@ describe("listTeamMembers / listTeamWorkspaces", () => {
 			"https://team.example.com/team/members",
 			{ headers: {} },
 		);
+	});
+});
+
+describe("createTeam / mintInvite", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("POSTs to /team/bootstrap with an empty body + bearer and returns the team id", async () => {
+		const fetchMock = vi.fn().mockResolvedValue(
+			new Response(JSON.stringify({ ok: true, teamId: "team" }), {
+				status: 200,
+			}),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		const result = await createTeam({
+			url: "https://team.example.com/",
+			token: "hlm_admin",
+		});
+		expect(result).toEqual({ teamId: "team" });
+
+		const [url, init] = fetchMock.mock.calls[0];
+		expect(url).toBe("https://team.example.com/team/bootstrap");
+		expect(init.method).toBe("POST");
+		expect(init.headers).toMatchObject({ Authorization: "Bearer hlm_admin" });
+		expect(JSON.parse(init.body)).toEqual({});
+	});
+
+	it("throws an admin-token hint when bootstrap returns 401", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(new Response("", { status: 401 })),
+		);
+		await expect(
+			createTeam({ url: "https://team.example.com", token: "not-admin" }),
+		).rejects.toThrow(/not an admin token/i);
+	});
+
+	it("POSTs to /team/invite and returns the minted token + url", async () => {
+		const fetchMock = vi.fn().mockResolvedValue(
+			new Response(
+				JSON.stringify({
+					token: "inv-1",
+					url: "https://team.example.com/?invite=inv-1",
+				}),
+				{ status: 200 },
+			),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		const result = await mintInvite({
+			url: "https://team.example.com",
+			token: "hlm_admin",
+		});
+		expect(result).toEqual({
+			token: "inv-1",
+			url: "https://team.example.com/?invite=inv-1",
+		});
+
+		const [url, init] = fetchMock.mock.calls[0];
+		expect(url).toBe("https://team.example.com/team/invite");
+		expect(init.method).toBe("POST");
+		expect(init.headers).toMatchObject({ Authorization: "Bearer hlm_admin" });
+		expect(JSON.parse(init.body)).toEqual({});
+	});
+
+	it("forwards expiresAt when provided", async () => {
+		const fetchMock = vi.fn().mockResolvedValue(
+			new Response(JSON.stringify({ token: "t", url: "u" }), {
+				status: 200,
+			}),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		await mintInvite(
+			{ url: "https://team.example.com", token: "hlm_admin" },
+			{ expiresAt: "2030-01-01T00:00:00Z" },
+		);
+		expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+			expiresAt: "2030-01-01T00:00:00Z",
+		});
+	});
+
+	it("throws an admin-token hint when invite returns 401", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(new Response("", { status: 401 })),
+		);
+		await expect(
+			mintInvite({ url: "https://team.example.com", token: "not-admin" }),
+		).rejects.toThrow(/not an admin token/i);
 	});
 });

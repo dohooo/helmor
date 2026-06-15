@@ -135,6 +135,59 @@ function authHeaders(cfg: TeamConfig): HeadersInit {
 	return cfg.token ? { Authorization: `Bearer ${cfg.token}` } : {};
 }
 
+/**
+ * `POST /team/bootstrap` (admin) — create/upsert the single team row, returning
+ * its id. The route is admin-gated: a 401 means {@link TeamConfig.token} is not
+ * the companion/admin token (an ordinary invite/member token can't bootstrap).
+ * Mirrors {@link listTeamMembers}' error style (throw on non-2xx) so the panel
+ * surfaces the failure rather than silently no-op'ing.
+ */
+export async function createTeam(cfg: TeamConfig): Promise<{ teamId: string }> {
+	const base = normalizeUrl(cfg.url);
+	const res = await fetch(`${base}/team/bootstrap`, {
+		method: "POST",
+		headers: { ...authHeaders(cfg), "Content-Type": "application/json" },
+		body: JSON.stringify({}),
+	});
+	if (!res.ok) {
+		throw new Error(
+			res.status === 401
+				? "Not an admin token — use the companion/admin token to create a team (HTTP 401)."
+				: `Failed to create team (HTTP ${res.status})`,
+		);
+	}
+	const body = (await res.json()) as { teamId?: string };
+	return { teamId: body.teamId ?? "" };
+}
+
+/**
+ * `POST /team/invite` (admin) — mint a one-time invite token (which doubles as
+ * the member's bearer once accepted). Returns the bare `{token, url}` the Worker
+ * emits; the URL is a capability secret — render it only after an explicit user
+ * action, never log it. Admin-gated like {@link createTeam}: 401 ⇒ not an admin
+ * token.
+ */
+export async function mintInvite(
+	cfg: TeamConfig,
+	opts?: { expiresAt?: string },
+): Promise<{ token: string; url: string }> {
+	const base = normalizeUrl(cfg.url);
+	const res = await fetch(`${base}/team/invite`, {
+		method: "POST",
+		headers: { ...authHeaders(cfg), "Content-Type": "application/json" },
+		body: JSON.stringify(opts?.expiresAt ? { expiresAt: opts.expiresAt } : {}),
+	});
+	if (!res.ok) {
+		throw new Error(
+			res.status === 401
+				? "Not an admin token — use the companion/admin token to mint invites (HTTP 401)."
+				: `Failed to mint invite (HTTP ${res.status})`,
+		);
+	}
+	const body = (await res.json()) as { token?: string; url?: string };
+	return { token: body.token ?? "", url: body.url ?? "" };
+}
+
 /** `GET /team/members` — the roster rendered in the sidebar team section.
  * Throws on non-2xx / network failure so React Query surfaces an error
  * state rather than silently rendering an empty list. */

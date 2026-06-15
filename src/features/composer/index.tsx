@@ -57,9 +57,11 @@ import type {
 	ResolvedComposerInsertRequest,
 } from "@/lib/composer-insert";
 import { recordComposerRender } from "@/lib/dev-render-debug";
+import { isTeamModeActive } from "@/lib/team-mode";
 import { cn } from "@/lib/utils";
 import { clampEffort } from "@/lib/workspace-helpers";
 import { ComposerButton } from "./button";
+import { classifyCloudError } from "./cloud-error-cta";
 import { ContextBar } from "./context-bar";
 import { ContextUsageRing } from "./context-usage-ring";
 import { clearPersistedDraft } from "./draft-storage";
@@ -520,6 +522,20 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		window.dispatchEvent(
 			new CustomEvent(OPEN_SETTINGS_EVENT, {
 				detail: { section: "providers" },
+			}),
+		);
+	}, []);
+	// Cloud-error recovery CTA: in team mode, classify a cloud send-error so
+	// the error box can offer a one-click fix (re-auth / Team settings). Off
+	// team mode this is always null → the plain box renders, byte-identical to
+	// single-user today.
+	const cloudErrorCta = isTeamModeActive()
+		? classifyCloudError(sendError)
+		: null;
+	const handleOpenTeamSettings = useCallback(() => {
+		window.dispatchEvent(
+			new CustomEvent(OPEN_SETTINGS_EVENT, {
+				detail: { section: "team" },
 			}),
 		);
 	}, []);
@@ -1010,6 +1026,20 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						{sendError ? (
 							<div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-small text-muted-foreground">
 								{sendError}
+								{cloudErrorCta ? (
+									<div className="mt-2">
+										<Button
+											type="button"
+											variant="outline"
+											size="xs"
+											onClick={handleOpenTeamSettings}
+										>
+											{cloudErrorCta === "auth"
+												? "Re-authorize"
+												: "View Team settings"}
+										</Button>
+									</div>
+								) : null}
 							</div>
 						) : null}
 
@@ -1477,6 +1507,20 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				{sendError && hasPendingUserInput ? (
 					<div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-small text-muted-foreground">
 						{sendError}
+						{cloudErrorCta ? (
+							<div className="mt-2">
+								<Button
+									type="button"
+									variant="outline"
+									size="xs"
+									onClick={handleOpenTeamSettings}
+								>
+									{cloudErrorCta === "auth"
+										? "Re-authorize"
+										: "View Team settings"}
+								</Button>
+							</div>
+						) : null}
 					</div>
 				) : null}
 			</div>

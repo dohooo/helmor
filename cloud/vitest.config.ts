@@ -41,6 +41,9 @@ const workersOptions = {
 			// to answer it, so an unstubbed / stray call is loud.
 			CODEX_REFRESH_TOKEN_URL_OVERRIDE: "https://oauth.test.invalid/token",
 		},
+		// In-memory D1 for the team-registry tests (handleTeamClone's workspaces
+		// mirror write). The schema is applied per-suite (see team-clone.test.ts).
+		d1Databases: { DB: "helmor-team-test" },
 	},
 };
 

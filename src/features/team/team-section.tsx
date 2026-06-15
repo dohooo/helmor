@@ -26,13 +26,26 @@ import { getTeamConfig, isTeamModeActive } from "@/lib/team-mode";
  * local single-user path — sidebar consumers that render without a
  * QueryClientProvider (e.g. standalone sidebar tests) stay unaffected.
  */
-export function TeamSection() {
+export function TeamSection({
+	onOpenWorkspace,
+}: {
+	/** Open a shared workspace by its sandbox id (== `ws.id`). Threaded from
+	 *  the sidebar's `onSelectWorkspace`, so a click routes through the same
+	 *  selection path as the local workspace list. */
+	onOpenWorkspace?: (id: string) => void;
+}) {
 	const cfg = isTeamModeActive() ? getTeamConfig() : null;
 	if (!cfg) return null;
-	return <TeamSectionContent cfg={cfg} />;
+	return <TeamSectionContent cfg={cfg} onOpenWorkspace={onOpenWorkspace} />;
 }
 
-function TeamSectionContent({ cfg }: { cfg: TeamConfig }) {
+function TeamSectionContent({
+	cfg,
+	onOpenWorkspace,
+}: {
+	cfg: TeamConfig;
+	onOpenWorkspace?: (id: string) => void;
+}) {
 	const membersQuery = useQuery(teamMembersQueryOptions(cfg));
 	const workspacesQuery = useQuery(teamWorkspacesQueryOptions(cfg));
 
@@ -72,14 +85,24 @@ function TeamSectionContent({ cfg }: { cfg: TeamConfig }) {
 			{workspaces.length > 0 ? (
 				<ul className="mt-1 space-y-0.5">
 					{workspaces.map((ws) => (
-						<li
-							key={ws.id}
-							className="flex items-center gap-2 rounded-md px-1.5 py-1 text-ui text-foreground"
-						>
-							<span className="truncate">{ws.name}</span>
-							<span className="ml-auto shrink-0 text-mini text-muted-foreground/70">
-								{ws.status}
-							</span>
+						<li key={ws.id}>
+							<div
+								role="button"
+								tabIndex={0}
+								className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-ui text-foreground hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50"
+								onClick={() => onOpenWorkspace?.(ws.id)}
+								onKeyDown={(event) => {
+									if (event.key === "Enter" || event.key === " ") {
+										event.preventDefault();
+										onOpenWorkspace?.(ws.id);
+									}
+								}}
+							>
+								<span className="truncate">{ws.name}</span>
+								<span className="ml-auto shrink-0 text-mini text-muted-foreground/70">
+									{ws.status}
+								</span>
+							</div>
 						</li>
 					))}
 				</ul>

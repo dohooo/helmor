@@ -13,6 +13,7 @@ import {
 	lookupMemberId,
 	readBackupHandle,
 	readCloudIdentityMemberId,
+	TEAM_ID,
 	writeBackupHandle,
 } from "./team";
 
@@ -226,7 +227,7 @@ async function route(
 	// persistent volume, so the Worker clones via the Sandbox SDK into /workspace
 	// then registers through serve. A plain proxy would EROFS in the container.
 	if (url.pathname === "/rpc/clone_repository_from_url") {
-		return handleTeamClone(forwarded, sandbox, port);
+		return handleTeamClone(forwarded, sandbox, port, env);
 	}
 
 	// WebSocket upgrades (future-proofs the streaming transport).
@@ -280,10 +281,11 @@ function inferRepoName(url: string): string | null {
  * `AddRepositoryResponse`) is returned verbatim — the frontend sees the same
  * shape it gets from a local clone, so no client change is needed.
  */
-async function handleTeamClone(
+export async function handleTeamClone(
 	forwarded: Request,
 	sandbox: Sandbox,
 	port: number,
+	env: Env,
 ): Promise<Response> {
 	const jsonError = (status: number, message: string) =>
 		new Response(
@@ -378,6 +380,33 @@ async function handleTeamClone(
 			await sandbox.exec(`rm -rf '${targetDir}'`);
 		} catch {
 			// best-effort — surface the original register error regardless
+		}
+	} else {
+		// Registration succeeded: upsert the D1 workspaces mirror so the team
+		// sidebar (`GET /team/workspaces`) lists the new repo. Best-effort — the
+		// container DB is the source of truth; a mirror write failure must never
+		// break the clone (the response already represents success). Read the
+		// register response (AddRepositoryResponse, camelCase) off a clone so the
+		// body returned to the client stays intact.
+		try {
+			const reg = (await registerRes.clone().json()) as {
+				repositoryId?: string;
+				selectedWorkspaceId?: string | null;
+			};
+			const id = reg.selectedWorkspaceId ?? reg.repositoryId;
+			if (id) {
+				await env.DB.prepare(
+					`INSERT INTO workspaces (id, team_id, name, status, created_at)
+					 VALUES (?1, ?2, ?3, ?4, ?5)
+					 ON CONFLICT(id) DO UPDATE SET
+					   name   = excluded.name,
+					   status = excluded.status`,
+				)
+					.bind(id, TEAM_ID, name, "active", new Date().toISOString())
+					.run();
+			}
+		} catch {
+			// best-effort mirror — never break the clone on a registry write error
 		}
 	}
 	return registerRes;

@@ -13,7 +13,7 @@
 import { type DirectoryBackup, getSandbox } from "@cloudflare/sandbox";
 import type { Env } from "./index";
 
-const TEAM_ID = "team-0";
+export const TEAM_ID = "team-0";
 
 type Caller = "admin" | "member" | "unauthorized";
 
