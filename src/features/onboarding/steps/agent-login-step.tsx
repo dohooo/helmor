@@ -91,8 +91,8 @@ export function AgentLoginStep({
 						Log in to your agents
 					</h2>
 					<p className="mt-2 max-w-xl text-body leading-6 text-muted-foreground">
-						Helmor uses your local Claude Code and Codex login sessions. You can
-						log in now, or continue and log in later.
+						Helmor uses your local login sessions. You can log in now, or
+						continue and log in later.
 					</p>
 
 					{/* Compact rows (h-12) so all four tiles + Back/Next stay inside

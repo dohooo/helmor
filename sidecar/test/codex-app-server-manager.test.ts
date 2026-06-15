@@ -49,6 +49,10 @@ const codexConfigState = {
 		path: "/fake/.codex/config.toml",
 	},
 	calls: 0,
+	// Same global-mock-leak guard as gitAccessState: the stub delegates to the
+	// real module unless a codex test is actively driving, so config.test.ts
+	// (which exercises the real exports) passes no matter the file order.
+	driving: false,
 };
 
 class MockCodexAppServer {
@@ -162,8 +166,17 @@ class MockCodexAppServer {
 	}
 }
 
-mock.module("../src/codex-app-server.js", () => ({
+// Capture real fns first (consts survive mock.module's in-place namespace
+// rewrite) and pass them through, overriding only CodexAppServer — otherwise
+// codex-app-server.test.ts imports this stub and can't find buildCodexEnv /
+// buildCodexAppServerArgs (load order surfaces this on Windows CI).
+const realCodexAppServer = await import("../src/codex/app-server.js");
+const realBuildCodexAppServerArgs = realCodexAppServer.buildCodexAppServerArgs;
+const realBuildCodexEnv = realCodexAppServer.buildCodexEnv;
+mock.module("../src/codex/app-server.js", () => ({
 	CodexAppServer: MockCodexAppServer,
+	buildCodexAppServerArgs: realBuildCodexAppServerArgs,
+	buildCodexEnv: realBuildCodexEnv,
 }));
 
 // `mock.module` is global to the whole `bun test` process and is NOT undone by
@@ -182,22 +195,39 @@ mock.module("../src/git-access.js", () => ({
 			: realResolveGitAccessDirectories(cwd),
 }));
 
-mock.module("../src/codex-config.js", () => ({
-	ensureCodexGoalsFeatureEnabled: async () => {
+// Capture real fns into consts (NOT the namespace — mock.module mutates the
+// namespace in place, see the gitAccess note above).
+const realConfigModule = await import("../src/codex/config.js");
+const realEnsureCodexGoalsFeatureEnabled =
+	realConfigModule.ensureCodexGoalsFeatureEnabled;
+const realCodexConfigPath = realConfigModule.codexConfigPath;
+const realInjectGoalsFeature = realConfigModule.injectGoalsFeature;
+mock.module("../src/codex/config.js", () => ({
+	injectGoalsFeature: realInjectGoalsFeature,
+	ensureCodexGoalsFeatureEnabled: async (
+		...args: Parameters<typeof realEnsureCodexGoalsFeatureEnabled>
+	) => {
+		if (!codexConfigState.driving) {
+			return realEnsureCodexGoalsFeatureEnabled(...args);
+		}
 		codexConfigState.calls += 1;
 		return { ...codexConfigState.result };
 	},
-	codexConfigPath: () => codexConfigState.result.path,
+	codexConfigPath: () =>
+		codexConfigState.driving
+			? codexConfigState.result.path
+			: realCodexConfigPath(),
 }));
 
 const { CodexAppServerManager } = await import(
-	"../src/codex-app-server-manager.js"
+	"../src/codex/app-server-manager.js"
 );
 
 // Release control so the still-installed stub delegates to the real module for
 // any test file that runs after us.
 afterAll(() => {
 	gitAccessState.driving = false;
+	codexConfigState.driving = false;
 });
 
 describe("CodexAppServerManager", () => {
@@ -215,6 +245,7 @@ describe("CodexAppServerManager", () => {
 		serverState.responses = [];
 		gitAccessState.directories = [];
 		gitAccessState.driving = true;
+		codexConfigState.driving = true;
 		codexConfigState.result = {
 			kind: "alreadyEnabled",
 			path: "/fake/.codex/config.toml",
@@ -1119,7 +1150,7 @@ describe("CodexAppServerManager", () => {
 describe("parseGoalCommand", () => {
 	test("returns null for non-/goal prompts", async () => {
 		const { parseGoalCommand } = await import(
-			"../src/codex-app-server-manager.js"
+			"../src/codex/app-server-manager.js"
 		);
 		expect(parseGoalCommand("hello world")).toBeNull();
 		expect(parseGoalCommand("/compact")).toBeNull();
@@ -1128,7 +1159,7 @@ describe("parseGoalCommand", () => {
 
 	test("returns null for bare /goal so the agent handles it", async () => {
 		const { parseGoalCommand } = await import(
-			"../src/codex-app-server-manager.js"
+			"../src/codex/app-server-manager.js"
 		);
 		expect(parseGoalCommand("/goal")).toBeNull();
 		expect(parseGoalCommand("  /goal  ")).toBeNull();
@@ -1136,7 +1167,7 @@ describe("parseGoalCommand", () => {
 
 	test("treats free-form text as the objective", async () => {
 		const { parseGoalCommand } = await import(
-			"../src/codex-app-server-manager.js"
+			"../src/codex/app-server-manager.js"
 		);
 		expect(parseGoalCommand("/goal improve benchmark coverage")).toEqual({
 			kind: "set",
@@ -1146,7 +1177,7 @@ describe("parseGoalCommand", () => {
 
 	test("recognises /goal resume as the resume kind", async () => {
 		const { parseGoalCommand } = await import(
-			"../src/codex-app-server-manager.js"
+			"../src/codex/app-server-manager.js"
 		);
 		expect(parseGoalCommand("/goal resume")).toEqual({ kind: "resume" });
 	});
@@ -1160,7 +1191,7 @@ describe("parseGoalCommand", () => {
 	// echoed as a chat user prompt.
 	test("does NOT recognise /goal pause or /goal clear (handled by container intercept)", async () => {
 		const { parseGoalCommand } = await import(
-			"../src/codex-app-server-manager.js"
+			"../src/codex/app-server-manager.js"
 		);
 		// Sidecar treats them as plain objectives if they ever arrive here.
 		expect(parseGoalCommand("/goal pause")).toEqual({
@@ -1189,6 +1220,7 @@ describe("CodexAppServerManager goal pre-flight", () => {
 		serverState.responses = [];
 		gitAccessState.directories = [];
 		gitAccessState.driving = true;
+		codexConfigState.driving = true;
 		codexConfigState.result = {
 			kind: "alreadyEnabled",
 			path: "/fake/.codex/config.toml",

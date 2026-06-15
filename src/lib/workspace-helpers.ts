@@ -764,6 +764,7 @@ function agentTypeToProvider(agentType?: string | null): AgentProvider | null {
 		case "codex":
 		case "cursor":
 		case "opencode":
+		case "kimi":
 		case "mimo":
 			return agentType;
 		default:

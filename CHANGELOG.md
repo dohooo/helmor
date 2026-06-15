@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.40.0
+
+### Minor Changes
+
+- [#797](https://github.com/dohooo/helmor/pull/797) [`e94d1c4`](https://github.com/dohooo/helmor/commit/e94d1c412255b74968d3ab423cab2b9969399b8c) Thanks [@dohooo](https://github.com/dohooo)! - Add Kimi Code as a new agent provider.
+
+  - Run Kimi models over the Agent Client Protocol with streaming responses, tool calls, file diffs, plans, permission prompts, and slash commands
+  - Sign in with `kimi login` from Settings → Providers
+  - Manage Kimi's third-party model providers — pick from a curated catalog or add a custom OpenAI-compatible endpoint or registry — and choose which models appear in the composer's picker
+
+### Patch Changes
+
+- [#854](https://github.com/dohooo/helmor/pull/854) [`62e6a6a`](https://github.com/dohooo/helmor/commit/62e6a6a042da2378d4f677a42cf02853ec06ee86) Thanks [@natllian](https://github.com/natllian)! - Fix Cursor responses briefly rendering their text twice while a turn is still streaming; the duplicate text now collapses to a single copy as it streams.
+
+- [#852](https://github.com/dohooo/helmor/pull/852) [`761599d`](https://github.com/dohooo/helmor/commit/761599da4c3a08180df157106cd27b996732db2f) Thanks [@natllian](https://github.com/natllian)! - Fix a sidecar process leak and refine provider behavior.
+
+  - The sidecar now tears down its provider servers and exits when the parent process goes away, fixing leaked OpenCode `serve` processes (and their memory) when an app instance dies.
+  - Kimi now generates real, model-written session titles and branch names (preferring the configured custom model), consistent with the other agents.
+  - OpenCode and MiMo show "Ready" only after an actual sign-in, so the Login action stays available when only environment variables or custom providers are configured.
+
 ## 0.39.1
 
 ### Patch Changes

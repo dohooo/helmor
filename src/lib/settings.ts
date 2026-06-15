@@ -157,6 +157,16 @@ export type OpencodeProviderSettings = {
 	cacheVersion?: number;
 };
 
+/** One Kimi model discovered via `kimi provider list`. `id` is the bare alias. */
+export type KimiCachedModel = { id: string; label: string };
+
+export type KimiProviderSettings = {
+	// `null` until the first sync; `[]` means "no Kimi providers configured".
+	cachedModels: KimiCachedModel[] | null;
+	// `null` = show all cached in the picker; explicit list = that subset.
+	enabledModelIds: string[] | null;
+};
+
 export type AgentProxySettings = {
 	mode: "none" | "system" | "custom";
 	customUrl: string;
@@ -328,6 +338,7 @@ export type AppSettings = {
 	codexEnabledModelIds: string[] | null;
 	cursorProvider: CursorProviderSettings;
 	opencodeProvider: OpencodeProviderSettings;
+	kimiProvider: KimiProviderSettings;
 	/** MiMo Code (opencode-protocol fork) — same settings shape. */
 	mimoProvider: OpencodeProviderSettings;
 	agentProxy: AgentProxySettings;
@@ -432,6 +443,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	opencodeProvider: {
 		status: "unavailable",
 		connected: [],
+		cachedModels: null,
+		enabledModelIds: null,
+	},
+	kimiProvider: {
 		cachedModels: null,
 		enabledModelIds: null,
 	},
@@ -608,6 +623,7 @@ const SETTINGS_KEY_MAP: Record<
 	codexEnabledModelIds: "app.codex_enabled_model_ids",
 	cursorProvider: "app.cursor_provider",
 	opencodeProvider: "app.opencode_provider",
+	kimiProvider: "app.kimi_provider",
 	mimoProvider: "app.mimo_provider",
 	agentProxy: "app.agent_proxy",
 	localLlm: "app.local_llm",
@@ -1006,6 +1022,36 @@ function parseStringArray(value: unknown): string[] {
 	return value.filter((item): item is string => typeof item === "string");
 }
 
+function parseKimiProviderSettings(
+	raw: string | undefined,
+): KimiProviderSettings {
+	if (!raw) return DEFAULT_SETTINGS.kimiProvider;
+	try {
+		const parsed = JSON.parse(raw) as Record<string, unknown>;
+		return {
+			cachedModels: parseKimiCachedModels(parsed.cachedModels),
+			enabledModelIds: parseEnabledModelIds(parsed.enabledModelIds),
+		};
+	} catch {
+		return DEFAULT_SETTINGS.kimiProvider;
+	}
+}
+
+function parseKimiCachedModels(value: unknown): KimiCachedModel[] | null {
+	if (!Array.isArray(value)) return null;
+	const models: KimiCachedModel[] = [];
+	for (const entry of value) {
+		if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+		const obj = entry as Record<string, unknown>;
+		if (typeof obj.id !== "string") continue;
+		models.push({
+			id: obj.id,
+			label: typeof obj.label === "string" ? obj.label : obj.id,
+		});
+	}
+	return models;
+}
+
 function parseOpencodeCachedModels(
 	value: unknown,
 ): OpencodeCachedModel[] | null {
@@ -1352,6 +1398,9 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.mimoProvider],
 				DEFAULT_SETTINGS.mimoProvider,
 			),
+			kimiProvider: parseKimiProviderSettings(
+				raw[SETTINGS_KEY_MAP.kimiProvider],
+			),
 			agentProxy: parseAgentProxySettings(raw[SETTINGS_KEY_MAP.agentProxy]),
 			localLlm: parseLocalLlmSettings(raw[SETTINGS_KEY_MAP.localLlm]),
 			inboxSourceConfig: parseInboxSourceConfig(
@@ -1401,6 +1450,7 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 				key === "codexEnabledModelIds" ||
 				key === "cursorProvider" ||
 				key === "opencodeProvider" ||
+				key === "kimiProvider" ||
 				key === "mimoProvider" ||
 				key === "agentProxy" ||
 				key === "localLlm" ||

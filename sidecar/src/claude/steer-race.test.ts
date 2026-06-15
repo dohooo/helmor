@@ -16,9 +16,9 @@
 
 import { describe, expect, test } from "bun:test";
 import type { Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import { ClaudeSessionManager } from "./claude-session-manager.js";
-import type { SidecarEmitter } from "./emitter.js";
-import { createPushable, type Pushable } from "./pushable-iterable.js";
+import type { SidecarEmitter } from "../emitter.js";
+import { createPushable, type Pushable } from "../pushable-iterable.js";
+import { ClaudeSessionManager } from "./session-manager.js";
 
 /** Build the minimal SidecarEmitter that `steer()` touches — just
  *  `passthrough`. All other methods fail loudly so a test drift that

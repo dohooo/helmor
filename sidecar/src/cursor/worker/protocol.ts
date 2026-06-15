@@ -4,7 +4,7 @@
  * Bun's HTTP/2 client throws `NGHTTP2_FRAME_SIZE_ERROR` on the larger frames
  * Cursor sends inside a git repo, which silently breaks every tool call. Node
  * does not have this bug, so we run the SDK in a Node child process and bridge
- * it over stdin/stdout JSON Lines. See `cursor-session-manager.ts` (proxy) and
+ * it over stdin/stdout JSON Lines. See `cursor/session-manager.ts` (proxy) and
  * `worker.ts` (Node entry). */
 
 import type {
@@ -13,7 +13,7 @@ import type {
 	ProviderModelInfo,
 	SendMessageParams,
 	SlashCommandInfo,
-} from "../session-manager.js";
+} from "../../session-manager.js";
 
 // --- proxy → worker -------------------------------------------------------
 

@@ -3,6 +3,7 @@ import { X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
 	ClaudeColorIcon,
+	KimiIcon,
 	MiMoCodeIcon,
 	OpenAIIcon,
 	OpenCodeIcon,
@@ -22,6 +23,8 @@ function providerIcon(provider: AgentLoginProvider) {
 	if (provider === "claude") return <ClaudeColorIcon className={className} />;
 	if (provider === "opencode")
 		return <OpenCodeIcon className={`${className} text-foreground`} />;
+	if (provider === "kimi")
+		return <KimiIcon className={`${className} text-foreground`} />;
 	if (provider === "mimo")
 		return <MiMoCodeIcon className={`${className} text-foreground`} />;
 	return <OpenAIIcon className={`${className} text-foreground`} />;

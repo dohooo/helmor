@@ -13,8 +13,8 @@
  * `codex app-server` child process.
  */
 
-import type { CodexAppServer } from "./codex-app-server.js";
-import { errorDetails, logger } from "./logger.js";
+import { errorDetails, logger } from "../logger.js";
+import type { CodexAppServer } from "./app-server.js";
 
 export interface SubAgentMeta {
 	threadId: string;

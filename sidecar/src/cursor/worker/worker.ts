@@ -7,8 +7,8 @@
  * logger) goes to stderr, which the proxy drains into the sidecar log. */
 
 import { createInterface } from "node:readline";
-import { applyAgentProxyToProcessEnv } from "../agent-proxy.js";
-import type { SidecarEmitter } from "../emitter.js";
+import { applyAgentProxyToProcessEnv } from "../../agent-proxy.js";
+import type { SidecarEmitter } from "../../emitter.js";
 import { CursorCore } from "./cursor-core.js";
 import { isAuthError, isRetryableCursorError } from "./cursor-helpers.js";
 import type { EmitMsg, FromWorker, ToWorker } from "./protocol.js";

@@ -14,18 +14,20 @@ import {
 	type SDKMessage,
 	type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { isAbortError, isQueryClosedTransient } from "./abort.js";
-import { ActiveTurnRegistry } from "./active-turn-registry.js";
-import { buildAgentProxyEnv } from "./agent-proxy.js";
-import { loadProjectMcpServers } from "./claude-project-mcp.js";
-import { buildClaudeRichMeta, buildClaudeStoredMeta } from "./context-usage.js";
-import type { SidecarEmitter, UserInputPayload } from "./emitter.js";
-import { readImageWithResize } from "./image-resize.js";
-import { parseImageRefs } from "./images.js";
-import { prependLinkedDirectoriesContext } from "./linked-directories-context.js";
-import { errorDetails, logger } from "./logger.js";
-import { listProviderModels, modelSupportsFastMode } from "./model-catalog.js";
-import { createPushable, type Pushable } from "./pushable-iterable.js";
+import { isAbortError, isQueryClosedTransient } from "../abort.js";
+import { ActiveTurnRegistry } from "../active-turn-registry.js";
+import { buildAgentProxyEnv } from "../agent-proxy.js";
+import {
+	buildClaudeRichMeta,
+	buildClaudeStoredMeta,
+} from "../context-usage.js";
+import type { SidecarEmitter, UserInputPayload } from "../emitter.js";
+import { readImageWithResize } from "../image-resize.js";
+import { parseImageRefs } from "../images.js";
+import { prependLinkedDirectoriesContext } from "../linked-directories-context.js";
+import { errorDetails, logger } from "../logger.js";
+import { listProviderModels, modelSupportsFastMode } from "../model-catalog.js";
+import { createPushable, type Pushable } from "../pushable-iterable.js";
 import type {
 	GenerateTitleOptions,
 	GetContextUsageParams,
@@ -35,12 +37,13 @@ import type {
 	SessionManager,
 	SlashCommandInfo,
 	UserInputResolution,
-} from "./session-manager.js";
+} from "../session-manager.js";
 import {
 	buildTitlePrompt,
 	parseTitleAndBranchWithDiagnostics,
 	TITLE_GENERATION_TIMEOUT_MS,
-} from "./title.js";
+} from "../title.js";
+import { loadProjectMcpServers } from "./project-mcp.js";
 
 /**
  * Hard upper bound on how long `listSlashCommands` will wait for the SDK's
@@ -64,7 +67,7 @@ const CONTEXT_USAGE_TIMEOUT_MS = 30_000;
  * Resolve the Claude Code native binary for `pathToClaudeCodeExecutable`.
  * Prefers `HELMOR_CLAUDE_CODE_BIN_PATH` (release), then the platform
  * sub-package (dev/test); falls back to the wrapper bin for `--omit=optional`.
- * Mirrors the codex resolver in `codex-app-server-manager.ts`.
+ * Mirrors the codex resolver in `codex/app-server-manager.ts`.
  *
  * MUST NOT throw: this runs at module load (before the ready signal), and
  * inside a `bun build --compile` binary `require.resolve` always fails —

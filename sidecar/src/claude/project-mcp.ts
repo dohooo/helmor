@@ -16,7 +16,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { McpServerConfig } from "@anthropic-ai/claude-agent-sdk";
 
-import { errorDetails, logger } from "./logger.js";
+import { errorDetails, logger } from "../logger.js";
 
 export type ProjectMcpServers = Record<string, McpServerConfig>;
 
