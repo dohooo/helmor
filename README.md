@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/dohooo/helmor/releases"><img src="https://img.shields.io/github/v/release/dohooo/helmor?style=flat&label=Release&color=0A7CFF" alt="Latest release" /></a>
   <a href="https://discord.gg/ukyyuNfnDp"><img src="https://img.shields.io/discord/1499667625267957920?style=flat&logo=discord&label=Discord&color=5865F2" alt="Discord" /></a>
-  <a href="docs/user/README.md"><img src="https://img.shields.io/badge/Docs-User_Guide-8A2BE2" alt="User docs" /></a>
+  <a href="https://docs.helmor.ai"><img src="https://app.dosu.dev/api/images/badge?h=20&message=Docs" alt="Docs" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-3DA639" alt="License: Apache 2.0" /></a>
 </p>
 
@@ -20,94 +20,90 @@
   <img src="src/assets/helmor-screenshot-light.png" alt="Helmor screenshot" width="100%" />
 </picture>
 
-> AI made coding faster. Helmor is about finishing the rest of the loop —
+> AI made coding faster.
+>
+> Helmor is about finishing the rest of the loop —
 > orchestrating, reviewing, testing, merging, and actually shipping software.
 
-Helmor runs many coding agents in parallel, each inside its own isolated git
-workspace, and gives you one place to steer them all: conversation, diffs, a
-real editor, terminals, run scripts, and one-click PR actions. Everything is
-stored in a local SQLite database on your machine.
+Helmor runs many coding agents in parallel, each in its own isolated git
+workspace — conversation, diffs, editor, terminals, and one-click PR actions
+in one window. Everything lives locally under `~/helmor/`.
 
-## Highlights
+## Features
 
-- **Isolated workspaces** — every task gets its own git worktree and branch.
-  Agents never trample each other's changes, and your `main` stays clean.
-- **Bring your own agents** — Claude Code, OpenAI Codex, Cursor, and OpenCode
-  side by side, using your existing logins and API keys. Pick the model,
-  effort level, plan mode, or fast mode per message.
-- **Steer mid-flight** — watch output stream live, inject follow-ups while the
-  agent is still working, queue prompts, paste images, mention files with `@`.
-- **Review without leaving** — changed files, side-by-side diffs, a Monaco
-  editor, and built-in terminals sit right next to the conversation.
-- **Ship from one button** — Create PR, Commit & Push, Pull Latest, Merge,
-  Fix CI, Resolve Conflicts. Stacked PRs included. GitHub and GitLab.
-- **Local-first** — your code, sessions, and credentials never leave your
-  machine, except for the agent API calls you choose to make.
-- **Scriptable** — a full `helmor` CLI and a built-in MCP server, so your
-  terminal — or another agent — can drive Helmor too.
+- **Isolated workspaces** — one git worktree and branch per task; agents never step on each other.
+- **Bring your own agents** — Claude Code, Codex, Cursor, and OpenCode with your existing logins.
+- **Review without leaving** — diffs, Monaco editor, and terminals beside the conversation.
+- **Ship from one button** — create PR, merge, fix CI, stacked PRs; GitHub and GitLab.
+- **Scriptable** — `helmor` CLI and MCP server; your terminal or another agent can drive Helmor.
+- **Skills** — install from onboarding or **Settings → Helmor Components**; browse with `/` in the composer.
+- **Mobile companion** *(experimental)* — Cloudflare tunnel to your desktop; start tasks from your phone's browser.
 
-## Install
-
-[**Download Helmor** →](https://github.com/dohooo/helmor/releases)
-
-- **macOS** — Apple Silicon and Intel (DMG)
-- **Windows** — x64 setup installer
-
-On first launch, Helmor walks you through connecting GitHub or GitLab and
-signing in to your first agent. Agent CLIs are bundled — there is nothing else
-to install. See the [install guide](docs/user/get-started/install.md) for
-details.
+*More on the way.*
 
 ## How it works
 
+```mermaid
+flowchart LR
+  A[Add a repository] --> B[Create a workspace]
+  B --> C[Prompt an agent]
+  C --> D[Review and ship]
+  D -.->|repeat in parallel| B
+```
+
 1. **Add a repository** — link a local clone, or clone from a URL.
-2. **Create a workspace** — Helmor makes a fresh git worktree and branch under
-   `~/helmor/workspaces/` and runs your project's setup script.
-3. **Prompt an agent** — choose a model, describe the task, and move on to the
-   next workspace while it runs.
-4. **Review and ship** — read the diff, run your tests, then create and merge
-   the PR from the inspector.
+2. **Create a workspace** — fresh git worktree and branch under `~/helmor/workspaces/`.
+3. **Prompt an agent** — describe the task and move on while it runs.
+4. **Review and ship** — read the diff, run tests, create and merge the PR.
 
-Repeat in parallel. Each workspace is fully independent, so five agents can
-work on five tasks in the same repository at once.
+## Get started
 
-## Documentation
+[**Download Helmor →**](https://github.com/dohooo/helmor/releases) · macOS (Apple Silicon & Intel) · Windows (x64)
 
-The full user guide lives in [`docs/user/`](docs/user/README.md):
+[**Read the docs →**](https://docs.helmor.ai)
 
-- [Introduction](docs/user/get-started/introduction.md) · [Install](docs/user/get-started/install.md) · [Your first workspace](docs/user/get-started/your-first-workspace.md) · [Configure your project](docs/user/get-started/configure-your-project.md)
-- Concepts: [Workspaces](docs/user/concepts/workspaces.md) · [Agents & models](docs/user/concepts/agents-and-models.md) · [Sessions](docs/user/concepts/sessions.md) · [Parallel agents](docs/user/concepts/parallel-agents.md) · [Stacked PRs](docs/user/concepts/stacked-prs.md)
-- Reference: [Composer](docs/user/reference/composer.md) · [Review & ship](docs/user/reference/review-and-ship.md) · [Editor](docs/user/reference/editor.md) · [Settings](docs/user/reference/settings.md) · [Keyboard shortcuts](docs/user/reference/keyboard-shortcuts.md) · [CLI & MCP](docs/user/reference/cli-and-mcp.md)
-- [Privacy](docs/user/security/privacy.md) · [FAQ](docs/user/troubleshooting/faq.md) · [Troubleshooting](docs/user/troubleshooting/troubleshooting.md)
+On first launch, connect GitHub or GitLab and sign in to your first agent. Agent
+CLIs are bundled — nothing else to install.
 
 ## CLI
 
-Helmor ships a companion CLI that works against the same local database as the
-app — even while the app is running:
+Install from **Settings → Experimental → Command Line Tool**. Works against the
+same local database as the app — even while it is running.
 
 ```bash
+helmor repo add /path/to/repo
 helmor workspace new --repo myapp
+helmor workspace list
 helmor send --workspace myapp/feature-x "Add a test for the parser edge case."
 helmor workspace status myapp/feature-x
+helmor workspace run-action myapp/feature-x   # create PR, merge, fix CI, …
+helmor mcp                                    # MCP server over stdio
 ```
 
-`helmor mcp` exposes the same surface as an MCP server over stdio, so other
-agents and tools can operate Helmor. See [CLI & MCP](docs/user/reference/cli-and-mcp.md).
+Workspaces use `repo-name/directory-name` shorthand. Every command supports
+`--json`. Run `helmor --help` for the full reference.
 
-## Building from source
-
-Prerequisites: [Bun](https://bun.sh) 1.3+, a stable [Rust](https://rustup.rs)
-toolchain, and platform build tools (Xcode Command Line Tools on macOS). A Nix
-flake is also available — see [NIX_SETUP.md](NIX_SETUP.md).
+**Example — an agent ships a fix:**
 
 ```bash
-bun install        # installs frontend + sidecar dependencies
-bun run dev        # full desktop app in development mode
-bun run test       # frontend, sidecar, and Rust test suites
+helmor workspace new --repo myapp --name fix-auth
+helmor send --workspace myapp/fix-auth "Add tests for the token refresh path."
+helmor workspace status myapp/fix-auth
+helmor workspace run-action myapp/fix-auth
 ```
 
-Architecture notes for contributors (and their agents) live in
-[AGENTS.md](AGENTS.md).
+## Contributing
+
+Architecture, commands, and test layout live in **[AGENTS.md](AGENTS.md)**.
+To get started locally: `bun install && bun run dev`.
+
+Or —
+
+Open Helmor, Import Helmor, Ask Helmor:
+
+> _"How do I contribute to Helmor?"_
+
+That's the guide.
 
 ## Community
 
