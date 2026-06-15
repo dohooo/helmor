@@ -3796,6 +3796,7 @@ export type ThreadMessageLike = {
 	status?: { type: string; reason?: string };
 	streaming?: boolean;
 	author?: MessageAuthor;
+	isRoomChat?: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -4123,6 +4124,34 @@ export async function startAgentMessageStream(
 	const onEvent = new Channel<AgentStreamEvent>();
 	onEvent.onmessage = (event) => callback(event);
 	await invoke("send_agent_message_stream", { request, onEvent });
+}
+
+/** Wire shape for `post_room_chat_message`. `author_id` is intentionally
+ *  absent from the desktop IPC call: the companion overwrites it from the
+ *  trusted `X-Helmor-Member-Id` header (see `companion/stream.rs`). */
+export type RoomChatSendRequest = {
+	helmorSessionId: string;
+	prompt: string;
+	files?: string[] | null;
+	images?: string[] | null;
+	pastedTexts?: PastedTextRange[] | null;
+};
+
+/**
+ * Persist a room-chat message (team-mode only, no-@agent path).
+ *
+ * Routed on the STREAMING companion surface so `author_id` is injected
+ * server-side from the trusted `X-Helmor-Member-Id` header — the client
+ * never asserts its own identity. Uses `ipc::Channel<T>` for streaming
+ * parity with `startAgentMessageStream` (same transport shim logic).
+ */
+export async function postRoomChatMessage(
+	request: RoomChatSendRequest,
+	callback: (event: AgentStreamEvent) => void,
+): Promise<void> {
+	const onEvent = new Channel<AgentStreamEvent>();
+	onEvent.onmessage = (event) => callback(event);
+	await invoke("post_room_chat_message", { request, onEvent });
 }
 
 export async function stopAgentStream(

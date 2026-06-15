@@ -24,6 +24,7 @@ import {
 	generateSessionTitle,
 	loadRepoPreferences,
 	mutateCodexGoal,
+	postRoomChatMessage,
 	renameSession,
 	respondToPermissionRequest,
 	respondToUserInput,
@@ -51,6 +52,7 @@ import {
 } from "@/lib/session-thread-cache";
 import type { FollowUpBehavior } from "@/lib/settings";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
+import { isTeamModeActive } from "@/lib/team-mode";
 import type { SubmitQueueApi } from "@/lib/use-submit-queue";
 import { showWorkspaceBrokenToast } from "@/lib/workspace-broken-toast";
 import {
@@ -58,6 +60,7 @@ import {
 	findModelOption,
 } from "@/lib/workspace-helpers";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
+import { hasAgentMention } from "../agent-mention";
 import {
 	buildSessionContextPrompt,
 	type SessionContextReference,
@@ -803,6 +806,73 @@ export function useConversationStreaming({
 					);
 					return;
 				}
+			}
+
+			// ── Team-mode @agent gating ──────────────────────────────────────
+			// Single-user path: isTeamModeActive() is false → fall through
+			// unchanged (byte-identical behaviour).
+			// Team mode + @agent mention: fall through to the existing
+			// startAgentMessageStream dispatch below (literal @agent NOT stripped).
+			// Team mode + no @agent: this is a room-chat message — persist it via
+			// postRoomChatMessage, insert an optimistic bubble, then RETURN (no
+			// ActiveStream, no stream dispatcher).
+			if (isTeamModeActive() && !hasAgentMention(trimmedPrompt)) {
+				const roomMsgId = crypto.randomUUID();
+				const now = new Date().toISOString();
+				const pastedTexts = locatePastedTextRanges(trimmedPrompt, customTags);
+				const optimisticMsg = createLiveThreadMessage({
+					id: roomMsgId,
+					role: "user",
+					text: trimmedPrompt,
+					createdAt: now,
+					files: filePaths,
+					images: imagePaths,
+					pastedTexts,
+				});
+				const rollback = appendUserMessage(
+					queryClient,
+					targetSessionId,
+					optimisticMsg,
+				);
+				if (!isOverride) {
+					storeActions.setComposerRestore(null);
+				}
+				storeActions.setSendError(contextKey, null);
+				try {
+					await postRoomChatMessage(
+						{
+							helmorSessionId: targetSessionId,
+							prompt: trimmedPrompt,
+							files: filePaths.length > 0 ? filePaths : null,
+							images: imagePaths.length > 0 ? imagePaths : null,
+							pastedTexts: pastedTexts.length > 0 ? pastedTexts : null,
+						},
+						() => {
+							// Room-chat broadcast events are handled by the session stream
+							// watcher (use-watch-session-stream). This callback is a no-op
+							// on the sender side — the optimistic bubble above is already
+							// in the cache and will be reconciled on reload/reload.
+						},
+					);
+				} catch (err) {
+					restoreSnapshot(queryClient, targetSessionId, rollback);
+					if (!isOverride) {
+						storeActions.setComposerRestore({
+							contextKey,
+							draft: trimmedPrompt,
+							images: imagePaths,
+							files: filePaths,
+							customTags,
+							editorState: editorStateSnapshot ?? null,
+							nonce: Date.now(),
+						});
+					}
+					storeActions.setSendError(
+						contextKey,
+						err instanceof Error ? err.message : String(err),
+					);
+				}
+				return;
 			}
 
 			const previousLiveSession =

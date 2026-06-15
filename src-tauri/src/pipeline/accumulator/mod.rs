@@ -723,6 +723,7 @@ impl StreamAccumulator {
             raw_json: entry.raw_json.clone(),
             parsed: entry.parsed.clone(),
             created_at: entry.created_at.clone(),
+            author_id: entry.author_id.clone(),
             is_streaming: true,
         })
     }

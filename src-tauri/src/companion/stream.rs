@@ -16,7 +16,9 @@ use tauri::Manager;
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::server::StreamStarter;
-use crate::agents::{self, AgentSendRequest, AgentStreamEvent, SessionStreamHub};
+use crate::agents::{
+    self, AgentSendRequest, AgentStreamEvent, RoomChatSendRequest, SessionStreamHub,
+};
 use crate::error::CommandError;
 use crate::sidecar::ManagedSidecar;
 use crate::ui_sync::{UiMutationEvent, UiSyncManager};
@@ -31,6 +33,7 @@ pub fn build_stream_starter(app: tauri::AppHandle) -> StreamStarter {
               tx: UnboundedSender<String>| {
             match command {
                 "send_agent_message_stream" => start_agent_stream(&app, args, author_id, tx),
+                "post_room_chat_message" => start_room_chat(&app, args, author_id, tx),
                 "subscribe_ui_mutations" => start_ui_subscription(&app, args, tx),
                 "subscribe_session_stream" => start_session_stream_subscription(&app, args, tx),
                 other => Err(CommandError::from(anyhow::anyhow!(
@@ -69,6 +72,45 @@ fn resolve_request(
         .map_err(|e| CommandError::from(anyhow::anyhow!("Invalid send request: {e}")))?;
     request.author_id = author_id;
     Ok(request)
+}
+
+/// Deserialize the room-chat request and stamp the SERVER-DERIVED `author_id`
+/// exactly like `resolve_request` does for agent streams.
+fn resolve_room_chat_request(
+    args: Value,
+    author_id: Option<String>,
+) -> Result<RoomChatSendRequest, CommandError> {
+    let request_value = args.get("request").cloned().unwrap_or(args);
+    let mut request: RoomChatSendRequest = serde_json::from_value(request_value)
+        .map_err(|e| CommandError::from(anyhow::anyhow!("Invalid room-chat request: {e}")))?;
+    // Overwrite any client-supplied authorId with the trusted header value —
+    // the hard "never client-asserted" rule.
+    request.author_id = author_id;
+    Ok(request)
+}
+
+fn start_room_chat(
+    app: &tauri::AppHandle,
+    args: Value,
+    author_id: Option<String>,
+    tx: UnboundedSender<String>,
+) -> Result<(), CommandError> {
+    let request = resolve_room_chat_request(args, author_id)?;
+
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        // Keep the channel alive for the full task duration so `tx` is not
+        // dropped early (the server's cleanup waits on tx.closed()). Room-chat
+        // itself doesn't stream events over this channel — the Update goes to
+        // the hub — but dropping _channel before the task completes would close
+        // tx and signal the HTTP response body as finished prematurely.
+        let _channel = ndjson_channel::<AgentStreamEvent>(tx);
+        let hub = app.state::<SessionStreamHub>();
+        if let Err(error) = agents::post_room_chat_message(app.clone(), request, hub).await {
+            tracing::warn!(error = %format!("{error:?}"), "companion room-chat failed");
+        }
+    });
+    Ok(())
 }
 
 fn start_agent_stream(
@@ -181,6 +223,42 @@ mod resolve_request_tests {
     #[test]
     fn header_sets_author_when_body_omits_it() {
         let request = resolve_request(body(None), Some("member-1".to_string())).unwrap();
+        assert_eq!(request.author_id.as_deref(), Some("member-1"));
+    }
+}
+
+#[cfg(test)]
+mod resolve_room_chat_request_tests {
+    use super::resolve_room_chat_request;
+    use serde_json::json;
+
+    fn body(author: Option<&str>) -> serde_json::Value {
+        let mut req = json!({ "helmorSessionId": "sess-abc", "prompt": "hello room" });
+        if let Some(a) = author {
+            req["authorId"] = json!(a);
+        }
+        json!({ "request": req })
+    }
+
+    #[test]
+    fn trusted_header_overwrites_body_author_id() {
+        // Client forges authorId in the body; the server-derived header wins.
+        let request =
+            resolve_room_chat_request(body(Some("evil-client-id")), Some("trusted-7".to_string()))
+                .unwrap();
+        assert_eq!(request.author_id.as_deref(), Some("trusted-7"));
+    }
+
+    #[test]
+    fn absent_header_drops_body_author_id_to_none() {
+        // No trusted header ⇒ a body-supplied authorId must NOT survive.
+        let request = resolve_room_chat_request(body(Some("evil-client-id")), None).unwrap();
+        assert_eq!(request.author_id, None);
+    }
+
+    #[test]
+    fn header_sets_author_when_body_omits_it() {
+        let request = resolve_room_chat_request(body(None), Some("member-1".to_string())).unwrap();
         assert_eq!(request.author_id.as_deref(), Some("member-1"));
     }
 }

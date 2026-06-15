@@ -37,6 +37,7 @@ pub use self::streaming::{
     BuildSendMessageParamsInput, SessionStreamHub,
 };
 
+pub use self::persistence::persist_room_chat_message;
 use self::persistence::{
     finalize_session_metadata, persist_error_message, persist_exit_plan_message,
     persist_result_and_finalize, persist_turn_message, persist_user_message,
@@ -385,6 +386,125 @@ pub async fn list_active_streams(
     active_streams: tauri::State<'_, ActiveStreams>,
 ) -> CmdResult<Vec<ActiveStreamSummary>> {
     Ok(active_streams.snapshot_for_ui())
+}
+
+/// A room-chat message sent by a human teammate that is NOT dispatched to
+/// the agent. Distinct from `AgentSendRequest` — no provider/model/session
+/// fields, just the text content and the team member identity.
+///
+/// `author_id` is NEVER client-asserted on the desktop IPC path (left
+/// `None`); the companion server OVERWRITES it from the trusted
+/// `X-Helmor-Member-Id` header exactly like `AgentSendRequest`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoomChatSendRequest {
+    pub helmor_session_id: String,
+    pub prompt: String,
+    /// Workspace-relative paths from the @-mention picker.
+    #[serde(default)]
+    pub files: Option<Vec<String>>,
+    /// Image attachment paths (drag-and-drop / paste).
+    #[serde(default)]
+    pub images: Option<Vec<String>>,
+    /// UTF-16 ranges of pasted-text tag spans.
+    #[serde(default)]
+    pub pasted_texts: Option<Vec<crate::pipeline::types::PastedTextRange>>,
+    /// Team member id — NEVER client-asserted. Desktop IPC leaves `None`;
+    /// the companion server overwrites from `X-Helmor-Member-Id`.
+    #[serde(default)]
+    pub author_id: Option<String>,
+}
+
+/// Post a room-chat message for a shared session. The message is persisted
+/// as a `{"type":"room_chat",...}` row (role=user, content JSON, author_id)
+/// and broadcast to all active watchers via `SessionStreamHub` so teammates
+/// see it live without an agent turn. NOT routed to the agent — callers must
+/// gate on team mode and the absence of `@agent` before calling this.
+#[tauri::command]
+pub async fn post_room_chat_message(
+    app: AppHandle,
+    mut request: RoomChatSendRequest,
+    hub: tauri::State<'_, SessionStreamHub>,
+) -> CmdResult<()> {
+    let prompt = request.prompt.trim().to_string();
+    if prompt.is_empty() {
+        return Err(anyhow::anyhow!("Room-chat prompt cannot be empty.").into());
+    }
+    // Desktop IPC must NEVER client-assert the author. The companion path
+    // (build_stream_starter) overwrites request.author_id from the trusted
+    // header before calling this command.
+    // Here we bind what arrived (None on desktop, trusted id on companion).
+    let author_id = request.author_id.take();
+
+    let msg_id = Uuid::new_v4().to_string();
+    let session_id = request.helmor_session_id.clone();
+    let files = request.files.clone().unwrap_or_default();
+    let images = request.images.clone().unwrap_or_default();
+    let pasted_texts = request.pasted_texts.clone().unwrap_or_default();
+
+    // Persist to the DB (blocking IO — run on the blocking thread pool).
+    let msg_id_clone = msg_id.clone();
+    let session_id_clone = session_id.clone();
+    let prompt_clone = prompt.clone();
+    let files_clone = files.clone();
+    let images_clone = images.clone();
+    let pasted_texts_clone = pasted_texts.clone();
+    let author_id_clone = author_id.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = crate::models::db::write_conn()
+            .map_err(|e| anyhow::anyhow!("DB connection failed: {e}"))?;
+        persist_room_chat_message(
+            &conn,
+            &session_id_clone,
+            &msg_id_clone,
+            &prompt_clone,
+            &files_clone,
+            &images_clone,
+            &pasted_texts_clone,
+            author_id_clone.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("Task join failed: {e}"))??;
+
+    // Build the rendered ThreadMessageLike for the broadcast via the adapter
+    // so watchers see the same shape as a historical reload would produce.
+    let mut payload = serde_json::json!({
+        "type": "room_chat",
+        "text": prompt,
+    });
+    if !files.is_empty() {
+        payload["files"] =
+            serde_json::Value::Array(files.iter().map(|f| serde_json::json!(f)).collect());
+    }
+    if !images.is_empty() {
+        payload["images"] =
+            serde_json::Value::Array(images.iter().map(|i| serde_json::json!(i)).collect());
+    }
+    if !pasted_texts.is_empty() {
+        payload["pastedTexts"] =
+            serde_json::to_value(&pasted_texts).unwrap_or(serde_json::Value::Array(vec![]));
+    }
+    let raw_json = payload.to_string();
+    let now = crate::models::db::current_timestamp()
+        .unwrap_or_else(|_| "1970-01-01T00:00:00.000Z".to_string());
+    let intermediate = crate::pipeline::types::IntermediateMessage {
+        id: msg_id,
+        role: crate::pipeline::types::MessageRole::User,
+        raw_json: raw_json.clone(),
+        parsed: serde_json::from_str(&raw_json).ok(),
+        created_at: now,
+        is_streaming: false,
+        author_id,
+    };
+    let messages = crate::pipeline::adapter::convert(&[intermediate]);
+    let event = AgentStreamEvent::Update { messages };
+    hub.publish(&session_id, &event);
+
+    // Signal that the session has new content (sidebar unread, etc.).
+    crate::ui_sync::publish(&app, crate::ui_sync::UiMutationEvent::WorkspaceListChanged);
+
+    Ok(())
 }
 
 /// Attach a *watcher* to a session's live agent stream. The initiating client

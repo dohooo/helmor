@@ -67,6 +67,67 @@ pub(super) fn persist_user_message(
     Ok(())
 }
 
+/// Persist a room-chat message sent by a human teammate (NOT dispatched
+/// to the agent). Mirrors `persist_user_message` but uses
+/// `{"type":"room_chat","text":...}` content and binds `author_id`.
+///
+/// No new SQL column — reuses the shipped `author_id` column and the
+/// JSON-content convention already in place for `user_prompt`.
+#[allow(clippy::too_many_arguments)]
+pub fn persist_room_chat_message(
+    conn: &Connection,
+    helmor_session_id: &str,
+    msg_id: &str,
+    prompt: &str,
+    files: &[String],
+    images: &[String],
+    pasted_texts: &[crate::pipeline::types::PastedTextRange],
+    author_id: Option<&str>,
+) -> anyhow::Result<()> {
+    let now = current_timestamp_string()?;
+    let mut payload = serde_json::json!({
+        "type": "room_chat",
+        "text": prompt,
+    });
+    if !files.is_empty() {
+        payload["files"] = serde_json::Value::Array(
+            files
+                .iter()
+                .map(|path| serde_json::Value::String(path.clone()))
+                .collect(),
+        );
+    }
+    if !images.is_empty() {
+        payload["images"] = serde_json::Value::Array(
+            images
+                .iter()
+                .map(|path| serde_json::Value::String(path.clone()))
+                .collect(),
+        );
+    }
+    if !pasted_texts.is_empty() {
+        payload["pastedTexts"] = serde_json::to_value(pasted_texts)?;
+    }
+    let content = payload.to_string();
+
+    conn.execute(
+        r#"
+            INSERT INTO session_messages (
+              id, session_id, role, content, created_at, sent_at, author_id
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)
+            "#,
+        rusqlite::params![
+            msg_id,
+            helmor_session_id,
+            crate::pipeline::types::MessageRole::User,
+            content,
+            now,
+            author_id,
+        ],
+    )?;
+    Ok(())
+}
+
 /// Persist a single intermediate turn (assistant message or user tool
 /// result). Called each time the accumulator produces a complete turn
 /// during streaming. Returns the DB message ID.

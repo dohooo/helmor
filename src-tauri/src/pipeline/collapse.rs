@@ -909,6 +909,7 @@ mod tests {
             status: None,
             streaming: None,
             author: None,
+            is_room_chat: false,
         }];
         collapse_pass(&mut messages);
         assert_eq!(messages[0].content.len(), 3); // text + Agent + text

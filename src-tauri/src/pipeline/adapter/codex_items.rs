@@ -50,6 +50,7 @@ pub(super) fn render_item_completed(
                     }),
                     streaming: None,
                     author: None,
+                    is_room_chat: false,
                 });
             }
         }
@@ -111,6 +112,7 @@ fn render_command_execution(
         }),
         streaming: None,
         author: None,
+        is_room_chat: false,
     });
 }
 
@@ -139,6 +141,7 @@ fn render_context_compaction(
         status: None,
         streaming: None,
         author: None,
+        is_room_chat: false,
     });
 }
 
@@ -158,6 +161,7 @@ fn render_todo_list(msg: &IntermediateMessage, item: &Value, result: &mut Vec<Th
             }),
             streaming: None,
             author: None,
+            is_room_chat: false,
         });
     }
 }
@@ -181,6 +185,7 @@ fn render_reasoning(msg: &IntermediateMessage, item: &Value, result: &mut Vec<Th
                 }),
                 streaming: None,
                 author: None,
+                is_room_chat: false,
             });
         }
     }
@@ -227,6 +232,7 @@ fn render_file_change(
         }),
         streaming: None,
         author: None,
+        is_room_chat: false,
     });
 }
 
@@ -277,6 +283,7 @@ fn render_web_search(msg: &IntermediateMessage, item: &Value, result: &mut Vec<T
         }),
         streaming: None,
         author: None,
+        is_room_chat: false,
     });
 }
 
@@ -326,6 +333,7 @@ fn render_mcp_tool_call(
         }),
         streaming: None,
         author: None,
+        is_room_chat: false,
     });
 }
 
@@ -351,6 +359,7 @@ fn render_plan(msg: &IntermediateMessage, item: &Value, result: &mut Vec<ThreadM
         }),
         streaming: None,
         author: None,
+        is_room_chat: false,
     });
 }
 
@@ -398,6 +407,7 @@ fn render_collab_agent_tool_call(
         }),
         streaming: None,
         author: None,
+        is_room_chat: false,
     });
 }
 
@@ -453,5 +463,6 @@ fn render_image_generation(
         }),
         streaming: None,
         author: None,
+        is_room_chat: false,
     });
 }

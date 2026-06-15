@@ -556,6 +556,13 @@ pub struct ThreadMessageLike {
     /// single-user wire shape (and its pipeline snapshots) is unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<MessageAuthor>,
+    /// Programmatic marker set only on room-chat messages (content type
+    /// `"room_chat"`). PR3 uses this to scope "messages since last agent
+    /// turn" for the context-carry assembler. Serialized as `isRoomChat`
+    /// only when `true`; absent on all non-room messages so existing
+    /// pipeline snapshots are byte-identical (no drift).
+    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+    pub is_room_chat: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -647,6 +654,7 @@ mod author_seam_tests {
             status: None,
             streaming: None,
             author: None,
+            is_room_chat: false,
         }
     }
 

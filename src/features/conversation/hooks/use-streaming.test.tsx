@@ -49,6 +49,7 @@ const apiMocks = vi.hoisted(() => ({
 	startAgentMessageStream: vi.fn(),
 	steerAgentStream: vi.fn(),
 	stopAgentStream: vi.fn(),
+	postRoomChatMessage: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -65,6 +66,19 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		startAgentMessageStream: apiMocks.startAgentMessageStream,
 		steerAgentStream: apiMocks.steerAgentStream,
 		stopAgentStream: apiMocks.stopAgentStream,
+		postRoomChatMessage: apiMocks.postRoomChatMessage,
+	};
+});
+
+const teamModeMocks = vi.hoisted(() => ({
+	isTeamModeActive: vi.fn().mockReturnValue(false),
+}));
+
+vi.mock("@/lib/team-mode", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@/lib/team-mode")>();
+	return {
+		...actual,
+		isTeamModeActive: teamModeMocks.isTeamModeActive,
 	};
 });
 
@@ -185,6 +199,7 @@ describe("useConversationStreaming", () => {
 		apiMocks.startAgentMessageStream.mockReset();
 		apiMocks.steerAgentStream.mockReset();
 		apiMocks.stopAgentStream.mockReset();
+		apiMocks.postRoomChatMessage.mockReset();
 		apiMocks.loadRepoPreferences.mockResolvedValue({});
 
 		apiMocks.generateSessionTitle.mockResolvedValue(null);
@@ -197,6 +212,9 @@ describe("useConversationStreaming", () => {
 		// tests override this when they want to exercise the steer branch.
 		apiMocks.steerAgentStream.mockResolvedValue({ accepted: false });
 		apiMocks.stopAgentStream.mockResolvedValue(undefined);
+		apiMocks.postRoomChatMessage.mockResolvedValue(undefined);
+		// Default: single-user mode (no team). Team tests override this.
+		teamModeMocks.isTeamModeActive.mockReturnValue(false);
 	});
 
 	afterEach(() => {
@@ -2906,6 +2924,189 @@ describe("useConversationStreaming", () => {
 			expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
 			expect(apiMocks.steerAgentStream).not.toHaveBeenCalled();
 			expect(queue.snapshot().get("session-1")).toHaveLength(1);
+		});
+	});
+
+	// ─── Team-mode @agent gating ─────────────────────────────────────────────
+	describe("team-mode @agent gating", () => {
+		it("single-user: dispatches via startAgentMessageStream regardless of @agent", async () => {
+			// isTeamModeActive() returns false (default) — byte-identical to existing path.
+			apiMocks.startAgentMessageStream.mockImplementation(async () => {});
+
+			const { Wrapper } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: noopSubmitQueue,
+						activeStreams: NO_ACTIVE_STREAMS,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "hello team, no agent mention",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
+			expect(apiMocks.startAgentMessageStream).toHaveBeenCalledOnce();
+			expect(apiMocks.postRoomChatMessage).not.toHaveBeenCalled();
+		});
+
+		it("team mode + @agent mention: dispatches via startAgentMessageStream", async () => {
+			teamModeMocks.isTeamModeActive.mockReturnValue(true);
+			apiMocks.startAgentMessageStream.mockImplementation(async () => {});
+
+			const { Wrapper } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: noopSubmitQueue,
+						activeStreams: NO_ACTIVE_STREAMS,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "hey @agent summarize the diff",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
+			expect(apiMocks.startAgentMessageStream).toHaveBeenCalledOnce();
+			expect(apiMocks.postRoomChatMessage).not.toHaveBeenCalled();
+		});
+
+		it("team mode + no @agent: routes to postRoomChatMessage, not startAgentMessageStream", async () => {
+			teamModeMocks.isTeamModeActive.mockReturnValue(true);
+			apiMocks.postRoomChatMessage.mockImplementation(async () => {});
+
+			const { Wrapper, queryClient } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: noopSubmitQueue,
+						activeStreams: NO_ACTIVE_STREAMS,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "hello team, what do you think?",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
+			// Room chat path: postRoomChatMessage called, startAgentMessageStream not.
+			expect(apiMocks.postRoomChatMessage).toHaveBeenCalledOnce();
+			expect(apiMocks.postRoomChatMessage).toHaveBeenCalledWith(
+				expect.objectContaining({
+					helmorSessionId: "session-1",
+					prompt: "hello team, what do you think?",
+				}),
+				expect.any(Function),
+			);
+			expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
+
+			// Optimistic user message inserted into thread cache.
+			const cachedThread = queryClient.getQueryData<unknown[]>(
+				sessionThreadCacheKey("session-1"),
+			);
+			expect(cachedThread).toBeDefined();
+			expect(cachedThread?.length).toBeGreaterThan(0);
+		});
+
+		it("team mode + no @agent + postRoomChatMessage error: rolls back optimistic message", async () => {
+			teamModeMocks.isTeamModeActive.mockReturnValue(true);
+			apiMocks.postRoomChatMessage.mockRejectedValue(
+				new Error("network error"),
+			);
+
+			const { Wrapper, queryClient } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: noopSubmitQueue,
+						activeStreams: NO_ACTIVE_STREAMS,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "hello team",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
+			expect(apiMocks.postRoomChatMessage).toHaveBeenCalledOnce();
+			expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
+
+			// After rollback the thread cache should not have the optimistic message.
+			const cachedThread = queryClient.getQueryData<unknown[]>(
+				sessionThreadCacheKey("session-1"),
+			);
+			// The snapshot before insertion was undefined → restoreSnapshot removes
+			// the cache entry on rollback. Either undefined or empty is correct.
+			expect(!cachedThread || cachedThread.length === 0).toBe(true);
+
+			// Send error set so the composer can show a failure state.
+			expect(result.current.activeSendError).toBe("network error");
 		});
 	});
 });

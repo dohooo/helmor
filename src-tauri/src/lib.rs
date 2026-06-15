@@ -530,6 +530,7 @@ fn build_app(mode: AppMode) -> tauri::App {
             agents::list_mimo_models,
             agents::list_provider_capabilities,
             agents::send_agent_message_stream,
+            agents::post_room_chat_message,
             agents::subscribe_session_stream,
             agents::unsubscribe_session_stream,
             agents::stop_agent_stream,

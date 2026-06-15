@@ -2519,3 +2519,102 @@ fn auq_claude_split_rows_still_merge_answers() {
     ];
     assert_yaml_snapshot!(run_normalized(msgs));
 }
+
+// ============================================================================
+// Room-chat messages (Bp-b snapshot coverage)
+// ============================================================================
+
+/// Basic room-chat without an author — the `is_room_chat` marker must be
+/// set; `author` must be absent (desktop / local path).
+#[test]
+fn room_basic_no_author_sets_is_room_chat_marker() {
+    let records = vec![room_chat("rc1", "hello team")];
+    let rendered = MessagePipeline::convert_historical(&records);
+    assert_eq!(rendered.len(), 1);
+    assert!(rendered[0].is_room_chat, "is_room_chat must be true");
+    assert!(rendered[0].author.is_none(), "author must be absent");
+    assert_eq!(
+        rendered[0].role,
+        helmor_lib::pipeline::types::MessageRole::User
+    );
+    // Normalized snapshot pins the structural shape.
+    assert_yaml_snapshot!(run_normalized(vec![room_chat("rc1", "hello team")]));
+}
+
+/// Room-chat with an author id — marker present, author id stamped.
+#[test]
+fn room_with_author_stamps_author_and_marker() {
+    let records = vec![room_chat_with_author("rc1", "hi", "member-42")];
+    let rendered = MessagePipeline::convert_historical(&records);
+    assert_eq!(rendered.len(), 1);
+    assert!(rendered[0].is_room_chat, "is_room_chat must be true");
+    let author = rendered[0].author.as_ref().expect("author must be present");
+    assert_eq!(author.id, "member-42");
+    assert!(author.display_name.is_none(), "display_name stays None");
+    // Normalized snapshot (author field stripped by normalizer — assert
+    // directly above; snapshot pins the content/status shape).
+    assert_yaml_snapshot!(run_normalized(vec![room_chat_with_author(
+        "rc1",
+        "hi",
+        "member-42"
+    )]));
+}
+
+/// Room-chat with file + image + pasted-text attachments.
+#[test]
+fn room_with_attachments_renders_correct_parts() {
+    let msgs = vec![room_chat_with_attachments(
+        "rc1",
+        "check @src/foo.rs",
+        &["src/foo.rs"],
+        &["/tmp/screenshot.png"],
+        &[],
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+/// Turn boundary interleave: user_prompt → assistant → room_chat → user_prompt.
+/// Verifies the room_chat branch does NOT interfere with surrounding messages.
+#[test]
+fn room_interleaved_with_agent_turns() {
+    let msgs = vec![
+        user_prompt("u1", "start the task @agent"),
+        assistant_json(
+            "a1",
+            json!([{"type": "text", "text": "Working on it."}]),
+            None,
+        ),
+        room_chat_with_author("rc1", "looks good so far", "member-7"),
+        user_prompt("u2", "continue @agent"),
+    ];
+    let rendered = MessagePipeline::convert_historical(&msgs);
+    assert_eq!(rendered.len(), 4, "four distinct messages");
+    // room_chat row is the third message.
+    assert!(rendered[2].is_room_chat, "third msg must be room_chat");
+    // Other rows must NOT have the marker.
+    assert!(
+        !rendered[0].is_room_chat,
+        "user_prompt must NOT be room_chat"
+    );
+    assert!(!rendered[1].is_room_chat, "assistant must NOT be room_chat");
+    assert!(
+        !rendered[3].is_room_chat,
+        "second user_prompt must NOT be room_chat"
+    );
+    assert_yaml_snapshot!(run_normalized(msgs.clone()));
+}
+
+/// Existing single-user messages MUST NOT be affected — zero drift guard.
+#[test]
+fn room_non_room_rows_have_no_marker_in_serialized_wire() {
+    // Serialize a plain user_prompt and verify `isRoomChat` key is absent.
+    let records = vec![user_prompt("u1", "plain prompt")];
+    let rendered = MessagePipeline::convert_historical(&records);
+    assert_eq!(rendered.len(), 1);
+    assert!(!rendered[0].is_room_chat, "is_room_chat must be false");
+    let wire = serde_json::to_value(&rendered[0]).unwrap();
+    assert!(
+        wire.get("isRoomChat").is_none(),
+        "isRoomChat key must be absent from wire when false"
+    );
+}

@@ -279,6 +279,7 @@ fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, Wo
                     status: None,
                     streaming: None,
                     author: None,
+                    is_room_chat: false,
                 });
             }
             i += 1;
@@ -323,6 +324,7 @@ fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, Wo
                     status: None,
                     streaming: if msg.is_streaming { Some(true) } else { None },
                     author: None,
+                    is_room_chat: false,
                 });
             }
             i += 1;
@@ -344,6 +346,8 @@ fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, Wo
                     content,
                     status: None,
                     streaming: if msg.is_streaming { Some(true) } else { None },
+                    author: None,
+                    is_room_chat: false,
                 });
             }
             i += 1;
@@ -428,6 +432,7 @@ fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, Wo
                 status: Some(map_stop_reason(parsed)),
                 streaming: if is_streaming { Some(true) } else { None },
                 author: None,
+                is_room_chat: false,
             });
 
             // Re-emit any system messages we skipped over so they still
@@ -500,6 +505,56 @@ fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, Wo
                 // author; agent output and local messages leave `author_id`
                 // None, so this stays None and the wire shape is unchanged.
                 author: author_from_id(msg.author_id.as_deref()),
+                is_room_chat: false,
+            });
+            i += 1;
+            continue;
+        }
+
+        // room_chat — a human teammate message NOT dispatched to the agent
+        // (persisted by `persist_room_chat_message`). Rendered as a User
+        // bubble with the programmatic `is_room_chat = true` marker so PR3's
+        // context-carry assembler can scope "since last agent turn". Does NOT
+        // flow through accumulator/collapse/classify.
+        if msg_type == Some("room_chat") {
+            let text = parsed
+                .and_then(|p| p.get("text"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let extract_strs = |key: &str| -> Vec<String> {
+                parsed
+                    .and_then(|p| p.get(key))
+                    .and_then(Value::as_array)
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            let files = extract_strs("files");
+            let images = extract_strs("images");
+            let pasted_texts: Vec<crate::pipeline::types::PastedTextRange> = parsed
+                .and_then(|p| p.get("pastedTexts"))
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            let parts = grouping::split_user_text_with_files(
+                &text,
+                &files,
+                &images,
+                &msg.id,
+                &pasted_texts,
+            );
+            result.push(ThreadMessageLike {
+                role: MessageRole::User,
+                id: Some(msg.id.clone()),
+                created_at: Some(msg.created_at.clone()),
+                content: parts.into_iter().map(ExtendedMessagePart::Basic).collect(),
+                status: None,
+                streaming: None,
+                author: author_from_id(msg.author_id.as_deref()),
+                is_room_chat: true,
             });
             i += 1;
             continue;
@@ -694,6 +749,7 @@ fn convert_user_type_msg(
                 status: None,
                 streaming: None,
                 author: None,
+                is_room_chat: false,
             });
         }
         return;
@@ -854,6 +910,7 @@ fn convert_user_question_msg(
         status: None,
         streaming: None,
         author: None,
+        is_room_chat: false,
     })
 }
 
@@ -911,5 +968,6 @@ fn convert_exit_plan_mode_msg(
         status: None,
         streaming: None,
         author: None,
+        is_room_chat: false,
     }
 }

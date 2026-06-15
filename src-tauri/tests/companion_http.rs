@@ -199,6 +199,71 @@ async fn rpc_stream_passes_trusted_header_author_id_not_body() {
     state.shutdown().await;
 }
 
+/// Same trust-boundary proof for `post_room_chat_message`: the companion server
+/// must forward the team member id from the trusted `X-Helmor-Member-Id` header
+/// to `resolve_room_chat_request`, OVERWRITING any `authorId` in the body. A
+/// client that forges `authorId` in the JSON body must never see it persist.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rpc_stream_post_room_chat_trusted_header_overwrites_body() {
+    let app = tauri::test::mock_app();
+    let state = CompanionState::new();
+
+    // Capture what the server passes as author_id to the streamer.
+    let (seen_tx, seen_rx) = std::sync::mpsc::channel::<Option<String>>();
+    let seen_tx = Arc::new(std::sync::Mutex::new(seen_tx));
+    let streamer: StreamStarter = Arc::new(move |_cmd, _args, author_id, _tx| {
+        seen_tx.lock().unwrap().send(author_id).unwrap();
+        Ok(())
+    });
+    let verifier: Verifier = Arc::new(|_bearer| false);
+    let dispatcher: Dispatcher = Arc::new(|cmd: String, _args: serde_json::Value, _author_id| {
+        async move { Err(anyhow::anyhow!("Unknown companion command: {cmd}").into()) }.boxed()
+    });
+
+    let token = "hlm_room_chat_trust".to_string();
+    let info = state
+        .start_serve(
+            app.handle().clone(),
+            "127.0.0.1",
+            0,
+            token.clone(),
+            streamer,
+            dispatcher,
+            verifier,
+        )
+        .await
+        .expect("serve companion should start");
+    let base = format!("http://127.0.0.1:{}", info.addr.port());
+    let client = reqwest::Client::new();
+
+    // Body forges authorId; trusted header carries the real member id.
+    client
+        .post(format!("{base}/rpc-stream/post_room_chat_message"))
+        .bearer_auth(&token)
+        .header("X-Helmor-Member-Id", "trusted-member-9")
+        .json(&serde_json::json!({
+            "request": {
+                "helmorSessionId": "sess-xyz",
+                "prompt": "hello room",
+                "authorId": "evil-forged-id",
+            }
+        }))
+        .send()
+        .await
+        .expect("room-chat stream request");
+
+    let seen = seen_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("streamer invoked");
+    assert_eq!(
+        seen.as_deref(),
+        Some("trusted-member-9"),
+        "server must forward the trusted-header member id, not the body's authorId"
+    );
+
+    state.shutdown().await;
+}
+
 /// `helmor serve` smoke test: `start_serve` binds the requested address with a
 /// caller-supplied capability token (no random dev token, no paired-device
 /// verifier), and the resulting surface gates RPC on exactly that token. This

@@ -24,6 +24,7 @@ pub(super) fn make_system(msg: &IntermediateMessage, text: &str) -> ThreadMessag
         status: None,
         streaming: None,
         author: None,
+        is_room_chat: false,
     }
 }
 
@@ -42,6 +43,7 @@ pub(super) fn make_turn_result_system(msg: &IntermediateMessage, text: &str) -> 
         status: None,
         streaming: None,
         author: None,
+        is_room_chat: false,
     }
 }
 
@@ -57,6 +59,7 @@ pub(super) fn make_system_notice(
         status: None,
         streaming: None,
         author: None,
+        is_room_chat: false,
     }
 }
 

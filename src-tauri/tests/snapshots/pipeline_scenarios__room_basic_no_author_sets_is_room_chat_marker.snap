@@ -1,0 +1,12 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: "run_normalized(vec![room_chat(\"rc1\", \"hello team\")])"
+---
+- role: user
+  id: msg-1
+  content_length: 1
+  content:
+    - type: text
+      text: hello team
+  status: ~
+  streaming: ~

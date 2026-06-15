@@ -153,6 +153,7 @@ mod tests {
                 status: None,
                 streaming: None,
                 author: None,
+                is_room_chat: false,
             }],
         }
     }

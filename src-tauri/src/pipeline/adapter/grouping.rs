@@ -79,6 +79,7 @@ pub(super) fn convert_user_message(
         status: None,
         streaming: None,
         author: None,
+        is_room_chat: false,
     }
 }
 
