@@ -10,7 +10,7 @@
 //   - `/team/accept` is OPEN — the token itself is the credential.
 // All queries are parameterized (`prepare().bind()`) — never interpolated.
 
-import type { DirectoryBackup } from "@cloudflare/sandbox";
+import { type DirectoryBackup, getSandbox } from "@cloudflare/sandbox";
 import type { Env } from "./index";
 
 const TEAM_ID = "team-0";
@@ -298,6 +298,7 @@ async function putCloudIdentity(request: Request, env: Env): Promise<Response> {
 		.bind(TEAM_ID, env.HELMOR_SANDBOX_ID, memberId)
 		.run();
 
+	if (result.changed) await stopSandboxForReauth(env);
 	return json({ accountId: result.accountId, changed: result.changed });
 }
 
@@ -382,7 +383,28 @@ async function putClaudeIdentity(
 		.bind(TEAM_ID, env.HELMOR_SANDBOX_ID, memberId)
 		.run();
 
+	if (result.changed) await stopSandboxForReauth(env);
 	return json({ changed: result.changed });
+}
+
+/**
+ * After a cloud identity is (re)authorized, stop the sandbox so the NEXT request
+ * cold-starts and re-mints + re-injects the new credential into a FRESH serve.
+ * start-serve.sh is idempotent ("bail if serve already running"), so a serve
+ * that started BEFORE authorization never picks up the new token on its own —
+ * without this the user has to manually restart. Best-effort: the identity is
+ * already persisted, so a missing/idle sandbox just cold-starts fresh anyway.
+ */
+async function stopSandboxForReauth(env: Env): Promise<void> {
+	try {
+		const sandbox = getSandbox(
+			env.Sandbox,
+			env.HELMOR_SANDBOX_ID ?? "helmor-team-0",
+		);
+		await sandbox.stop();
+	} catch {
+		// ignore — store already succeeded; next cold start applies it regardless
+	}
 }
 
 /**

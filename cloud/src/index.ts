@@ -544,6 +544,13 @@ async function ensureServe(
 			// RISK-2). /root is root's home (matches start-serve.sh's fallback),
 			// so today's behavior is unchanged, just made deterministic.
 			HOME: "/root",
+			// Claude Code refuses --dangerously-skip-permissions as root
+			// (getuid()===0) UNLESS IS_SANDBOX=1 (binary guard, VERIFIED 2.1.x:
+			// `getuid()===0 && IS_SANDBOX!=="1" && !CLAUDE_CODE_BUBBLEWRAP`). The
+			// cloud Agent SDK runs claude-code non-interactively with
+			// bypassPermissions, so without this EVERY claude turn exits code 1 in
+			// this isolated, ephemeral CF container.
+			IS_SANDBOX: "1",
 			...(env.GITHUB_TOKEN ? { GITHUB_TOKEN: env.GITHUB_TOKEN } : {}),
 			...(codexAuthJson ? { CODEX_AUTH_JSON: codexAuthJson } : {}),
 			...(claudeToken ? { CLAUDE_CODE_OAUTH_TOKEN: claudeToken } : {}),
