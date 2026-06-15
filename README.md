@@ -32,14 +32,16 @@ in one window. Everything lives locally under `~/helmor/`.
 ## Features
 
 - **Isolated workspaces** — one git worktree and branch per task; agents never step on each other.
-- **Bring your own agents** — Claude Code, Codex, Cursor, and OpenCode with your existing logins.
+- **Bring your own agents** — Claude Code, Codex, Cursor, OpenCode, and Kimi Code; your logins, API keys, and custom providers.
 - **Review without leaving** — diffs, Monaco editor, and terminals beside the conversation.
-- **Ship from one button** — create PR, merge, fix CI, stacked PRs; GitHub and GitLab.
+- **Ship from one button** — create PR/MR, merge, fix CI, resolve conflicts, stacked PRs; GitHub and GitLab.
+- **Terminal Mode** — run prompts in the agent's native TUI, or resume a GUI chat in the terminal.
+- **Quick panel** — ⇧⌥Space opens a floating window to start a workspace and chat from anywhere.
 - **Scriptable** — `helmor` CLI and MCP server; your terminal or another agent can drive Helmor.
 - **Skills** — install from onboarding or **Settings → Helmor Components**; browse with `/` in the composer.
 - **Mobile companion** *(experimental)* — Cloudflare tunnel to your desktop; start tasks from your phone's browser.
 
-*More on the way.*
+*More on the way — Smart Triage, Slack & GitHub context, plan mode, and agent-driven orchestration.*
 
 ## How it works
 
@@ -58,7 +60,9 @@ flowchart LR
 
 ## Get started
 
-[**Download Helmor →**](https://github.com/dohooo/helmor/releases) · macOS (Apple Silicon & Intel) · Windows (x64)
+[**Download Helmor →**](https://github.com/dohooo/helmor/releases)
+
+macOS (Apple Silicon & Intel) · Windows (x64)
 
 [**Read the docs →**](https://docs.helmor.ai)
 
