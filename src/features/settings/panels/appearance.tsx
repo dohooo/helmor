@@ -348,19 +348,6 @@ export function AppearancePanel({
 					}
 				/>
 			</SettingsRow>
-
-			{/* ── Colorful composer controls ───────────────────────────────── */}
-			<SettingsRow
-				title="Colorful composer controls"
-				description="Bring a splash of color to the composer's mode controls"
-			>
-				<Switch
-					checked={settings.colorfulComposerControls}
-					onCheckedChange={(checked) =>
-						updateSettings({ colorfulComposerControls: checked })
-					}
-				/>
-			</SettingsRow>
 		</SettingsGroup>
 	);
 }

@@ -1,5 +1,5 @@
 ---
-"helmor": minor
+"helmor": patch
 ---
 
-Add an opt-in Appearance setting (off by default) that paints the composer's effort, Plan, and Terminal-Mode controls with their accent colors.
+Restore the accent colors on the composer's mode controls — the animated Extra High / Max effort label, the Plan toggle, and the Terminal-Mode toggle.
