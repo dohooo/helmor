@@ -282,6 +282,7 @@ pub async fn update_session_settings(
     effort_level: Option<String>,
     permission_mode: Option<String>,
     fast_mode: Option<bool>,
+    carry_room_context: Option<bool>,
 ) -> CmdResult<()> {
     run_blocking(move || {
         let connection = db::write_conn()?;
@@ -292,10 +293,18 @@ pub async fn update_session_settings(
                   model = COALESCE(?2, model),
                   effort_level = COALESCE(?3, effort_level),
                   permission_mode = COALESCE(?4, permission_mode),
-                  fast_mode = COALESCE(?5, fast_mode)
+                  fast_mode = COALESCE(?5, fast_mode),
+                  carry_room_context = COALESCE(?6, carry_room_context)
                 WHERE id = ?1
                 "#,
-                rusqlite::params![session_id, model, effort_level, permission_mode, fast_mode],
+                rusqlite::params![
+                    session_id,
+                    model,
+                    effort_level,
+                    permission_mode,
+                    fast_mode,
+                    carry_room_context.map(|v| v as i64),
+                ],
             )
             .context("Failed to update session settings")?;
         Ok(())

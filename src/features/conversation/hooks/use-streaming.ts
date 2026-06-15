@@ -42,6 +42,7 @@ import {
 	helmorQueryKeys,
 	providerCapabilitiesQueryOptions,
 	sessionThreadMessagesQueryOptions,
+	teamMembersQueryOptions,
 } from "@/lib/query-client";
 import { resolveGeneralPreferencePrefix } from "@/lib/repo-preferences-prompts";
 import {
@@ -52,7 +53,8 @@ import {
 } from "@/lib/session-thread-cache";
 import type { FollowUpBehavior } from "@/lib/settings";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
-import { isTeamModeActive } from "@/lib/team-mode";
+import type { TeamMember } from "@/lib/team-api";
+import { getTeamConfig, isTeamModeActive } from "@/lib/team-mode";
 import type { SubmitQueueApi } from "@/lib/use-submit-queue";
 import { showWorkspaceBrokenToast } from "@/lib/workspace-broken-toast";
 import {
@@ -61,6 +63,7 @@ import {
 } from "@/lib/workspace-helpers";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 import { hasAgentMention } from "../agent-mention";
+import { buildRoomCarryTranscript } from "../room-context-carry";
 import {
 	buildSessionContextPrompt,
 	type SessionContextReference,
@@ -95,6 +98,12 @@ type SubmitPayload = {
 	effortLevel: string;
 	permissionMode: string;
 	fastMode: boolean;
+	/** Per-session context-carry toggle (team collaboration room). When
+	 *  true (or omitted — defaults to ON) and teamMode is active and the
+	 *  message has an @agent mention, room-chat messages since the last
+	 *  agent turn are folded into promptPrefix as an author-tagged
+	 *  transcript. */
+	carryRoomContext?: boolean;
 	/** When true, route to the follow-up queue instead of steering if a
 	 *  turn is already streaming — regardless of the user's
 	 *  `followUpBehavior` setting. Set by host-triggered submits (e.g.
@@ -637,6 +646,7 @@ export function useConversationStreaming({
 				effortLevel,
 				permissionMode,
 				fastMode,
+				carryRoomContext = true,
 				forceQueue,
 				followUpBehaviorOverride,
 				editorStateSnapshot,
@@ -725,6 +735,7 @@ export function useConversationStreaming({
 							effortLevel,
 							permissionMode,
 							fastMode,
+							carryRoomContext,
 							editorStateSnapshot,
 						},
 					);
@@ -910,17 +921,36 @@ export function useConversationStreaming({
 			// `trimmedPrompt` is what the user typed — that's what we
 			// optimistically render in the chat bubble and what the Rust
 			// side persists to `session_messages` as the user_prompt body.
-			const promptPrefix =
-				isFirstUserMessage && !isCompactCommand
-					? [
-							buildSessionContextPrompt(
-								getSessionContextReferences?.(targetSessionId) ?? [],
-							),
-							resolveGeneralPreferencePrefix(repoPreferences),
-						]
-							.filter((prefix): prefix is string => Boolean(prefix?.trim()))
-							.join("\n\n") || null
-					: null;
+			//
+			// Team mode + @agent: also fold the room-context carry block when
+			// the toggle is ON and there are room-chat messages since the last
+			// agent turn. The carried block is wire-only (in promptPrefix) —
+			// the persisted user_prompt body stays byte-identical.
+			const roomCarryBlock: string | null = (() => {
+				if (!isTeamModeActive() || !carryRoomContext) return null;
+				if (!currentThread || currentThread.length === 0) return null;
+				const teamCfg = getTeamConfig();
+				const members: TeamMember[] = teamCfg
+					? (queryClient.getQueryData<TeamMember[]>(
+							teamMembersQueryOptions(teamCfg).queryKey,
+						) ?? [])
+					: [];
+				const { block } = buildRoomCarryTranscript(currentThread, members);
+				return block;
+			})();
+			const promptPrefix = (() => {
+				const parts: string[] = [];
+				if (isFirstUserMessage && !isCompactCommand) {
+					const sessionCtx = buildSessionContextPrompt(
+						getSessionContextReferences?.(targetSessionId) ?? [],
+					);
+					if (sessionCtx?.trim()) parts.push(sessionCtx);
+					const generalPref = resolveGeneralPreferencePrefix(repoPreferences);
+					if (generalPref?.trim()) parts.push(generalPref);
+				}
+				if (roomCarryBlock) parts.push(roomCarryBlock);
+				return parts.length > 0 ? parts.join("\n\n") : null;
+			})();
 			// Pasted-tag spans inside the prompt — rendered as tag chips (the
 			// composer badge, post-send) instead of inlining the full paste.
 			// Computed against `trimmedPrompt`, which is byte-identical to what

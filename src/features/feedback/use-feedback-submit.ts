@@ -80,6 +80,7 @@ export function useFeedbackSubmit(deps: Deps) {
 				effortLevel: appSettings.defaultEffort ?? "high",
 				permissionMode: "default",
 				fastMode: appSettings.defaultFastMode ?? false,
+				carryRoomContext: true,
 			};
 
 			try {

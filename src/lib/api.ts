@@ -463,6 +463,9 @@ export type WorkspaceSessionSummary = {
 	effortLevel?: string | null;
 	unreadCount: number;
 	fastMode: boolean;
+	/** Per-session context-carry toggle (team collaboration room). Defaults
+	 *  to true when omitted (old rows or non-team sessions). */
+	carryRoomContext?: boolean;
 	createdAt: string;
 	updatedAt: string;
 	lastUserMessageAt?: string | null;
@@ -3389,6 +3392,7 @@ export async function updateSessionSettings(
 		effortLevel?: string;
 		permissionMode?: string;
 		fastMode?: boolean;
+		carryRoomContext?: boolean;
 	},
 ): Promise<void> {
 	await invoke("update_session_settings", {
@@ -3397,6 +3401,7 @@ export async function updateSessionSettings(
 		effortLevel: settings.effortLevel ?? null,
 		permissionMode: settings.permissionMode ?? null,
 		fastMode: settings.fastMode ?? null,
+		carryRoomContext: settings.carryRoomContext ?? null,
 	});
 }
 

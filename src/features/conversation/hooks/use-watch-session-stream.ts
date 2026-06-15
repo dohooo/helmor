@@ -28,6 +28,7 @@ import {
 	readSessionThread,
 	replaceStreamingTail,
 } from "@/lib/session-thread-cache";
+import { isTeamModeActive } from "@/lib/team-mode";
 
 type Args = {
 	sessionId: string | null;
@@ -64,7 +65,10 @@ export function useWatchSessionStream({ sessionId, activeStreams }: Args) {
 		? activeStreams.some((stream) => stream.sessionId === sessionId)
 		: false;
 
-	const enabled = Boolean(sessionId) && hasRemoteStream && !isLocallyDriven;
+	const enabled =
+		Boolean(sessionId) &&
+		!isLocallyDriven &&
+		(hasRemoteStream || isTeamModeActive());
 
 	useEffect(() => {
 		if (!enabled || !sessionId) return;

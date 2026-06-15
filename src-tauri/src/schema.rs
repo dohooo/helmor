@@ -891,6 +891,17 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             "session_kind",
             "TEXT NOT NULL DEFAULT 'gui'",
         )?;
+        // Per-session context-carry toggle (team collaboration room). Default
+        // ON (1) — folds room-chat messages since the last agent turn into the
+        // next @agent dispatch. NULL on old rows is treated as ON by the
+        // frontend (`?? true`). Only meaningful in team mode; single-user code
+        // never reads or writes it.
+        add_column_if_missing(
+            connection,
+            "sessions",
+            "carry_room_context",
+            "INTEGER DEFAULT 1",
+        )?;
     }
     if has_table(connection, "triage_candidate") {
         // Why an item surfaced for the user (review_requested / assigned /
@@ -1165,6 +1176,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     title TEXT DEFAULT 'Untitled',
     effort_level TEXT DEFAULT 'high',
     fast_mode INTEGER DEFAULT 0,
+    carry_room_context INTEGER DEFAULT 1,
     action_kind TEXT,
     context_usage_meta TEXT,
     codex_goal_meta TEXT,

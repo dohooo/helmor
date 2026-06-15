@@ -22,6 +22,7 @@ pub struct WorkspaceSessionSummary {
     pub effort_level: Option<String>,
     pub unread_count: i64,
     pub fast_mode: bool,
+    pub carry_room_context: bool,
     pub created_at: String,
     pub updated_at: String,
     pub last_user_message_at: Option<String>,
@@ -63,7 +64,8 @@ pub fn list_workspace_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessio
               s.last_user_message_at,
               s.is_hidden,
               s.action_kind,
-              s.session_kind
+              s.session_kind,
+              s.carry_room_context
             FROM sessions s
             WHERE s.workspace_id = ?1 AND COALESCE(s.is_hidden, 0) = 0
             ORDER BY
@@ -93,6 +95,7 @@ pub fn list_workspace_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessio
             is_hidden: row.get::<_, i64>(14)? != 0,
             action_kind: row.get(15)?,
             session_kind: row.get(16)?,
+            carry_room_context: row.get::<_, Option<i64>>(17)?.unwrap_or(1) != 0,
         })
     })?;
 
@@ -938,7 +941,8 @@ pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSu
               s.id, s.workspace_id, s.title, s.agent_type, s.status, s.model,
               s.permission_mode, s.provider_session_id, s.effort_level,
               s.unread_count, s.fast_mode, s.created_at, s.updated_at,
-              s.last_user_message_at, s.is_hidden, s.action_kind, s.session_kind
+              s.last_user_message_at, s.is_hidden, s.action_kind, s.session_kind,
+              s.carry_room_context
             FROM sessions s
             WHERE s.workspace_id = ?1 AND s.is_hidden = 1
             ORDER BY datetime(s.created_at) ASC
@@ -968,6 +972,7 @@ pub fn list_hidden_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSu
                 is_hidden: row.get::<_, i64>(14)? != 0,
                 action_kind: row.get(15)?,
                 session_kind: row.get(16)?,
+                carry_room_context: row.get::<_, Option<i64>>(17)?.unwrap_or(1) != 0,
             })
         })
         .context("Failed to query hidden sessions")?;
