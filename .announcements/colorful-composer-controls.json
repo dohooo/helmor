@@ -1,0 +1,11 @@
+{
+	"items": [
+		{
+			"text": "Appearance now has a toggle that brings accent colors back to the composer's mode controls.",
+			"action": {
+				"label": "Open Appearance",
+				"value": { "type": "openSettings", "section": "appearance" }
+			}
+		}
+	]
+}

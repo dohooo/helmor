@@ -271,6 +271,10 @@ export type AppSettings = {
 	/** When true, all clickable elements show a pointer cursor on hover.
 	 *  When false, falls back to the default arrow. */
 	usePointerCursors: boolean;
+	/** Opt-in: restores the colorful composer controls — the animated
+	 *  Extra High / Max effort label, the teal Plan toggle, and the emerald
+	 *  Terminal-Mode toggle. Off by default keeps them neutral. */
+	colorfulComposerControls: boolean;
 	theme: ThemeMode;
 	/** Color preset applied when the effective mode is `light`. */
 	lightTheme: ColorTheme;
@@ -403,6 +407,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	codeFontFamily: null,
 	terminalFontFamily: null,
 	usePointerCursors: true,
+	colorfulComposerControls: false,
 	theme: "system",
 	lightTheme: "default",
 	darkTheme: "default",
@@ -592,6 +597,7 @@ const SETTINGS_KEY_MAP: Record<
 > = {
 	chatFontSize: "app.chat_font_size",
 	usePointerCursors: "app.use_pointer_cursors",
+	colorfulComposerControls: "app.colorful_composer_controls",
 	notifications: "app.notifications",
 	notificationSound: "app.notification_sound",
 	terminalHoverExpansion: "app.terminal_hover_expansion",
@@ -1263,6 +1269,10 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.usePointerCursors] !== undefined
 					? raw[SETTINGS_KEY_MAP.usePointerCursors] === "true"
 					: DEFAULT_SETTINGS.usePointerCursors,
+			colorfulComposerControls:
+				raw[SETTINGS_KEY_MAP.colorfulComposerControls] !== undefined
+					? raw[SETTINGS_KEY_MAP.colorfulComposerControls] === "true"
+					: DEFAULT_SETTINGS.colorfulComposerControls,
 			theme:
 				(localStorage.getItem(THEME_STORAGE_KEY) as AppSettings["theme"]) ??
 				DEFAULT_SETTINGS.theme,

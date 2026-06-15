@@ -1329,6 +1329,7 @@ export const WorkspaceComposerContainer = memo(
 						toggleFollowUpShortcut={toggleFollowUpShortcut}
 						toggleContextPanelShortcut={toggleContextPanelShortcut}
 						alwaysShowContextUsage={settings.alwaysShowContextUsage}
+						colorfulControls={settings.colorfulComposerControls}
 						onSubmit={handleComposerSubmit}
 						disabled={composerUnavailable}
 						submitDisabled={

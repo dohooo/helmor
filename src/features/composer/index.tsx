@@ -158,6 +158,10 @@ type WorkspaceComposerProps = {
 	 *  sending opens the prompt in the agent's TUI instead of a GUI turn. */
 	terminalMode?: boolean;
 	onChangeTerminalMode?: (enabled: boolean) => void;
+	/** Opt-in (Appearance setting): paints the Extra High / Max effort label,
+	 *  the Plan toggle, and the Terminal-Mode toggle with their accent colors.
+	 *  Off keeps all three neutral. */
+	colorfulControls?: boolean;
 	sendError?: string | null;
 	restoreDraft?: string | null;
 	restoreImages?: string[];
@@ -313,6 +317,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	onChangeFastMode,
 	terminalMode = false,
 	onChangeTerminalMode,
+	colorfulControls = false,
 	sendError,
 	restoreDraft,
 	restoreImages = [],
@@ -1169,7 +1174,16 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 													disabled={toolbarDisabled}
 													className={cn(
 														`flex items-center gap-0.5 ${composerToolbarTriggerClassName}`,
-														composerToolbarActiveClassName,
+														// `effort-max-text` paints via `-webkit-text-fill-color:
+														// transparent` without a `color`, so it needs a muted
+														// baseline to avoid a flash when the gradient class drops.
+														colorfulControls
+															? "text-muted-foreground hover:text-muted-foreground"
+															: composerToolbarActiveClassName,
+														colorfulControls &&
+															(effectiveEffort === "max" ||
+																effectiveEffort === "xhigh") &&
+															"effort-max-text",
 														toolbarDisabled
 															? "cursor-not-allowed opacity-45 hover:bg-transparent"
 															: null,
@@ -1223,7 +1237,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 												className={cn(
 													`size-7 justify-center px-0 ${composerToolbarTriggerClassName}`,
 													permissionMode === "plan"
-														? composerToolbarActiveClassName
+														? colorfulControls
+															? "text-plan hover:text-plan"
+															: composerToolbarActiveClassName
 														: "text-muted-foreground/70 hover:text-muted-foreground/70",
 												)}
 												onToggle={() =>
@@ -1244,7 +1260,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 														className={cn(
 															`size-7 justify-center px-0 ${composerToolbarTriggerClassName}`,
 															terminalMode
-																? composerToolbarActiveClassName
+																? colorfulControls
+																	? "text-emerald-500 hover:bg-emerald-500/10 hover:text-emerald-500"
+																	: composerToolbarActiveClassName
 																: // Pin the hover text color (like the Plan toggle) so the
 																	// toolbar base `hover:text-foreground` can't flash the icon
 																	// white for a frame while `transition-colors` runs on toggle.
