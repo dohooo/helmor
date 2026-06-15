@@ -18,6 +18,7 @@ import type {
 	ActiveStreamSummary,
 	AgentModelOption,
 	CodexGoalState,
+	ThreadMessageLike,
 } from "@/lib/api";
 import {
 	findProviderCapabilities,
@@ -831,15 +832,24 @@ export function useConversationStreaming({
 				const roomMsgId = crypto.randomUUID();
 				const now = new Date().toISOString();
 				const pastedTexts = locatePastedTextRanges(trimmedPrompt, customTags);
-				const optimisticMsg = createLiveThreadMessage({
-					id: roomMsgId,
-					role: "user",
-					text: trimmedPrompt,
-					createdAt: now,
-					files: filePaths,
-					images: imagePaths,
-					pastedTexts,
-				});
+				const optimisticMsg: ThreadMessageLike = {
+					...createLiveThreadMessage({
+						id: roomMsgId,
+						role: "user",
+						text: trimmedPrompt,
+						createdAt: now,
+						files: filePaths,
+						images: imagePaths,
+						pastedTexts,
+					}),
+					// Mark the optimistic bubble as room chat so the context-carry
+					// assembler (buildRoomCarryTranscript) folds it into the NEXT
+					// @agent turn — it collects user rows where isRoomChat===true.
+					// Without this, the room messages the user JUST typed are invisible
+					// to the agent until a reload re-fetches them with the marker
+					// stamped by the pipeline adapter.
+					isRoomChat: true,
+				};
 				const rollback = appendUserMessage(
 					queryClient,
 					targetSessionId,

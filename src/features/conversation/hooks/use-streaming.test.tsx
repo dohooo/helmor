@@ -3315,5 +3315,91 @@ describe("useConversationStreaming", () => {
 			const prefix = callArg.promptPrefix ?? "";
 			expect(prefix).not.toContain("<helmor-room-context>");
 		});
+
+		it("REPRO (room chat → @agent): the just-sent room chat is carried into the @agent prompt", async () => {
+			// User flow: in team mode, send a plain message (room chat, no @agent),
+			// then send an @agent message. The room chat the user JUST typed must be
+			// folded into the @agent prompt's carry block. Regression: the optimistic
+			// room-chat bubble was inserted WITHOUT the `isRoomChat` marker, so the
+			// carry assembler (which scans for isRoomChat===true) skipped it — the
+			// agent never saw what the user had just said in the room.
+			teamModeMocks.isTeamModeActive.mockReturnValue(true);
+			apiMocks.postRoomChatMessage.mockImplementation(async () => {});
+			apiMocks.startAgentMessageStream.mockImplementation(async () => {});
+
+			const { Wrapper, queryClient } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: noopSubmitQueue,
+						activeStreams: NO_ACTIVE_STREAMS,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			// msg 1 — room chat (no @agent)
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "the CI build is failing on main",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+					carryRoomContext: true,
+				});
+			});
+
+			expect(apiMocks.postRoomChatMessage).toHaveBeenCalledOnce();
+			expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
+
+			// The optimistic room-chat bubble must be marked isRoomChat so the
+			// carry assembler can find it on the next @agent turn.
+			const afterRoomChat = queryClient.getQueryData<ThreadMessageLike[]>(
+				sessionThreadCacheKey("session-1"),
+			);
+			expect(afterRoomChat).toHaveLength(1);
+			expect(afterRoomChat?.[0]?.isRoomChat).toBe(true);
+
+			// msg 2 — @agent
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "@agent why is the build failing?",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+					carryRoomContext: true,
+				});
+			});
+
+			expect(apiMocks.startAgentMessageStream).toHaveBeenCalledOnce();
+			const callArg = apiMocks.startAgentMessageStream.mock.calls[0][0] as {
+				prompt: string;
+				promptPrefix?: string | null;
+			};
+
+			// The agent prompt body stays byte-identical to what the user typed.
+			expect(callArg.prompt).toBe("@agent why is the build failing?");
+
+			// The room chat the user JUST sent must be carried into promptPrefix.
+			expect(callArg.promptPrefix ?? "").toContain("<helmor-room-context>");
+			expect(callArg.promptPrefix ?? "").toContain(
+				"the CI build is failing on main",
+			);
+		});
 	});
 });
