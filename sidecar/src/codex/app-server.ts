@@ -14,9 +14,9 @@ import {
 	applyWindowsPathFromRegistry,
 	prependPathSegment,
 	type WindowsPathEnvOptions,
-} from "./agent-path-env.js";
-import { type AgentProxySettings, buildAgentProxyEnv } from "./agent-proxy.js";
-import { logger } from "./logger.js";
+} from "../agent-path-env.js";
+import { type AgentProxySettings, buildAgentProxyEnv } from "../agent-proxy.js";
+import { logger } from "../logger.js";
 
 // ---------------------------------------------------------------------------
 // JSON-RPC types

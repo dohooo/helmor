@@ -7,7 +7,7 @@
  *   bun run scripts/trace-thinking-events.ts [prompt]
  */
 
-import { ClaudeSessionManager } from "../src/claude-session-manager.js";
+import { ClaudeSessionManager } from "../src/claude/session-manager.js";
 import { createSidecarEmitter } from "../src/emitter.js";
 
 const prompt =

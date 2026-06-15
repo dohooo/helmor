@@ -11,13 +11,13 @@
 
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
-import { imageMime } from "./images.js";
+import { imageMime } from "../images.js";
+import type { SlashCommandInfo } from "../session-manager.js";
 import type {
 	AcpContentBlock,
 	AcpPermissionOption,
 	AcpSessionUpdate,
-} from "./kimi-acp-types.js";
-import type { SlashCommandInfo } from "./session-manager.js";
+} from "./acp-types.js";
 
 /** Build an ACP `prompt: ContentBlock[]` from the composer's text + images. */
 export async function buildPromptBlocks(

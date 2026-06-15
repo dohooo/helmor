@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { loadProjectMcpServers } from "./claude-project-mcp.js";
+import { loadProjectMcpServers } from "./project-mcp.js";
 
 const REPO = "/Users/test/projects/sample";
 

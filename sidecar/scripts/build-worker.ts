@@ -1,4 +1,4 @@
-// Builds the Cursor Node worker (`src/cursor-worker/worker.ts`) to a plain
+// Builds the Cursor Node worker (`src/cursor/worker/worker.ts`) to a plain
 // ESM `dist/cursor-worker.mjs` that runs on Node — NOT the Bun-compiled
 // sidecar binary. `@cursor/sdk` stays external so it loads from the staged
 // `node_modules` at runtime, where its webpack chunks + native rg/cursorsandbox
@@ -13,7 +13,7 @@ const SIDECAR_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export async function buildCursorWorker(): Promise<string> {
 	const outdir = join(SIDECAR_ROOT, "dist");
 	const result = await Bun.build({
-		entrypoints: [join(SIDECAR_ROOT, "src/cursor-worker/worker.ts")],
+		entrypoints: [join(SIDECAR_ROOT, "src/cursor/worker/worker.ts")],
 		target: "node",
 		format: "esm",
 		outdir,

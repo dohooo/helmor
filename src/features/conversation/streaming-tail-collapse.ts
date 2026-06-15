@@ -287,6 +287,28 @@ function collapseAssistantParts(
 			result.push(part);
 			continue;
 		}
+		if (part.type === "text") {
+			// A streaming turn exposes the same assistant text twice when this
+			// run is merged: the stable base snapshot carries it (the backend
+			// Full includes the in-flight partial) AND the pending partial
+			// re-sends it. Text parts have no shared id to dedupe on (unlike
+			// reasoning / tool-call), so collapse an adjacent text part when one
+			// side is a prefix of the other — keep the longer (newer) copy.
+			flushGroup();
+			const prev = result[result.length - 1];
+			if (prev?.type === "text") {
+				const prevText = prev.text ?? "";
+				const curText = part.text ?? "";
+				if (curText.startsWith(prevText) || prevText.startsWith(curText)) {
+					if (curText.length >= prevText.length) {
+						result[result.length - 1] = part;
+					}
+					continue;
+				}
+			}
+			result.push(part);
+			continue;
+		}
 		// Flush so the group stays BEFORE this part — letting reads straddle
 		// a reasoning/text block reorders the thread.
 		flushGroup();

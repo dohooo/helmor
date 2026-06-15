@@ -28,7 +28,7 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { ClaudeSessionManager } from "../src/claude-session-manager.js";
+import { ClaudeSessionManager } from "../src/claude/session-manager.js";
 import { createSidecarEmitter } from "../src/emitter.js";
 
 function createStableMapper(prefix: string) {

@@ -6,7 +6,6 @@ import {
 	ClaudeIcon,
 	CursorIcon,
 	KimiIcon,
-	MiMoCodeIcon,
 	OpenAIIcon,
 	OpenCodeIcon,
 } from "@/components/icons";
@@ -24,17 +23,6 @@ export function buildAgentLoginItems(
 	const CHECKING_COPY = "Checking sign-in…";
 	return [
 		{
-			icon: ClaudeIcon,
-			provider: "claude",
-			label: "Claude Code",
-			description: checking
-				? CHECKING_COPY
-				: status?.claude
-					? "Signed in and ready to run in local workspaces."
-					: "Sign in to Claude Code to use Anthropic models in Helmor.",
-			status: resolve(status?.claude),
-		},
-		{
 			icon: OpenCodeIcon,
 			provider: "opencode",
 			label: "OpenCode",
@@ -46,15 +34,15 @@ export function buildAgentLoginItems(
 			status: resolve(status?.opencode),
 		},
 		{
-			icon: MiMoCodeIcon,
-			provider: "mimo",
-			label: "MiMo Code",
+			icon: ClaudeIcon,
+			provider: "claude",
+			label: "Claude Code",
 			description: checking
 				? CHECKING_COPY
-				: status?.mimo
-					? "Connected and ready to run MiMo Code models in Helmor."
-					: "Sign in with `mimo auth login` to use MiMo Code models in Helmor.",
-			status: resolve(status?.mimo),
+				: status?.claude
+					? "Signed in and ready to run in local workspaces."
+					: "Sign in to Claude Code to use Anthropic models in Helmor.",
+			status: resolve(status?.claude),
 		},
 		{
 			icon: OpenAIIcon,
@@ -66,7 +54,7 @@ export function buildAgentLoginItems(
 		{
 			icon: KimiIcon,
 			provider: "kimi",
-			label: "Kimi Code",
+			label: "Kimi",
 			description: checking
 				? CHECKING_COPY
 				: status?.kimi
