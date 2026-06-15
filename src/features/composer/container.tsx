@@ -40,6 +40,7 @@ import {
 	helmorQueryKeys,
 	providerCapabilitiesQueryOptions,
 	sessionCodexGoalQueryOptions,
+	sessionThreadMessagesQueryOptions,
 	slashCommandsQueryOptions,
 	teamMembersQueryOptions,
 	workspaceCandidateDirectoriesQueryOptions,
@@ -648,20 +649,23 @@ export const WorkspaceComposerContainer = memo(
 			: undefined;
 		const carryRoomContext =
 			cachedCarryRoomContext ?? sessionCarryRoomContext ?? true;
-		const carryRoomContextCount = useMemo(() => {
-			if (!showRoomContextToggle) return 0;
-			const thread = displayedSessionId
-				? readSessionThread(queryClient, displayedSessionId)
-				: null;
-			if (!thread || thread.length === 0) return 0;
-			return buildRoomCarryTranscript(thread, teamMembersQuery.data ?? [])
-				.count;
-		}, [
-			showRoomContextToggle,
-			displayedSessionId,
-			queryClient,
-			teamMembersQuery.data,
-		]);
+		// Reactive room-chat count for the carry-toggle tooltip. Subscribing to
+		// the thread query — instead of an imperative readSessionThread inside a
+		// useMemo whose deps never change as the thread grows — makes the count
+		// update the moment a new room-chat message lands. `select` narrows the
+		// subscription to the count, so an agent turn's per-frame thread ticks
+		// don't re-render the composer (the count stays stable mid-turn). Gated
+		// on team mode → single-user adds no subscription.
+		const carryRoomContextCount =
+			useQuery({
+				...sessionThreadMessagesQueryOptions(displayedSessionId ?? ""),
+				enabled: showRoomContextToggle && Boolean(displayedSessionId),
+				select: (thread) =>
+					thread && thread.length > 0
+						? buildRoomCarryTranscript(thread, teamMembersQuery.data ?? [])
+								.count
+						: 0,
+			}).data ?? 0;
 		const handleChangeCarryRoomContextInner = useCallback(
 			(enabled: boolean) => {
 				onChangeCarryRoomContext(composerContextKey, enabled);
