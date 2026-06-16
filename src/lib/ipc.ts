@@ -499,6 +499,11 @@ export function convertFileSrc(filePath: string, protocol?: string): string {
 const LOCAL_ONLY_INVOKES = new Set<string>([
 	"authorize_cloud_codex_identity",
 	"authorize_cloud_claude_identity",
+	// Avatar caching writes to LOCAL disk and is rendered via a local
+	// `asset://` URL. Routing it to the container (team mode) would cache there
+	// and hand back a path this webview can't resolve, so every team-room
+	// avatar falls back to initials. Always keep it local.
+	"cache_forge_avatar",
 ]);
 
 export function invoke<T>(

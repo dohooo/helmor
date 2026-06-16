@@ -49,6 +49,18 @@ function PastedTextBadge({ text }: { text: string }) {
 	);
 }
 
+/** Team-room authors are stamped id-only by the backend (the GitHub numeric
+ * id, no URL). Derive the canonical GitHub avatar from that id so persisted and
+ * teammate messages show the real picture instead of just initials. */
+export function resolveAuthorAvatarUrl(
+	author: MessageAuthor,
+): string | undefined {
+	if (author.avatarUrl) return author.avatarUrl;
+	return /^\d+$/.test(author.id)
+		? `https://avatars.githubusercontent.com/u/${author.id}`
+		: undefined;
+}
+
 /** Two-letter initials for the message author's avatar fallback. */
 function authorInitials(author: MessageAuthor): string {
 	const name = author.displayName?.trim() || author.id;
@@ -220,7 +232,7 @@ export function ChatUserMessage({ message }: { message: RenderedMessage }) {
 			{message.author ? (
 				<CachedAvatar
 					data-testid="author-avatar"
-					src={message.author.avatarUrl}
+					src={resolveAuthorAvatarUrl(message.author)}
 					alt={message.author.displayName ?? message.author.id}
 					title={message.author.displayName ?? message.author.id}
 					size="sm"

@@ -143,6 +143,31 @@ export function replaceStreamingTail(
 }
 
 /**
+ * Idempotently fold teammate room-chat broadcast rows into the cached thread.
+ * Appends any incoming message whose id isn't already present (room chat
+ * arrives newest-last). Lets the passive watcher surface a teammate's chat
+ * live without a full refetch — and, being id-keyed, it never clobbers this
+ * client's own optimistic messages.
+ */
+export function mergeRoomChatMessages(
+	queryClient: QueryClient,
+	sessionId: string,
+	incoming: readonly ThreadMessageLike[],
+): void {
+	if (incoming.length === 0) return;
+	const cacheKey = sessionThreadCacheKey(sessionId);
+	queryClient.setQueryData<ThreadMessageLike[]>(cacheKey, (prev) => {
+		const prior = prev ?? [];
+		const seen = new Set(
+			prior.map((m) => m.id).filter((id): id is string => id != null),
+		);
+		const fresh = incoming.filter((m) => m.id != null && !seen.has(m.id));
+		if (fresh.length === 0) return prior;
+		return shareMessages(prior, [...prior, ...fresh]);
+	});
+}
+
+/**
  * Restore a previously captured snapshot. Used for full rollback when
  * a stream errors out before any messages are persisted server-side.
  */

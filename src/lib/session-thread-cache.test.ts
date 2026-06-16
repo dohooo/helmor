@@ -15,6 +15,7 @@ import type { ThreadMessageLike } from "./api";
 import { sessionThreadMessagesQueryOptions } from "./query-client";
 import {
 	appendUserMessage,
+	mergeRoomChatMessages,
 	readSessionThread,
 	replaceStreamingTail,
 	restoreSnapshot,
@@ -42,6 +43,23 @@ function makeClient(): QueryClient {
 }
 
 describe("session-thread-cache", () => {
+	it("mergeRoomChatMessages appends a teammate row by id, preserving prior", () => {
+		const client = makeClient();
+		appendUserMessage(client, "s1", makeMessage("u1", "user", "hi"));
+		mergeRoomChatMessages(client, "s1", [makeMessage("rc1", "user", "room")]);
+		expect(readSessionThread(client, "s1")?.map((m) => m.id)).toEqual([
+			"u1",
+			"rc1",
+		]);
+	});
+
+	it("mergeRoomChatMessages is idempotent — skips ids already present", () => {
+		const client = makeClient();
+		appendUserMessage(client, "s1", makeMessage("rc1", "user", "room"));
+		mergeRoomChatMessages(client, "s1", [makeMessage("rc1", "user", "room")]);
+		expect(readSessionThread(client, "s1")?.map((m) => m.id)).toEqual(["rc1"]);
+	});
+
 	it("appendUserMessage seeds an empty cache and returns the prior snapshot", () => {
 		const client = makeClient();
 		const userMsg = makeMessage("u1", "user", "hello");

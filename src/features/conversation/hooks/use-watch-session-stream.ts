@@ -14,9 +14,10 @@
  */
 
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useStreamingStore } from "@/features/conversation/state/streaming-store";
 import { stabilizeStreamingMessages } from "@/features/conversation/streaming-tail-collapse";
+import { useTeamIdentity } from "@/features/team/use-team-identity";
 import {
 	type ActiveStreamSummary,
 	type AgentStreamEvent,
@@ -25,6 +26,7 @@ import {
 } from "@/lib/api";
 import { sessionThreadMessagesQueryOptions } from "@/lib/query-client";
 import {
+	mergeRoomChatMessages,
 	readSessionThread,
 	replaceStreamingTail,
 } from "@/lib/session-thread-cache";
@@ -69,6 +71,15 @@ export function useWatchSessionStream({ sessionId, activeStreams }: Args) {
 		Boolean(sessionId) &&
 		!isLocallyDriven &&
 		(hasRemoteStream || isTeamModeActive());
+
+	// Read inside the effect's event handlers via refs (no re-subscribe churn).
+	// `selfMemberId` is this client's GitHub numeric id — used to drop the echo
+	// of our OWN room-chat broadcast (already shown optimistically).
+	const { identity } = useTeamIdentity();
+	const selfMemberIdRef = useRef<string | null>(identity?.githubId ?? null);
+	selfMemberIdRef.current = identity?.githubId ?? null;
+	const isLocallyDrivenRef = useRef(isLocallyDriven);
+	isLocallyDrivenRef.current = isLocallyDriven;
 
 	useEffect(() => {
 		if (!enabled || !sessionId) return;
@@ -148,6 +159,26 @@ export function useWatchSessionStream({ sessionId, activeStreams }: Args) {
 
 		const handle = (event: AgentStreamEvent) => {
 			if (event.kind === "update") {
+				// A room-chat broadcast carries a USER row (a teammate's, or the
+				// echo of our own), not an assistant tail — never tail-splice it
+				// (that duplicates the boundary / piles onto our optimistic copy).
+				// Our OWN message is already shown optimistically with our avatar,
+				// so drop the echo; a teammate's we fold in by id (idempotent, no
+				// refetch) so it appears live without clobbering anything.
+				const isRoomChatBroadcast =
+					event.messages.length > 0 &&
+					event.messages.every((m) => m.isRoomChat === true);
+				if (isRoomChatBroadcast) {
+					const fromSelf =
+						selfMemberIdRef.current != null &&
+						event.messages.every(
+							(m) => m.author?.id === selfMemberIdRef.current,
+						);
+					if (!fromSelf) {
+						mergeRoomChatMessages(queryClient, sessionId, event.messages);
+					}
+					return;
+				}
 				accumulator.baseMessages = event.messages;
 				accumulator.pendingPartial = null;
 				scheduleFlush();
@@ -226,9 +257,13 @@ export function useWatchSessionStream({ sessionId, activeStreams }: Args) {
 				window.clearTimeout(accumulator.fallbackTimerId);
 			}
 			unlisten?.();
-			// On teardown (turn ended or navigated away), pull canonical DB
-			// state so a half-streamed snapshot never lingers.
-			void refreshFromDb();
+			// On teardown (turn ended or navigated away) pull canonical DB state
+			// so a half-streamed snapshot never lingers — UNLESS this client just
+			// became the driver (isLocallyDriven): its own send path renders the
+			// turn and the optimistic row isn't persisted yet, so a refetch here
+			// would briefly clobber it (the "@agent message vanishes then
+			// reappears" bug).
+			if (!isLocallyDrivenRef.current) void refreshFromDb();
 		};
 	}, [enabled, sessionId, queryClient]);
 }

@@ -82,6 +82,15 @@ vi.mock("@/lib/team-mode", async (importOriginal) => {
 	};
 });
 
+vi.mock("@/features/team/use-team-identity", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("@/features/team/use-team-identity")>();
+	return {
+		...actual,
+		useTeamIdentity: () => ({ identity: null, isLoading: false }),
+	};
+});
+
 const MODEL: AgentModelOption = {
 	id: "gpt-5.4",
 	provider: "codex",

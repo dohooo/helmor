@@ -3,6 +3,7 @@ import type {
 	AgentModelSection,
 	AgentProvider,
 	ChangeRequestInfo,
+	MessageAuthor,
 	MessagePart,
 	PastedTextRange,
 	ThreadMessageLike,
@@ -1075,6 +1076,7 @@ export function createLiveThreadMessage({
 	files = [],
 	images = [],
 	pastedTexts = [],
+	author,
 }: {
 	id: string;
 	role: "user" | "assistant" | "system";
@@ -1083,12 +1085,17 @@ export function createLiveThreadMessage({
 	files?: readonly string[];
 	images?: readonly string[];
 	pastedTexts?: readonly PastedTextRange[];
+	/** Team-room author (the sender's own identity) for optimistic render.
+	 * Omitted entirely when undefined so single-user messages stay
+	 * byte-identical. */
+	author?: MessageAuthor;
 }): ThreadMessageLike {
 	return {
 		role,
 		id,
 		createdAt,
 		content: splitTextWithFiles(text, files, id, images, pastedTexts),
+		...(author ? { author } : {}),
 	};
 }
 

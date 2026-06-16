@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { ThreadMessageLike } from "@/lib/api";
 import { consumeAnchoredToggle, resetAnchoredToggle } from "./anchored-toggle";
 import { serializeMessageForClipboard } from "./copy-message";
-import { ChatUserMessage } from "./user-message";
+import { ChatUserMessage, resolveAuthorAvatarUrl } from "./user-message";
 import { UserMessageExpansionProvider } from "./user-message-expansion";
 
 afterEach(() => {
@@ -289,5 +289,25 @@ describe("ChatUserMessage author avatar (team room)", () => {
 		);
 		expect(screen.getByTestId("author-avatar")).toBeInTheDocument();
 		expect(screen.getByText("ZO")).toBeInTheDocument();
+	});
+});
+
+describe("resolveAuthorAvatarUrl", () => {
+	it("derives the GitHub avatar from a numeric author id", () => {
+		// Team-room authors arrive id-only (GitHub numeric id, no URL); derive
+		// the real picture from the id instead of showing only initials.
+		expect(resolveAuthorAvatarUrl({ id: "32405058" })).toBe(
+			"https://avatars.githubusercontent.com/u/32405058",
+		);
+	});
+
+	it("prefers an explicit avatarUrl over the derived one", () => {
+		expect(
+			resolveAuthorAvatarUrl({ id: "32405058", avatarUrl: "https://x/a.png" }),
+		).toBe("https://x/a.png");
+	});
+
+	it("returns undefined for a non-numeric id with no avatarUrl", () => {
+		expect(resolveAuthorAvatarUrl({ id: "alice" })).toBeUndefined();
 	});
 });

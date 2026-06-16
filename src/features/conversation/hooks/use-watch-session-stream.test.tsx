@@ -37,10 +37,20 @@ vi.mock("@/lib/team-mode", async (importOriginal) => {
 	};
 });
 
+vi.mock("@/features/team/use-team-identity", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("@/features/team/use-team-identity")>();
+	return {
+		...actual,
+		useTeamIdentity: () => ({ identity: null, isLoading: false }),
+	};
+});
+
 // session-thread-cache — don't exercise cache logic in this suite
 vi.mock("@/lib/session-thread-cache", () => ({
 	readSessionThread: vi.fn().mockReturnValue([]),
 	replaceStreamingTail: vi.fn(),
+	mergeRoomChatMessages: vi.fn(),
 	sessionThreadCacheKey: (id: string) => ["sessionThread", id],
 }));
 

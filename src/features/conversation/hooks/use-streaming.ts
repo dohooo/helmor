@@ -14,10 +14,12 @@ import {
 	type PendingPermission as StorePendingPermission,
 	useStreamingStore,
 } from "@/features/conversation/state/streaming-store";
+import { useTeamIdentity } from "@/features/team/use-team-identity";
 import type {
 	ActiveStreamSummary,
 	AgentModelOption,
 	CodexGoalState,
+	MessageAuthor,
 	ThreadMessageLike,
 } from "@/lib/api";
 import {
@@ -179,6 +181,12 @@ export function useConversationStreaming({
 }: UseConversationStreamingArgs) {
 	const queryClient = useQueryClient();
 	const pushToast = useWorkspaceToast();
+	// Local team identity (the sender's own GitHub avatar/name). Read via a ref
+	// in the submit handler so optimistic messages render the avatar instantly,
+	// without churning the large submit callback's dependency array.
+	const { identity: teamIdentity } = useTeamIdentity();
+	const teamIdentityRef = useRef(teamIdentity);
+	teamIdentityRef.current = teamIdentity;
 	// All per-context state lives in the module-level Zustand store so the
 	// stream's Tauri Channel callback keeps writing to a target that
 	// outlives every component unmount / remount. The hook subscribes via
@@ -686,6 +694,23 @@ export function useConversationStreaming({
 
 			const contextKey = targetContextKey;
 
+			// Optimistic messages render the sender's OWN avatar/name instantly
+			// (the client knows who it is; the server still stamps the trusted
+			// author_id on persist). Team mode only — single-user carries no
+			// author (no avatar), byte-identical to before.
+			const selfAuthor: MessageAuthor | undefined = (() => {
+				if (!isTeamModeActive()) return undefined;
+				const id = teamIdentityRef.current?.githubId;
+				if (!id) return undefined;
+				return {
+					id,
+					displayName:
+						teamIdentityRef.current?.displayName ??
+						teamIdentityRef.current?.login,
+					avatarUrl: teamIdentityRef.current?.avatarUrl ?? undefined,
+				};
+			})();
+
 			// Follow-up branch: stream still alive → steer or queue.
 			// `activeStreams` is the source of truth (survives remount);
 			// `activeSessionByContext` is the optimistic fast-path for the
@@ -759,6 +784,7 @@ export function useConversationStreaming({
 					createdAt: new Date().toISOString(),
 					files: filePaths,
 					images: imagePaths,
+					author: selfAuthor,
 				});
 				const rollback = appendUserMessage(
 					queryClient,
@@ -849,6 +875,9 @@ export function useConversationStreaming({
 					// to the agent until a reload re-fetches them with the marker
 					// stamped by the pipeline adapter.
 					isRoomChat: true,
+					// The sender's own avatar/name → the bubble shows it instantly,
+					// no wait for the server round-trip / broadcast echo.
+					author: selfAuthor,
 				};
 				const rollback = appendUserMessage(
 					queryClient,
@@ -976,6 +1005,7 @@ export function useConversationStreaming({
 				files: filePaths,
 				images: imagePaths,
 				pastedTexts,
+				author: selfAuthor,
 			});
 			let titleSeed: string | null = null;
 			if (isFirstUserMessage && !isCompactCommand) {
