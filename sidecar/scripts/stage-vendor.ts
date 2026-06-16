@@ -1199,8 +1199,10 @@ if (!IS_LINUX) stageOptional("opencode", () => stageOpencodeBinary(target));
 // ----- mimo (desktop only — skipped in the Linux serve image) -----
 if (!IS_LINUX) stageOptional("mimo", () => stageMimoBinary(target));
 
-// ----- kimi (Kimi Code CLI, ACP provider) -----
-stageOptional("kimi", () => stageKimiBinary(target));
+// ----- kimi (Kimi Code CLI, ACP provider) — desktop only. Upstream ships no
+// Linux release artifact, and the headless serve image stages only
+// claude-code + codex + gh (T3), so gate it off Linux like opencode / mimo. -----
+if (!IS_LINUX) stageOptional("kimi", () => stageKimiBinary(target));
 
 // ----- gh + glab (forge CLIs) -----
 // Wrapped in stageOptional so a missing/unpublished Windows artifact downgrades
