@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.40.1
+
+### Patch Changes
+
+- [#858](https://github.com/dohooo/helmor/pull/858) [`b23e5d9`](https://github.com/dohooo/helmor/commit/b23e5d96e5f1ea2cf671aa2f396fc916452773da) Thanks [@natllian](https://github.com/natllian)! - Restore the accent colors on the composer's mode controls — the animated Extra High / Max effort label, the Plan toggle, and the Terminal-Mode toggle.
+
 ## 0.40.0
 
 ### Minor Changes
