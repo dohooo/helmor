@@ -55,10 +55,7 @@
 		"active": true,
 		"createUpdaterArtifacts": true,
 		"targets": "all",
-		"externalBin": [
-			"../sidecar/dist/helmor-sidecar",
-			"./target/bundled/helmor-cli"
-		],
+		"externalBin": ["../sidecar/dist/helmor-sidecar"],
 		"resources": {
 			"../sidecar/dist/vendor/": "vendor"
 		},
