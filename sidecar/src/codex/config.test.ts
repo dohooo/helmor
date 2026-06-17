@@ -5,7 +5,7 @@ import { join } from "node:path";
 import {
 	ensureCodexGoalsFeatureEnabled,
 	injectGoalsFeature,
-} from "./codex-config.js";
+} from "./config.js";
 
 describe("injectGoalsFeature", () => {
 	test("creates a fresh file body when content is null", () => {

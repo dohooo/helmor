@@ -104,6 +104,7 @@ async fn dispatch(
         "get_helmor_components_update_check" => to_value(crate::commands::system_commands::get_helmor_components_update_check().await?),
         "get_helmor_skills_status" => to_value(crate::commands::system_commands::get_helmor_skills_status().await?),
         "get_inbox_item_detail" => to_value(crate::commands::forge_commands::get_inbox_item_detail(arg_json(&args, "provider")?, arg_string(&args, "login")?, arg_opt_string(&args, "host"), arg_json(&args, "source")?, arg_string(&args, "externalId")?).await?),
+        "get_kimi_provider_config" => to_value(crate::commands::kimi_provider_commands::get_kimi_provider_config().await?),
         "get_live_context_usage" => to_value(crate::commands::session_commands::get_live_context_usage(app.state::<crate::sidecar::ManagedSidecar>(), arg_json(&args, "request")?).await?),
         "get_repo_current_branch" => to_value(crate::commands::workspace_commands::get_repo_current_branch(arg_string(&args, "repoId")?).await?),
         "get_session_codex_goal" => to_value(crate::commands::session_commands::get_session_codex_goal(arg_string(&args, "sessionId")?).await?),
@@ -154,6 +155,7 @@ async fn dispatch(
                 arg_string(&args, "family")?,
                 arg_string(&args, "baseUrl")?,
                 arg_opt_string(&args, "apiKey").unwrap_or_default(),
+                arg_opt_string(&args, "apiStyle"),
             )
             .await?,
         ),

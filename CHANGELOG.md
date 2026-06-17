@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.40.1
+
+### Patch Changes
+
+- [#858](https://github.com/dohooo/helmor/pull/858) [`b23e5d9`](https://github.com/dohooo/helmor/commit/b23e5d96e5f1ea2cf671aa2f396fc916452773da) Thanks [@natllian](https://github.com/natllian)! - Restore the accent colors on the composer's mode controls — the animated Extra High / Max effort label, the Plan toggle, and the Terminal-Mode toggle.
+
+## 0.40.0
+
+### Minor Changes
+
+- [#797](https://github.com/dohooo/helmor/pull/797) [`e94d1c4`](https://github.com/dohooo/helmor/commit/e94d1c412255b74968d3ab423cab2b9969399b8c) Thanks [@dohooo](https://github.com/dohooo)! - Add Kimi Code as a new agent provider.
+
+  - Run Kimi models over the Agent Client Protocol with streaming responses, tool calls, file diffs, plans, permission prompts, and slash commands
+  - Sign in with `kimi login` from Settings → Providers
+  - Manage Kimi's third-party model providers — pick from a curated catalog or add a custom OpenAI-compatible endpoint or registry — and choose which models appear in the composer's picker
+
+### Patch Changes
+
+- [#854](https://github.com/dohooo/helmor/pull/854) [`62e6a6a`](https://github.com/dohooo/helmor/commit/62e6a6a042da2378d4f677a42cf02853ec06ee86) Thanks [@natllian](https://github.com/natllian)! - Fix Cursor responses briefly rendering their text twice while a turn is still streaming; the duplicate text now collapses to a single copy as it streams.
+
+- [#852](https://github.com/dohooo/helmor/pull/852) [`761599d`](https://github.com/dohooo/helmor/commit/761599da4c3a08180df157106cd27b996732db2f) Thanks [@natllian](https://github.com/natllian)! - Fix a sidecar process leak and refine provider behavior.
+
+  - The sidecar now tears down its provider servers and exits when the parent process goes away, fixing leaked OpenCode `serve` processes (and their memory) when an app instance dies.
+  - Kimi now generates real, model-written session titles and branch names (preferring the configured custom model), consistent with the other agents.
+  - OpenCode and MiMo show "Ready" only after an actual sign-in, so the Login action stays available when only environment variables or custom providers are configured.
+
+## 0.39.1
+
+### Patch Changes
+
+- [#848](https://github.com/dohooo/helmor/pull/848) [`eac697c`](https://github.com/dohooo/helmor/commit/eac697c62d0bbf434433421db09d63ac11f25893) Thanks [@natllian](https://github.com/natllian)! - Improve Claude model handling:
+  - The default Claude model is pinned to Opus 4.8 (1M context) so it can't silently switch to a different model when the bundled Claude CLI updates; existing sessions and settings keep the same model.
+  - Terminal mode is now limited to official Claude models — custom (BYOK) Claude models run in GUI mode instead, since the terminal can't carry their custom provider settings.
+
+## 0.39.0
+
+### Minor Changes
+
+- [#846](https://github.com/dohooo/helmor/pull/846) [`533228a`](https://github.com/dohooo/helmor/commit/533228a8a1278fe76abc9bbff14160b32c4a8270) Thanks [@natllian](https://github.com/natllian)! - Unify custom AI provider configuration across Claude Code, Codex, OpenCode, and MiMo Code.
+
+  - Configure multiple custom providers per agent in Settings — pick a built-in preset or add an OpenAI-compatible endpoint; models are auto-fetched from the endpoint with a manual fallback.
+  - Claude Code custom providers are now multi-slot, matching Codex, OpenCode, and MiMo Code.
+  - Pick which official and custom models appear in the composer's model picker; deselecting all of a provider hides its section.
+
+### Patch Changes
+
+- [#844](https://github.com/dohooo/helmor/pull/844) [`e8dbade`](https://github.com/dohooo/helmor/commit/e8dbade1bfd0600f98472c0b57fc96250d796c74) Thanks [@lncitador](https://github.com/lncitador)! - Fix Intel (x86_64) builds shipping an arm64 `helmor-sidecar`, which made the app fail to launch its sidecar with "Failed to start sidecar binary" / "bad CPU type in executable" on Intel Macs. The sidecar is now cross-compiled to the release target triple, and the bundle arch check covers it so the mismatch can't ship again.
+
 ## 0.38.0
 
 ### Minor Changes

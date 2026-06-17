@@ -38,6 +38,8 @@ import {
 	type DarwinArch,
 	ghArchivePlan,
 	glabArchivePlan,
+	KIMI_VERSION,
+	kimiArchivePlan,
 	llamaArchivePlan,
 	mimoArchivePlan,
 	nodeArchivePlan,
@@ -706,6 +708,51 @@ function stageMimoBinary(target: TargetInfo): string {
 }
 
 // ---------------------------------------------------------------------------
+// kimi — Kimi Code CLI. Per-platform native binary (Node SEA), shipped as a
+// GitHub release `.zip` holding a single `kimi[.exe]` at the archive root.
+// codesign needs JIT entitlements (true flag) because V8's JIT hits the same
+// hardened-runtime wall as the Bun/Node binaries.
+// ---------------------------------------------------------------------------
+
+function stageKimiBinary(target: TargetInfo): string {
+	ensureCacheDir();
+	const plan = kimiArchivePlan(target, KIMI_VERSION);
+	// Shared cross-worktree archive cache (like every other vendor) so a new
+	// worktree reuses the downloaded zip (~43 MB) instead of re-fetching it.
+	// kimi ships no npm package, so it ALWAYS hits this download path — unlike
+	// mimo/codex/claude, which come from node_modules on a native-arch host.
+	const archive = join(ARCHIVE_CACHE, plan.archiveName);
+	downloadAndVerify(plan.url, archive, plan.sha256);
+
+	const extractDir = join(BUNDLE_CACHE, plan.slug);
+	freshExtractDir(extractDir);
+	extractArchive(archive, extractDir);
+
+	// The release zip holds a single `kimi[.exe]` at the archive root; tolerate
+	// a one-level wrapper dir in case upstream re-nests it.
+	let binSrc = join(extractDir, `kimi${EXE}`);
+	if (!existsSync(binSrc)) {
+		for (const entry of readdirSync(extractDir)) {
+			const nested = join(extractDir, entry, `kimi${EXE}`);
+			if (existsSync(nested)) {
+				binSrc = nested;
+				break;
+			}
+		}
+	}
+	if (!existsSync(binSrc)) {
+		throw new Error(
+			`[stage-vendor] kimi binary missing after extract: ${extractDir}`,
+		);
+	}
+	const binDest = join(DIST_VENDOR, "kimi", `kimi${EXE}`);
+	copyFile(binSrc, binDest);
+	chmodSync(binDest, 0o755);
+	maybeSignMacBinary(binDest, true);
+	return binDest;
+}
+
+// ---------------------------------------------------------------------------
 // llama.cpp — download official macOS binary release for the target arch.
 // Different from gh/glab: ships as a fat zip containing llama-server +
 // llama-cli + a pile of shared libs (libllama, libggml-*, libmtmd, ...).
@@ -1146,6 +1193,9 @@ stageOptional("opencode", () => stageOpencodeBinary(target));
 // ----- mimo -----
 stageOptional("mimo", () => stageMimoBinary(target));
 
+// ----- kimi (Kimi Code CLI, ACP provider) -----
+stageOptional("kimi", () => stageKimiBinary(target));
+
 // ----- gh + glab (forge CLIs) -----
 // Wrapped in stageOptional so a missing/unpublished Windows artifact downgrades
 // to a warning; on macOS stageOptional re-throws, keeping staging strict.
@@ -1172,6 +1222,7 @@ console.log(`  claude-code ${humanSize(join(DIST_VENDOR, "claude-code"))}`);
 console.log(`  codex       ${humanSize(join(DIST_VENDOR, "codex"))}`);
 console.log(`  opencode    ${humanSize(join(DIST_VENDOR, "opencode"))}`);
 console.log(`  mimo        ${humanSize(join(DIST_VENDOR, "mimo"))}`);
+console.log(`  kimi        ${humanSize(join(DIST_VENDOR, "kimi"))}`);
 console.log(`  gh          ${humanSize(join(DIST_VENDOR, "gh"))}`);
 console.log(`  glab        ${humanSize(join(DIST_VENDOR, "glab"))}`);
 console.log(`  cloudflared ${humanSize(join(DIST_VENDOR, "cloudflared"))}`);

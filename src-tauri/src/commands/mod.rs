@@ -5,6 +5,7 @@ pub(crate) mod editor_commands;
 pub(crate) mod editors;
 pub(crate) mod feedback_commands;
 pub(crate) mod forge_commands;
+pub(crate) mod kimi_provider_commands;
 pub(crate) mod local_llm_commands;
 pub(crate) mod provider_commands;
 pub(crate) mod repository_commands;

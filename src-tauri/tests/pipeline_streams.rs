@@ -275,7 +275,7 @@ fn stream_replay() {
         assert!(
             matches!(
                 provider,
-                "claude" | "codex" | "cursor" | "opencode" | "mimo"
+                "claude" | "codex" | "cursor" | "opencode" | "mimo" | "kimi"
             ),
             "fixture {path:?} is under unknown provider directory {provider:?}"
         );
@@ -316,8 +316,12 @@ fn stream_replay() {
 
         // Mirror the persistence-side finalization that agents.rs runs after
         // the stream loop — this flushes the staged final assistant turn
-        // into `accumulator.turns`, which the snapshot below reads.
+        // into `accumulator.turns`, which the snapshot below reads. Kimi
+        // flushes on every termination path (see agents/streaming) so
+        // fixtures ending without `kimi/turn_complete` (error mid-turn)
+        // still persist the partial turn; no-op for other providers.
         pipeline.accumulator.flush_pending();
+        pipeline.accumulator.flush_kimi_in_progress();
         let persisted_turns = build_persisted_snapshot(&pipeline);
         let historical_render = build_historical_snapshot(&pipeline);
 

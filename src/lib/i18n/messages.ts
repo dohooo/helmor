@@ -361,8 +361,8 @@ export const ZH_CN_MESSAGES = {
 	"Helmor Skills (Beta)": "Helmor 技能（Beta）",
 	"Helmor now supports English and Simplified Chinese, with language pickers in Settings and onboarding.":
 		"Helmor 现在支持英文和简体中文，并可在设置和引导流程中切换语言。",
-	"Helmor uses your local Claude Code and Codex login sessions. You can log in now, or continue and log in later.":
-		"Helmor 使用你本地的 Claude Code 和 Codex 登录会话。你可以现在登录，也可以继续后稍后登录。",
+	"Helmor uses your local login sessions. You can log in now, or continue and log in later.":
+		"Helmor 使用你本地的登录会话。你可以现在登录，也可以继续并稍后登录。",
 	"Helmor workspace preview": "Helmor 工作区预览",
 	Helpers: "辅助项",
 	"Hi, Helmor!": "你好，Helmor！",

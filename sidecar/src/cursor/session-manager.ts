@@ -1,5 +1,5 @@
 /** Proxy `SessionManager` for Cursor. The real `@cursor/sdk` work runs in a
- * Node child process (`cursor-worker/worker.ts`) because Bun's HTTP/2 client
+ * Node child process (`cursor/worker/worker.ts`) because Bun's HTTP/2 client
  * throws `NGHTTP2_FRAME_SIZE_ERROR` on the larger frames Cursor sends inside a
  * git repo, which silently breaks every tool call. Node has no such bug.
  *
@@ -11,13 +11,8 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import type {
-	EmitMsg,
-	FromWorker,
-	ToWorker,
-} from "./cursor-worker/protocol.js";
-import type { SidecarEmitter } from "./emitter.js";
-import { errorDetails, logger } from "./logger.js";
+import type { SidecarEmitter } from "../emitter.js";
+import { errorDetails, logger } from "../logger.js";
 import type {
 	GenerateTitleOptions,
 	ListSlashCommandsParams,
@@ -26,7 +21,8 @@ import type {
 	SessionManager,
 	SlashCommandInfo,
 	UserInputResolution,
-} from "./session-manager.js";
+} from "../session-manager.js";
+import type { EmitMsg, FromWorker, ToWorker } from "./worker/protocol.js";
 
 /// Resolve the Node binary that runs the worker. Release passes an absolute
 /// path; dev falls back to `node` on PATH.

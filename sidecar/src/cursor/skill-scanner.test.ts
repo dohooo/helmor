@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseFrontmatter, scanCursorSkills } from "./cursor-skill-scanner.js";
+import { parseFrontmatter, scanCursorSkills } from "./skill-scanner.js";
 
 async function makeSkill(
 	root: string,

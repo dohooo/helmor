@@ -1,0 +1,5 @@
+{"type":"kimi/session_init","session_id":"ses_kimi_1","model":"kimi-for-coding"}
+{"type":"kimi/agent_message_chunk","session_id":"ses_kimi_1","text":"Updating the config."}
+{"type":"kimi/tool_call","session_id":"ses_kimi_1","tool_call_id":"call_1","title":"Edit config.toml","kind":"edit","status":"in_progress","raw_input":{"path":"config.toml"}}
+{"type":"error","message":"Kimi process exited unexpectedly"}
+{"type":"end"}

@@ -17,6 +17,7 @@
 mod blocks;
 mod codex_items;
 mod grouping;
+mod kimi_parts;
 mod labels;
 mod opencode_parts;
 
@@ -309,6 +310,27 @@ fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, Wo
             if let Some(p) = parsed {
                 let content: Vec<ExtendedMessagePart> =
                     opencode_parts::render_parts(p, &msg.id, msg.is_streaming)
+                        .into_iter()
+                        .map(ExtendedMessagePart::Basic)
+                        .collect();
+                result.push(ThreadMessageLike {
+                    role: MessageRole::Assistant,
+                    id: Some(msg.id.clone()),
+                    created_at: Some(msg.created_at.clone()),
+                    content,
+                    status: None,
+                    streaming: if msg.is_streaming { Some(true) } else { None },
+                });
+            }
+            i += 1;
+            continue;
+        }
+
+        // kimi (ACP) native assistant message → universal render parts.
+        if msg_type == Some("kimi_message") {
+            if let Some(p) = parsed {
+                let content: Vec<ExtendedMessagePart> =
+                    kimi_parts::render_parts(p, &msg.id, msg.is_streaming)
                         .into_iter()
                         .map(ExtendedMessagePart::Basic)
                         .collect();

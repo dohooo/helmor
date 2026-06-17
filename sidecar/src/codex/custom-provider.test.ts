@@ -1,11 +1,11 @@
 // Custom Codex provider plumbing: parse + inject into thread params.
 
 import { describe, expect, test } from "bun:test";
-import { applyCodexProviderConfig } from "./codex-app-server-manager.js";
 import {
 	parseCodexProvider,
 	parseSendMessageParams,
-} from "./request-parser.js";
+} from "../request-parser.js";
+import { applyCodexProviderConfig } from "./app-server-manager.js";
 
 const VALID = {
 	id: "hundun",

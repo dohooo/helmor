@@ -3,7 +3,7 @@ import { parseMacSystemProxy } from "../src/agent-proxy.js";
 import {
 	buildCodexAppServerArgs,
 	buildCodexEnv,
-} from "../src/codex-app-server.js";
+} from "../src/codex/app-server.js";
 
 function withPlatform<T>(platform: NodeJS.Platform, fn: () => T): T {
 	const original = process.platform;

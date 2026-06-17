@@ -735,6 +735,90 @@ describe("WorkspaceComposerContainer", () => {
 		expect(composerMockState.lastOnChangeTerminalMode).toBeNull();
 	});
 
+	it("hides the terminal toggle for custom (BYOK) Claude models", () => {
+		const queryClient = createHelmorQueryClient();
+		// Same official Claude option plus a custom (BYOK) one carrying a
+		// providerKey — the terminal CLI can't carry its base URL / auth.
+		const sections = [
+			{
+				id: "claude",
+				label: "Claude",
+				options: [
+					...MODEL_SECTIONS[0].options,
+					{
+						id: "claude-custom|minimax|MiniMax-M2.7",
+						provider: "claude",
+						providerKey: "minimax",
+						label: "MiniMax M2.7",
+						cliModel: "MiniMax-M2.7",
+						effortLevels: ["low", "medium", "high"],
+					},
+				],
+			},
+			...MODEL_SECTIONS.slice(1),
+		];
+		queryClient.setQueryData(helmorQueryKeys.agentModelSections, sections);
+
+		const settings = {
+			...DEFAULT_SETTINGS,
+			enableTerminalMode: true,
+			startSurfacePreferences: {
+				...DEFAULT_SETTINGS.startSurfacePreferences,
+				// Persisted "on" — must be masked when a custom model is selected.
+				terminalModeActive: true,
+			},
+		};
+
+		const sharedProps = {
+			displayedWorkspaceId: null,
+			displayedSessionId: null,
+			disabled: false,
+			forceAvailable: true as const,
+			focusScope: "start-composer" as const,
+			contextKeyOverride: "start:repo:repo-1",
+			sending: false,
+			sendError: null,
+			restoreDraft: null,
+			restoreImages: [],
+			restoreFiles: [],
+			restoreNonce: 0,
+			effortLevels: {},
+			permissionModes: {},
+			fastModes: {},
+			onSelectModel: vi.fn(),
+			onSelectEffort: vi.fn(),
+			onChangePermissionMode: vi.fn(),
+			onChangeFastMode: vi.fn(),
+			onSubmit: vi.fn(),
+		};
+
+		const renderWith = (modelId: string) =>
+			render(
+				<SettingsContext.Provider
+					value={{ settings, isLoaded: true, updateSettings: vi.fn() }}
+				>
+					<QueryClientProvider client={queryClient}>
+						<WorkspaceComposerContainer
+							{...sharedProps}
+							modelSelections={{
+								"start:repo:repo-1": { provider: "claude", modelId },
+							}}
+						/>
+					</QueryClientProvider>
+				</SettingsContext.Provider>,
+			);
+
+		// Control: an official Claude model keeps the terminal toggle.
+		renderWith("opus-1m");
+		expect(composerMockState.lastOnChangeTerminalMode).not.toBeNull();
+		expect(composerMockState.lastTerminalMode).toBe(true);
+
+		// Custom model: toggle hidden and the persisted "on" is masked to GUI.
+		renderWith("claude-custom|minimax|MiniMax-M2.7");
+		expect(composerMockState.lastOnChangeTerminalMode).toBeNull();
+		expect(composerMockState.lastTerminalMode).toBe(false);
+	});
+
 	it("auto-submits queued CLI prompts using the model + permission_mode pinned on the session row", async () => {
 		const queryClient = createHelmorQueryClient();
 		queryClient.setQueryData(

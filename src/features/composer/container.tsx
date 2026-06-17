@@ -775,7 +775,10 @@ export const WorkspaceComposerContainer = memo(
 		// Custom Codex providers (`codex:<id>`) collapse to "codex".
 		const slashProvider: AgentProvider = isCodexProvider(provider)
 			? "codex"
-			: provider === "cursor" || provider === "opencode" || provider === "mimo"
+			: provider === "cursor" ||
+					provider === "opencode" ||
+					provider === "mimo" ||
+					provider === "kimi"
 				? provider
 				: "claude";
 		// Prefer the repoId from a real workspace; on the start page there's no
@@ -892,11 +895,19 @@ export const WorkspaceComposerContainer = memo(
 		// Terminal sessions need a repo to spawn the PTY in — hide the toggle on
 		// chat surfaces (chat-mode start page via the prop, chat workspaces via
 		// the detail row) so a submit can't strand a session that never spawns.
+		// Custom (BYOK) Claude models hide it too: the terminal CLI only takes
+		// `--model`, with no way to carry their base URL / auth, so they behave
+		// like any provider without a terminal agent.
 		const showTerminalToggle =
 			settings.enableTerminalMode &&
 			terminalModeAvailable &&
 			workspaceDetailQuery.data?.mode !== "chat" &&
-			findTerminalAgent(effectiveModel?.provider) !== null;
+			findTerminalAgent(effectiveModel?.provider) !== null &&
+			!effectiveModel?.providerKey;
+		// Masked terminal mode: a stale `true` (toggled on under an official
+		// model, then switched to a custom one) must not leak terminal styling
+		// or a terminal submit — fall back to GUI until the toggle returns.
+		const effectiveTerminalMode = terminalMode && showTerminalToggle;
 
 		// App-scoped ⌘⇧T (global shortcut → shell event).
 		useShellEvent("toggle-terminal-mode", () => {
@@ -920,11 +931,7 @@ export const WorkspaceComposerContainer = memo(
 				if (!effectiveModel) {
 					return;
 				}
-				if (
-					terminalMode &&
-					showTerminalToggle &&
-					focusScope === "workspace-composer"
-				) {
+				if (effectiveTerminalMode && focusScope === "workspace-composer") {
 					// Terminal-Mode send: open the prompt in the provider's TUI
 					// instead of streaming a GUI turn. The shell listener creates
 					// the terminal session and boots it with the composer state.
@@ -974,7 +981,7 @@ export const WorkspaceComposerContainer = memo(
 					// Start composer only: the workspace doesn't exist yet, so the
 					// terminal intent rides the payload through create/finalize and
 					// is honored by the pending-submit consumer.
-					terminalMode: terminalMode && showTerminalToggle,
+					terminalMode: effectiveTerminalMode,
 				});
 			},
 			[
@@ -986,8 +993,7 @@ export const WorkspaceComposerContainer = memo(
 				fastMode,
 				supportsFastMode,
 				settings.followUpBehavior,
-				terminalMode,
-				showTerminalToggle,
+				effectiveTerminalMode,
 				linkedDirectories,
 				displayedWorkspaceId,
 				displayedSessionId,
@@ -1348,7 +1354,7 @@ export const WorkspaceComposerContainer = memo(
 						onChangeFastMode={
 							supportsFastMode ? handleChangeFastModeInner : undefined
 						}
-						terminalMode={terminalMode}
+						terminalMode={effectiveTerminalMode}
 						onChangeTerminalMode={
 							showTerminalToggle ? setTerminalMode : undefined
 						}
