@@ -1,12 +1,12 @@
 /**
- * Lexical plugin: @-mention file picker.
+ * Lexical plugin: @-mention picker.
  *
  * Mirrors `slash-command-plugin.tsx` but for files. Trigger character is `@`,
- * the data source is `listWorkspaceFiles` (cached per workspace root), and
- * selection inserts a `FileBadgeNode` in place of the `@<query>` text rather
- * than replacing the text with a command name. The badge is the same node
- * the drag-drop plugin produces, so `$extractComposerContent()` already knows
- * how to serialize it as `@relative/path.ts` for the agent prompt.
+ * the main data source is `listWorkspaceFiles` (cached per workspace root), and
+ * selection inserts an inline mention badge in place of the `@<query>` text
+ * rather than replacing the text with a command name. File badges are the same
+ * nodes the drag-drop plugin produces, so `$extractComposerContent()` already
+ * knows how to serialize them as `@relative/path.ts` for the agent prompt.
  *
  * The popup is anchored, navigated, and positioned by Lexical's
  * `LexicalTypeaheadMenuPlugin` — same primitive used by the slash plugin.
@@ -21,7 +21,7 @@ import {
 } from "@lexical/react/LexicalTypeaheadMenuPlugin";
 import { useQuery } from "@tanstack/react-query";
 import { $createTextNode, type TextNode } from "lexical";
-import { FileText } from "lucide-react";
+import { Bot, FileText } from "lucide-react";
 import {
 	type RefObject,
 	useCallback,
@@ -40,7 +40,9 @@ import {
 import type { InspectorFileItem } from "@/lib/editor-session";
 import { workspaceFilesQueryOptions } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
+import { $createAgentMentionNode } from "../agent-mention-node";
 import { $createFileBadgeNode } from "../file-badge-node";
+import { shouldIncludeAgentMentionOption } from "./agent-mention-option";
 
 /** Cap the visible option list. With ~5000 files in cache, rendering them all
  * into cmdk would tank typing latency for no UX benefit — users always narrow
@@ -48,6 +50,7 @@ import { $createFileBadgeNode } from "../file-badge-node";
 export const MAX_VISIBLE_OPTIONS = 50;
 
 class FileMentionOption extends MenuOption {
+	readonly kind = "file";
 	readonly file: InspectorFileItem;
 	constructor(file: InspectorFileItem) {
 		// MenuOption keys must be unique within the visible list. Path is
@@ -57,6 +60,15 @@ class FileMentionOption extends MenuOption {
 		this.file = file;
 	}
 }
+
+class AgentMentionOption extends MenuOption {
+	readonly kind = "agent";
+	constructor() {
+		super("agent:agent");
+	}
+}
+
+type MentionOption = AgentMentionOption | FileMentionOption;
 
 /**
  * Rank files against a query. Higher score = better match.
@@ -143,8 +155,13 @@ export function FileMentionPlugin({
 	const files = filesQuery.data ?? [];
 
 	const options = useMemo(() => {
+		const next: MentionOption[] = [];
+		if (shouldIncludeAgentMentionOption(query ?? "")) {
+			next.push(new AgentMentionOption());
+		}
 		const filtered = filterFiles(files, query ?? "");
-		return filtered.map((file) => new FileMentionOption(file));
+		next.push(...filtered.map((file) => new FileMentionOption(file)));
+		return next;
 	}, [files, query]);
 
 	const triggerFn = useBasicTypeaheadTriggerMatch("@", {
@@ -156,16 +173,19 @@ export function FileMentionPlugin({
 
 	const onSelectOption = useCallback(
 		(
-			selected: FileMentionOption,
+			selected: MentionOption,
 			nodeToReplace: TextNode | null,
 			closeMenu: () => void,
 		) => {
 			editor.update(() => {
 				if (nodeToReplace) {
-					// Swap the `@<query>` text slice for an inline file badge,
+					// Swap the `@<query>` text slice for an inline mention badge,
 					// then drop a trailing space TextNode so the caret has a
 					// landing spot to continue typing.
-					const badge = $createFileBadgeNode(selected.file.path);
+					const badge =
+						selected.kind === "agent"
+							? $createAgentMentionNode()
+							: $createFileBadgeNode(selected.file.path);
 					const trailing = $createTextNode(" ");
 					nodeToReplace.replace(badge);
 					badge.insertAfter(trailing);
@@ -178,7 +198,7 @@ export function FileMentionPlugin({
 	);
 
 	return (
-		<LexicalTypeaheadMenuPlugin<FileMentionOption>
+		<LexicalTypeaheadMenuPlugin<MentionOption>
 			triggerFn={triggerFn}
 			onQueryChange={setQuery}
 			onSelectOption={onSelectOption}
@@ -196,7 +216,7 @@ export function FileMentionPlugin({
 				if (!portalTarget) return null;
 				if (options.length === 0) return null;
 
-				const highlightValue = options[selectedIndex ?? 0]?.file.path ?? "";
+				const highlightValue = optionValue(options[selectedIndex ?? 0]) ?? "";
 
 				return createPortal(
 					// Same anchor strategy as the slash command popup: `bottom-full`
@@ -214,11 +234,38 @@ export function FileMentionPlugin({
 							className="rounded-xl border border-border/60 bg-background text-foreground shadow-2xl ring-1 ring-black/5"
 						>
 							<CommandList className="max-h-72">
-								<CommandEmpty>No files</CommandEmpty>
-								<CommandGroup heading="Files">
+								<CommandEmpty>No mentions</CommandEmpty>
+								<CommandGroup heading="Mentions">
 									{options.map((opt, index) => {
-										const file = opt.file;
 										const isSelected = index === selectedIndex;
+										if (opt.kind === "agent") {
+											return (
+												<CommandItem
+													key={opt.key}
+													value="@agent"
+													ref={(el) => opt.setRefElement(el)}
+													onSelect={() => selectOptionAndCleanUp(opt)}
+													onMouseEnter={() => setHighlightedIndex(index)}
+													onPointerDown={(event) => event.preventDefault()}
+													className={cn(
+														"min-w-0 rounded-lg px-2.5 py-2 text-ui",
+														isSelected && "bg-muted text-foreground",
+													)}
+												>
+													<Bot
+														className="size-3.5 shrink-0 text-muted-foreground"
+														strokeWidth={1.8}
+													/>
+													<span className="min-w-0 shrink-0 truncate font-medium">
+														@agent
+													</span>
+													<span className="min-w-0 flex-1 truncate whitespace-nowrap text-small text-muted-foreground">
+														Send to the agent
+													</span>
+												</CommandItem>
+											);
+										}
+										const file = opt.file;
 										// Show the directory portion of the path dimmed,
 										// filename in foreground. For root files the
 										// directory portion is empty.
@@ -263,4 +310,9 @@ export function FileMentionPlugin({
 			}}
 		/>
 	);
+}
+
+function optionValue(option: MentionOption | undefined): string | null {
+	if (!option) return null;
+	return option.kind === "agent" ? "@agent" : option.file.path;
 }

@@ -80,6 +80,10 @@ import { buildTitleSeed, seedSessionTitle } from "./seed-session-title";
 
 const EMPTY_IMAGES: string[] = [];
 const EMPTY_FILES: string[] = [];
+const PENDING_SELF_AUTHOR: MessageAuthor = {
+	id: "pending-self",
+	displayName: "You",
+};
 
 /**
  * Re-export from the streaming store — kept here so existing import
@@ -204,6 +208,7 @@ export function useConversationStreaming({
 		interactionWorkspaceByContext,
 		sendingContextKeys,
 		activeFastPreludes,
+		mirroredActiveSessionByContext,
 	} = useStreamingStore(
 		useShallow((state) => ({
 			pendingPermissionsByContext: state.pendingPermissionsByContext,
@@ -212,6 +217,7 @@ export function useConversationStreaming({
 			interactionWorkspaceByContext: state.interactionWorkspaceByContext,
 			sendingContextKeys: state.sendingContextKeys,
 			activeFastPreludes: state.activeFastPreludes,
+			mirroredActiveSessionByContext: state.mirroredActiveSessionByContext,
 		})),
 	);
 	const activeSendError = useStreamingStore(
@@ -281,14 +287,13 @@ export function useConversationStreaming({
 	const providerCapabilitiesTable = providerCapabilitiesQuery.data ?? null;
 	// Value-stable fingerprint for effects that only care about the set
 	// of active session ids, not the array's reference.
-	const activeSessionIdsKey = useMemo(
-		() =>
-			activeStreams
-				.map((stream) => stream.sessionId)
-				.sort()
-				.join("\n"),
-		[activeStreams],
-	);
+	const activeSessionIdsKey = useMemo(() => {
+		const ids = new Set(activeStreams.map((stream) => stream.sessionId));
+		for (const sessionId of Object.values(mirroredActiveSessionByContext)) {
+			ids.add(sessionId);
+		}
+		return [...ids].sort().join("\n");
+	}, [activeStreams, mirroredActiveSessionByContext]);
 	const selectedProvider = useMemo(() => {
 		if (!displayedSelectedModelId) return null;
 		const sections = modelSectionsQuery.data ?? [];
@@ -693,15 +698,16 @@ export function useConversationStreaming({
 			}
 
 			const contextKey = targetContextKey;
+			const teamModeActive = isTeamModeActive();
 
 			// Optimistic messages render the sender's OWN avatar/name instantly
 			// (the client knows who it is; the server still stamps the trusted
 			// author_id on persist). Team mode only — single-user carries no
 			// author (no avatar), byte-identical to before.
 			const selfAuthor: MessageAuthor | undefined = (() => {
-				if (!isTeamModeActive()) return undefined;
+				if (!teamModeActive) return undefined;
 				const id = teamIdentityRef.current?.githubId;
-				if (!id) return undefined;
+				if (!id) return PENDING_SELF_AUTHOR;
 				return {
 					id,
 					displayName:
@@ -710,6 +716,85 @@ export function useConversationStreaming({
 					avatarUrl: teamIdentityRef.current?.avatarUrl ?? undefined,
 				};
 			})();
+			const hasTeamAgentMention =
+				teamModeActive && hasAgentMention(trimmedPrompt);
+
+			// ── Team-mode @agent gating ──────────────────────────────────────
+			// In a room, an unmentioned message is normal group chat even when
+			// an agent turn is running. Persist/broadcast it as room chat before
+			// the live-stream follow-up branch can classify it as steer/queue.
+			// Only @agent messages are allowed to affect the agent control plane.
+			if (teamModeActive && !hasTeamAgentMention) {
+				const roomMsgId = crypto.randomUUID();
+				const now = new Date().toISOString();
+				const pastedTexts = locatePastedTextRanges(trimmedPrompt, customTags);
+				const optimisticMsg: ThreadMessageLike = {
+					...createLiveThreadMessage({
+						id: roomMsgId,
+						role: "user",
+						text: trimmedPrompt,
+						createdAt: now,
+						files: filePaths,
+						images: imagePaths,
+						pastedTexts,
+					}),
+					// Mark the optimistic bubble as room chat so the context-carry
+					// assembler (buildRoomCarryTranscript) folds it into the NEXT
+					// @agent turn — it collects user rows where isRoomChat===true.
+					// Without this, the room messages the user JUST typed are invisible
+					// to the agent until a reload re-fetches them with the marker
+					// stamped by the pipeline adapter.
+					isRoomChat: true,
+					// The sender's own avatar/name → the bubble shows it instantly,
+					// no wait for the server round-trip / broadcast echo.
+					author: selfAuthor,
+				};
+				const rollback = appendUserMessage(
+					queryClient,
+					targetSessionId,
+					optimisticMsg,
+				);
+				if (!isOverride) {
+					storeActions.setComposerRestore(null);
+				}
+				storeActions.setSendError(contextKey, null);
+				try {
+					await postRoomChatMessage(
+						{
+							helmorSessionId: targetSessionId,
+							clientMessageId: roomMsgId,
+							prompt: trimmedPrompt,
+							files: filePaths.length > 0 ? filePaths : null,
+							images: imagePaths.length > 0 ? imagePaths : null,
+							pastedTexts: pastedTexts.length > 0 ? pastedTexts : null,
+						},
+						() => {
+							// Room-chat broadcast events are handled by the session stream
+							// watcher (use-watch-session-stream). This callback is a no-op
+							// on the sender side — the optimistic bubble above is already
+							// in the cache and will be reconciled on reload/reload.
+						},
+					);
+				} catch (err) {
+					restoreSnapshot(queryClient, targetSessionId, rollback);
+					if (!isOverride) {
+						storeActions.setComposerRestore({
+							contextKey,
+							draft: trimmedPrompt,
+							images: imagePaths,
+							files: filePaths,
+							customTags,
+							editorState: editorStateSnapshot ?? null,
+							nonce: Date.now(),
+						});
+					}
+					storeActions.setSendError(
+						contextKey,
+						err instanceof Error ? err.message : String(err),
+					);
+				}
+				return;
+			}
 
 			// Follow-up branch: stream still alive → steer or queue.
 			// `activeStreams` is the source of truth (survives remount);
@@ -720,6 +805,11 @@ export function useConversationStreaming({
 			const backendLiveStream = activeStreams.find(
 				(stream) => stream.sessionId === targetSessionId,
 			);
+			const mirroredLiveSessionId =
+				mirroredActiveSessionByContext[targetContextKey];
+			const hasMirroredLiveStream = mirroredLiveSessionId === targetSessionId;
+			const mirroredOnlyLiveStream =
+				hasMirroredLiveStream && !localLiveStream && !backendLiveStream;
 			const liveStream =
 				localLiveStream ??
 				(backendLiveStream
@@ -727,7 +817,12 @@ export function useConversationStreaming({
 							stopSessionId: targetSessionId,
 							provider: backendLiveStream.provider,
 						}
-					: null);
+					: hasMirroredLiveStream
+						? {
+								stopSessionId: targetSessionId,
+								provider: model.provider,
+							}
+						: null);
 			const hasPlanReviewForContext = planReviewByContext[contextKey] ?? false;
 			if (liveStream && !hasPlanReviewForContext) {
 				// `forceQueue` is a caller-supplied override that pins
@@ -736,9 +831,10 @@ export function useConversationStreaming({
 				// prompts (e.g. git-pull) that must never steer.
 				// `followUpBehaviorOverride` is the per-submit "opposite"
 				// flip from the composer shortcut; subordinate to forceQueue.
-				const effectiveBehavior = forceQueue
-					? "queue"
-					: (followUpBehaviorOverride ?? followUpBehavior);
+				const effectiveBehavior =
+					hasTeamAgentMention || mirroredOnlyLiveStream || forceQueue
+						? "queue"
+						: (followUpBehaviorOverride ?? followUpBehavior);
 				if (effectiveBehavior === "queue" && !isOverride) {
 					// App-level queue: capture the current (session,
 					// workspace, contextKey) so drain can replay faithfully
@@ -844,85 +940,6 @@ export function useConversationStreaming({
 					);
 					return;
 				}
-			}
-
-			// ── Team-mode @agent gating ──────────────────────────────────────
-			// Single-user path: isTeamModeActive() is false → fall through
-			// unchanged (byte-identical behaviour).
-			// Team mode + @agent mention: fall through to the existing
-			// startAgentMessageStream dispatch below (literal @agent NOT stripped).
-			// Team mode + no @agent: this is a room-chat message — persist it via
-			// postRoomChatMessage, insert an optimistic bubble, then RETURN (no
-			// ActiveStream, no stream dispatcher).
-			if (isTeamModeActive() && !hasAgentMention(trimmedPrompt)) {
-				const roomMsgId = crypto.randomUUID();
-				const now = new Date().toISOString();
-				const pastedTexts = locatePastedTextRanges(trimmedPrompt, customTags);
-				const optimisticMsg: ThreadMessageLike = {
-					...createLiveThreadMessage({
-						id: roomMsgId,
-						role: "user",
-						text: trimmedPrompt,
-						createdAt: now,
-						files: filePaths,
-						images: imagePaths,
-						pastedTexts,
-					}),
-					// Mark the optimistic bubble as room chat so the context-carry
-					// assembler (buildRoomCarryTranscript) folds it into the NEXT
-					// @agent turn — it collects user rows where isRoomChat===true.
-					// Without this, the room messages the user JUST typed are invisible
-					// to the agent until a reload re-fetches them with the marker
-					// stamped by the pipeline adapter.
-					isRoomChat: true,
-					// The sender's own avatar/name → the bubble shows it instantly,
-					// no wait for the server round-trip / broadcast echo.
-					author: selfAuthor,
-				};
-				const rollback = appendUserMessage(
-					queryClient,
-					targetSessionId,
-					optimisticMsg,
-				);
-				if (!isOverride) {
-					storeActions.setComposerRestore(null);
-				}
-				storeActions.setSendError(contextKey, null);
-				try {
-					await postRoomChatMessage(
-						{
-							helmorSessionId: targetSessionId,
-							prompt: trimmedPrompt,
-							files: filePaths.length > 0 ? filePaths : null,
-							images: imagePaths.length > 0 ? imagePaths : null,
-							pastedTexts: pastedTexts.length > 0 ? pastedTexts : null,
-						},
-						() => {
-							// Room-chat broadcast events are handled by the session stream
-							// watcher (use-watch-session-stream). This callback is a no-op
-							// on the sender side — the optimistic bubble above is already
-							// in the cache and will be reconciled on reload/reload.
-						},
-					);
-				} catch (err) {
-					restoreSnapshot(queryClient, targetSessionId, rollback);
-					if (!isOverride) {
-						storeActions.setComposerRestore({
-							contextKey,
-							draft: trimmedPrompt,
-							images: imagePaths,
-							files: filePaths,
-							customTags,
-							editorState: editorStateSnapshot ?? null,
-							nonce: Date.now(),
-						});
-					}
-					storeActions.setSendError(
-						contextKey,
-						err instanceof Error ? err.message : String(err),
-					);
-				}
-				return;
 			}
 
 			const previousLiveSession =
@@ -1230,6 +1247,7 @@ export function useConversationStreaming({
 			setFastPreludeActive,
 			setPlanReviewActive,
 			activeStreams,
+			mirroredActiveSessionByContext,
 			planReviewByContext,
 			followUpBehavior,
 			storeActions,
@@ -1254,6 +1272,9 @@ export function useConversationStreaming({
 		const current = new Set(
 			activeStreamsRef.current.map((stream) => stream.sessionId),
 		);
+		for (const sessionId of Object.values(mirroredActiveSessionByContext)) {
+			current.add(sessionId);
+		}
 		const justEnded: string[] = [];
 		for (const sid of previous) {
 			if (!current.has(sid)) justEnded.push(sid);
@@ -1267,7 +1288,7 @@ export function useConversationStreaming({
 				handleComposerSubmitRef.current(next.payload, next.context);
 			}, 0);
 		}
-	}, [activeSessionIdsKey, submitQueue]);
+	}, [activeSessionIdsKey, mirroredActiveSessionByContext, submitQueue]);
 
 	// Row actions: Steer now / Remove. Both key off the item's stored
 	// context (NOT the currently displayed session) so row clicks from

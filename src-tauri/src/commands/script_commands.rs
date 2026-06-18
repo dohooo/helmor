@@ -2,7 +2,10 @@ use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 
 use crate::repos::{self, RunAction};
-use crate::workspace::scripts::{ScriptContext, ScriptEvent, ScriptProcessManager, ScriptStop};
+use crate::workspace::scripts::{
+    ScriptContext, ScriptEvent, ScriptOutputBufferSnapshot, ScriptOutputBufferSummary,
+    ScriptProcessManager, ScriptStop,
+};
 
 use super::common::CmdResult;
 
@@ -568,6 +571,41 @@ pub async fn resize_repo_script(
     let process_type = process_type_for(&script_type, action_id.as_deref());
     let key = (repo_id, process_type, workspace_id);
     Ok(manager.resize(&key, cols, rows)?)
+}
+
+#[tauri::command]
+pub async fn debug_list_terminal_buffers(
+    manager: State<'_, ScriptProcessManager>,
+) -> CmdResult<Vec<ScriptOutputBufferSummary>> {
+    if !cfg!(debug_assertions) {
+        return Err(
+            anyhow::anyhow!("debug terminal buffers are only available in debug builds").into(),
+        );
+    }
+    Ok(manager.debug_list_output_buffers())
+}
+
+#[tauri::command]
+pub async fn debug_read_terminal_buffer(
+    manager: State<'_, ScriptProcessManager>,
+    repo_id: String,
+    script_type: String,
+    workspace_id: Option<String>,
+    max_bytes: Option<usize>,
+) -> CmdResult<Option<ScriptOutputBufferSnapshot>> {
+    if !cfg!(debug_assertions) {
+        return Err(
+            anyhow::anyhow!("debug terminal buffers are only available in debug builds").into(),
+        );
+    }
+    Ok(
+        manager.debug_read_output_buffer(
+            &repo_id,
+            &script_type,
+            workspace_id.as_deref(),
+            max_bytes,
+        ),
+    )
 }
 
 /// Stop / write / resize need the SAME process-key shape `execute_repo_script`

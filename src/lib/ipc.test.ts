@@ -75,6 +75,34 @@ describe("ipc transport switch", () => {
 		expect(ch).not.toBeInstanceOf(FakeTauriChannel);
 	});
 
+	it("keeps local-only identity commands on Tauri in desktop team mode", async () => {
+		configureTeamBackend();
+		activateTeamMode();
+		const fetchMock = vi.fn(async () => new Response("[]", { status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+		const ipc = await freshIpc();
+
+		await ipc.invoke("list_forge_accounts", { gitlabHosts: [] });
+
+		expect(tauriInvoke).toHaveBeenCalledWith("list_forge_accounts", {
+			gitlabHosts: [],
+		});
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("uses the local asset protocol for known-local files in desktop team mode", async () => {
+		configureTeamBackend();
+		activateTeamMode();
+		const ipc = await freshIpc();
+
+		expect(ipc.convertFileSrc("/remote/avatar.png")).toBe(
+			"https://team.example.com/v1/asset?path=%2Fremote%2Favatar.png",
+		);
+		expect(ipc.convertLocalFileSrc("/local/avatar.png")).toBe(
+			"asset://localhost/local/avatar.png",
+		);
+	});
+
 	it("applyTransportSwitch flips local→team in place: remote, connecting, CompanionChannel", async () => {
 		const ipc = await freshIpc();
 		expect(ipc.isRemoteTransport()).toBe(false);

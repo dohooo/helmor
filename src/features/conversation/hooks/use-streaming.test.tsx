@@ -3,7 +3,10 @@ import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PendingUserInput } from "@/features/conversation/pending-user-input";
-import { __resetStreamingStoreForTests } from "@/features/conversation/state/streaming-store";
+import {
+	__resetStreamingStoreForTests,
+	useStreamingStore,
+} from "@/features/conversation/state/streaming-store";
 import type {
 	ActiveStreamSummary,
 	AgentModelOption,
@@ -1941,6 +1944,271 @@ describe("useConversationStreaming", () => {
 			});
 		});
 
+		it("queues team follow-ups when only a mirrored remote stream is known", async () => {
+			teamModeMocks.isTeamModeActive.mockReturnValue(true);
+			useStreamingStore
+				.getState()
+				.setMirroredActiveSession("session:session-1", "session-1");
+			const queue = createFakeQueue();
+
+			const { Wrapper } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: queue,
+						activeStreams: NO_ACTIVE_STREAMS,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "@agent follow up",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+					carryRoomContext: false,
+				});
+			});
+
+			expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
+			expect(apiMocks.steerAgentStream).not.toHaveBeenCalled();
+			expect(queue.snapshot().get("session-1")?.[0]).toMatchObject({
+				prompt: "@agent follow up",
+				context: {
+					sessionId: "session-1",
+					workspaceId: "workspace-1",
+					contextKey: "session:session-1",
+				},
+			});
+		});
+
+		it("keeps plain team chat as room chat while an agent stream is active", async () => {
+			teamModeMocks.isTeamModeActive.mockReturnValue(true);
+			apiMocks.postRoomChatMessage.mockImplementation(async () => {});
+			const queue = createFakeQueue();
+			const activeStreams: ActiveStreamSummary[] = [
+				{
+					sessionId: "session-1",
+					workspaceId: "workspace-1",
+					provider: "codex",
+				},
+			];
+
+			const { Wrapper, queryClient } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: queue,
+						activeStreams,
+					}),
+				{ wrapper: Wrapper },
+			);
+			apiMocks.postRoomChatMessage.mockClear();
+			apiMocks.startAgentMessageStream.mockClear();
+			apiMocks.steerAgentStream.mockClear();
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "plain room update",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+					carryRoomContext: false,
+				});
+			});
+
+			const roomChatCalls = apiMocks.postRoomChatMessage.mock.calls.filter(
+				([request]) =>
+					(request as { prompt?: string } | undefined)?.prompt ===
+					"plain room update",
+			);
+			expect(roomChatCalls).toHaveLength(1);
+			expect(
+				apiMocks.startAgentMessageStream.mock.calls.some(
+					([request]) =>
+						(request as { prompt?: string } | undefined)?.prompt ===
+						"plain room update",
+				),
+			).toBe(false);
+			expect(
+				apiMocks.steerAgentStream.mock.calls.some(
+					([request]) =>
+						(request as { prompt?: string } | undefined)?.prompt ===
+						"plain room update",
+				),
+			).toBe(false);
+			expect(queue.snapshot().has("session-1")).toBe(false);
+			const cachedThread = queryClient.getQueryData<ThreadMessageLike[]>(
+				sessionThreadCacheKey("session-1"),
+			);
+			expect(cachedThread?.[0]).toMatchObject({
+				role: "user",
+				isRoomChat: true,
+			});
+		});
+
+		it("queues @agent team messages while an agent stream is active even when steer is configured", async () => {
+			teamModeMocks.isTeamModeActive.mockReturnValue(true);
+			apiMocks.steerAgentStream.mockResolvedValue({ accepted: true });
+			const queue = createFakeQueue();
+			const activeStreams: ActiveStreamSummary[] = [
+				{
+					sessionId: "session-1",
+					workspaceId: "workspace-1",
+					provider: "codex",
+				},
+			];
+
+			const { Wrapper } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: queue,
+						activeStreams,
+					}),
+				{ wrapper: Wrapper },
+			);
+			apiMocks.postRoomChatMessage.mockClear();
+			apiMocks.startAgentMessageStream.mockClear();
+			apiMocks.steerAgentStream.mockClear();
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "@agent please pick this up",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+					carryRoomContext: false,
+					followUpBehaviorOverride: "steer",
+				});
+			});
+
+			expect(
+				apiMocks.postRoomChatMessage.mock.calls.some(
+					([request]) =>
+						(request as { prompt?: string } | undefined)?.prompt ===
+						"@agent please pick this up",
+				),
+			).toBe(false);
+			expect(
+				apiMocks.startAgentMessageStream.mock.calls.some(
+					([request]) =>
+						(request as { prompt?: string } | undefined)?.prompt ===
+						"@agent please pick this up",
+				),
+			).toBe(false);
+			expect(
+				apiMocks.steerAgentStream.mock.calls.some(
+					([request]) =>
+						(request as { prompt?: string } | undefined)?.prompt ===
+						"@agent please pick this up",
+				),
+			).toBe(false);
+			expect(queue.snapshot().get("session-1")?.[0]).toMatchObject({
+				prompt: "@agent please pick this up",
+				context: {
+					sessionId: "session-1",
+					workspaceId: "workspace-1",
+					contextKey: "session:session-1",
+				},
+			});
+		});
+
+		it("drains queued team follow-ups when a mirrored remote stream ends", async () => {
+			apiMocks.startAgentMessageStream.mockImplementation(async () => {});
+			const queue = createFakeQueue();
+			queue.enqueue(
+				{
+					sessionId: "session-1",
+					workspaceId: "workspace-1",
+					contextKey: "session:session-1",
+				},
+				{
+					prompt: "@agent queued after remote",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+					carryRoomContext: false,
+				},
+			);
+			useStreamingStore
+				.getState()
+				.setMirroredActiveSession("session:session-1", "session-1");
+
+			const { Wrapper } = createWrapper();
+			renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "queue",
+						submitQueue: queue,
+						activeStreams: NO_ACTIVE_STREAMS,
+					}),
+				{ wrapper: Wrapper },
+			);
+			await flushDrainTimer();
+			apiMocks.startAgentMessageStream.mockClear();
+
+			act(() => {
+				useStreamingStore
+					.getState()
+					.clearMirroredActiveSession("session:session-1");
+			});
+			await flushDrainTimer();
+
+			expect(queue.snapshot().has("session-1")).toBe(false);
+			expect(apiMocks.startAgentMessageStream).toHaveBeenCalledOnce();
+			expect(apiMocks.startAgentMessageStream.mock.calls[0]?.[0]).toMatchObject(
+				{
+					prompt: "@agent queued after remote",
+					helmorSessionId: "session-1",
+				},
+			);
+		});
+
 		it("drains the queue when the active turn finishes", async () => {
 			const streamCallbacks: Array<(event: unknown) => void> = [];
 			apiMocks.startAgentMessageStream.mockImplementation(
@@ -3104,6 +3372,7 @@ describe("useConversationStreaming", () => {
 			expect(apiMocks.postRoomChatMessage).toHaveBeenCalledWith(
 				expect.objectContaining({
 					helmorSessionId: "session-1",
+					clientMessageId: expect.any(String),
 					prompt: "hello team, what do you think?",
 				}),
 				expect.any(Function),
@@ -3116,6 +3385,15 @@ describe("useConversationStreaming", () => {
 			);
 			expect(cachedThread).toBeDefined();
 			expect(cachedThread?.length).toBeGreaterThan(0);
+			expect((cachedThread?.[0] as ThreadMessageLike | undefined)?.id).toBe(
+				apiMocks.postRoomChatMessage.mock.calls[0]?.[0].clientMessageId,
+			);
+			expect(
+				(cachedThread?.[0] as ThreadMessageLike | undefined)?.author,
+			).toEqual({
+				id: "pending-self",
+				displayName: "You",
+			});
 		});
 
 		it("team mode + no @agent + postRoomChatMessage error: rolls back optimistic message", async () => {

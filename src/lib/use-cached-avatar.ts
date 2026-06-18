@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { cacheForgeAvatar } from "./api";
-import { convertFileSrc } from "./ipc";
+import { convertLocalFileSrc } from "./ipc";
 import { PERSIST_META } from "./query-client";
+
+const AVATAR_CACHE_QUERY_VERSION = "local-v2";
 
 /** Resolves a remote avatar URL to a local `asset://` URL backed by an
  * on-disk cache. First call downloads + writes to disk; every later call
@@ -10,17 +12,19 @@ import { PERSIST_META } from "./query-client";
  * decode that causes fallback letters to flash on page navigations.
  *
  * Returns:
- * - `null` while the cache lookup is in flight (component renders empty)
- * - the `asset://...` URL on success
- * - the original `url` as a fallback on error (lets the browser try the
- *   network as a last resort)
+ * - `null` when no URL exists
+ * - local URLs as-is
+ * - the `asset://...` URL on cache success
+ * - the original remote URL while the cache lookup is in flight, and on
+ *   cache failure, so the browser can paint from its own HTTP cache instead
+ *   of waiting for the disk-cache IPC round trip
  */
 export function useCachedAvatar(url: string | null | undefined): string | null {
 	const trimmed = url?.trim() ?? "";
 	const skipCache = !trimmed || isAlreadyLocal(trimmed);
 
 	const query = useQuery({
-		queryKey: ["cachedAvatar", trimmed],
+		queryKey: ["cachedAvatar", AVATAR_CACHE_QUERY_VERSION, trimmed],
 		queryFn: () => cacheForgeAvatar(trimmed),
 		enabled: !skipCache,
 		staleTime: Number.POSITIVE_INFINITY,
@@ -38,14 +42,9 @@ export function useCachedAvatar(url: string | null | undefined): string | null {
 		return trimmed;
 	}
 	if (query.data) {
-		return convertFileSrc(query.data);
+		return convertLocalFileSrc(query.data);
 	}
-	if (query.isError) {
-		// On disk-cache failure, fall back to the original URL so the
-		// avatar still has a chance to load over HTTP.
-		return trimmed;
-	}
-	return null;
+	return trimmed;
 }
 
 function isAlreadyLocal(url: string): boolean {

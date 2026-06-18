@@ -1,12 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	__resetStreamingStoreForTests,
 	useStreamingStore,
 } from "@/features/conversation/state/streaming-store";
-import type { ActiveStreamSummary } from "@/lib/api";
+import type { ActiveStreamSummary, AgentStreamEvent } from "@/lib/api";
 import { useWatchSessionStream } from "./use-watch-session-stream";
 
 // ---------------------------------------------------------------------------
@@ -14,6 +14,7 @@ import { useWatchSessionStream } from "./use-watch-session-stream";
 // ---------------------------------------------------------------------------
 
 const apiMocks = vi.hoisted(() => ({
+	loadSessionThreadMessages: vi.fn(),
 	subscribeSessionStream: vi.fn(),
 }));
 
@@ -21,6 +22,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@/lib/api")>();
 	return {
 		...actual,
+		loadSessionThreadMessages: apiMocks.loadSessionThreadMessages,
 		subscribeSessionStream: apiMocks.subscribeSessionStream,
 	};
 });
@@ -46,11 +48,17 @@ vi.mock("@/features/team/use-team-identity", async (importOriginal) => {
 	};
 });
 
-// session-thread-cache — don't exercise cache logic in this suite
-vi.mock("@/lib/session-thread-cache", () => ({
+const cacheMocks = vi.hoisted(() => ({
 	readSessionThread: vi.fn().mockReturnValue([]),
 	replaceStreamingTail: vi.fn(),
 	mergeRoomChatMessages: vi.fn(),
+}));
+
+// session-thread-cache — don't exercise cache logic in this suite
+vi.mock("@/lib/session-thread-cache", () => ({
+	readSessionThread: cacheMocks.readSessionThread,
+	replaceStreamingTail: cacheMocks.replaceStreamingTail,
+	mergeRoomChatMessages: cacheMocks.mergeRoomChatMessages,
 	sessionThreadCacheKey: (id: string) => ["sessionThread", id],
 }));
 
@@ -89,6 +97,7 @@ describe("useWatchSessionStream — enabled gate", () => {
 		// subscribeSessionStream returns a cleanup fn; default to a promise that
 		// never resolves so we don't get unhandled-rejection noise.
 		apiMocks.subscribeSessionStream.mockReturnValue(new Promise(() => {}));
+		apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
 		teamModeMocks.isTeamModeActive.mockReturnValue(false);
 	});
 
@@ -188,5 +197,113 @@ describe("useWatchSessionStream — enabled gate", () => {
 		);
 
 		expect(apiMocks.subscribeSessionStream).not.toHaveBeenCalled();
+	});
+
+	it("routes room-chat broadcasts through id-based cache merge", () => {
+		teamModeMocks.isTeamModeActive.mockReturnValue(true);
+		const captured: { onEvent?: (event: AgentStreamEvent) => void } = {};
+		apiMocks.subscribeSessionStream.mockImplementation(
+			(_sessionId, callback) => {
+				captured.onEvent = callback;
+				return Promise.resolve(() => {});
+			},
+		);
+		const { Wrapper } = createWrapper();
+
+		renderHook(
+			() =>
+				useWatchSessionStream({
+					sessionId: "session-5",
+					activeStreams: NO_ACTIVE_STREAMS,
+				}),
+			{ wrapper: Wrapper },
+		);
+
+		const onEvent = captured.onEvent;
+		expect(typeof onEvent).toBe("function");
+		if (!onEvent) throw new Error("subscription callback was not captured");
+		const messages = [
+			{
+				id: "room-1",
+				role: "user" as const,
+				createdAt: "2026-04-08T00:00:00Z",
+				content: [{ type: "text" as const, id: "room-1:txt:0", text: "hi" }],
+				isRoomChat: true,
+				author: { id: "32405058" },
+			},
+		];
+		onEvent({ kind: "update", messages });
+
+		expect(cacheMocks.mergeRoomChatMessages).toHaveBeenCalledWith(
+			expect.any(QueryClient),
+			"session-5",
+			messages,
+		);
+		expect(cacheMocks.replaceStreamingTail).not.toHaveBeenCalled();
+	});
+
+	it("marks mirrored remote turns active until the terminal event arrives", async () => {
+		teamModeMocks.isTeamModeActive.mockReturnValue(true);
+		const captured: { onEvent?: (event: AgentStreamEvent) => void } = {};
+		apiMocks.subscribeSessionStream.mockImplementation(
+			(_sessionId, callback) => {
+				captured.onEvent = callback;
+				return Promise.resolve(() => {});
+			},
+		);
+		const { Wrapper } = createWrapper();
+
+		renderHook(
+			() =>
+				useWatchSessionStream({
+					sessionId: "session-6",
+					activeStreams: NO_ACTIVE_STREAMS,
+				}),
+			{ wrapper: Wrapper },
+		);
+
+		const onEvent = captured.onEvent;
+		expect(typeof onEvent).toBe("function");
+		if (!onEvent) throw new Error("subscription callback was not captured");
+		await act(async () => {
+			onEvent({
+				kind: "update",
+				messages: [
+					{
+						id: "assistant-1",
+						role: "assistant",
+						createdAt: "2026-04-08T00:00:00Z",
+						content: [
+							{
+								type: "text" as const,
+								id: "assistant-1:txt:0",
+								text: "hi",
+							},
+						],
+					},
+				],
+			});
+			await Promise.resolve();
+		});
+		expect(
+			useStreamingStore.getState().mirroredActiveSessionByContext[
+				"session:session-6"
+			],
+		).toBe("session-6");
+
+		onEvent({
+			kind: "done",
+			provider: "claude",
+			modelId: "opus",
+			resolvedModel: "opus",
+			sessionId: null,
+			workingDirectory: "/tmp/helmor",
+			persisted: true,
+		});
+		expect(
+			useStreamingStore.getState().mirroredActiveSessionByContext[
+				"session:session-6"
+			],
+		).toBeUndefined();
 	});
 });

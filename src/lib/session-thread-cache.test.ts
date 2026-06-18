@@ -21,6 +21,7 @@ import {
 	restoreSnapshot,
 	sessionThreadCacheKey,
 	shareMessages,
+	shareMessagesWithRoomChatReconciliation,
 } from "./session-thread-cache";
 
 function makeMessage(
@@ -58,6 +59,146 @@ describe("session-thread-cache", () => {
 		appendUserMessage(client, "s1", makeMessage("rc1", "user", "room"));
 		mergeRoomChatMessages(client, "s1", [makeMessage("rc1", "user", "room")]);
 		expect(readSessionThread(client, "s1")?.map((m) => m.id)).toEqual(["rc1"]);
+	});
+
+	it("mergeRoomChatMessages reconciles a broadcast echo into the optimistic row", () => {
+		const client = makeClient();
+		appendUserMessage(client, "s1", {
+			...makeMessage("rc1", "user", "room"),
+			isRoomChat: true,
+			author: {
+				id: "32405058",
+				displayName: "Caspian",
+				avatarUrl: "https://avatars.githubusercontent.com/u/32405058?v=4",
+			},
+		});
+		mergeRoomChatMessages(client, "s1", [
+			{
+				...makeMessage("rc1", "user", "room"),
+				createdAt: "2026-04-08T00:00:01Z",
+				isRoomChat: true,
+				author: { id: "32405058" },
+			},
+		]);
+
+		const thread = readSessionThread(client, "s1");
+		expect(thread).toHaveLength(1);
+		expect(thread?.[0]?.author?.id).toBe("32405058");
+		expect(thread?.[0]?.author?.displayName).toBe("Caspian");
+		expect(thread?.[0]?.author?.avatarUrl).toBe(
+			"https://avatars.githubusercontent.com/u/32405058?v=4",
+		);
+		expect(thread?.[0]?.createdAt).toBe("2026-04-08T00:00:01Z");
+	});
+
+	it("mergeRoomChatMessages reconciles an old-server echo whose id differs", () => {
+		const client = makeClient();
+		appendUserMessage(client, "s1", {
+			...makeMessage("client-id", "user", "room"),
+			createdAt: "2026-04-08T00:00:00Z",
+			isRoomChat: true,
+			author: {
+				id: "pending-self",
+				displayName: "Caspian",
+				avatarUrl: "https://avatars.githubusercontent.com/u/32405058?v=4",
+			},
+		});
+		mergeRoomChatMessages(client, "s1", [
+			{
+				...makeMessage("server-id", "user", "room"),
+				createdAt: "2026-04-08T00:00:01Z",
+				isRoomChat: true,
+				author: { id: "32405058" },
+			},
+		]);
+
+		const thread = readSessionThread(client, "s1");
+		expect(thread).toHaveLength(1);
+		expect(thread?.[0]?.id).toBe("client-id");
+		expect(thread?.[0]?.author?.id).toBe("32405058");
+		expect(thread?.[0]?.author?.displayName).toBe("Caspian");
+		expect(thread?.[0]?.author?.avatarUrl).toBe(
+			"https://avatars.githubusercontent.com/u/32405058?v=4",
+		);
+	});
+
+	it("mergeRoomChatMessages does not merge same-text rows from different authors", () => {
+		const client = makeClient();
+		appendUserMessage(client, "s1", {
+			...makeMessage("alice-id", "user", "same"),
+			createdAt: "2026-04-08T00:00:00Z",
+			isRoomChat: true,
+			author: { id: "alice" },
+		});
+		mergeRoomChatMessages(client, "s1", [
+			{
+				...makeMessage("bob-id", "user", "same"),
+				createdAt: "2026-04-08T00:00:01Z",
+				isRoomChat: true,
+				author: { id: "bob" },
+			},
+		]);
+
+		expect(readSessionThread(client, "s1")?.map((m) => m.id)).toEqual([
+			"alice-id",
+			"bob-id",
+		]);
+	});
+
+	it("mergeRoomChatMessages does not merge stale same-text rows", () => {
+		const client = makeClient();
+		appendUserMessage(client, "s1", {
+			...makeMessage("old-id", "user", "same"),
+			createdAt: "2026-04-08T00:00:00Z",
+			isRoomChat: true,
+			author: { id: "pending-self", displayName: "You" },
+		});
+		mergeRoomChatMessages(client, "s1", [
+			{
+				...makeMessage("new-id", "user", "same"),
+				createdAt: "2026-04-08T00:01:00Z",
+				isRoomChat: true,
+				author: { id: "32405058" },
+			},
+		]);
+
+		expect(readSessionThread(client, "s1")?.map((m) => m.id)).toEqual([
+			"old-id",
+			"new-id",
+		]);
+	});
+
+	it("shareMessagesWithRoomChatReconciliation preserves optimistic room-chat rows across historical refetch", () => {
+		const optimistic: ThreadMessageLike = {
+			...makeMessage("client-id", "user", "first"),
+			createdAt: "2026-04-08T00:00:00Z",
+			isRoomChat: true,
+			author: {
+				id: "pending-self",
+				displayName: "Caspian",
+				avatarUrl: "https://avatars.githubusercontent.com/u/32405058?v=4",
+			},
+		};
+		const historical: ThreadMessageLike = {
+			...makeMessage("server-id", "user", "first"),
+			createdAt: "2026-04-08T00:00:01Z",
+			isRoomChat: true,
+			author: { id: "32405058" },
+		};
+
+		const shared = shareMessagesWithRoomChatReconciliation(
+			[optimistic],
+			[historical],
+		);
+
+		expect(shared).toHaveLength(1);
+		expect(shared[0]?.id).toBe("client-id");
+		expect(shared[0]?.createdAt).toBe("2026-04-08T00:00:01Z");
+		expect(shared[0]?.author).toEqual({
+			id: "32405058",
+			displayName: "Caspian",
+			avatarUrl: "https://avatars.githubusercontent.com/u/32405058?v=4",
+		});
 	});
 
 	it("appendUserMessage seeds an empty cache and returns the prior snapshot", () => {
@@ -138,6 +279,66 @@ describe("session-thread-cache", () => {
 		}
 	});
 
+	it("replaceStreamingTail keeps room chat after an in-progress agent turn", () => {
+		const client = makeClient();
+		const userMsg = makeMessage("u1", "user", "ask agent");
+		const firstAssistant = makeMessage("a1", "assistant", "thinking");
+		const roomChat: ThreadMessageLike = {
+			...makeMessage("room-1", "user", "team aside"),
+			isRoomChat: true,
+			author: {
+				id: "32405058",
+				displayName: "Caspian",
+				avatarUrl: "https://avatars.githubusercontent.com/u/32405058?v=4",
+			},
+		};
+		appendUserMessage(client, "session-1", userMsg);
+		replaceStreamingTail(client, "session-1", "u1", [userMsg, firstAssistant]);
+		appendUserMessage(client, "session-1", roomChat);
+
+		replaceStreamingTail(client, "session-1", "u1", [
+			userMsg,
+			makeMessage("a1", "assistant", "thinking more"),
+		]);
+
+		const cached = readSessionThread(client, "session-1");
+		expect(cached?.map((message) => message.id)).toEqual([
+			"u1",
+			"a1",
+			"room-1",
+		]);
+		expect(cached?.[2]).toBe(roomChat);
+		expect(cached?.[2]?.author?.avatarUrl).toBe(
+			"https://avatars.githubusercontent.com/u/32405058?v=4",
+		);
+	});
+
+	it("replaceStreamingTail leaves room chat below the final agent snapshot", () => {
+		const client = makeClient();
+		const userMsg = makeMessage("u1", "user", "ask agent");
+		const roomChat: ThreadMessageLike = {
+			...makeMessage("room-1", "user", "team aside"),
+			isRoomChat: true,
+			author: { id: "32405058", displayName: "Caspian" },
+		};
+		appendUserMessage(client, "session-1", userMsg);
+		replaceStreamingTail(client, "session-1", "u1", [
+			userMsg,
+			makeMessage("a1", "assistant", "partial"),
+		]);
+		appendUserMessage(client, "session-1", roomChat);
+
+		replaceStreamingTail(client, "session-1", "u1", [
+			userMsg,
+			makeMessage("a1", "assistant", "final"),
+			makeMessage("a2", "assistant", "summary"),
+		]);
+
+		expect(
+			readSessionThread(client, "session-1")?.map((message) => message.id),
+		).toEqual(["u1", "a1", "a2", "room-1"]);
+	});
+
 	it("restoreSnapshot reverts to the captured state and removes the entry on undefined", () => {
 		const client = makeClient();
 		const userMsg = makeMessage("u1", "user", "draft");
@@ -205,6 +406,29 @@ describe("shareMessages — structural reference reuse", () => {
 		const prev = [userMsg("m1", "hello"), userMsg("m2", "world")];
 		const next = [userMsg("m1", "hello"), userMsg("m2", "world")];
 		expect(shareMessages(prev, next)).toBe(prev);
+	});
+
+	it("preserves richer user author metadata across id-matched refetches", () => {
+		const prev = [
+			{
+				...userMsg("m1", "hello"),
+				author: {
+					id: "32405058",
+					displayName: "Caspian 東澔",
+					avatarUrl: "https://avatars.githubusercontent.com/u/32405058?v=4",
+				},
+			},
+		];
+		const next = [
+			{
+				...userMsg("m1", "hello"),
+				author: { id: "32405058" },
+			},
+		];
+
+		const result = shareMessages(prev, next);
+
+		expect(result[0]?.author).toEqual(prev[0]?.author);
 	});
 
 	it("reuses individual message references when content matches by id", () => {

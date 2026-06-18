@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { InspectorFileItem } from "@/lib/editor-session";
+import { shouldIncludeAgentMentionOption } from "./agent-mention-option";
 import {
 	filterFiles,
 	MAX_VISIBLE_OPTIONS,
@@ -108,5 +109,20 @@ describe("filterFiles", () => {
 		];
 		const result = filterFiles(ordered, "ap");
 		expect(result.map((f) => f.name)).toEqual(["Apple.tsx", "Apricot.tsx"]);
+	});
+});
+
+describe("shouldIncludeAgentMentionOption", () => {
+	it("shows @agent for an empty mention query", () => {
+		expect(shouldIncludeAgentMentionOption("")).toBe(true);
+	});
+
+	it("shows @agent while typing its name", () => {
+		expect(shouldIncludeAgentMentionOption("ag")).toBe(true);
+		expect(shouldIncludeAgentMentionOption("Agent")).toBe(true);
+	});
+
+	it("hides @agent for unrelated file mention queries", () => {
+		expect(shouldIncludeAgentMentionOption("src")).toBe(false);
 	});
 });

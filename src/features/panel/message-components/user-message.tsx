@@ -1,9 +1,15 @@
-import { ChevronDown, Tag } from "lucide-react";
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { Bot, ChevronDown, Tag } from "lucide-react";
+import {
+	type ReactNode,
+	useCallback,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
 import { CachedAvatar } from "@/components/cached-avatar";
 import { FileMentionBadge } from "@/components/file-mention-badge";
 import { InlineBadge } from "@/components/inline-badge";
-import type { MessageAuthor, MessagePart } from "@/lib/api";
+import { type MessageAuthor, type MessagePart, partKey } from "@/lib/api";
 import {
 	buildComposerPreviewLabel,
 	type ComposerPreviewPayload,
@@ -47,6 +53,56 @@ function PastedTextBadge({ text }: { text: string }) {
 			nonSelectable={false}
 		/>
 	);
+}
+
+function AgentMentionBadge() {
+	return (
+		<InlineBadge
+			icon={
+				<Bot
+					className="size-3.5 shrink-0 text-muted-foreground"
+					strokeWidth={1.8}
+				/>
+			}
+			label="agent"
+			nonSelectable={false}
+		/>
+	);
+}
+
+function isAgentMentionBoundaryBefore(char: string | undefined): boolean {
+	return char === undefined || /[\s([{（【]/.test(char);
+}
+
+function isAgentMentionBoundaryAfter(char: string | undefined): boolean {
+	return char === undefined || /[\s.,!?，。！？)\]}）】]/.test(char);
+}
+
+function TextWithAgentMentions({ text }: { text: string }) {
+	const nodes: ReactNode[] = [];
+	let cursor = 0;
+	let partIndex = 0;
+	for (let index = text.indexOf("@agent"); index >= 0; ) {
+		const end = index + "@agent".length;
+		if (
+			isAgentMentionBoundaryBefore(text[index - 1]) &&
+			isAgentMentionBoundaryAfter(text[end])
+		) {
+			if (index > cursor) {
+				nodes.push(
+					<span key={`text:${partIndex++}`}>{text.slice(cursor, index)}</span>,
+				);
+			}
+			nodes.push(<AgentMentionBadge key={`agent:${partIndex++}`} />);
+			cursor = end;
+		}
+		index = text.indexOf("@agent", end);
+	}
+	if (cursor === 0) return text;
+	if (cursor < text.length) {
+		nodes.push(<span key={`text:${partIndex++}`}>{text.slice(cursor)}</span>);
+	}
+	return <>{nodes}</>;
 }
 
 /** Team-room authors are stamped id-only by the backend (the GitHub numeric
@@ -193,15 +249,20 @@ export function ChatUserMessage({ message }: { message: RenderedMessage }) {
 								: undefined
 						}
 					>
-						{parts.map((part, index) => {
+						{parts.map((part) => {
+							const key = partKey(part);
 							if (isTextPart(part)) {
-								return <span key={index}>{part.text}</span>;
+								return (
+									<span key={key}>
+										<TextWithAgentMentions text={part.text} />
+									</span>
+								);
 							}
 							if (isFileMentionPart(part)) {
-								return <FileMentionBadge key={index} path={part.path} />;
+								return <FileMentionBadge key={key} path={part.path} />;
 							}
 							if (isPastedTextPart(part)) {
-								return <PastedTextBadge key={index} text={part.text} />;
+								return <PastedTextBadge key={key} text={part.text} />;
 							}
 							return null;
 						})}

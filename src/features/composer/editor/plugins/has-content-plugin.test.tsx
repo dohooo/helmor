@@ -23,6 +23,10 @@ import {
 } from "lexical";
 import { useContext } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+	$createAgentMentionNode,
+	AgentMentionNode,
+} from "../agent-mention-node";
 import { CustomTagBadgeNode } from "../custom-tag-badge-node";
 import { FileBadgeNode } from "../file-badge-node";
 import { $createImageBadgeNode, ImageBadgeNode } from "../image-badge-node";
@@ -51,7 +55,12 @@ function renderPlugin(onChange: (hasContent: boolean) => void) {
 				onError: (error) => {
 					throw error;
 				},
-				nodes: [ImageBadgeNode, FileBadgeNode, CustomTagBadgeNode],
+				nodes: [
+					AgentMentionNode,
+					ImageBadgeNode,
+					FileBadgeNode,
+					CustomTagBadgeNode,
+				],
 			}}
 		>
 			<HasContentPlugin onChange={onChange} />
@@ -175,6 +184,24 @@ describe("HasContentPlugin", () => {
 				() => {
 					const paragraph = $createParagraphNode();
 					paragraph.append($createImageBadgeNode("/tmp/pic.png"));
+					$getRoot().append(paragraph);
+				},
+				{ discrete: true },
+			);
+		});
+
+		expect(onChange).toHaveBeenLastCalledWith(true);
+	});
+
+	it("treats an agent mention badge as content", () => {
+		const onChange = vi.fn();
+		const editor = renderPlugin(onChange);
+
+		act(() => {
+			editor.update(
+				() => {
+					const paragraph = $createParagraphNode();
+					paragraph.append($createAgentMentionNode());
 					$getRoot().append(paragraph);
 				},
 				{ discrete: true },

@@ -63,6 +63,7 @@ type StreamingState = {
 	liveSessionsByContext: Record<string, LiveSessionInfo>;
 	sendErrorsByContext: Record<string, string | null>;
 	activeSessionByContext: Record<string, ActiveSessionInfo>;
+	mirroredActiveSessionByContext: Record<string, string>;
 	sendingContextKeys: ReadonlySet<string>;
 	pendingPermissionsByContext: Record<string, PendingPermission[]>;
 	pendingUserInputByContext: Record<string, PendingUserInput | null>;
@@ -87,6 +88,8 @@ type StreamingActions = {
 	setSendError(contextKey: string, error: string | null): void;
 	setActiveSession(contextKey: string, info: ActiveSessionInfo): void;
 	clearActiveSession(contextKey: string): void;
+	setMirroredActiveSession(contextKey: string, sessionId: string): void;
+	clearMirroredActiveSession(contextKey: string): void;
 	setLiveSession(contextKey: string, info: LiveSessionInfo): void;
 	rememberInteractionWorkspace(
 		contextKey: string,
@@ -107,6 +110,7 @@ function freshInitialState(): StreamingState {
 		liveSessionsByContext: {},
 		sendErrorsByContext: {},
 		activeSessionByContext: {},
+		mirroredActiveSessionByContext: {},
 		sendingContextKeys: new Set<string>(),
 		pendingPermissionsByContext: {},
 		pendingUserInputByContext: {},
@@ -299,6 +303,29 @@ export const useStreamingStore = create<StreamingStore>((set) => ({
 			const stripped = omitKey(state.activeSessionByContext, contextKey);
 			if (stripped === state.activeSessionByContext) return state;
 			return { activeSessionByContext: stripped };
+		}),
+
+	setMirroredActiveSession: (contextKey, sessionId) =>
+		set((state) => {
+			if (state.mirroredActiveSessionByContext[contextKey] === sessionId) {
+				return state;
+			}
+			return {
+				mirroredActiveSessionByContext: {
+					...state.mirroredActiveSessionByContext,
+					[contextKey]: sessionId,
+				},
+			};
+		}),
+
+	clearMirroredActiveSession: (contextKey) =>
+		set((state) => {
+			const stripped = omitKey(
+				state.mirroredActiveSessionByContext,
+				contextKey,
+			);
+			if (stripped === state.mirroredActiveSessionByContext) return state;
+			return { mirroredActiveSessionByContext: stripped };
 		}),
 
 	// -------------------------------------------------------------------

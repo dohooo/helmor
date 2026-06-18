@@ -636,6 +636,8 @@ fn build_app(mode: AppMode) -> tauri::App {
             commands::script_commands::stop_repo_script,
             commands::script_commands::write_repo_script_stdin,
             commands::script_commands::resize_repo_script,
+            commands::script_commands::debug_list_terminal_buffers,
+            commands::script_commands::debug_read_terminal_buffer,
             commands::script_commands::create_repo_run_action,
             commands::script_commands::update_repo_run_action,
             commands::script_commands::delete_repo_run_action,

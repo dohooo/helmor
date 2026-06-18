@@ -6,6 +6,7 @@
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { $getRoot, $isElementNode } from "lexical";
 import { useEffect } from "react";
+import { $isAgentMentionNode } from "../agent-mention-node";
 import { $isCustomTagBadgeNode } from "../custom-tag-badge-node";
 import { $isFileBadgeNode } from "../file-badge-node";
 import { $isImageBadgeNode } from "../image-badge-node";
@@ -15,7 +16,8 @@ function $isBadgeNode(node: import("lexical").LexicalNode): boolean {
 	return (
 		$isImageBadgeNode(node) ||
 		$isFileBadgeNode(node) ||
-		$isCustomTagBadgeNode(node)
+		$isCustomTagBadgeNode(node) ||
+		$isAgentMentionNode(node)
 	);
 }
 

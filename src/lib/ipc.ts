@@ -481,6 +481,21 @@ export function convertFileSrc(filePath: string, protocol?: string): string {
 	return `${baseUrl()}/v1/asset?path=${encodeURIComponent(filePath)}`;
 }
 
+/**
+ * Convert a path that is known to live on THIS desktop machine.
+ *
+ * Desktop team mode is remote for app commands, but local-only commands such
+ * as `cache_forge_avatar` still return local filesystem paths. Those must be
+ * served through Tauri's local asset protocol, not through the team Worker.
+ */
+export function convertLocalFileSrc(
+	filePath: string,
+	protocol?: string,
+): string {
+	if (isTauriRuntime()) return tauriConvertFileSrc(filePath, protocol);
+	return convertFileSrc(filePath, protocol);
+}
+
 // ---------------------------------------------------------------------------
 // invoke
 // ---------------------------------------------------------------------------
@@ -499,6 +514,13 @@ export function convertFileSrc(filePath: string, protocol?: string): string {
 const LOCAL_ONLY_INVOKES = new Set<string>([
 	"authorize_cloud_codex_identity",
 	"authorize_cloud_claude_identity",
+	// Dev-only inspection helpers read buffers owned by the desktop Tauri host.
+	"debug_list_terminal_buffers",
+	"debug_read_terminal_buffer",
+	// Team identity is the GitHub account on THIS Mac. Routing this to the
+	// cloud sandbox leaves the desktop without a self author for optimistic
+	// room-chat bubbles.
+	"list_forge_accounts",
 	// Avatar caching writes to LOCAL disk and is rendered via a local
 	// `asset://` URL. Routing it to the container (team mode) would cache there
 	// and hand back a path this webview can't resolve, so every team-room
@@ -511,7 +533,7 @@ export function invoke<T>(
 	args?: InvokeArgs,
 	options?: InvokeOptions,
 ): Promise<T> {
-	if (!transport.remote || LOCAL_ONLY_INVOKES.has(cmd)) {
+	if (!transport.remote || (isTauriRuntime() && LOCAL_ONLY_INVOKES.has(cmd))) {
 		// Preserve the original call arity so tests asserting
 		// `invoke).toHaveBeenCalledWith("cmd")` (no trailing undefineds) keep
 		// matching.

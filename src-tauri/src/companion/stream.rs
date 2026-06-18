@@ -261,4 +261,24 @@ mod resolve_room_chat_request_tests {
         let request = resolve_room_chat_request(body(None), Some("member-1".to_string())).unwrap();
         assert_eq!(request.author_id.as_deref(), Some("member-1"));
     }
+
+    #[test]
+    fn preserves_client_message_id_for_room_chat_reconciliation() {
+        let id = "550e8400-e29b-41d4-a716-446655440000";
+        let request = resolve_room_chat_request(
+            json!({
+                "request": {
+                    "helmorSessionId": "sess-abc",
+                    "clientMessageId": id,
+                    "prompt": "hello room",
+                    "authorId": "evil-client-id"
+                }
+            }),
+            Some("trusted-7".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(request.client_message_id.as_deref(), Some(id));
+        assert_eq!(request.author_id.as_deref(), Some("trusted-7"));
+    }
 }

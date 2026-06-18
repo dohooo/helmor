@@ -399,6 +399,10 @@ pub async fn list_active_streams(
 #[serde(rename_all = "camelCase")]
 pub struct RoomChatSendRequest {
     pub helmor_session_id: String,
+    /// Client-generated UUID for optimistic/canonical reconciliation.
+    /// Author identity is still server-derived; this only stabilizes the row id.
+    #[serde(default)]
+    pub client_message_id: Option<String>,
     pub prompt: String,
     /// Workspace-relative paths from the @-mention picker.
     #[serde(default)]
@@ -413,6 +417,15 @@ pub struct RoomChatSendRequest {
     /// the companion server overwrites from `X-Helmor-Member-Id`.
     #[serde(default)]
     pub author_id: Option<String>,
+}
+
+fn resolve_room_chat_message_id(client_message_id: Option<String>) -> anyhow::Result<String> {
+    match client_message_id {
+        Some(id) => Uuid::parse_str(&id)
+            .map(|uuid| uuid.to_string())
+            .map_err(|_| anyhow::anyhow!("Invalid room-chat clientMessageId: expected UUID")),
+        None => Ok(Uuid::new_v4().to_string()),
+    }
 }
 
 /// Post a room-chat message for a shared session. The message is persisted
@@ -436,7 +449,7 @@ pub async fn post_room_chat_message(
     // Here we bind what arrived (None on desktop, trusted id on companion).
     let author_id = request.author_id.take();
 
-    let msg_id = Uuid::new_v4().to_string();
+    let msg_id = resolve_room_chat_message_id(request.client_message_id.take())?;
     let session_id = request.helmor_session_id.clone();
     let files = request.files.clone().unwrap_or_default();
     let images = request.images.clone().unwrap_or_default();
@@ -781,6 +794,26 @@ pub async fn list_slash_commands(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn room_chat_message_id_uses_valid_client_uuid() {
+        let id = "550e8400-e29b-41d4-a716-446655440000".to_string();
+        assert_eq!(
+            resolve_room_chat_message_id(Some(id.clone())).unwrap(),
+            id,
+            "room chat must preserve the client id used for optimistic render"
+        );
+    }
+
+    #[test]
+    fn room_chat_message_id_rejects_invalid_client_id() {
+        let error = resolve_room_chat_message_id(Some("not-a-uuid".to_string()))
+            .expect_err("invalid ids must not reach persistence");
+        assert!(
+            error.to_string().contains("clientMessageId"),
+            "error should identify the invalid field"
+        );
+    }
 
     // -----------------------------------------------------------------------
     // parse_claude_output

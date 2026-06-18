@@ -37,6 +37,33 @@ describe("ChatUserMessage pasted-text tags", () => {
 		expect(screen.getByText("short prompt")).toBeInTheDocument();
 	});
 
+	it("renders a sent @agent mention as the same inline badge style", () => {
+		render(
+			<ChatUserMessage
+				message={makeMessage([
+					{ type: "text", id: "t0", text: "@agent search the market" },
+				])}
+			/>,
+		);
+
+		expect(screen.getByText("agent")).toBeInTheDocument();
+		expect(screen.queryByText("@agent")).toBeNull();
+		expect(screen.getByText(/search the market/)).toBeInTheDocument();
+	});
+
+	it("does not turn embedded @agent text into a mention badge", () => {
+		render(
+			<ChatUserMessage
+				message={makeMessage([
+					{ type: "text", id: "t0", text: "email me at x@agent.test" },
+				])}
+			/>,
+		);
+
+		expect(screen.getByText("email me at x@agent.test")).toBeInTheDocument();
+		expect(screen.queryByText("agent")).toBeNull();
+	});
+
 	it("renders a pasted-text part as a tag chip, not inline content", () => {
 		render(
 			<ChatUserMessage

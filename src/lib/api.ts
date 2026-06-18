@@ -4136,6 +4136,7 @@ export async function startAgentMessageStream(
  *  trusted `X-Helmor-Member-Id` header (see `companion/stream.rs`). */
 export type RoomChatSendRequest = {
 	helmorSessionId: string;
+	clientMessageId?: string;
 	prompt: string;
 	files?: string[] | null;
 	images?: string[] | null;
@@ -4704,6 +4705,26 @@ export type ScriptEvent =
 	| { type: "exited"; code: number | null }
 	| { type: "error"; message: string };
 
+export type DebugTerminalBufferSummary = {
+	repoId: string;
+	workspaceId?: string | null;
+	scriptType: string;
+	kind: string;
+	targetId?: string | null;
+	command?: string | null;
+	status: "running" | "exited";
+	exitCode?: number | null;
+	bufferedBytes: number;
+	chunkCount: number;
+	truncated: boolean;
+};
+
+export type DebugTerminalBufferSnapshot = DebugTerminalBufferSummary & {
+	returnedBytes: number;
+	omittedHeadBytes: number;
+	data: string;
+};
+
 /**
  * Resolve repo scripts using a fixed priority (enforced in Rust):
  *   1. Workspace worktree `helmor.json` (when `workspaceId` is given AND
@@ -4874,6 +4895,29 @@ export async function resizeRepoScript(
 		cols,
 		rows,
 	});
+}
+
+export async function debugListTerminalBuffers(): Promise<
+	DebugTerminalBufferSummary[]
+> {
+	return invoke<DebugTerminalBufferSummary[]>("debug_list_terminal_buffers");
+}
+
+export async function debugReadTerminalBuffer(
+	repoId: string,
+	scriptType: string,
+	workspaceId?: string | null,
+	maxBytes?: number | null,
+): Promise<DebugTerminalBufferSnapshot | null> {
+	return invoke<DebugTerminalBufferSnapshot | null>(
+		"debug_read_terminal_buffer",
+		{
+			repoId,
+			scriptType,
+			workspaceId: workspaceId ?? null,
+			maxBytes: maxBytes ?? null,
+		},
+	);
 }
 
 // ---- Run actions CRUD ----

@@ -53,7 +53,7 @@ import { invoke } from "./ipc";
 import { parsePrUrl } from "./pr-url";
 // Lazy-cycle-safe: session-thread-cache imports `helmorQueryKeys` from this
 // module, but both sides only dereference inside function bodies.
-import { shareMessages } from "./session-thread-cache";
+import { shareMessagesWithRoomChatReconciliation } from "./session-thread-cache";
 import {
 	getSessionThreadPaginationState,
 	setSessionThreadPaginationState,
@@ -717,15 +717,15 @@ export function sessionThreadMessagesQueryOptions(sessionId: string) {
 		// Reuse per-message references on refetch via the same helper the
 		// streaming writes use, so per-message memos bail out. First fetch
 		// passes `oldData === undefined` and must flow straight through —
-		// `shareMessages` iterates prev unconditionally. Note: a key whose
-		// first write comes from `setQueryData` before any observer mounts
-		// is built with default options (default structural sharing for
-		// that one write) — known and fine; this fn applies once an
-		// observer mounts with these options.
+		// `shareMessagesWithRoomChatReconciliation` iterates prev
+		// unconditionally. Note: a key whose first write comes from
+		// `setQueryData` before any observer mounts is built with default
+		// options (default structural sharing for that one write) — known and
+		// fine; this fn applies once an observer mounts with these options.
 		structuralSharing: (oldData, newData) =>
 			oldData == null
 				? newData
-				: shareMessages(
+				: shareMessagesWithRoomChatReconciliation(
 						oldData as ThreadMessageLike[],
 						newData as ThreadMessageLike[],
 					),

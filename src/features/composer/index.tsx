@@ -71,6 +71,7 @@ import {
 	type AddDirPickerEntry,
 	AddDirTypeaheadPlugin,
 } from "./editor/add-dir/typeahead-plugin";
+import { AgentMentionNode } from "./editor/agent-mention-node";
 import { CustomTagBadgeNode } from "./editor/custom-tag-badge-node";
 import { FileBadgeNode } from "./editor/file-badge-node";
 import { ImageBadgeNode } from "./editor/image-badge-node";
@@ -581,6 +582,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		namespace: "WorkspaceComposer",
 		theme: EDITOR_THEME,
 		nodes: [
+			AgentMentionNode,
 			ImageBadgeNode,
 			FileBadgeNode,
 			CustomTagBadgeNode,

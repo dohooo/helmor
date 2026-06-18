@@ -3,6 +3,7 @@ import { ArrowDown, ArrowUp, Loader2 } from "lucide-react";
 import {
 	type ComponentType,
 	createElement,
+	Fragment,
 	type ReactNode,
 	startTransition,
 	useCallback,
@@ -23,6 +24,10 @@ import { hasUnresolvedPlanReview } from "@/lib/plan-review";
 import { expandSessionThread } from "@/lib/query-client";
 import { useSessionThreadPagination } from "@/lib/session-thread-pagination";
 import { useSettings } from "@/lib/settings";
+import {
+	normalizeThreadMessagesForDisplay,
+	resolveStreamingFooterMessageIndex,
+} from "@/lib/thread-message-order";
 import type { WorkspaceScriptType } from "@/lib/workspace-script-actions";
 import { isShellResizing, onShellResize } from "@/shell/hooks/use-panels";
 import {
@@ -214,7 +219,7 @@ function ChatThread({
 	sessionId: string;
 	sending: boolean;
 }) {
-	const threadMessages = messages;
+	const threadMessages = normalizeThreadMessagesForDisplay(messages);
 	const { settings } = useSettings();
 	const queryClient = useQueryClient();
 	const pagination = useSessionThreadPagination(sessionId);
@@ -495,6 +500,10 @@ function ConversationViewport({
 	const Header: ThreadViewportSlot = ConversationHeaderSpacer;
 	const planReviewActive = useMemo(() => hasUnresolvedPlanReview(data), [data]);
 	const showStreamingFooter = sending && !planReviewActive;
+	const streamingFooterMessageIndex = resolveStreamingFooterMessageIndex(
+		data,
+		showStreamingFooter,
+	);
 	const streamingIndicatorStartTime = showStreamingFooter
 		? sendingStartTime
 		: undefined;
@@ -513,7 +522,7 @@ function ConversationViewport({
 		<div className="conversation-scroll-area relative min-h-0 flex-1 overflow-hidden">
 			<div
 				ref={viewportRef}
-				className="conversation-scroll-viewport h-full w-full overflow-x-hidden overflow-y-auto"
+				className="conversation-scroll-viewport scrollbar-stable h-full w-full overflow-x-hidden overflow-y-auto"
 			>
 				{prologueSlot}
 				{usePlainThread ? (
@@ -524,13 +533,16 @@ function ConversationViewport({
 								? createElement(EmptyPlaceholder)
 								: null
 							: data.map((message, index) => (
-									<ConversationRowShell
-										key={message.id ?? `${message.role}:${index}`}
-									>
-										{itemContent(index, message)}
-									</ConversationRowShell>
+									<Fragment key={message.id ?? `${message.role}:${index}`}>
+										<ConversationRowShell>
+											{itemContent(index, message)}
+										</ConversationRowShell>
+										{streamingFooterMessageIndex === index ? (
+											<StreamingFooter startTime={sendingStartTime} />
+										) : null}
+									</Fragment>
 								))}
-						{showStreamingFooter ? (
+						{showStreamingFooter && streamingFooterMessageIndex == null ? (
 							<StreamingFooter startTime={sendingStartTime} />
 						) : null}
 						<ConversationBottomSpacer />
@@ -548,6 +560,7 @@ function ConversationViewport({
 						scrollParent={scrollParent}
 						sessionId={sessionId}
 						stopScroll={stopScroll}
+						streamingFooterMessageIndex={streamingFooterMessageIndex}
 						streamingIndicatorStartTime={streamingIndicatorStartTime}
 					/>
 				)}
@@ -600,6 +613,7 @@ function ProgressiveConversationViewport({
 	scrollParent,
 	sessionId,
 	stopScroll,
+	streamingFooterMessageIndex,
 	streamingIndicatorStartTime,
 }: {
 	contentRef?: React.RefCallback<HTMLElement>;
@@ -613,6 +627,7 @@ function ProgressiveConversationViewport({
 	scrollParent: HTMLDivElement | null;
 	sessionId: string;
 	stopScroll: () => void;
+	streamingFooterMessageIndex: number | null;
 	streamingIndicatorStartTime?: number;
 }) {
 	const [committedScrollState, setCommittedScrollState] = useState({
@@ -785,6 +800,20 @@ function ProgressiveConversationViewport({
 				() => {
 					const result: ProgressiveViewportRow[] = [];
 					let top = 0;
+					const appendIndicator = () => {
+						if (streamingIndicatorStartTime === undefined) return;
+						const indicatorHeight =
+							PROGRESSIVE_VIEWPORT_STREAMING_FOOTER_HEIGHT;
+						result.push({
+							height: indicatorHeight,
+							index: result.length,
+							key: STREAMING_INDICATOR_ROW_KEY,
+							kind: "indicator",
+							startTime: streamingIndicatorStartTime,
+							top,
+						});
+						top += indicatorHeight;
+					};
 					data.forEach((message, index) => {
 						const key = message.id ?? `${message.role}:${index}`;
 						const estimatedHeight = estimatedHeights[index] ?? 72;
@@ -802,18 +831,15 @@ function ProgressiveConversationViewport({
 							top,
 						});
 						top += height;
+						if (streamingFooterMessageIndex === index) {
+							appendIndicator();
+						}
 					});
-					if (streamingIndicatorStartTime !== undefined) {
-						const indicatorHeight =
-							PROGRESSIVE_VIEWPORT_STREAMING_FOOTER_HEIGHT;
-						result.push({
-							height: indicatorHeight,
-							index: data.length,
-							key: STREAMING_INDICATOR_ROW_KEY,
-							kind: "indicator",
-							startTime: streamingIndicatorStartTime,
-							top,
-						});
+					if (
+						streamingIndicatorStartTime !== undefined &&
+						streamingFooterMessageIndex == null
+					) {
+						appendIndicator();
 					}
 					return result;
 				},
@@ -822,7 +848,13 @@ function ProgressiveConversationViewport({
 						data.length + (streamingIndicatorStartTime !== undefined ? 1 : 0),
 				},
 			),
-		[data, estimatedHeights, measuredHeights, streamingIndicatorStartTime],
+		[
+			data,
+			estimatedHeights,
+			measuredHeights,
+			streamingFooterMessageIndex,
+			streamingIndicatorStartTime,
+		],
 	);
 	const totalRowsHeight =
 		rows.length > 0
@@ -832,9 +864,8 @@ function ProgressiveConversationViewport({
 	// DOM node isn't mounted yet (e.g. request just sent, assistant hasn't
 	// emitted yet). Once the streaming row mounts, the DOM-driven effect
 	// below takes over and this value is ignored.
-	const lastRow = rows[rows.length - 1];
-	const indicatorFallbackTop =
-		lastRow?.kind === "indicator" ? lastRow.top : undefined;
+	const indicatorRow = rows.find((row) => row.kind === "indicator");
+	const indicatorFallbackTop = indicatorRow?.top;
 
 	// DOM-driven indicator position sync.
 	//
@@ -917,13 +948,16 @@ function ProgressiveConversationViewport({
 					}
 
 					const tailStartIndex = Math.max(0, rows.length - 2);
-					const lastVisibleIndex =
-						inWindow.length > 0 ? inWindow[inWindow.length - 1]!.index : -1;
-					if (lastVisibleIndex >= rows.length - 1) {
+					const lastVisibleRow =
+						inWindow.length > 0 ? inWindow[inWindow.length - 1] : undefined;
+					const lastVisiblePosition = lastVisibleRow
+						? rows.indexOf(lastVisibleRow)
+						: -1;
+					if (lastVisiblePosition >= rows.length - 1) {
 						return inWindow;
 					}
 					const result = inWindow.slice();
-					const appendStart = Math.max(tailStartIndex, lastVisibleIndex + 1);
+					const appendStart = Math.max(tailStartIndex, lastVisiblePosition + 1);
 					for (let index = appendStart; index < rows.length; index += 1) {
 						result.push(rows[index]!);
 					}
@@ -1017,7 +1051,7 @@ function ProgressiveConversationViewport({
 			const row = rowsRef.current.find((entry) => entry.key === rowKey);
 			// Only message rows flow through here. The indicator pseudo row
 			// has a fixed height and does not use `MeasuredConversationRow`.
-			if (!row || row.kind !== "message") {
+			if (row?.kind !== "message") {
 				return;
 			}
 
