@@ -1169,7 +1169,13 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 													disabled={toolbarDisabled}
 													className={cn(
 														`flex items-center gap-0.5 ${composerToolbarTriggerClassName}`,
-														composerToolbarActiveClassName,
+														// `effort-max-text` paints via `-webkit-text-fill-color:
+														// transparent` without a `color`, so it needs a muted
+														// baseline to avoid a flash when the gradient class drops.
+														"text-muted-foreground hover:text-muted-foreground",
+														(effectiveEffort === "max" ||
+															effectiveEffort === "xhigh") &&
+															"effort-max-text",
 														toolbarDisabled
 															? "cursor-not-allowed opacity-45 hover:bg-transparent"
 															: null,
@@ -1223,7 +1229,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 												className={cn(
 													`size-7 justify-center px-0 ${composerToolbarTriggerClassName}`,
 													permissionMode === "plan"
-														? composerToolbarActiveClassName
+														? "text-plan hover:text-plan"
 														: "text-muted-foreground/70 hover:text-muted-foreground/70",
 												)}
 												onToggle={() =>
@@ -1244,7 +1250,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 														className={cn(
 															`size-7 justify-center px-0 ${composerToolbarTriggerClassName}`,
 															terminalMode
-																? composerToolbarActiveClassName
+																? "text-emerald-500 hover:bg-emerald-500/10 hover:text-emerald-500"
 																: // Pin the hover text color (like the Plan toggle) so the
 																	// toolbar base `hover:text-foreground` can't flash the icon
 																	// white for a frame while `transition-colors` runs on toggle.
