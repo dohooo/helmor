@@ -7,7 +7,11 @@
 // its own bearer-token auth, so the Worker just passes the client's
 // `Authorization` header through. Blueprint: cloudflare/claude-managed-agents.
 
-import { getSandbox, proxyToSandbox, type Sandbox } from "@cloudflare/sandbox";
+import {
+	Sandbox as CloudflareSandbox,
+	getSandbox,
+	proxyToSandbox,
+} from "@cloudflare/sandbox";
 import {
 	createWorkerTeamGatewayStore,
 	handleTeamRoute,
@@ -22,7 +26,57 @@ import {
 	stripInboundMemberHeader,
 } from "./team-gateway/core";
 
-export { Sandbox } from "@cloudflare/sandbox";
+export class Sandbox extends CloudflareSandbox {
+	async fetch(request: Request): Promise<Response> {
+		const url = new URL(request.url);
+		const match = url.pathname.match(/^\/__helmor-companion\/(\d+)(\/.*)?$/);
+		if (!match) {
+			return super.fetch(request);
+		}
+
+		const port = Number(match[1]);
+		if (!Number.isFinite(port) || port <= 0 || port > 65_535) {
+			return new Response("Invalid companion port", { status: 400 });
+		}
+		const upstreamPath = match[2] || "/";
+		const upstreamUrl = `http://localhost:${port}${upstreamPath}${url.search}`;
+		return this.fetchCompanionPort(new Request(upstreamUrl, request), port);
+	}
+
+	private async fetchCompanionPort(
+		request: Request,
+		port: number,
+	): Promise<Response> {
+		const internals = this as unknown as {
+			container?: {
+				running: boolean;
+				getTcpPort: (port: number) => {
+					fetch: (url: string, request: Request) => Promise<Response>;
+				};
+			};
+			inflightRequests?: number;
+			renewActivityTimeout?: () => void;
+			decrementInflight?: () => void;
+		};
+		if (!internals.container?.running) {
+			return new Response("Container is not running", { status: 503 });
+		}
+
+		const tcpPort = internals.container.getTcpPort(port);
+		const target = request.url.replace("https:", "http:");
+
+		internals.inflightRequests = (internals.inflightRequests ?? 0) + 1;
+		internals.renewActivityTimeout?.();
+		try {
+			const response = await tcpPort.fetch(target, request);
+			internals.decrementInflight?.();
+			return response;
+		} catch (error) {
+			internals.decrementInflight?.();
+			throw error;
+		}
+	}
+}
 // Likewise for the `CLAUDE_IDENTITY` binding (Claude subscription token broker).
 export { ClaudeIdentity } from "./claude-identity";
 // Re-export so workerd registers the Durable Object class named in
@@ -30,7 +84,7 @@ export { ClaudeIdentity } from "./claude-identity";
 export { CodexIdentity } from "./codex-identity";
 
 export interface Env {
-	Sandbox: DurableObjectNamespace<Sandbox>;
+	Sandbox: DurableObjectNamespace<CloudflareSandbox>;
 	/** Team registry: members / invites / teams / workspaces mirror (Phase 3). */
 	DB: D1Database;
 	/** Fixed sandbox id for Phase 0 (one team → one sandbox). */
@@ -247,7 +301,7 @@ async function route(
 	// Transparent HTTP proxy: method, path, body, and streaming responses
 	// pass straight through; headers carry the derived member id + shared
 	// companion token (see `deriveForwardedRequest`).
-	const response = await sandbox.containerFetch(forwarded, port);
+	const response = await containerFetchThroughPort(sandbox, forwarded, port);
 
 	// Phase 2b sleep persistence: ONLY for the agent-stream path, snapshot
 	// /home/helmor to R2 after the turn so the session survives sandbox
@@ -277,7 +331,7 @@ async function route(
  */
 export async function handleTeamClone(
 	forwarded: Request,
-	sandbox: Sandbox,
+	sandbox: CloudflareSandbox,
 	port: number,
 	env: Env,
 ): Promise<Response> {
@@ -364,7 +418,11 @@ export async function handleTeamClone(
 			body: JSON.stringify({ folderPath: targetDir }),
 		},
 	);
-	const registerRes = await sandbox.containerFetch(registerReq, port);
+	const registerRes = await containerFetchThroughPort(
+		sandbox,
+		registerReq,
+		port,
+	);
 	if (!registerRes.ok) {
 		// The clone landed but registration failed (transient serve error).
 		// Leaving the dir behind wedges a retry on the "already exists" clone
@@ -414,7 +472,7 @@ export async function handleTeamClone(
  */
 async function backupAfterStream(
 	body: ReadableStream<Uint8Array>,
-	sandbox: Sandbox,
+	sandbox: CloudflareSandbox,
 	env: Env,
 ): Promise<void> {
 	try {
@@ -435,7 +493,10 @@ async function backupAfterStream(
  * disposable) so the backup is just the SQLite DB + small settings. All errors
  * are logged and swallowed — cold-starting with an empty DB is acceptable.
  */
-async function backupAndStore(sandbox: Sandbox, env: Env): Promise<void> {
+async function backupAndStore(
+	sandbox: CloudflareSandbox,
+	env: Env,
+): Promise<void> {
 	try {
 		const handle = await sandbox.createBackup({
 			dir: "/home/helmor",
@@ -484,7 +545,7 @@ export interface EnsureServeOptions {
 }
 
 export async function ensureServe(
-	sandbox: Sandbox,
+	sandbox: CloudflareSandbox,
 	env: Env,
 	port: number,
 	options: EnsureServeOptions = {},
@@ -600,7 +661,7 @@ export async function ensureServe(
 }
 
 export async function healthOk(
-	sandbox: Sandbox,
+	sandbox: CloudflareSandbox,
 	port: number,
 	timeoutMs = HEALTH_CHECK_TIMEOUT_MS,
 ): Promise<boolean> {
@@ -608,7 +669,8 @@ export async function healthOk(
 	const timeout = setTimeout(() => controller.abort(), timeoutMs);
 	try {
 		const res = await withTimeout(
-			sandbox.containerFetch(
+			containerFetchThroughPort(
+				sandbox,
 				new Request(`http://localhost:${port}/v1/health`, {
 					signal: controller.signal,
 				}),
@@ -623,6 +685,30 @@ export async function healthOk(
 	} finally {
 		clearTimeout(timeout);
 	}
+}
+
+function containerFetchThroughPort(
+	sandbox: CloudflareSandbox,
+	request: Request,
+	port: number,
+): Promise<Response> {
+	const url = new URL(request.url);
+	const target = `http://localhost:${port}${url.pathname}${url.search}`;
+	const proxyUrl = new URL(request.url);
+	proxyUrl.pathname = `/__helmor-companion/${port}${url.pathname}`;
+	const init: RequestInit = {
+		method: request.method,
+		headers: request.headers,
+		signal: request.signal,
+	};
+	if (request.method !== "GET" && request.method !== "HEAD") {
+		init.body = request.body;
+	}
+	const fetchThroughDurableObject = (sandbox as { fetch?: typeof fetch }).fetch;
+	if (fetchThroughDurableObject) {
+		return fetchThroughDurableObject(new Request(proxyUrl.toString(), init));
+	}
+	return sandbox.containerFetch(target, init, port);
 }
 
 async function withTimeout<T>(

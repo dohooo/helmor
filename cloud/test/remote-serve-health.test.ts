@@ -11,6 +11,22 @@ describe("remote sandbox serve health", () => {
 		await expect(healthOk(sandbox, 8080, 5)).resolves.toBe(false);
 	});
 
+	it("routes companion health through the internal DO fetch proxy", async () => {
+		const paths: string[] = [];
+		const sandbox = {
+			fetch: async (request: Request) => {
+				paths.push(new URL(request.url).pathname);
+				return new Response(JSON.stringify({ ok: true }), {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				});
+			},
+		} as unknown as Sandbox;
+
+		await expect(healthOk(sandbox, 8080, 50)).resolves.toBe(true);
+		expect(paths).toEqual(["/__helmor-companion/8080/v1/health"]);
+	});
+
 	it("does not let an initial hung containerFetch prevent startProcess", async () => {
 		let fetchCalls = 0;
 		let startCalls = 0;
