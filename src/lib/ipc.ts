@@ -547,6 +547,29 @@ export function invoke<T>(
 async function companionInvoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
 	const record = isPlainArgs(args) ? args : undefined;
 
+	// UI-mutation subscription rides the SHARED, reconnecting `/v1/stream` SSE
+	// (which emits `ui-mutation` events) instead of a one-shot `/rpc-stream`
+	// subscription. The rpc-stream had no reconnect and the proxy idle-closes it
+	// after ~10s, so workspace-state events (e.g. finalize) were silently dropped
+	// and the composer stayed gated. `/v1/stream` already keepalive-pings and the
+	// loop reconnects, so events keep flowing.
+	if (cmd === "subscribe_ui_mutations" && record) {
+		const channel = Object.values(record).find(
+			(value) => value instanceof CompanionChannel,
+		) as CompanionChannel<unknown> | undefined;
+		if (channel) {
+			const unlisten = companionListen("ui-mutation", (event) => {
+				channel.onmessage?.(event.payload);
+			});
+			channel.close = () => void unlisten.then((un) => un());
+			return undefined as T;
+		}
+	}
+	// The matching teardown: the listener was already dropped via
+	// `closeChannel` → `channel.close`, so there's nothing to unsubscribe
+	// server-side (the SSE body drop auto-unsubscribes the UiSyncManager).
+	if (cmd === "unsubscribe_ui_mutations") return undefined as T;
+
 	// A `Channel` argument means this is a streaming command — route it to the
 	// streaming endpoint and resolve once the stream closes.
 	if (record) {

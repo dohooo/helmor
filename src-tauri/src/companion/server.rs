@@ -274,19 +274,46 @@ async fn stream_handler(State(state): State<AppState>, headers: HeaderMap) -> Re
     if !auth::authorize(&headers, state.token.as_str(), &state.verifier) {
         return unauthorized();
     }
-    Sse::new(keepalive_stream())
+    // Carry UI mutations over the SHARED /v1/stream rather than a separate
+    // one-shot rpc-stream subscription. This stream already keepalive-pings (a
+    // proxy can't idle-close it) and the desktop reconnects it on drop — the
+    // rpc-stream path had neither, so finalize/workspace-state events were
+    // silently lost in team mode and the composer stayed gated. Reuse the
+    // desktop streaming path: it subscribes to the UiSyncManager and
+    // auto-unsubscribes when `tx` drops (the SSE body closing on disconnect).
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let subscription_id = uuid::Uuid::new_v4().to_string();
+    if let Err(error) = (state.streamer)(
+        "subscribe_ui_mutations",
+        json!({ "subscriptionId": subscription_id }),
+        None,
+        tx,
+    ) {
+        // Degrade to keepalive-only (rx stays empty) instead of failing the
+        // stream — the client still gets a live, reconnecting connection.
+        tracing::warn!(error = %format!("{error:?}"), "/v1/stream ui-mutation subscribe failed");
+    }
+    Sse::new(ui_mutation_stream(rx))
         .keep_alive(KeepAlive::default())
         .into_response()
 }
 
-fn keepalive_stream() -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
+/// SSE body: an initial `hello`, every UI-mutation line as a `ui-mutation`
+/// event, and a 15s `ping` keepalive so an idle stream (no mutations) still
+/// sends bytes and a proxy idle-timeout can't close it.
+fn ui_mutation_stream(
+    rx: tokio::sync::mpsc::UnboundedReceiver<String>,
+) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
     let hello = stream::once(async {
         Ok::<_, std::convert::Infallible>(Event::default().event("hello").data("{}"))
+    });
+    let mutations = UnboundedReceiverStream::new(rx).map(|line| {
+        Ok::<_, std::convert::Infallible>(Event::default().event("ui-mutation").data(line))
     });
     let interval = tokio::time::interval(Duration::from_secs(15));
     let pings = tokio_stream::wrappers::IntervalStream::new(interval)
         .map(|_| Ok::<_, std::convert::Infallible>(Event::default().event("ping").data("{}")));
-    hello.chain(pings)
+    hello.chain(stream::select(mutations, pings))
 }
 
 fn unauthorized() -> Response {

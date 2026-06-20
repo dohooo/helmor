@@ -253,6 +253,44 @@ describe("companion connection state + reconnect backoff", () => {
 		unsub();
 	});
 
+	it("routes subscribe_ui_mutations onto the shared /v1/stream and delivers ui-mutation events", async () => {
+		let controller!: ReadableStreamDefaultController<Uint8Array>;
+		const body = new ReadableStream<Uint8Array>({
+			start(c) {
+				controller = c;
+			},
+		});
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValue({ ok: true, status: 200, body });
+		vi.stubGlobal("fetch", fetchMock);
+
+		const ipc = await import("./ipc");
+		const received: unknown[] = [];
+		const channel = new ipc.Channel<unknown>();
+		channel.onmessage = (message) => received.push(message);
+
+		// Subscribing must NOT open a dedicated /rpc-stream subscription (which the
+		// proxy idle-closes and never reconnects) — it must ride the shared SSE.
+		await ipc.invoke("subscribe_ui_mutations", {
+			subscriptionId: "s1",
+			onEvent: channel,
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(String(fetchMock.mock.calls[0][0])).toContain("/v1/stream");
+		expect(String(fetchMock.mock.calls[0][0])).not.toContain("/rpc-stream");
+
+		// A ui-mutation SSE frame from the backend reaches the channel, parsed.
+		controller.enqueue(
+			new TextEncoder().encode(
+				'event: ui-mutation\ndata: {"type":"workspaceChanged","workspaceId":"w1"}\n\n',
+			),
+		);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(received).toEqual([{ type: "workspaceChanged", workspaceId: "w1" }]);
+	});
+
 	it("native (non-remote) transport stays online and never opens the stream", async () => {
 		// No companion marker → native (mocked-Tauri) transport.
 		(window as unknown as CompanionWindow).__HELMOR_COMPANION__ = undefined;

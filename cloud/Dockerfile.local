@@ -16,18 +16,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY sidecar/package.json sidecar/bun.lock ./sidecar/
-RUN cd sidecar && bun install --frozen-lockfile
+# Cache bun's package downloads across builds/worktrees (BuildKit cache mount,
+# like cargo below) so the big platform tarballs are fetched once and a retry
+# reuses them instead of re-downloading — avoids download-corruption integrity fails.
+RUN --mount=type=cache,target=/bun-cache,sharing=locked \
+	cd sidecar && BUN_INSTALL_CACHE_DIR=/bun-cache bun install --frozen-lockfile --network-concurrency=4
 COPY sidecar ./sidecar
 COPY scripts ./scripts
 
 ARG TARGETARCH
-RUN set -eux; \
+# Cache the SHA256-verified vendor archives (HELMOR_BUNDLE_CACHE -> ARCHIVE_CACHE)
+# and bun's package cache so re-runs don't re-download gh/glab/opencode/etc.
+RUN --mount=type=cache,target=/bun-cache,sharing=locked \
+	--mount=type=cache,target=/bundle-cache,sharing=locked \
+	set -eux; \
 	case "$TARGETARCH" in \
 		arm64) target="aarch64-unknown-linux-gnu" ;; \
 		amd64) target="x86_64-unknown-linux-gnu" ;; \
 		*) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
 	esac; \
 	cd sidecar; \
+	export BUN_INSTALL_CACHE_DIR=/bun-cache HELMOR_BUNDLE_CACHE=/bundle-cache; \
 	bun run scripts/stage-vendor.ts; \
 	TAURI_TARGET_TRIPLE="$target" bun run scripts/build.ts; \
 	cp dist/helmor-sidecar "dist/helmor-sidecar-${target}"; \

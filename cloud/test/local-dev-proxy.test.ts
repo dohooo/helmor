@@ -212,6 +212,66 @@ describe("local Docker Team proxy", () => {
 			expect.objectContaining({ id: "ws-1", name: "foo" }),
 		]);
 	});
+
+	it("seeds a fixed invite token so the dev member token is stable", async () => {
+		// `dev:team` seeds a known token (instead of a random UUID) so the desktop
+		// can default to it with no manual entry. The seeded token must classify
+		// as a member after acceptance — and a random one stays random.
+		const registry = new InMemoryLocalTeamRegistry();
+		const fixed = await registry.createInvite({
+			baseUrl: PUBLIC_URL,
+			token: "hlm_dev_team_local",
+		});
+		expect(fixed.token).toBe("hlm_dev_team_local");
+		await registry.acceptInvite({
+			token: fixed.token,
+			githubId: "dev",
+			login: "dev",
+		});
+		expect(await registry.classify(fixed.token, ADMIN_TOKEN)).toMatchObject({
+			caller: "member",
+		});
+		const random = await registry.createInvite({ baseUrl: PUBLIC_URL });
+		expect(random.token).not.toBe("hlm_dev_team_local");
+	});
+
+	it("stores the Claude token for container injection but never exposes it over HTTP", async () => {
+		const registry = new InMemoryLocalTeamRegistry();
+		await registry.putClaudeIdentity("member-1", {
+			oauthToken: "sk-ant-oat01-secret",
+		});
+		// The launcher reads the raw token to inject as CLAUDE_CODE_OAUTH_TOKEN…
+		expect(registry.getClaudeToken()).toBe("sk-ant-oat01-secret");
+		// …but the HTTP-facing status exposes only the boolean flag.
+		expect(await registry.getClaudeIdentity()).toEqual({ hasToken: true });
+	});
+
+	it("recreates the container after a successful Claude (re)authorize", async () => {
+		const registry = new InMemoryLocalTeamRegistry();
+		let restarts = 0;
+		const proxy = createLocalTeamProxy({
+			registry,
+			companionBaseUrl: "http://companion.local:8080",
+			companionToken: COMPANION_TOKEN,
+			adminToken: ADMIN_TOKEN,
+			publicBaseUrl: PUBLIC_URL,
+			fetchCompanion: async () => json({ ok: true }),
+			restartCompanion: async () => {
+				restarts += 1;
+			},
+		});
+		const token = await acceptMember(proxy);
+		const res = await proxy.fetch(
+			new Request(`${PUBLIC_URL}/team/claude-identity`, {
+				method: "PUT",
+				headers: { ...auth(token), "content-type": "application/json" },
+				body: JSON.stringify({ oauthToken: "sk-ant-oat01-x" }),
+			}),
+		);
+		expect(res.status).toBe(200);
+		expect(restarts).toBe(1);
+		expect(registry.getClaudeToken()).toBe("sk-ant-oat01-x");
+	});
 });
 
 function auth(token: string): Record<string, string> {

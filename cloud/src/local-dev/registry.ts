@@ -51,6 +51,10 @@ export interface LocalTeamSnapshot {
 	workspaces: Record<string, LocalTeamWorkspace & { team_id: string }>;
 	codexIdentities: Record<string, CloudCodexIdentityStatus>;
 	claudeIdentities: Record<string, CloudClaudeIdentityStatus>;
+	/** Local-dev only: the raw Claude OAuth token per member, kept so the
+	 *  launcher can inject it into the container as CLAUDE_CODE_OAUTH_TOKEN.
+	 *  NEVER returned over HTTP — `getClaudeIdentity` exposes only `{ hasToken }`. */
+	claudeTokens: Record<string, string>;
 }
 
 export interface AcceptInviteInput {
@@ -74,6 +78,7 @@ export interface LocalTeamRegistry {
 	createInvite(input: {
 		baseUrl: string;
 		expiresAt?: string | null;
+		token?: string;
 	}): Promise<{ token: string; url: string }>;
 	acceptInvite(
 		input: AcceptInviteInput,
@@ -145,8 +150,11 @@ export class InMemoryLocalTeamRegistry implements LocalTeamRegistry {
 	async createInvite(input: {
 		baseUrl: string;
 		expiresAt?: string | null;
+		/** Seed a fixed invite token (local dev only) instead of a random UUID,
+		 *  so the desktop can default to a known token with no manual entry. */
+		token?: string;
 	}): Promise<{ token: string; url: string }> {
-		const token = crypto.randomUUID();
+		const token = input.token?.trim() || crypto.randomUUID();
 		this.snapshotState.invites[token] = {
 			token,
 			team_id: LOCAL_TEAM_ID,
@@ -271,6 +279,9 @@ export class InMemoryLocalTeamRegistry implements LocalTeamRegistry {
 		const previous = this.snapshotState.claudeIdentities[memberId];
 		const next = { hasToken: true };
 		this.snapshotState.claudeIdentities[memberId] = next;
+		// Local dev: keep the raw token (NEVER exposed over HTTP) so the launcher
+		// can inject it as CLAUDE_CODE_OAUTH_TOKEN when (re)creating the container.
+		this.snapshotState.claudeTokens[memberId] = input.oauthToken;
 		this.bindIdentityMember(memberId);
 		this.changed();
 		return {
@@ -285,6 +296,15 @@ export class InMemoryLocalTeamRegistry implements LocalTeamRegistry {
 					hasToken: false,
 				})
 			: { hasToken: false };
+	}
+
+	/** Local-dev only: the bound member's raw Claude OAuth token, for container
+	 *  injection. Never exposed over HTTP (no gateway route returns it). */
+	getClaudeToken(): string | null {
+		const memberId = this.identityMemberId();
+		return memberId
+			? (this.snapshotState.claudeTokens[memberId] ?? null)
+			: null;
 	}
 
 	snapshot(): LocalTeamSnapshot {
@@ -321,6 +341,7 @@ function normalizeSnapshot(
 		workspaces: initial?.workspaces ?? {},
 		codexIdentities: initial?.codexIdentities ?? {},
 		claudeIdentities: initial?.claudeIdentities ?? {},
+		claudeTokens: initial?.claudeTokens ?? {},
 	};
 }
 

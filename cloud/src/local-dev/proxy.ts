@@ -83,7 +83,25 @@ export function createLocalTeamProxy(options: LocalTeamProxyOptions): {
 		const url = new URL(request.url);
 		if (url.pathname.startsWith("/team/")) {
 			const response = await handleTeamGatewayRoute(request, url, gatewayStore);
-			if (response) return response;
+			if (response) {
+				// A successful in-app Claude (re)authorize must re-create the local
+				// container so the freshly-stored token is injected as env (baked at
+				// create time). Block until it's healthy so "Authorize" finishing
+				// means cloud Claude is ready. The token is already persisted; a
+				// recreate failure must not fail authorize.
+				if (
+					request.method === "PUT" &&
+					response.ok &&
+					url.pathname === "/team/claude-identity"
+				) {
+					try {
+						await options.restartCompanion?.();
+					} catch {
+						// best-effort — the identity is persisted regardless
+					}
+				}
+				return response;
+			}
 		}
 
 		const requestBody = await readRequestBody(request);

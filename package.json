@@ -13,6 +13,7 @@
 	"scripts": {
 		"changeset": "changeset",
 		"dev": "bun run dev:prepare && vite build && tauri dev",
+		"dev:team": "bun run scripts/dev-team.ts",
 		"dev:prepare": "bun run dev:prepare:sidecar && bun run dev:prepare:cli",
 		"dev:prepare:sidecar": "cd sidecar && bun run dev:prepare",
 		"dev:prepare:cli": "node scripts/stage-dev-cli.mjs",

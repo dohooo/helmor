@@ -62,6 +62,18 @@ export function saveTeamConfig(config: TeamConfig): void {
 	store.setItem(TOKEN_KEY, config.token.trim());
 }
 
+/**
+ * Local-dev convenience: the fixed URL + member token the `bun run dev:team`
+ * proxy seeds, so toggling Team mode in a dev build needs no manual entry.
+ * `null` in a production build — the fixed token only works against the
+ * 127.0.0.1 dev proxy. Keep the token in sync with
+ * `cloud/scripts/local-docker-team.ts` (`devMemberToken`).
+ */
+export function getDevTeamDefault(): TeamConfig | null {
+	if (!import.meta.env.DEV) return null;
+	return { url: "http://127.0.0.1:8787", token: "hlm_dev_team_local" };
+}
+
 /** True when team mode is switched on AND a Worker URL is configured. */
 export function isTeamModeActive(): boolean {
 	const store = storage();

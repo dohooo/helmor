@@ -6,6 +6,7 @@ import { Switch } from "@/components/ui/switch";
 import { useInviteAccept } from "@/features/team/use-invite-accept";
 import { useTeamIdentity } from "@/features/team/use-team-identity";
 import {
+	getDevTeamDefault,
 	getTeamConfig,
 	isTeamModeActive,
 	parseInviteLink,
@@ -23,7 +24,9 @@ import { SettingsGroup, SettingsRow } from "../components/settings-row";
  * identical — "zero new concepts".
  */
 export function TeamPanel() {
-	const initial = getTeamConfig();
+	// In a dev build, pre-fill the fixed local `dev:team` URL + token so Team
+	// mode can be toggled with zero manual entry (production stores nothing here).
+	const initial = getTeamConfig() ?? getDevTeamDefault();
 	const [url, setUrl] = useState(initial?.url ?? "");
 	const [token, setToken] = useState(initial?.token ?? "");
 	const [testing, setTesting] = useState(false);
@@ -79,13 +82,16 @@ export function TeamPanel() {
 
 	const handleToggle = (next: boolean) => {
 		if (next) {
-			if (!url.trim()) {
+			// Empty fields fall back to the dev default (dev builds only) so the
+			// switch alone brings up Team mode with no typing.
+			const effective = url.trim() ? { url, token } : getDevTeamDefault();
+			if (!effective) {
 				toast.error("Enter a Worker URL first");
 				return;
 			}
 			// Repoint the IPC transport in place — no reload. The shell shows a
 			// connecting banner while a cold team backend wakes.
-			switchTeamMode({ url, token });
+			switchTeamMode(effective);
 		} else {
 			switchTeamMode(null);
 		}
