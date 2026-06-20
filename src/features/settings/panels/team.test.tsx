@@ -4,6 +4,14 @@ import * as teamSwitch from "@/lib/team-switch";
 import { renderWithProviders } from "@/test/render-with-providers";
 import { TeamPanel } from "./team";
 
+// These panel tests assert PRODUCTION behaviour (no auto-fill). `import.meta.env.DEV`
+// is true under vitest, so disable the dev-only default that would otherwise
+// pre-fill the URL/token fields.
+vi.mock("@/lib/team-mode", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/team-mode")>()),
+	getDevTeamDefault: () => null,
+}));
+
 function stubReload(): ReturnType<typeof vi.fn> {
 	const reload = vi.fn();
 	Object.defineProperty(window, "location", {

@@ -51,6 +51,12 @@ export function getTeamConfig(): TeamConfig | null {
 	if (!store) return null;
 	const url = normalizeUrl(store.getItem(URL_KEY) ?? "");
 	if (!url) return null;
+	// Dev: the local proxy seeds a FIXED member token, so a stale stored token
+	// (e.g. left over after the local registry was wiped) 401s the SSE and hangs
+	// on "Reconnecting…". When pointed at the local dev proxy, always use the
+	// known dev token so a reconnect/reload auto-recovers without re-typing.
+	const dev = getDevTeamDefault();
+	if (dev && url === dev.url) return { url, token: dev.token };
 	return { url, token: (store.getItem(TOKEN_KEY) ?? "").trim() };
 }
 
