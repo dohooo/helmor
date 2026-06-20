@@ -9,13 +9,18 @@
 
 import { getSandbox, proxyToSandbox, type Sandbox } from "@cloudflare/sandbox";
 import {
+	createWorkerTeamGatewayStore,
 	handleTeamRoute,
-	lookupMemberId,
 	readBackupHandle,
 	readCloudIdentityMemberId,
 	TEAM_ID,
 	writeBackupHandle,
 } from "./team";
+import {
+	deriveGatewayHeaders,
+	inferRepoName,
+	stripInboundMemberHeader,
+} from "./team-gateway/core";
 
 export { Sandbox } from "@cloudflare/sandbox";
 // Likewise for the `CLAUDE_IDENTITY` binding (Claude subscription token broker).
@@ -67,6 +72,12 @@ export interface Env {
 
 /** Boot script staged in the image (Xvfb daemon → readiness → `helmor serve`). */
 const SERVE_START_CMD = "/usr/local/bin/helmor-start-serve";
+const HEALTH_CHECK_TIMEOUT_MS = 1_500;
+const RESTORE_BACKUP_TIMEOUT_MS = 15_000;
+const START_PROCESS_TIMEOUT_MS = 15_000;
+const IDENTITY_MINT_TIMEOUT_MS = 15_000;
+const SERVE_READY_TIMEOUT_MS = 120_000;
+const SERVE_POLL_INTERVAL_MS = 500;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -154,9 +165,7 @@ async function route(
 	// front — before proxyToSandbox — so the "never client-asserted" invariant
 	// holds on the SDK preview path too, not only the derived proxy hop. The
 	// companion trusts this header as author_id, so a client must never set it.
-	const req = request.headers.has("X-Helmor-Member-Id")
-		? new Request(request, { headers: withoutMemberHeader(request.headers) })
-		: request;
+	const req = stripInboundMemberHeader(request);
 
 	// Preview-URL passthrough (port-subdomain hostnames). Returns null for
 	// the Worker's own hostname, which we proxy transparently below.
@@ -254,21 +263,6 @@ async function route(
 	}
 
 	return response;
-}
-
-/**
- * Derive the repo folder name from a clone URL, mirroring the Rust
- * `infer_repo_name_from_url` so a cloud clone lands at the same name a local
- * clone would (`…/foo.git` → `foo`). Returns null when none can be derived.
- */
-function inferRepoName(url: string): string | null {
-	const trimmed = url.trim().replace(/[/\\]+$/, "");
-	const withoutGit = trimmed.endsWith(".git")
-		? trimmed.slice(0, -".git".length)
-		: trimmed;
-	const segments = withoutGit.split(/[/\\:]/);
-	const last = (segments[segments.length - 1] ?? "").trim();
-	return last.length > 0 ? last : null;
 }
 
 /**
@@ -470,64 +464,43 @@ async function deriveForwardedRequest(
 	request: Request,
 	env: Env,
 ): Promise<Request | Response> {
-	const bearer = readBearer(request);
-	let memberId: string | null = null;
-	// Only swap in the shared companion token for an AUTHENTICATED caller — admin
-	// (shared token) or a member (valid invite token). An UNauthenticated caller
-	// must NOT receive the shared token (that would bypass the companion's own
-	// bearer auth); pass it through unswapped so the companion gates it
-	// (/rpc -> 401, /v1/health stays public). An unknown token -> 401 here.
-	let injectCompanionToken = false;
-	if (bearer === env.HELMOR_COMPANION_TOKEN) {
-		injectCompanionToken = true; // admin / local (no member id)
-	} else if (bearer) {
-		memberId = await lookupMemberId(env, bearer);
-		if (!memberId) {
-			return new Response(JSON.stringify({ code: "Unauthorized" }), {
-				status: 401,
-				headers: { "content-type": "application/json" },
-			});
-		}
-		injectCompanionToken = true; // member: invite token -> shared token
-	}
-
-	const forwarded = new Request(request, {
-		headers: new Headers(request.headers),
+	const headers = await deriveGatewayHeaders(request, {
+		store: createWorkerTeamGatewayStore(env, new URL(request.url)),
+		companionToken: env.HELMOR_COMPANION_TOKEN,
 	});
-	forwarded.headers.delete("X-Helmor-Member-Id"); // never client-asserted
-	if (memberId) forwarded.headers.set("X-Helmor-Member-Id", memberId);
-	if (injectCompanionToken) {
-		forwarded.headers.set(
-			"Authorization",
-			`Bearer ${env.HELMOR_COMPANION_TOKEN}`,
-		);
-	}
-	return forwarded;
-}
-
-/** Read the `Authorization: Bearer <token>` value, or null if absent. */
-function readBearer(request: Request): string | null {
-	const header = request.headers.get("Authorization");
-	if (!header) return null;
-	const match = /^Bearer\s+(.+)$/i.exec(header);
-	return match ? match[1] : null;
-}
-
-/** Clone request headers with the trusted member-id header removed. */
-function withoutMemberHeader(headers: Headers): Headers {
-	const next = new Headers(headers);
-	next.delete("X-Helmor-Member-Id");
-	return next;
+	if (headers instanceof Response) return headers;
+	return new Request(request, { headers });
 }
 
 /** Ensure the companion server is up. Fast-path on a health hit; otherwise
  *  launch the boot script and poll until it answers (Xvfb + serve cold start). */
-async function ensureServe(
+export interface EnsureServeOptions {
+	healthCheckTimeoutMs?: number;
+	restoreBackupTimeoutMs?: number;
+	startProcessTimeoutMs?: number;
+	identityMintTimeoutMs?: number;
+	readyTimeoutMs?: number;
+	pollIntervalMs?: number;
+}
+
+export async function ensureServe(
 	sandbox: Sandbox,
 	env: Env,
 	port: number,
+	options: EnsureServeOptions = {},
 ): Promise<void> {
-	if (await healthOk(sandbox, port)) return;
+	const healthCheckTimeoutMs =
+		options.healthCheckTimeoutMs ?? HEALTH_CHECK_TIMEOUT_MS;
+	const restoreBackupTimeoutMs =
+		options.restoreBackupTimeoutMs ?? RESTORE_BACKUP_TIMEOUT_MS;
+	const startProcessTimeoutMs =
+		options.startProcessTimeoutMs ?? START_PROCESS_TIMEOUT_MS;
+	const identityMintTimeoutMs =
+		options.identityMintTimeoutMs ?? IDENTITY_MINT_TIMEOUT_MS;
+	const readyTimeoutMs = options.readyTimeoutMs ?? SERVE_READY_TIMEOUT_MS;
+	const pollIntervalMs = options.pollIntervalMs ?? SERVE_POLL_INTERVAL_MS;
+
+	if (await healthOk(sandbox, port, healthCheckTimeoutMs)) return;
 
 	// Phase 2b sleep persistence: restore the last DB snapshot BEFORE serve
 	// binds. Restore must precede serve (serve not yet running = no open handle
@@ -535,7 +508,13 @@ async function ensureServe(
 	// the container cold-starts with an empty DB, exactly like a brand-new team.
 	try {
 		const handle = await readBackupHandle(env);
-		if (handle) await sandbox.restoreBackup(handle);
+		if (handle) {
+			await withTimeout(
+				sandbox.restoreBackup(handle),
+				restoreBackupTimeoutMs,
+				"restoreBackup",
+			);
+		}
 	} catch (error) {
 		console.error("Phase 2b restore failed (cold-starting empty)", error);
 	}
@@ -547,63 +526,121 @@ async function ensureServe(
 	// identity or a brick/refresh failure starts serve WITHOUT Codex auth (the
 	// container runs un-authenticated for Codex until the user re-authorizes);
 	// we log only a NON-SENSITIVE marker, never the auth.json or any token.
-	const codexAuthJson = await mintCodexAuthJson(env);
+	const codexAuthJson = await withTimeout(
+		mintCodexAuthJson(env),
+		identityMintTimeoutMs,
+		"codex identity mint",
+	).catch((error) => {
+		console.error(
+			"Phase 1 codex mint timed out or failed",
+			error instanceof Error ? error.message : "unknown",
+		);
+		return null;
+	});
 	// Claude subscription token broker: mint the team's Claude OAuth token and
 	// inject it as the plain CLAUDE_CODE_OAUTH_TOKEN env var (VERIFIED §1.5: the
 	// serve process env is inherited all the way to the claude child — no file
 	// write needed, unlike CODEX_AUTH_JSON). A missing identity starts serve
 	// WITHOUT Claude subscription auth; never logs the token.
-	const claudeToken = await mintClaudeOauthToken(env);
-
-	await sandbox.startProcess(SERVE_START_CMD, {
-		env: {
-			HELMOR_COMPANION_TOKEN: env.HELMOR_COMPANION_TOKEN,
-			HELMOR_SERVE_PORT: String(port),
-			// Phase 2b: relocate the data dir under /home so it lands in the
-			// backed-up /home/helmor tree (createBackup dir must be under
-			// /workspace|/home|/tmp|/var/tmp|/app).
-			HELMOR_DATA_DIR: "/home/helmor",
-			// Pin HOME explicitly. The image sets no USER/HOME, so the spawned
-			// serve process would otherwise inherit whatever ambient HOME the
-			// sandbox runtime injects. The Claude onboarding seed in
-			// start-serve.sh writes
-			// `${CLAUDE_CONFIG_DIR:-${HOME:-/root}}/.claude.json` and the SDK's
-			// claude child reads `$HOME/.claude.json` — pinning HOME makes the
-			// seeded dir == the child's read path PROVABLY (VERIFIED §2.6 /
-			// RISK-2). /root is root's home (matches start-serve.sh's fallback),
-			// so today's behavior is unchanged, just made deterministic.
-			HOME: "/root",
-			// Claude Code refuses --dangerously-skip-permissions as root
-			// (getuid()===0) UNLESS IS_SANDBOX=1 (binary guard, VERIFIED 2.1.x:
-			// `getuid()===0 && IS_SANDBOX!=="1" && !CLAUDE_CODE_BUBBLEWRAP`). The
-			// cloud Agent SDK runs claude-code non-interactively with
-			// bypassPermissions, so without this EVERY claude turn exits code 1 in
-			// this isolated, ephemeral CF container.
-			IS_SANDBOX: "1",
-			...(env.GITHUB_TOKEN ? { GITHUB_TOKEN: env.GITHUB_TOKEN } : {}),
-			...(codexAuthJson ? { CODEX_AUTH_JSON: codexAuthJson } : {}),
-			...(claudeToken ? { CLAUDE_CODE_OAUTH_TOKEN: claudeToken } : {}),
-		},
+	const claudeToken = await withTimeout(
+		mintClaudeOauthToken(env),
+		identityMintTimeoutMs,
+		"claude identity mint",
+	).catch((error) => {
+		console.error(
+			"Claude mint timed out or failed",
+			error instanceof Error ? error.message : "unknown",
+		);
+		return null;
 	});
+
+	await withTimeout(
+		sandbox.startProcess(SERVE_START_CMD, {
+			env: {
+				HELMOR_COMPANION_TOKEN: env.HELMOR_COMPANION_TOKEN,
+				HELMOR_SERVE_PORT: String(port),
+				// Phase 2b: relocate the data dir under /home so it lands in the
+				// backed-up /home/helmor tree (createBackup dir must be under
+				// /workspace|/home|/tmp|/var/tmp|/app).
+				HELMOR_DATA_DIR: "/home/helmor",
+				// Pin HOME explicitly. The image sets no USER/HOME, so the spawned
+				// serve process would otherwise inherit whatever ambient HOME the
+				// sandbox runtime injects. The Claude onboarding seed in
+				// start-serve.sh writes
+				// `${CLAUDE_CONFIG_DIR:-${HOME:-/root}}/.claude.json` and the SDK's
+				// claude child reads `$HOME/.claude.json` — pinning HOME makes the
+				// seeded dir == the child's read path PROVABLY (VERIFIED §2.6 /
+				// RISK-2). /root is root's home (matches start-serve.sh's fallback),
+				// so today's behavior is unchanged, just made deterministic.
+				HOME: "/root",
+				// Claude Code refuses --dangerously-skip-permissions as root
+				// (getuid()===0) UNLESS IS_SANDBOX=1 (binary guard, VERIFIED 2.1.x:
+				// `getuid()===0 && IS_SANDBOX!=="1" && !CLAUDE_CODE_BUBBLEWRAP`). The
+				// cloud Agent SDK runs claude-code non-interactively with
+				// bypassPermissions, so without this EVERY claude turn exits code 1 in
+				// this isolated, ephemeral CF container.
+				IS_SANDBOX: "1",
+				...(env.GITHUB_TOKEN ? { GITHUB_TOKEN: env.GITHUB_TOKEN } : {}),
+				...(codexAuthJson ? { CODEX_AUTH_JSON: codexAuthJson } : {}),
+				...(claudeToken ? { CLAUDE_CODE_OAUTH_TOKEN: claudeToken } : {}),
+			},
+		}),
+		startProcessTimeoutMs,
+		"startProcess",
+	);
 
 	// Cold start: Xvfb + GTK/WebKit init + companion bind. Poll up to ~120s
 	// (WebKitGTK init is heavy on a fresh container's first boot).
-	for (let attempt = 0; attempt < 240; attempt++) {
-		if (await healthOk(sandbox, port)) return;
-		await sleep(500);
-	}
+	const deadline = Date.now() + readyTimeoutMs;
+	do {
+		if (await healthOk(sandbox, port, healthCheckTimeoutMs)) return;
+		await sleep(pollIntervalMs);
+	} while (Date.now() < deadline);
 	throw new Error("companion /v1/health did not respond in time");
 }
 
-async function healthOk(sandbox: Sandbox, port: number): Promise<boolean> {
+export async function healthOk(
+	sandbox: Sandbox,
+	port: number,
+	timeoutMs = HEALTH_CHECK_TIMEOUT_MS,
+): Promise<boolean> {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), timeoutMs);
 	try {
-		const res = await sandbox.containerFetch(
-			new Request(`http://localhost:${port}/v1/health`),
-			port,
+		const res = await withTimeout(
+			sandbox.containerFetch(
+				new Request(`http://localhost:${port}/v1/health`, {
+					signal: controller.signal,
+				}),
+				port,
+			),
+			timeoutMs,
+			"health check",
 		);
 		return res.ok;
 	} catch {
 		return false;
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
+async function withTimeout<T>(
+	promise: Promise<T>,
+	timeoutMs: number,
+	label: string,
+): Promise<T> {
+	let timeout: ReturnType<typeof setTimeout> | null = null;
+	const timeoutPromise = new Promise<never>((_, reject) => {
+		timeout = setTimeout(
+			() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
+			timeoutMs,
+		);
+	});
+	try {
+		return await Promise.race([promise, timeoutPromise]);
+	} finally {
+		if (timeout) clearTimeout(timeout);
 	}
 }
 

@@ -1,0 +1,95 @@
+# syntax=docker/dockerfile:1.7
+#
+# Local Docker-backed Team Mode image.
+#
+# This image is intentionally NOT based on cloudflare/sandbox. It runs
+# `helmor serve` directly through the same start script the Cloudflare Worker
+# launches in staging/production, but without the Cloudflare Sandbox control
+# server entrypoint. Use it for daily local development behind
+# `bun run dev:docker`.
+
+FROM --platform=$TARGETPLATFORM oven/bun:1.3.2-debian AS sidecar
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+	curl ca-certificates tar \
+	&& rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY sidecar/package.json sidecar/bun.lock ./sidecar/
+RUN cd sidecar && bun install --frozen-lockfile
+COPY sidecar ./sidecar
+COPY scripts ./scripts
+
+ARG TARGETARCH
+RUN set -eux; \
+	case "$TARGETARCH" in \
+		arm64) target="aarch64-unknown-linux-gnu" ;; \
+		amd64) target="x86_64-unknown-linux-gnu" ;; \
+		*) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
+	esac; \
+	cd sidecar; \
+	bun run scripts/stage-vendor.ts; \
+	TAURI_TARGET_TRIPLE="$target" bun run scripts/build.ts; \
+	cp dist/helmor-sidecar "dist/helmor-sidecar-${target}"; \
+	chmod +x dist/helmor-sidecar "dist/helmor-sidecar-${target}"; \
+	mkdir -p dist/vendor
+
+FROM --platform=$TARGETPLATFORM rust:1-bookworm AS build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+	libwebkit2gtk-4.1-dev libgtk-3-dev build-essential libxdo-dev libssl-dev \
+	libayatana-appindicator3-dev librsvg2-dev pkg-config cmake clang \
+	&& rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY . .
+COPY --from=sidecar /app/sidecar/dist ./sidecar/dist
+
+ARG TARGETARCH
+RUN set -eux; \
+	case "$TARGETARCH" in \
+		arm64) target="aarch64-unknown-linux-gnu" ;; \
+		amd64) target="x86_64-unknown-linux-gnu" ;; \
+		*) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
+	esac; \
+	mkdir -p dist src-tauri/target/bundled /out; \
+	printf '<!doctype html><html><body>helmor local docker serve</body></html>\n' > dist/index.html; \
+	printf '#!/bin/sh\necho "helmor-cli local docker placeholder" >&2\nexit 1\n' > "src-tauri/target/bundled/helmor-cli-${target}"; \
+	chmod +x "src-tauri/target/bundled/helmor-cli-${target}"
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+	--mount=type=cache,target=/usr/local/cargo/git \
+	--mount=type=cache,target=/cargo-target \
+	set -eux; \
+	cd src-tauri; \
+	RUSTC_WRAPPER= CARGO_TARGET_DIR=/cargo-target cargo build --bin helmor; \
+	cp /cargo-target/debug/helmor /out/helmor
+
+FROM --platform=$TARGETPLATFORM debian:bookworm-slim AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+	libwebkit2gtk-4.1-0 libgtk-3-0 libxdo3 libayatana-appindicator3-1 \
+	librsvg2-2 xvfb git ca-certificates procps \
+	&& rm -rf /var/lib/apt/lists/*
+
+ENV HELMOR_HOME=/opt/helmor
+RUN mkdir -p "$HELMOR_HOME"
+
+COPY --from=build /out/helmor "$HELMOR_HOME/helmor"
+COPY --from=sidecar /app/sidecar/dist/helmor-sidecar "$HELMOR_HOME/helmor-sidecar"
+COPY --from=sidecar /app/sidecar/dist/vendor "$HELMOR_HOME/vendor"
+COPY cloud/scripts/start-serve.sh /usr/local/bin/helmor-start-serve
+
+RUN set -eux; \
+	chmod +x "$HELMOR_HOME/helmor" "$HELMOR_HOME/helmor-sidecar" /usr/local/bin/helmor-start-serve
+
+ENV HELMOR_SIDECAR_PATH=/opt/helmor/helmor-sidecar \
+	HELMOR_SERVE_PORT=8080 \
+	HELMOR_DATA_DIR=/home/helmor \
+	HELMOR_CLOUD_AUTOPUSH=0 \
+	HOME=/root \
+	IS_SANDBOX=1 \
+	DISPLAY=:99
+
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/helmor-start-serve"]

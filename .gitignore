@@ -8,6 +8,7 @@ dist
 dist-ssr
 *.local
 *.local.*
+!cloud/Dockerfile.local
 .env
 .env.*
 .env.release.local

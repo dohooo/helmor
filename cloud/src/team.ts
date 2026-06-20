@@ -12,28 +12,16 @@
 
 import { type DirectoryBackup, getSandbox } from "@cloudflare/sandbox";
 import type { Env } from "./index";
+import {
+	handleTeamGatewayRoute,
+	TEAM_ID,
+	type TeamGatewayAcceptInviteInput,
+	type TeamGatewayAcceptInviteResult,
+	type TeamGatewayAuth,
+	type TeamGatewayStore,
+} from "./team-gateway/core";
 
-export const TEAM_ID = "team-0";
-
-type Caller = "admin" | "member" | "unauthorized";
-
-/** Read the `Authorization: Bearer <token>` value, or null if absent. */
-function readBearer(request: Request): string | null {
-	const header = request.headers.get("Authorization");
-	if (!header) return null;
-	const match = /^Bearer\s+(.+)$/i.exec(header);
-	return match ? match[1] : null;
-}
-
-/** Classify the caller: admin (shared token), member (a token that maps to a
- *  non-null accepted `invites.member_id`), or unauthorized. */
-async function classifyCaller(request: Request, env: Env): Promise<Caller> {
-	const bearer = readBearer(request);
-	if (!bearer) return "unauthorized";
-	if (bearer === env.HELMOR_COMPANION_TOKEN) return "admin";
-	const memberId = await lookupMemberId(env, bearer);
-	return memberId ? "member" : "unauthorized";
-}
+export { TEAM_ID };
 
 /** Map an invite token to its accepted member id (null if unknown/unaccepted). */
 export async function lookupMemberId(
@@ -89,13 +77,6 @@ export async function writeBackupHandle(
 		.run();
 }
 
-function json(body: unknown, status = 200): Response {
-	return new Response(JSON.stringify(body), {
-		status,
-		headers: { "content-type": "application/json" },
-	});
-}
-
 /**
  * Handle `/team/*` registry routes. Returns null for any other path so the
  * caller falls through to the container proxy.
@@ -105,82 +86,85 @@ export async function handleTeamRoute(
 	env: Env,
 	url: URL,
 ): Promise<Response | null> {
-	if (!url.pathname.startsWith("/team/")) return null;
-
-	const route = `${request.method} ${url.pathname}`;
-	switch (route) {
-		case "POST /team/bootstrap":
-			return bootstrap(request, env);
-		case "POST /team/invite":
-			return createInvite(request, env, url);
-		case "POST /team/accept":
-			return acceptInvite(request, env);
-		case "GET /team/members":
-			return listMembers(request, env);
-		case "GET /team/workspaces":
-			return listWorkspaces(request, env);
-		case "PUT /team/cloud-identity":
-			return putCloudIdentity(request, env);
-		case "GET /team/cloud-identity":
-			return getCloudIdentity(request, env);
-		case "PUT /team/claude-identity":
-			return putClaudeIdentity(request, env);
-		case "GET /team/claude-identity":
-			return getClaudeIdentity(request, env);
-		default:
-			return json({ code: "NotFound", message: `no route ${route}` }, 404);
-	}
+	return handleTeamGatewayRoute(
+		request,
+		url,
+		createWorkerTeamGatewayStore(env, url),
+	);
 }
 
-/** POST /team/bootstrap (admin) — upsert the single team row. */
-async function bootstrap(request: Request, env: Env): Promise<Response> {
-	if ((await classifyCaller(request, env)) !== "admin") {
-		return json({ code: "Unauthorized" }, 401);
+export function createWorkerTeamGatewayStore(
+	env: Env,
+	url: URL,
+): TeamGatewayStore {
+	return {
+		classifyBearer: (token) => classifyBearer(env, token),
+		bootstrap: () => bootstrap(env),
+		createInvite: (input) => createInvite(env, url, input.expiresAt),
+		acceptInvite: (input) => acceptInvite(env, input),
+		listMembers: () => listMembers(env),
+		listWorkspaces: () => listWorkspaces(env),
+		putCodexIdentity: (memberId, input) =>
+			putCloudIdentity(env, memberId, input),
+		getCodexIdentity: () => getCloudIdentity(env),
+		putClaudeIdentity: (memberId, input) =>
+			putClaudeIdentity(env, memberId, input),
+		getClaudeIdentity: () => getClaudeIdentity(env),
+	};
+}
+
+async function classifyBearer(
+	env: Env,
+	token: string | null,
+): Promise<TeamGatewayAuth> {
+	if (!token) return { caller: "unauthorized", memberId: null };
+	if (token === env.HELMOR_COMPANION_TOKEN) {
+		return { caller: "admin", memberId: null };
 	}
+	const memberId = await lookupMemberId(env, token);
+	return memberId
+		? { caller: "member", memberId }
+		: { caller: "unauthorized", memberId: null };
+}
+
+async function bootstrap(env: Env): Promise<{ teamId: string }> {
 	await env.DB.prepare(
 		`INSERT INTO teams (id, sandbox_id) VALUES (?1, ?2)
 		 ON CONFLICT(id) DO UPDATE SET sandbox_id = excluded.sandbox_id`,
 	)
 		.bind(TEAM_ID, env.HELMOR_SANDBOX_ID)
 		.run();
-	return json({ ok: true, teamId: TEAM_ID });
+	return { teamId: TEAM_ID };
 }
 
-/** POST /team/invite (admin) — mint a capability token (the member's bearer). */
 async function createInvite(
-	request: Request,
 	env: Env,
 	url: URL,
-): Promise<Response> {
-	if ((await classifyCaller(request, env)) !== "admin") {
-		return json({ code: "Unauthorized" }, 401);
-	}
-	const body = await readJsonBody(request);
-	const expiresAt = typeof body.expiresAt === "string" ? body.expiresAt : null;
+	expiresAt?: string | null,
+): Promise<{ token: string; url: string }> {
 	const token = crypto.randomUUID();
 	await env.DB.prepare(
 		`INSERT INTO invites (token, team_id, created_at, expires_at)
 		 VALUES (?1, ?2, ?3, ?4)`,
 	)
-		.bind(token, TEAM_ID, new Date().toISOString(), expiresAt)
+		.bind(token, TEAM_ID, new Date().toISOString(), expiresAt ?? null)
 		.run();
-	return json({ token, url: `https://${url.host}/?invite=${token}` });
+	return { token, url: `https://${url.host}/?invite=${token}` };
 }
 
-/** POST /team/accept (OPEN — token is the credential) — claim an invite. */
-async function acceptInvite(request: Request, env: Env): Promise<Response> {
-	const body = await readJsonBody(request);
-	const token = typeof body.token === "string" ? body.token : "";
-	const githubId =
-		typeof body.githubId === "string"
-			? body.githubId
-			: String(body.githubId ?? "");
-	const login = typeof body.login === "string" ? body.login : "";
+async function acceptInvite(
+	env: Env,
+	input: TeamGatewayAcceptInviteInput,
+): Promise<TeamGatewayAcceptInviteResult> {
+	const token = input.token.trim();
+	const githubId = input.githubId.trim();
+	const login = input.login.trim();
 	if (!token || !githubId || !login) {
-		return json(
-			{ code: "BadRequest", message: "token, githubId, login required" },
-			400,
-		);
+		return {
+			ok: false,
+			status: 400,
+			message: "token, githubId, login required",
+		};
 	}
 
 	const invite = await env.DB.prepare(
@@ -188,25 +172,19 @@ async function acceptInvite(request: Request, env: Env): Promise<Response> {
 	)
 		.bind(token)
 		.first<{ expires_at: string | null; member_id: string | null }>();
-	if (!invite)
-		return json({ code: "NotFound", message: "unknown invite" }, 404);
+	if (!invite) return { ok: false, status: 404, message: "unknown invite" };
 	if (invite.expires_at) {
-		// Fail-closed: an unparseable expires_at counts as expired (Date.parse ->
-		// NaN, and `NaN < now` is false, which would otherwise never expire).
+		// Fail-closed: an unparseable expires_at counts as expired.
 		const expiry = Date.parse(invite.expires_at);
 		if (!Number.isFinite(expiry) || expiry < Date.now()) {
-			return json({ code: "Gone", message: "invite expired" }, 410);
+			return { ok: false, status: 410, message: "invite expired" };
 		}
 	}
 	// An already-claimed invite may be refreshed by the SAME member, but never
-	// re-bound to a different id — no seat takeover via a leaked invite link.
+	// re-bound to a different id.
 	if (invite.member_id && invite.member_id !== githubId) {
-		return json({ code: "Conflict", message: "invite already claimed" }, 409);
+		return { ok: false, status: 409, message: "invite already claimed" };
 	}
-
-	const avatarUrl = typeof body.avatarUrl === "string" ? body.avatarUrl : null;
-	const displayName =
-		typeof body.displayName === "string" ? body.displayName : null;
 
 	await env.DB.batch([
 		env.DB.prepare(
@@ -216,38 +194,36 @@ async function acceptInvite(request: Request, env: Env): Promise<Response> {
 			   github_login = excluded.github_login,
 			   avatar_url   = excluded.avatar_url,
 			   display_name = excluded.display_name`,
-		).bind(githubId, login, avatarUrl, displayName, new Date().toISOString()),
+		).bind(
+			githubId,
+			login,
+			input.avatarUrl ?? null,
+			input.displayName ?? null,
+			new Date().toISOString(),
+		),
 		env.DB.prepare("UPDATE invites SET member_id = ?1 WHERE token = ?2").bind(
 			githubId,
 			token,
 		),
 	]);
 
-	return json({ ok: true, memberId: githubId });
+	return { ok: true, memberId: githubId };
 }
 
-/** GET /team/members (member-or-admin) — roster for the sidebar. */
-async function listMembers(request: Request, env: Env): Promise<Response> {
-	if ((await classifyCaller(request, env)) === "unauthorized") {
-		return json({ code: "Unauthorized" }, 401);
-	}
+async function listMembers(env: Env): Promise<unknown[]> {
 	const { results } = await env.DB.prepare(
 		"SELECT id, github_login, avatar_url, display_name FROM members",
 	).all();
-	return json({ members: results });
+	return results;
 }
 
-/** GET /team/workspaces (member-or-admin) — read-only workspace mirror. */
-async function listWorkspaces(request: Request, env: Env): Promise<Response> {
-	if ((await classifyCaller(request, env)) === "unauthorized") {
-		return json({ code: "Unauthorized" }, 401);
-	}
+async function listWorkspaces(env: Env): Promise<unknown[]> {
 	const { results } = await env.DB.prepare(
 		"SELECT id, name, status, created_at FROM workspaces WHERE team_id = ?1",
 	)
 		.bind(TEAM_ID)
 		.all();
-	return json({ workspaces: results });
+	return results;
 }
 
 /**
@@ -265,28 +241,13 @@ async function listWorkspaces(request: Request, env: Env): Promise<Response> {
  * to the DO (encrypted at rest there) and is NEVER logged, NEVER echoed back —
  * the response is `{ accountId, changed }` only.
  */
-async function putCloudIdentity(request: Request, env: Env): Promise<Response> {
-	// Derive the member id from the bearer alone — never from a client header.
-	const bearer = readBearer(request);
-	const memberId = bearer ? await lookupMemberId(env, bearer) : null;
-	if (!memberId) {
-		return json({ code: "Unauthorized" }, 401);
-	}
-
-	const body = await readJsonBody(request);
-	const refreshToken =
-		typeof body.refreshToken === "string" ? body.refreshToken : "";
-	const idToken = typeof body.idToken === "string" ? body.idToken : "";
-	if (!refreshToken || !idToken) {
-		// NB: never include the (absent/empty) token values in the error.
-		return json(
-			{ code: "BadRequest", message: "refreshToken, idToken required" },
-			400,
-		);
-	}
-
+async function putCloudIdentity(
+	env: Env,
+	memberId: string,
+	input: { refreshToken: string; idToken: string },
+): Promise<{ accountId: string | null; changed: boolean }> {
 	const stub = env.CODEX_IDENTITY.get(env.CODEX_IDENTITY.idFromName(memberId));
-	const result = await stub.putRefreshToken(refreshToken, idToken);
+	const result = await stub.putRefreshToken(input.refreshToken, input.idToken);
 
 	// Bind this team's cloud run identity to the authorizing member (v1: one
 	// team -> one identity; last writer wins). Upsert the single team row so a
@@ -299,7 +260,7 @@ async function putCloudIdentity(request: Request, env: Env): Promise<Response> {
 		.run();
 
 	if (result.changed) await stopSandboxForReauth(env);
-	return json({ accountId: result.accountId, changed: result.changed });
+	return { accountId: result.accountId, changed: result.changed };
 }
 
 /**
@@ -311,24 +272,19 @@ async function putCloudIdentity(request: Request, env: Env): Promise<Response> {
  * `cloud_identity_member_id`. A no-identity team (none bound yet) reports
  * `hasToken: false` without touching a DO.
  */
-async function getCloudIdentity(request: Request, env: Env): Promise<Response> {
-	if ((await classifyCaller(request, env)) === "unauthorized") {
-		return json({ code: "Unauthorized" }, 401);
-	}
-
+async function getCloudIdentity(env: Env): Promise<unknown> {
 	const memberId = await readCloudIdentityMemberId(env);
 	if (!memberId) {
-		return json({
+		return {
 			hasToken: false,
 			accountId: null,
 			accessExp: null,
 			bricked: false,
-		});
+		};
 	}
 
 	const stub = env.CODEX_IDENTITY.get(env.CODEX_IDENTITY.idFromName(memberId));
-	const status = await stub.status();
-	return json(status);
+	return stub.status();
 }
 
 /**
@@ -349,27 +305,14 @@ async function getCloudIdentity(request: Request, env: Env): Promise<Response> {
  * `{ changed }` only.
  */
 async function putClaudeIdentity(
-	request: Request,
 	env: Env,
-): Promise<Response> {
-	// Derive the member id from the bearer alone — never from a client header.
-	const bearer = readBearer(request);
-	const memberId = bearer ? await lookupMemberId(env, bearer) : null;
-	if (!memberId) {
-		return json({ code: "Unauthorized" }, 401);
-	}
-
-	const body = await readJsonBody(request);
-	const oauthToken = typeof body.oauthToken === "string" ? body.oauthToken : "";
-	if (!oauthToken) {
-		// NB: never include the (absent/empty) token value in the error.
-		return json({ code: "BadRequest", message: "oauthToken required" }, 400);
-	}
-
+	memberId: string,
+	input: { oauthToken: string },
+): Promise<{ changed: boolean }> {
 	const stub = env.CLAUDE_IDENTITY.get(
 		env.CLAUDE_IDENTITY.idFromName(memberId),
 	);
-	const result = await stub.store(oauthToken);
+	const result = await stub.store(input.oauthToken);
 
 	// Bind this team's cloud run identity to the authorizing member (v1: one
 	// team -> one identity; last writer wins). REUSES the same
@@ -384,7 +327,7 @@ async function putClaudeIdentity(
 		.run();
 
 	if (result.changed) await stopSandboxForReauth(env);
-	return json({ changed: result.changed });
+	return { changed: result.changed };
 }
 
 /**
@@ -416,24 +359,16 @@ async function stopSandboxForReauth(env: Env): Promise<void> {
  * `cloud_identity_member_id`. A no-identity team (none bound yet) reports
  * `hasToken: false` without touching a DO.
  */
-async function getClaudeIdentity(
-	request: Request,
-	env: Env,
-): Promise<Response> {
-	if ((await classifyCaller(request, env)) === "unauthorized") {
-		return json({ code: "Unauthorized" }, 401);
-	}
-
+async function getClaudeIdentity(env: Env): Promise<unknown> {
 	const memberId = await readCloudIdentityMemberId(env);
 	if (!memberId) {
-		return json({ hasToken: false });
+		return { hasToken: false };
 	}
 
 	const stub = env.CLAUDE_IDENTITY.get(
 		env.CLAUDE_IDENTITY.idFromName(memberId),
 	);
-	const status = await stub.status();
-	return json(status);
+	return stub.status();
 }
 
 /** Read the team's bound cloud-identity member id (the member whose
@@ -449,18 +384,4 @@ export async function readCloudIdentityMemberId(
 		.bind(TEAM_ID)
 		.first<{ cloud_identity_member_id: string | null }>();
 	return row?.cloud_identity_member_id ?? null;
-}
-
-/** Best-effort JSON body parse — an empty/invalid body yields `{}`. */
-async function readJsonBody(
-	request: Request,
-): Promise<Record<string, unknown>> {
-	try {
-		const parsed = await request.json();
-		return parsed && typeof parsed === "object"
-			? (parsed as Record<string, unknown>)
-			: {};
-	} catch {
-		return {};
-	}
 }
