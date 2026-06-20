@@ -9,6 +9,7 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { listCursorModels } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
 import { helmorQueryKeys } from "@/lib/query-client";
 import {
@@ -170,8 +171,8 @@ export function CursorCardBody() {
 					</div>
 					{fetchError ? (
 						<p className="text-small leading-snug text-destructive">
-							Could not fetch models — {fetchError}. The composer will fall back
-							to Auto.
+							<I18nText source={"Could not fetch models —"} /> {fetchError}
+							<I18nText source={". The composer will fall back to Auto."} />
 						</p>
 					) : null}
 				</>

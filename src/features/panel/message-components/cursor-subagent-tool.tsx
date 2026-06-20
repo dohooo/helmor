@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { memo, useState } from "react";
 import type { ToolCallPart } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import { getSubagentIdentity } from "@/lib/subagent-identity";
 import { cn } from "@/lib/utils";
 
@@ -139,7 +140,7 @@ export const CursorSubagentToolCall = memo(function CursorSubagentToolCall({
 					{prompt ? (
 						<div className="flex flex-col gap-1">
 							<span className="text-mini uppercase tracking-wide text-muted-foreground/50">
-								Prompt
+								<I18nText source={"Prompt"} />
 							</span>
 							<div className="whitespace-pre-wrap break-words rounded-md bg-accent/35 px-2.5 py-1.5 text-small leading-5 text-muted-foreground/85">
 								{prompt}
@@ -148,7 +149,7 @@ export const CursorSubagentToolCall = memo(function CursorSubagentToolCall({
 					) : null}
 					<div className="flex flex-col gap-1">
 						<span className="text-mini uppercase tracking-wide text-muted-foreground/50">
-							Result
+							<I18nText source={"Result"} />
 						</span>
 						{resultText ? (
 							<div className="whitespace-pre-wrap break-words rounded-md bg-accent/35 px-2.5 py-1.5 text-small leading-5 text-muted-foreground/85">
@@ -162,10 +163,14 @@ export const CursorSubagentToolCall = memo(function CursorSubagentToolCall({
 											className="size-3 animate-spin text-muted-foreground/50"
 											strokeWidth={2}
 										/>
-										<span>Waiting for subagent…</span>
+										<span>
+											<I18nText source={"Waiting for subagent…"} />
+										</span>
 									</>
 								) : (
-									<span>No output captured.</span>
+									<span>
+										<I18nText source={"No output captured."} />
+									</span>
 								)}
 							</div>
 						)}

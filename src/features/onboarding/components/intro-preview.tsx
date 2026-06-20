@@ -1,6 +1,7 @@
 import { ArrowRight } from "lucide-react";
 import helmorLogoSrc from "@/assets/helmor-logo-light.png";
 import { Button } from "@/components/ui/button";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { HelmorOnboardingMockup } from "../mockup";
 import type { OnboardingStep } from "../types";
 
@@ -11,6 +12,7 @@ export function IntroPreview({
 	step: OnboardingStep;
 	onNext: () => void;
 }) {
+	const { t } = useI18n();
 	return (
 		<div
 			aria-hidden={step !== "intro"}
@@ -30,11 +32,14 @@ export function IntroPreview({
 					className="size-14 rounded-[10px] opacity-95"
 				/>
 				<h1 className="mt-7 text-[2.625rem] font-semibold leading-[1.1] tracking-normal text-foreground max-lg:text-3xl">
-					Hi, Helmor!
+					<I18nText source={"Hi, Helmor!"} />
 				</h1>
 				<p className="mt-6 max-w-md text-base font-medium leading-7 text-muted-foreground">
-					AI generates the code. Helmor is where you orchestrate, review, and
-					ship it.
+					<I18nText
+						source={
+							"AI generates the code. Helmor is where you orchestrate, review, and ship it."
+						}
+					/>
 				</p>
 
 				<Button
@@ -49,7 +54,7 @@ export function IntroPreview({
 			</section>
 
 			<section
-				aria-label="Helmor preview"
+				aria-label={t("Helmor preview")}
 				className={`relative flex min-h-[560px] min-w-0 items-center justify-center transition-transform duration-1000 ease-[cubic-bezier(.22,.82,.2,1)] max-lg:hidden ${
 					step === "skills"
 						? "translate-x-[28vw] translate-y-0"

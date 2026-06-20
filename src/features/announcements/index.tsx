@@ -30,6 +30,7 @@ import {
 } from "@/features/announcements/storage";
 import type { SettingsSection } from "@/features/settings";
 import { toggleQuickPanel } from "@/lib/api";
+import { I18nText, useI18n } from "@/lib/i18n";
 import type { WorkspaceRightSidebarMode } from "@/lib/settings";
 import packageJson from "../../../package.json";
 
@@ -146,7 +147,8 @@ function ReleaseAnnouncementToast({
 						className="shrink-0 opacity-90"
 					/>
 					<div className="truncate text-ui font-semibold leading-none text-foreground">
-						New in v{announcement.version}
+						<I18nText source={"New in v"} />
+						{announcement.version}
 					</div>
 				</div>
 				<div className="-mr-1 flex items-center gap-1">
@@ -228,6 +230,7 @@ function ReleaseAnnouncementListItem({
 	item: ReleaseAnnouncementItem;
 	onRunAction: (action: ReleaseAnnouncementAction) => void;
 }) {
+	const { t } = useI18n();
 	const action = item.action;
 
 	return (
@@ -239,7 +242,7 @@ function ReleaseAnnouncementListItem({
 				-
 			</span>
 			<div className="min-w-0">
-				<span>{item.text}</span>
+				<span>{t(item.text)}</span>
 				{action ? (
 					<button
 						type="button"
@@ -250,7 +253,7 @@ function ReleaseAnnouncementListItem({
 							action={action.value}
 							className="mr-1 inline-block size-[1em] align-[-0.125em]"
 						/>
-						{action.label}
+						{t(action.label)}
 					</button>
 				) : null}
 			</div>

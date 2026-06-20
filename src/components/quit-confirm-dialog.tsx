@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { requestQuit } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import { listen } from "@/lib/ipc";
 import type { SessionRunState } from "@/lib/session-run-state";
 
@@ -10,6 +11,7 @@ export function QuitConfirmDialog({
 	sessionRunStates: ReadonlyMap<string, SessionRunState>;
 }) {
 	const [open, setOpen] = useState(false);
+	const { f } = useI18n();
 	const runningRef = useRef(sessionRunStates);
 	runningRef.current = sessionRunStates;
 
@@ -55,7 +57,10 @@ export function QuitConfirmDialog({
 			description={
 				count === 1
 					? "There is 1 task in progress. Quitting now will cancel it."
-					: `There are ${count} tasks in progress. Quitting now will cancel them.`
+					: f(
+							"There are {count} tasks in progress. Quitting now will cancel them.",
+							{ count },
+						)
 			}
 			confirmLabel="Quit anyway"
 			onConfirm={() => void handleQuit(true)}

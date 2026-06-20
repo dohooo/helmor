@@ -15,6 +15,7 @@ import { getShortcut } from "@/features/shortcuts/registry";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import { AppUpdateButton } from "@/features/updater/app-update-button";
 import type { AppUpdateStatus } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import type { AppSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
@@ -75,6 +76,7 @@ export function ShellSidebarPane({
 	onOpenSettings,
 	pushWorkspaceToast,
 }: Props) {
+	const { t } = useI18n();
 	// Read the selected workspace + start flag from the ROUTER (Stage 3b: the
 	// router owns navigation intent). Both come from the same location, so the
 	// `start → null` highlight derivation and the auto-select gate stay mutually
@@ -114,7 +116,7 @@ export function ShellSidebarPane({
 		<aside
 			ref={asideRef}
 			aria-hidden={collapsed}
-			aria-label="Workspace sidebar"
+			aria-label={t("Workspace sidebar")}
 			data-helmor-sidebar-root
 			data-shell-pane="sidebar"
 			className={cn(

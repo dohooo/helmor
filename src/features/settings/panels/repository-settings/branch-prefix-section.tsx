@@ -11,6 +11,7 @@ import {
 	type RepositoryCreateOption,
 	updateRepositoryBranchPrefix,
 } from "@/lib/api";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const PREFIX_TYPES: BranchPrefixType[] = ["username", "custom", "none"];
@@ -123,11 +124,14 @@ export function BranchPrefixSection({
 			<div className="flex items-start justify-between gap-4">
 				<div className="min-w-0 flex-1">
 					<div className="text-ui font-medium leading-snug text-foreground">
-						Branch prefix
+						<I18nText source={"Branch prefix"} />
 					</div>
 					<div className="mt-1 text-small leading-snug text-muted-foreground">
-						Prefix added to branch names when creating new workspaces in this
-						repo.
+						<I18nText
+							source={
+								"Prefix added to branch names when creating new workspaces in this repo."
+							}
+						/>
 					</div>
 				</div>
 				<BranchPrefixPreview
@@ -152,7 +156,7 @@ export function BranchPrefixSection({
 				>
 					<RadioGroupItem value="custom" id={customId} />
 					<FieldLabel htmlFor={customId} className="shrink-0 text-foreground">
-						Custom
+						<I18nText source={"Custom"} />
 					</FieldLabel>
 					<Input
 						type="text"
@@ -197,14 +201,14 @@ function BranchPrefixPreview({
 			)}
 			aria-hidden={hidden}
 		>
-			Preview:{" "}
+			<I18nText source={"Preview:"} />{" "}
 			<span className="font-mono text-foreground/80">
 				{previewPrefix}
 				{previewBase}
 			</span>
 			{prefixType === "username" && !previewPrefix ? (
 				<span className="ml-1 text-muted-foreground/70">
-					(connect an account)
+					<I18nText source={"(connect an account)"} />
 				</span>
 			) : null}
 		</div>
@@ -220,6 +224,7 @@ function PrefixRadioOption({
 	value: BranchPrefixType;
 	label: string;
 }) {
+	const { t } = useI18n();
 	const id = `repo-${repoId}-branch-prefix-${value}`;
 	return (
 		<Field
@@ -229,7 +234,7 @@ function PrefixRadioOption({
 			<RadioGroupItem value={value} id={id} />
 			<FieldContent>
 				<FieldLabel htmlFor={id} className="text-foreground">
-					{label}
+					{t(label)}
 				</FieldLabel>
 			</FieldContent>
 		</Field>

@@ -6,6 +6,7 @@ import {
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { useI18n } from "@/lib/i18n";
 import { isMac } from "@/lib/platform";
 import type { AgentProxySettings } from "@/lib/settings";
 import { useSettings } from "@/lib/settings";
@@ -22,6 +23,7 @@ const AGENT_PROXY_MODES: Array<{
 ];
 
 export function AgentProxyPanel() {
+	const { t } = useI18n();
 	const { settings, updateSettings } = useSettings();
 	const value = settings.agentProxy;
 	const selected =
@@ -52,7 +54,7 @@ export function AgentProxyPanel() {
 							"flex h-8 cursor-pointer items-center justify-between rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
 						)}
 					>
-						<span>{selected.label}</span>
+						<span>{t(selected.label)}</span>
 						<ChevronDown className="size-3 opacity-40" />
 					</DropdownMenuTrigger>
 					<DropdownMenuContent align="end" sideOffset={4} className="w-40">

@@ -1,6 +1,7 @@
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
 import { CheckIcon, ChevronRightIcon } from "lucide-react";
 import type * as React from "react";
+import { useLocalizedNode } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 // Shared classes for every interactive row inside DropdownMenu / ContextMenu.
@@ -67,11 +68,13 @@ function DropdownMenuItem({
 	className,
 	inset,
 	variant = "default",
+	children,
 	...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Item> & {
 	inset?: boolean;
 	variant?: "default" | "destructive";
 }) {
+	const localizedChildren = useLocalizedNode(children);
 	return (
 		<DropdownMenuPrimitive.Item
 			data-slot="dropdown-menu-item"
@@ -83,7 +86,9 @@ function DropdownMenuItem({
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{localizedChildren}
+		</DropdownMenuPrimitive.Item>
 	);
 }
 
@@ -96,6 +101,7 @@ function DropdownMenuCheckboxItem({
 }: React.ComponentProps<typeof DropdownMenuPrimitive.CheckboxItem> & {
 	inset?: boolean;
 }) {
+	const localizedChildren = useLocalizedNode(children);
 	return (
 		<DropdownMenuPrimitive.CheckboxItem
 			data-slot="dropdown-menu-checkbox-item"
@@ -116,7 +122,7 @@ function DropdownMenuCheckboxItem({
 					<CheckIcon />
 				</DropdownMenuPrimitive.ItemIndicator>
 			</span>
-			{children}
+			{localizedChildren}
 		</DropdownMenuPrimitive.CheckboxItem>
 	);
 }
@@ -140,6 +146,7 @@ function DropdownMenuRadioItem({
 }: React.ComponentProps<typeof DropdownMenuPrimitive.RadioItem> & {
 	inset?: boolean;
 }) {
+	const localizedChildren = useLocalizedNode(children);
 	return (
 		<DropdownMenuPrimitive.RadioItem
 			data-slot="dropdown-menu-radio-item"
@@ -159,7 +166,7 @@ function DropdownMenuRadioItem({
 					<CheckIcon />
 				</DropdownMenuPrimitive.ItemIndicator>
 			</span>
-			{children}
+			{localizedChildren}
 		</DropdownMenuPrimitive.RadioItem>
 	);
 }
@@ -167,10 +174,12 @@ function DropdownMenuRadioItem({
 function DropdownMenuLabel({
 	className,
 	inset,
+	children,
 	...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Label> & {
 	inset?: boolean;
 }) {
+	const localizedChildren = useLocalizedNode(children);
 	return (
 		<DropdownMenuPrimitive.Label
 			data-slot="dropdown-menu-label"
@@ -180,7 +189,9 @@ function DropdownMenuLabel({
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{localizedChildren}
+		</DropdownMenuPrimitive.Label>
 	);
 }
 
@@ -199,8 +210,10 @@ function DropdownMenuSeparator({
 
 function DropdownMenuShortcut({
 	className,
+	children,
 	...props
 }: React.ComponentProps<"span">) {
+	const localizedChildren = useLocalizedNode(children);
 	return (
 		<span
 			data-slot="dropdown-menu-shortcut"
@@ -209,7 +222,9 @@ function DropdownMenuShortcut({
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{localizedChildren}
+		</span>
 	);
 }
 
@@ -227,6 +242,7 @@ function DropdownMenuSubTrigger({
 }: React.ComponentProps<typeof DropdownMenuPrimitive.SubTrigger> & {
 	inset?: boolean;
 }) {
+	const localizedChildren = useLocalizedNode(children);
 	return (
 		<DropdownMenuPrimitive.SubTrigger
 			data-slot="dropdown-menu-sub-trigger"
@@ -238,7 +254,7 @@ function DropdownMenuSubTrigger({
 			)}
 			{...props}
 		>
-			{children}
+			{localizedChildren}
 			<ChevronRightIcon className="ml-auto" />
 		</DropdownMenuPrimitive.SubTrigger>
 	);

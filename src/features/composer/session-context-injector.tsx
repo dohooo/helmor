@@ -7,6 +7,7 @@ import {
 } from "@/components/icons";
 import type { SessionContextCandidate } from "@/features/panel/session-context";
 import { type AgentProvider, isCodexProvider } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 type SessionContextInjectorProps = {
@@ -27,7 +28,7 @@ export function SessionContextInjector({
 	return (
 		<div className="pointer-events-auto mb-2 flex w-full items-center gap-2 self-start pl-[17px]">
 			<span className="shrink-0 text-small leading-none text-muted-foreground">
-				Inject sessions:
+				<I18nText source={"Inject sessions:"} />
 			</span>
 			<div className="scrollbar-none flex min-w-0 flex-1 flex-nowrap items-center justify-start gap-1 overflow-x-auto overscroll-x-contain">
 				{candidates.map((session) => {

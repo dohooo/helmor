@@ -16,6 +16,7 @@ import {
 	revokePairedDevice,
 	signInCloudflare,
 } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { SettingsGroup, SettingsRow } from "../components/settings-row";
 
@@ -135,7 +136,9 @@ export function MobileCompanionPanel() {
 			>
 				<div className="flex items-center gap-2">
 					{enableMutation.isPending ? (
-						<span className="text-small text-muted-foreground">Starting…</span>
+						<span className="text-small text-muted-foreground">
+							<I18nText source={"Starting…"} />
+						</span>
 					) : null}
 					<Switch
 						checked={running}
@@ -210,7 +213,7 @@ export function MobileCompanionPanel() {
 
 					{stableHost ? (
 						<p className="text-small text-muted-foreground">
-							Permanent address:{" "}
+							<I18nText source={"Permanent address:"} />{" "}
 							<span className="font-mono text-foreground">{stableHost}</span>
 						</p>
 					) : null}
@@ -258,8 +261,11 @@ export function MobileCompanionPanel() {
 								<QRCodeSVG value={pairing.url} size={184} />
 							</div>
 							<p className="max-w-[340px] text-center text-small leading-snug text-muted-foreground">
-								Scan with your phone's camera. The code carries a one-time
-								device token — pair once and the phone reconnects on its own.
+								<I18nText
+									source={
+										"Scan with your phone's camera. The code carries a one-time device token — pair once and the phone reconnects on its own."
+									}
+								/>
 							</p>
 							{/* Also expose the link as copyable text: phones that can't
 							    scan can paste it into the browser, and it's the address to
@@ -287,11 +293,11 @@ export function MobileCompanionPanel() {
 
 					<div className="flex flex-col gap-2 py-5">
 						<p className="text-ui font-medium text-foreground">
-							Paired devices
+							<I18nText source={"Paired devices"} />
 						</p>
 						{devices.length === 0 ? (
 							<p className="text-small text-muted-foreground">
-								No phones paired yet.
+								<I18nText source={"No phones paired yet."} />
 							</p>
 						) : (
 							devices.map((device) => (

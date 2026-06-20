@@ -1,3 +1,4 @@
+import { I18nText } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
 	formatResetsAt,
@@ -22,7 +23,9 @@ export function UsageHeader({
 	const hasMax = max !== null && max > 0;
 	return (
 		<div className="flex items-center justify-between">
-			<div className="text-body font-semibold text-foreground">Context</div>
+			<div className="text-body font-semibold text-foreground">
+				<I18nText source={"Context"} />
+			</div>
 			<div className="text-small tabular-nums text-muted-foreground">
 				{hasUsed && hasMax ? (
 					<>
@@ -79,7 +82,9 @@ export function UsageBar({
 export function SpentRow({ cost }: { cost: number }) {
 	return (
 		<div className="flex items-center justify-between text-small">
-			<span className="text-muted-foreground">Spent</span>
+			<span className="text-muted-foreground">
+				<I18nText source={"Spent"} />
+			</span>
 			<span className="tabular-nums text-foreground">{formatUsd(cost)}</span>
 		</div>
 	);
@@ -108,7 +113,8 @@ export function LimitRow({ window }: { window: RateLimitWindowDisplay }) {
 			<div className="flex items-center justify-between text-small">
 				<span className="text-foreground">{window.label ?? "Limit"}</span>
 				<span className="font-medium tabular-nums text-foreground">
-					{Math.round(window.leftPercent)}% left
+					{Math.round(window.leftPercent)}
+					<I18nText source={"% left"} />
 				</span>
 			</div>
 			<div className="h-1 w-full overflow-hidden rounded-full bg-muted">
@@ -119,7 +125,11 @@ export function LimitRow({ window }: { window: RateLimitWindowDisplay }) {
 			</div>
 			{window.resetsAt !== null ? (
 				<div className="text-mini text-muted-foreground">
-					{window.expired ? "Pending refresh — " : "Resets "}
+					{window.expired ? (
+						<I18nText source={"Pending refresh —"} />
+					) : (
+						<I18nText source={"Resets"} />
+					)}{" "}
 					{formatResetsAt(window.resetsAt)}
 				</div>
 			) : null}
@@ -165,7 +175,7 @@ function formatCategoryValue(tokens: number, maxTokens: number): string {
 export function AutoCompactNote() {
 	return (
 		<div className="text-mini text-muted-foreground">
-			Auto-compacts older turns when the window fills.
+			<I18nText source={"Auto-compacts older turns when the window fills."} />
 		</div>
 	);
 }

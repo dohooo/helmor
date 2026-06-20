@@ -6,6 +6,7 @@
 // that the pane shows as a normal full sidebar (e.g. iPad landscape).
 import type { TouchEvent } from "react";
 import { createPortal } from "react-dom";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 type SwipeHandlers = {
@@ -29,6 +30,7 @@ export function EdgeSwipeLayer({
 	onClose,
 	swipeHandlers,
 }: Props) {
+	const { t } = useI18n();
 	if (open) {
 		// The scrim must sit BELOW the drawer (the pane's aside is z-50) but ABOVE
 		// the page content — a middle layer. Rendering it inside the aside breaks
@@ -42,7 +44,7 @@ export function EdgeSwipeLayer({
 		return createPortal(
 			<button
 				type="button"
-				aria-label={`Close ${label}`}
+				aria-label={`${t("Close")} ${t(label)}`}
 				onClick={onClose}
 				className="fixed inset-0 z-40 hidden cursor-pointer bg-black/40 max-[960px]:block motion-safe:animate-in motion-safe:fade-in"
 				style={{ touchAction: "none" }}

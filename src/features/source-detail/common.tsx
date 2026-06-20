@@ -15,6 +15,7 @@ import { SourceIcon } from "@/features/inbox/source-icon";
 import { STATE_TONE_CLASS } from "@/features/inbox/state-tone";
 import { getInboxItemDetail } from "@/lib/api";
 import type { ComposerInsertTarget } from "@/lib/composer-insert";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
 import { helmorQueryKeys } from "@/lib/query-client";
 import type {
@@ -113,7 +114,8 @@ export function GitHubDetailPage({
 						</span>
 						<span className="inline-flex items-center gap-1 font-normal text-muted-foreground/70">
 							<Clock3 className="size-[13px]" strokeWidth={1.8} />
-							Updated {formatRelativeTime(card.lastActivityAt)}
+							<I18nText source={"Updated"} />{" "}
+							{formatRelativeTime(card.lastActivityAt)}
 						</span>
 					</div>
 					<SourceDetailActions
@@ -157,6 +159,7 @@ function SourceDetailActions({
 	copyDisabled?: boolean;
 	refresh?: DetailRefreshControl;
 }) {
+	const { t } = useI18n();
 	const [copied, setCopied] = useState(false);
 	const handleCopy = useCallback(() => {
 		if (copyDisabled || !navigator.clipboard?.writeText) return;
@@ -186,7 +189,7 @@ function SourceDetailActions({
 			</Tooltip>
 			<Tooltip>
 				<TooltipTrigger asChild>
-					<span className="inline-flex" aria-label="Add to context">
+					<span className="inline-flex" aria-label={t("Add to context")}>
 						<AppendContextButton
 							subjectLabel={card.title}
 							ariaLabel="Add to context"

@@ -20,6 +20,7 @@ import { formatTokens } from "@/features/composer/context-usage-ring/parse";
 import { formatWorkflowDuration } from "@/features/panel/message-components/content-parts";
 import { ShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import type { WorkflowAgentRow, WorkflowPart } from "@/lib/api";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { sessionThreadMessagesQueryOptions } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
 
@@ -158,6 +159,7 @@ export function WorkflowProgressPanel({
 	open: boolean;
 	onClose: () => void;
 }) {
+	const { t } = useI18n();
 	const workflows = useSessionWorkflows(sessionId);
 	const panelRef = useRef<HTMLDivElement>(null);
 	// The natural-height content of the current level's scroll region (the list
@@ -336,7 +338,7 @@ export function WorkflowProgressPanel({
 							strokeWidth={1.8}
 						/>
 						<span className="text-mini font-medium uppercase tracking-[0.06em] text-muted-foreground">
-							Workflows
+							<I18nText source={"Workflows"} />
 						</span>
 					</>
 				) : (
@@ -359,7 +361,7 @@ export function WorkflowProgressPanel({
 					<button
 						type="button"
 						onClick={onClose}
-						aria-label="Close workflows"
+						aria-label={t("Close workflows")}
 						className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
 					>
 						<X className="size-3.5" strokeWidth={1.8} />
@@ -373,8 +375,11 @@ export function WorkflowProgressPanel({
 						<div ref={scrollContentRef}>
 							{workflows.length === 0 ? (
 								<p className="px-1 py-2 text-ui leading-6 text-muted-foreground">
-									No workflows in this conversation yet. They appear here when
-									the agent runs a dynamic workflow.
+									<I18nText
+										source={
+											"No workflows in this conversation yet. They appear here when the agent runs a dynamic workflow."
+										}
+									/>
 								</p>
 							) : (
 								<div className="flex flex-col gap-0.5">
@@ -422,7 +427,7 @@ export function WorkflowProgressPanel({
 						<div ref={scrollContentRef} className="flex flex-col gap-0.5">
 							{flat.length === 0 ? (
 								<p className="px-1 py-2 text-ui leading-6 text-muted-foreground">
-									No agents reported yet.
+									<I18nText source={"No agents reported yet."} />
 								</p>
 							) : (
 								rows.map((row) =>
@@ -491,7 +496,7 @@ export function WorkflowProgressPanel({
 						if (!agent) {
 							return (
 								<p className="px-1 py-2 text-ui text-muted-foreground">
-									Agent unavailable.
+									<I18nText source={"Agent unavailable."} />
 								</p>
 							);
 						}
@@ -548,7 +553,7 @@ export function WorkflowProgressPanel({
 									</div>
 								) : (
 									<div className="text-ui text-muted-foreground/60">
-										No result preview.
+										<I18nText source={"No result preview."} />
 									</div>
 								)}
 							</div>

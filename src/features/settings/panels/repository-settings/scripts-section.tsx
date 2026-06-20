@@ -40,6 +40,7 @@ import {
 	updateRepoRunAction,
 	updateRepoScripts,
 } from "@/lib/api";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 export function ScriptsSection({
@@ -164,10 +165,14 @@ export function ScriptsSection({
 	return (
 		<div className="py-5">
 			<div className="text-ui font-medium leading-snug text-foreground">
-				Scripts
+				<I18nText source={"Scripts"} />
 			</div>
 			<div className="mt-1 text-small leading-snug text-muted-foreground">
-				Commands that run when workspaces are set up, run, or archived.
+				<I18nText
+					source={
+						"Commands that run when workspaces are set up, run, or archived."
+					}
+				/>
 			</div>
 
 			<div className="mt-4 space-y-4">
@@ -182,7 +187,7 @@ export function ScriptsSection({
 					headerRight={
 						<div className="flex items-center gap-1.5">
 							<span className="text-mini font-medium text-muted-foreground">
-								Auto-run
+								<I18nText source={"Auto-run"} />
 							</span>
 							<TooltipProvider>
 								<Tooltip>
@@ -193,9 +198,11 @@ export function ScriptsSection({
 										/>
 									</TooltipTrigger>
 									<TooltipContent side="top" className="max-w-[240px]">
-										On by default — setup runs automatically as soon as a
-										workspace is created. Turn off to run it manually from the
-										Setup tab.
+										<I18nText
+											source={
+												"On by default — setup runs automatically as soon as a workspace is created. Turn off to run it manually from the Setup tab."
+											}
+										/>
 									</TooltipContent>
 								</Tooltip>
 							</TooltipProvider>
@@ -251,10 +258,11 @@ function ScriptField({
 	onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
 	headerRight?: React.ReactNode;
 }) {
+	const { t } = useI18n();
 	const textarea = (
 		<Textarea
 			className="mt-2 min-h-[72px] resize-y bg-app-base/30 font-mono text-small"
-			placeholder={placeholder}
+			placeholder={t(placeholder)}
 			value={value}
 			onChange={onChange}
 			readOnly={locked}
@@ -267,10 +275,10 @@ function ScriptField({
 			<div className="flex items-start justify-between gap-3">
 				<div className="min-w-0">
 					<div className="text-small font-medium text-app-foreground">
-						{label}
+						{t(label)}
 					</div>
 					<div className="mt-0.5 text-mini text-muted-foreground">
-						{description}
+						{t(description)}
 					</div>
 				</div>
 				{headerRight && <div className="shrink-0">{headerRight}</div>}
@@ -279,7 +287,7 @@ function ScriptField({
 				<TooltipProvider>
 					<Tooltip>
 						<TooltipTrigger asChild>{textarea}</TooltipTrigger>
-						<TooltipContent side="top">{lockedMessage}</TooltipContent>
+						<TooltipContent side="top">{t(lockedMessage)}</TooltipContent>
 					</Tooltip>
 				</TooltipProvider>
 			) : (
@@ -318,17 +326,21 @@ function RunScriptsSection({
 		<div>
 			<div className="min-w-0">
 				<div className="text-small font-medium text-app-foreground">
-					Run scripts
+					<I18nText source={"Run scripts"} />
 				</div>
 				<div className="mt-0.5 text-mini text-muted-foreground">
-					Each entry appears in the Inspector's Run dropdown.
+					<I18nText
+						source={"Each entry appears in the Inspector's Run dropdown."}
+					/>
 				</div>
 			</div>
 
 			{actions.length === 0 ? (
 				locked ? (
 					<div className="mt-2 text-mini text-muted-foreground/70">
-						Set by this workspace's helmor.json — edit it there.
+						<I18nText
+							source={"Set by this workspace's helmor.json — edit it there."}
+						/>
 					</div>
 				) : (
 					// Empty state: dashed placeholder explaining what run
@@ -337,11 +349,14 @@ function RunScriptsSection({
 					// sits below so the user always finds the entry point.
 					<div className="mt-3 rounded-lg border border-dashed border-border/60 bg-app-base/30 px-4 py-5 text-center">
 						<div className="text-small font-medium text-foreground">
-							No run scripts yet
+							<I18nText source={"No run scripts yet"} />
 						</div>
 						<div className="mx-auto mt-1 max-w-[320px] text-mini leading-relaxed text-muted-foreground">
-							Add one to expose a command — like a dev server, test runner, or
-							background task.
+							<I18nText
+								source={
+									"Add one to expose a command — like a dev server, test runner, or background task."
+								}
+							/>
 						</div>
 					</div>
 				)
@@ -406,6 +421,7 @@ function RunScriptRow({
 	onFocused: () => void;
 }) {
 	const queryClient = useQueryClient();
+	const { t } = useI18n();
 	const isProjectOwned = action.fromProject || locked;
 
 	const [open, setOpen] = useState(false);
@@ -590,7 +606,9 @@ function RunScriptRow({
 					<button
 						type="button"
 						className="flex min-w-0 flex-1 cursor-interactive items-center gap-2 text-left"
-						aria-label={`${open ? "Collapse" : "Expand"} ${action.name || "script"}`}
+						aria-label={`${t(open ? "Collapse" : "Expand")} ${
+							action.name || t("script")
+						}`}
 					>
 						<ChevronDown
 							className={cn(
@@ -616,7 +634,7 @@ function RunScriptRow({
 				</CollapsibleTrigger>
 				<div className="flex shrink-0 items-center gap-1.5">
 					<span className="text-mini font-medium text-muted-foreground">
-						Exclusive
+						<I18nText source={"Exclusive"} />
 					</span>
 					<TooltipProvider>
 						<Tooltip>
@@ -627,9 +645,11 @@ function RunScriptRow({
 								/>
 							</TooltipTrigger>
 							<TooltipContent side="top" className="max-w-[240px]">
-								Only let one workspace run this script at a time. Starting a new
-								run stops any other run in this repository — useful when the
-								script binds a fixed port.
+								<I18nText
+									source={
+										"Only let one workspace run this script at a time. Starting a new run stops any other run in this repository — useful when the script binds a fixed port."
+									}
+								/>
 							</TooltipContent>
 						</Tooltip>
 					</TooltipProvider>
@@ -658,7 +678,7 @@ function RunScriptRow({
 				<div className="border-t border-app-border/30 px-3 pt-3 pb-1.5">
 					{/* Script name */}
 					<div className="text-mini font-medium text-muted-foreground">
-						Script name
+						<I18nText source={"Script name"} />
 					</div>
 					{editing ? (
 						<Input
@@ -682,21 +702,23 @@ function RunScriptRow({
 					) : (
 						<div className="mt-1 text-small font-medium text-foreground">
 							{name.trim() || (
-								<span className="text-muted-foreground italic">(unnamed)</span>
+								<span className="text-muted-foreground italic">
+									<I18nText source={"(unnamed)"} />
+								</span>
 							)}
 						</div>
 					)}
 
 					{/* Command */}
 					<div className="mt-3 text-mini font-medium text-muted-foreground">
-						Command
+						<I18nText source={"Command"} />
 					</div>
 					{editing ? (
 						<Textarea
 							className="mt-1 min-h-[56px] resize-y bg-app-base/30 font-mono text-small"
 							placeholder="e.g., npm run dev"
 							value={command}
-							aria-label={`${action.name || "Script"} command`}
+							aria-label={`${action.name || t("Script")} ${t("command")}`}
 							onChange={(e) => {
 								const value = e.target.value;
 								setCommand(value);
@@ -711,7 +733,9 @@ function RunScriptRow({
 					) : (
 						<pre className="mt-1 whitespace-pre-wrap break-all font-mono text-small text-foreground">
 							{command || (
-								<span className="text-muted-foreground italic">(empty)</span>
+								<span className="text-muted-foreground italic">
+									<I18nText source={"(empty)"} />
+								</span>
 							)}
 						</pre>
 					)}
@@ -722,7 +746,7 @@ function RunScriptRow({
 					{showStopRow ? (
 						<>
 							<div className="mt-3 flex items-center gap-1 text-mini font-medium text-muted-foreground">
-								Stop command
+								<I18nText source={"Stop command"} />
 								<TooltipProvider>
 									<Tooltip>
 										<TooltipTrigger asChild>
@@ -732,9 +756,11 @@ function RunScriptRow({
 											/>
 										</TooltipTrigger>
 										<TooltipContent side="top" className="max-w-[280px]">
-											Optional cleanup command run when you click Stop. Useful
-											for scripts that manage external resources (docker compose
-											down, supabase stop). Same env + cwd as the main command.
+											<I18nText
+												source={
+													"Optional cleanup command run when you click Stop. Useful for scripts that manage external resources (docker compose down, supabase stop). Same env + cwd as the main command."
+												}
+											/>
 										</TooltipContent>
 									</Tooltip>
 								</TooltipProvider>
@@ -744,7 +770,7 @@ function RunScriptRow({
 									className="mt-1 min-h-[56px] resize-y bg-app-base/30 font-mono text-small"
 									placeholder="e.g., docker compose down"
 									value={stopCommand}
-									aria-label={`${action.name || "Script"} stop command`}
+									aria-label={`${action.name || t("Script")} ${t("stop command")}`}
 									onChange={(e) => {
 										const value = e.target.value;
 										setStopCommand(value);
@@ -760,7 +786,7 @@ function RunScriptRow({
 								<pre className="mt-1 whitespace-pre-wrap break-all font-mono text-small text-foreground">
 									{stopCommand || (
 										<span className="text-muted-foreground italic">
-											(empty)
+											<I18nText source={"(empty)"} />
 										</span>
 									)}
 								</pre>
@@ -801,7 +827,7 @@ function RunScriptRow({
 										</Button>
 									</TooltipTrigger>
 									<TooltipContent side="top">
-										{editing ? "Done editing" : "Edit"}
+										<I18nText source={editing ? "Done editing" : "Edit"} />
 									</TooltipContent>
 								</Tooltip>
 							</TooltipProvider>
@@ -820,8 +846,12 @@ function RunScriptRow({
 											disabled={deleting}
 											aria-label={
 												confirmingDelete
-													? `Confirm delete ${action.name || "(unnamed)"}`
-													: `Delete script ${action.name || "(unnamed)"}`
+													? `${t("Confirm delete")} ${
+															action.name || t("(unnamed)")
+														}`
+													: `${t("Delete script")} ${
+															action.name || t("(unnamed)")
+														}`
 											}
 										>
 											{confirmingDelete ? (
@@ -832,16 +862,24 @@ function RunScriptRow({
 										</Button>
 									</TooltipTrigger>
 									<TooltipContent side="top">
-										{confirmingDelete
-											? "Click again to confirm"
-											: "Delete script"}
+										<I18nText
+											source={
+												confirmingDelete
+													? "Click again to confirm"
+													: "Delete script"
+											}
+										/>
 									</TooltipContent>
 								</Tooltip>
 							</TooltipProvider>
 						</div>
 					) : (
 						<div className="mt-2 flex h-7 items-center justify-end text-mini text-muted-foreground/70">
-							Managed by helmor.json — edit the file to add or change
+							<I18nText
+								source={
+									"Managed by helmor.json — edit the file to add or change"
+								}
+							/>
 						</div>
 					)}
 				</div>

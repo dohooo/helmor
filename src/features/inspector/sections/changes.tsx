@@ -58,6 +58,7 @@ import {
 	type InspectorFileItem,
 	isActiveEditorTarget,
 } from "@/lib/editor-session";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
 import {
 	helmorQueryKeys,
@@ -163,6 +164,7 @@ function ChangesSectionImpl({
 	forgeIsRefreshing = false,
 	sectionRef,
 }: ChangesSectionProps) {
+	const { t } = useI18n();
 	const queryClient = useQueryClient();
 	const {
 		changesOpen,
@@ -351,7 +353,7 @@ function ChangesSectionImpl({
 			/>
 
 			<ScrollArea
-				aria-label="Changes panel body"
+				aria-label={t("Changes panel body")}
 				className="min-h-0 flex-1 bg-muted/20 font-sans text-ui leading-5"
 			>
 				{hasUncommittedChanges && (
@@ -433,7 +435,7 @@ function ChangesSectionImpl({
 
 				{changesLoaded && !hasChanges && !branchSwitching && (
 					<div className="px-3 py-3 text-small leading-5 text-muted-foreground/70">
-						No changes on this branch yet.
+						<I18nText source={"No changes on this branch yet."} />
 					</div>
 				)}
 			</ScrollArea>
@@ -696,7 +698,7 @@ function BranchDiffSection({
 				>
 					{loading && changes.length === 0 ? (
 						<div className="px-2 py-2 text-micro text-muted-foreground/70">
-							Switching target branch…
+							<I18nText source={"Switching target branch…"} />
 						</div>
 					) : treeView ? (
 						<ChangesTreeView

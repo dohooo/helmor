@@ -57,6 +57,7 @@ import type {
 	ResolvedComposerInsertRequest,
 } from "@/lib/composer-insert";
 import { recordComposerRender } from "@/lib/dev-render-debug";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { isTeamModeActive } from "@/lib/team-mode";
 import { cn } from "@/lib/utils";
 import { clampEffort } from "@/lib/workspace-helpers";
@@ -376,6 +377,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	focusScope = "workspace-composer",
 	getInputHistory,
 }: WorkspaceComposerProps) {
+	const { t } = useI18n();
 	const instanceIdRef = useRef(
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
 	);
@@ -833,7 +835,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		<TooltipProvider delayDuration={0}>
 			<div
 				ref={composerRootRef}
-				aria-label="Workspace composer"
+				aria-label={t("Workspace composer")}
 				data-focus-scope={focusScope}
 				onKeyDownCapture={handleComposerKeyDownCapture}
 				className={cn(
@@ -860,7 +862,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 					/>
 				) : null}
 				<label htmlFor="workspace-input" className="sr-only">
-					Workspace input
+					<I18nText source={"Workspace input"} />
 				</label>
 
 				{hasPendingUserInput ? (
@@ -934,7 +936,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 									contentEditable={
 										<ContentEditable
 											id="workspace-input"
-											aria-label="Workspace input"
+											aria-label={t("Workspace input")}
 											aria-multiline
 											className={cn(
 												"composer-editor min-h-[64px] max-h-[240px] resize-none overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-body leading-5 tracking-[-0.01em] text-foreground outline-none",
@@ -946,9 +948,13 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										showEditorPlaceholder ? (
 											<div className="pointer-events-none absolute left-0 top-0 text-body leading-5 tracking-[-0.01em] text-muted-foreground/70">
 												{hasPlanReview && permissionMode === "plan"
-													? "Describe what to change, then click Request Changes"
-													: (placeholder ??
-														"Ask to make changes, @mention files, run /commands")}
+													? t(
+															"Describe what to change, then click Request Changes",
+														)
+													: t(
+															placeholder ??
+																"Ask to make changes, @mention files, run /commands",
+														)}
 											</div>
 										) : null
 									}
@@ -956,13 +962,15 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								/>
 								{showTerminalDirectiveHint ? (
 									<div className="pointer-events-none absolute left-[88px] top-0 text-body leading-5 tracking-[-0.01em] text-muted-foreground/70">
-										Send to start in Terminal mode
+										<I18nText source={"Send to start in Terminal mode"} />
 									</div>
 								) : null}
 								{showFocusHint && focusShortcut ? (
 									<div className="pointer-events-none absolute right-0 top-0 hidden h-5 items-center gap-1 text-ui leading-5 tracking-[-0.01em] text-muted-foreground/70 sm:flex">
 										<InlineShortcutDisplay hotkey={focusShortcut} />
-										<span>to focus</span>
+										<span>
+											<I18nText source={"to focus"} />
+										</span>
 									</div>
 								) : null}
 							</div>
@@ -1063,7 +1071,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 							<div className="flex flex-wrap items-center gap-2">
 								{modelsLoading ? (
 									<ShimmerText className="px-1 py-0.5 text-ui text-muted-foreground">
-										Loading models…
+										<I18nText source={"Loading models…"} />
 									</ShimmerText>
 								) : (
 									<>

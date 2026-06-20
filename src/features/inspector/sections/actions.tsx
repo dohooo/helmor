@@ -35,6 +35,7 @@ import {
 	type WorkspaceGitActionStatus,
 } from "@/lib/api";
 import { buildComposerPreviewPayload } from "@/lib/composer-insert";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
 import {
 	helmorQueryKeys,
@@ -172,6 +173,7 @@ export function ActionsSection({
 	commitButtonState,
 	changeRequest,
 }: ActionsSectionProps) {
+	const { t } = useI18n();
 	const queryClient = useQueryClient();
 	const [syncPending, setSyncPending] = useState(false);
 	const [reviewPending, setReviewPending] = useState(false);
@@ -365,14 +367,14 @@ export function ActionsSection({
 			{open && (
 				<div className="min-h-0 flex-1">
 					<ScrollArea
-						aria-label="Actions panel body"
+						aria-label={t("Actions panel body")}
 						className="h-full min-h-0 bg-muted/18 text-ui"
 					>
 						{showHelpersGroup && (
 							<>
 								<div className="px-2.5 pb-1 pt-2">
 									<span className="text-mini font-medium tracking-wide text-muted-foreground/70">
-										Helpers
+										<I18nText source={"Helpers"} />
 									</span>
 								</div>
 								{showReviewHelper && (
@@ -387,13 +389,15 @@ export function ActionsSection({
 											className="size-3 shrink-0"
 											strokeWidth={2}
 										/>
-										<span className="truncate">Review changes</span>
+										<span className="truncate">
+											<I18nText source={"Review changes"} />
+										</span>
 										<button
 											type="button"
 											onClick={() => void handleReviewChanges()}
 											disabled={reviewPending || workspaceId === null}
 											aria-busy={reviewPending ? true : undefined}
-											aria-label={reviewPending ? "Reviewing" : undefined}
+											aria-label={reviewPending ? t("Reviewing") : undefined}
 											className="ml-auto shrink-0 cursor-interactive text-micro text-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
 										>
 											<span className="inline-flex items-center gap-1">
@@ -404,7 +408,7 @@ export function ActionsSection({
 														strokeWidth={2}
 													/>
 												) : null}
-												{reviewPending ? null : "Review"}
+												{reviewPending ? null : <I18nText source={"Review"} />}
 											</span>
 										</button>
 									</div>
@@ -413,7 +417,7 @@ export function ActionsSection({
 						)}
 						<div className="px-2.5 pb-1 pt-2">
 							<span className="text-mini font-medium tracking-wide text-muted-foreground/70">
-								Git
+								<I18nText source={"Git"} />
 							</span>
 						</div>
 						{gitRows.map((item) => {
@@ -458,7 +462,7 @@ export function ActionsSection({
 											aria-busy={isActionBusy ? true : undefined}
 											aria-label={
 												isActionBusy
-													? loadingActionLabel(action.label)
+													? t(loadingActionLabel(action.label))
 													: undefined
 											}
 										>
@@ -470,7 +474,7 @@ export function ActionsSection({
 														strokeWidth={2}
 													/>
 												) : null}
-												{isActionBusy ? null : action.label}
+												{isActionBusy ? null : t(action.label)}
 											</span>
 										</button>
 									)}
@@ -482,7 +486,7 @@ export function ActionsSection({
 							<>
 								<div className="px-2.5 pb-1 pt-2.5">
 									<span className="text-mini font-medium tracking-wide text-muted-foreground/70">
-										Review
+										<I18nText source={"Review"} />
 									</span>
 								</div>
 								{reviewRows.map((item) => (
@@ -504,7 +508,7 @@ export function ActionsSection({
 							<>
 								<div className="px-2.5 pb-1 pt-2.5">
 									<span className="text-mini font-medium tracking-wide text-muted-foreground/70">
-										Deployments
+										<I18nText source={"Deployments"} />
 									</span>
 								</div>
 								{sortedDeployments.map((item) => (
@@ -517,7 +521,7 @@ export function ActionsSection({
 							<>
 								<div className="px-2.5 pb-1 pt-2.5">
 									<span className="text-mini font-medium tracking-wide text-muted-foreground/70">
-										Checks
+										<I18nText source={"Checks"} />
 									</span>
 								</div>
 								{sortedChecks.map((item) => (
@@ -555,10 +559,11 @@ function ProviderIcon({ provider }: { provider: ActionProvider }) {
 }
 
 function StatusIcon({ status }: { status: ActionStatusKind }) {
+	const { t } = useI18n();
 	if (status === "success") {
 		return (
 			<CheckIcon
-				aria-label="Passed"
+				aria-label={t("Passed")}
 				className="size-3 shrink-0 text-chart-2"
 				strokeWidth={2.2}
 			/>
@@ -568,7 +573,7 @@ function StatusIcon({ status }: { status: ActionStatusKind }) {
 	if (status === "skipped") {
 		return (
 			<CircleSlashIcon
-				aria-label="Skipped"
+				aria-label={t("Skipped")}
 				className="size-3 shrink-0 text-muted-foreground"
 				strokeWidth={2}
 			/>
@@ -590,7 +595,7 @@ function StatusIcon({ status }: { status: ActionStatusKind }) {
 
 	return (
 		<span
-			aria-label={label}
+			aria-label={t(label)}
 			className="inline-flex size-3 shrink-0 items-center justify-center rounded-full border border-current text-muted-foreground"
 			style={color ? { color } : undefined}
 		>
@@ -786,7 +791,7 @@ function ActionStatusRow({
 				</span>
 				{item.status === "skipped" ? (
 					<span className="shrink-0 text-micro text-muted-foreground/70">
-						skipped
+						<I18nText source={"skipped"} />
 					</span>
 				) : (
 					item.duration && (

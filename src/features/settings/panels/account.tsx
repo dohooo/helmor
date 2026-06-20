@@ -9,6 +9,7 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type { ForgeAccount } from "@/lib/api";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { initialsFor } from "@/lib/initials";
 import { useForgeAccountsAll } from "@/lib/use-forge-accounts";
 import { SettingsGroup } from "../components/settings-row";
@@ -16,6 +17,7 @@ import { SettingsGroup } from "../components/settings-row";
 const GITHUB_DEFAULT_HOST = "github.com";
 
 export function AccountPanel() {
+	const { t } = useI18n();
 	// Shared cache key with onboarding + repo settings — see
 	// `useForgeAccountsAll` for why this matters (one cache entry,
 	// not three).
@@ -44,7 +46,7 @@ export function AccountPanel() {
 						<TooltipTrigger asChild>
 							<button
 								type="button"
-								aria-label="Account list error"
+								aria-label={t("Account list error")}
 								className="inline-flex h-7 cursor-default items-center justify-center text-destructive"
 							>
 								<CircleAlert className="size-4" strokeWidth={2.2} />
@@ -63,11 +65,11 @@ export function AccountPanel() {
 				{accountsQuery.isPending ? (
 					<div className="flex items-center justify-center gap-2 py-5 text-small text-muted-foreground">
 						<Loader2 className="size-3.5 animate-spin" />
-						Loading accounts…
+						<I18nText source={"Loading accounts…"} />
 					</div>
 				) : sortedAccounts.length === 0 ? (
 					<div className="py-5 text-center text-small text-muted-foreground">
-						No accounts connected yet.
+						<I18nText source={"No accounts connected yet."} />
 					</div>
 				) : (
 					sortedAccounts.map((account) => (

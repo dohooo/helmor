@@ -7,6 +7,7 @@ import {
 	type SlackWorkspace,
 	slackImportFromDesktop,
 } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import { isMac } from "@/lib/platform";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
@@ -50,12 +51,22 @@ export function SlackConnectState({
 			<SlackBrandIcon className="text-muted-foreground/80" size={28} />
 			<div className="space-y-1">
 				<div className="text-ui font-medium text-foreground">
-					Connect a Slack workspace
+					<I18nText source={"Connect a Slack workspace"} />
 				</div>
 				<div className="text-pretty text-small leading-5 text-muted-foreground">
-					{desktopImportSupported
-						? "Connects to your signed-in Slack desktop app. Everything stays local and secure on your device."
-						: "Slack desktop import is available on macOS. Windows support is not wired up yet."}
+					{desktopImportSupported ? (
+						<I18nText
+							source={
+								"Connects to your signed-in Slack desktop app. Everything stays local and secure on your device."
+							}
+						/>
+					) : (
+						<I18nText
+							source={
+								"Slack desktop import is available on macOS. Windows support is not wired up yet."
+							}
+						/>
+					)}
 				</div>
 			</div>
 			<Button

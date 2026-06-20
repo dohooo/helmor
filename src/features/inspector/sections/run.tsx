@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/hover-card";
 import { getShortcut } from "@/features/shortcuts/registry";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
+import { I18nText } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
@@ -413,7 +414,11 @@ export function RunTab({
 						Add run script
 					</Button>
 					<p className="text-small text-muted-foreground/70">
-						Run tests or a development server to test changes in this workspace.
+						<I18nText
+							source={
+								"Run tests or a development server to test changes in this workspace."
+							}
+						/>
 					</p>
 				</div>
 			) : (
@@ -423,13 +428,15 @@ export function RunTab({
 					    trigger — important now that one workspace can have
 					    several. */}
 					<p className="text-ui text-muted-foreground">
-						No output for{" "}
+						<I18nText source={"No output for"} />{" "}
 						<span className="font-medium text-foreground">
 							{activeRunActionName ?? "Default"}
 						</span>
 					</p>
 					<p className="text-small text-muted-foreground/70">
-						Run script output will appear here after running.
+						<I18nText
+							source={"Run script output will appear here after running."}
+						/>
 					</p>
 					<Button
 						variant="outline"

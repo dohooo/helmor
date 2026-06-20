@@ -16,6 +16,7 @@ import { AppOnboarding } from "@/features/onboarding";
 import type { SettingsSection } from "@/features/settings";
 import { SettingsDialog } from "@/features/settings";
 import { InviteAcceptHost } from "@/features/team/invite-accept-host";
+import { I18nText } from "@/lib/i18n";
 import { getPendingPairingToken, isRemoteTransport } from "@/lib/ipc";
 import { helmorQueryPersister, QUERY_CACHE_BUSTER } from "@/lib/query-client";
 import { resetSessionThreadPagination } from "@/lib/session-thread-pagination";
@@ -120,7 +121,9 @@ export function AppProviders({
 					// The onboarding flow belongs to the main window; the panel
 					// summoned mid-onboarding just points the user there.
 					<div className="flex h-dvh items-center justify-center bg-background p-6 text-center text-ui text-muted-foreground">
-						Finish setting up Helmor in the main window first.
+						<I18nText
+							source={"Finish setting up Helmor in the main window first."}
+						/>
 					</div>
 				) : (
 					<>
@@ -158,18 +161,10 @@ export function AppProviders({
 	return (
 		<SettingsContext.Provider value={settingsContextValue}>
 			{/* Keyed on the transport generation so an in-place team↔local switch
-			    fully REMOUNTS the QueryClient + router subtree against the new
-			    transport (every shell `useEffect` subscription unmounts → cleanup
-			    runs → remounts, re-`listen`/`Channel`/`invoke` on the new backend).
-			    The QueryClient itself is recreated per generation upstream
-			    (`use-app-bootstrap.ts`), so this binds the fresh, empty cache.
-
-			    PERSISTENCE is gated OFF for remote transports (team / companion):
-			    the persister's `write_query_cache` is a Tauri `invoke` that, in team
-			    mode, would hit the Worker (which doesn't implement it) and throw in
-			    the persister — and team data is remote + per-session (its queries
-			    already opt out of `meta.persist`). On the local transport we keep
-			    the on-disk persistence so cold-start first paint stays instant. */}
+			    fully remounts the QueryClient + router subtree against the new
+			    transport. Persistence is gated off for remote transports (team /
+			    companion): the persister calls local Tauri commands that remote
+			    backends do not implement. */}
 			{isRemoteTransport() ? (
 				<QueryClientProvider key={transportGeneration} client={queryClient}>
 					{providerChildren}

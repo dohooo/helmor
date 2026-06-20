@@ -3,6 +3,7 @@ import type { VariantProps } from "class-variance-authority";
 import * as React from "react";
 
 import { toggleVariants } from "@/components/ui/toggle";
+import { useI18n, useLocalizedNode } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const ToggleGroupContext = React.createContext<
@@ -58,10 +59,13 @@ function ToggleGroupItem({
 	children,
 	variant = "default",
 	size = "default",
+	"aria-label": ariaLabel,
 	...props
 }: React.ComponentProps<typeof ToggleGroupPrimitive.Item> &
 	VariantProps<typeof toggleVariants>) {
 	const context = React.useContext(ToggleGroupContext);
+	const { t } = useI18n();
+	const localizedChildren = useLocalizedNode(children);
 
 	return (
 		<ToggleGroupPrimitive.Item
@@ -69,6 +73,7 @@ function ToggleGroupItem({
 			data-variant={context.variant || variant}
 			data-size={context.size || size}
 			data-spacing={context.spacing}
+			aria-label={typeof ariaLabel === "string" ? t(ariaLabel) : ariaLabel}
 			className={cn(
 				"shrink-0 group-data-[spacing=0]/toggle-group:rounded-none group-data-[spacing=0]/toggle-group:px-2 focus:z-10 focus-visible:z-10 group-data-[spacing=0]/toggle-group:has-data-[icon=inline-end]:pr-1.5 group-data-[spacing=0]/toggle-group:has-data-[icon=inline-start]:pl-1.5 group-data-horizontal/toggle-group:data-[spacing=0]:first:rounded-l-lg group-data-vertical/toggle-group:data-[spacing=0]:first:rounded-t-lg group-data-horizontal/toggle-group:data-[spacing=0]:last:rounded-r-lg group-data-vertical/toggle-group:data-[spacing=0]:last:rounded-b-lg group-data-horizontal/toggle-group:data-[spacing=0]:data-[variant=outline]:border-l-0 group-data-vertical/toggle-group:data-[spacing=0]:data-[variant=outline]:border-t-0 group-data-horizontal/toggle-group:data-[spacing=0]:data-[variant=outline]:first:border-l group-data-vertical/toggle-group:data-[spacing=0]:data-[variant=outline]:first:border-t",
 				toggleVariants({
@@ -79,7 +84,7 @@ function ToggleGroupItem({
 			)}
 			{...props}
 		>
-			{children}
+			{localizedChildren}
 		</ToggleGroupPrimitive.Item>
 	);
 }

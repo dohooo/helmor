@@ -6,6 +6,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { I18nText } from "@/lib/i18n";
 
 export type MoveToWorktreeDialogProps = {
 	open: boolean;
@@ -51,16 +52,26 @@ export function MoveToWorktreeDialog({
 						<span className="font-medium text-foreground">
 							{workspaceTitle}
 						</span>{" "}
-						will continue in a fresh worktree on a new auto-named branch.
+						<I18nText
+							source={
+								"will continue in a fresh worktree on a new auto-named branch."
+							}
+						/>
 					</p>
 					<ul className="list-disc space-y-0.5 pl-4">
 						<li>
-							Your local repository stays exactly as it is — branch and files
-							untouched.
+							<I18nText
+								source={
+									"Your local repository stays exactly as it is — branch and files untouched."
+								}
+							/>
 						</li>
 						<li>
-							Tracked + untracked changes are carried over into the new
-							worktree.
+							<I18nText
+								source={
+									"Tracked + untracked changes are carried over into the new worktree."
+								}
+							/>
 						</li>
 					</ul>
 				</div>

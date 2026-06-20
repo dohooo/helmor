@@ -35,6 +35,7 @@ import {
 	stopForgeCliAuthTerminal,
 	writeForgeCliAuthTerminalStdin,
 } from "@/lib/api";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { initialsFor } from "@/lib/initials";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { useForgeAccountsAll } from "@/lib/use-forge-accounts";
@@ -83,6 +84,7 @@ export function RepositoryCliStep({
 	onBack: () => void;
 	onNext: () => void;
 }) {
+	const { t } = useI18n();
 	const [github, setGithub] = useState<CliState>({
 		logins: [],
 		checking: true,
@@ -408,7 +410,7 @@ export function RepositoryCliStep({
 
 	return (
 		<section
-			aria-label="Repository CLI setup"
+			aria-label={t("Repository CLI setup")}
 			aria-hidden={step !== "corner"}
 			className={`absolute top-20 right-20 z-30 w-[560px] transition-all duration-1000 ease-[cubic-bezier(.22,.82,.2,1)] ${
 				step === "skills"
@@ -420,12 +422,14 @@ export function RepositoryCliStep({
 		>
 			<div className="flex flex-col items-start">
 				<h2 className="max-w-none text-4xl font-semibold leading-[1.02] tracking-normal text-foreground whitespace-nowrap">
-					Connect accounts
+					<I18nText source={"Connect accounts"} />
 				</h2>
 				<p className="mt-4 max-w-md text-small leading-5 text-muted-foreground">
-					Each repo uses one of your accounts. Add now or skip — existing logins
-					are picked up automatically. All accounts live in your local gh/glab
-					CLI.
+					<I18nText
+						source={
+							"Each repo uses one of your accounts. Add now or skip — existing logins are picked up automatically. All accounts live in your local gh/glab CLI."
+						}
+					/>
 				</p>
 
 				<div className="mt-7 grid w-full gap-3">
@@ -595,9 +599,11 @@ function AccountListPanel({
 					<CompactAccountStack rows={rows} addingAccount={addingAccount} />
 				) : rows.length === 0 ? (
 					<div className="flex items-center justify-center px-2 py-4 text-small text-muted-foreground">
-						{loading
-							? "Checking for connected accounts…"
-							: "No accounts connected yet."}
+						{loading ? (
+							<I18nText source={"Checking for connected accounts…"} />
+						) : (
+							<I18nText source={"No accounts connected yet."} />
+						)}
 					</div>
 				) : (
 					<ul className="divide-y divide-border/40">
@@ -730,6 +736,7 @@ function PickerButton({
 	icon: React.ReactNode;
 	label: string;
 }) {
+	const { t } = useI18n();
 	return (
 		<button
 			type="button"
@@ -742,7 +749,7 @@ function PickerButton({
 			)}
 		>
 			{icon}
-			<span>{label}</span>
+			<span>{t(label)}</span>
 		</button>
 	);
 }
@@ -783,7 +790,7 @@ function CompactAccountStack({
 					</>
 				) : (
 					<span className="text-small text-muted-foreground">
-						No accounts connected yet.
+						<I18nText source={"No accounts connected yet."} />
 					</span>
 				)}
 			</div>
@@ -994,6 +1001,7 @@ function GitlabHostSlot({
 	onSubmit: () => void;
 	onClose: () => void;
 }) {
+	const { t } = useI18n();
 	const openDelay = active && !flowSettled ? "700ms" : "0ms";
 	return (
 		<div
@@ -1018,16 +1026,18 @@ function GitlabHostSlot({
 					<button
 						type="button"
 						onClick={onClose}
-						aria-label="Cancel"
+						aria-label={t("Cancel")}
 						className="absolute top-3 right-3 inline-flex size-6 cursor-interactive items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
 					>
 						<X className="size-3.5" strokeWidth={2.4} />
 					</button>
 					<div className="text-body font-medium text-foreground">
-						GitLab domain
+						<I18nText source={"GitLab domain"} />
 					</div>
 					<p className="mt-1 text-small leading-5 text-muted-foreground">
-						Use gitlab.com or your self-hosted GitLab domain.
+						<I18nText
+							source={"Use gitlab.com or your self-hosted GitLab domain."}
+						/>
 					</p>
 					<form
 						className="mt-4 flex items-center gap-2"

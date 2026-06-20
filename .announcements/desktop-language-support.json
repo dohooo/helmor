@@ -1,0 +1,11 @@
+{
+	"items": [
+		{
+			"text": "Helmor now supports English and Simplified Chinese, with language pickers in Settings and onboarding.",
+			"action": {
+				"label": "Open Appearance",
+				"value": { "type": "openSettings", "section": "appearance" }
+			}
+		}
+	]
+}

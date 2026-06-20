@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
 import type {
 	CustomProvider,
@@ -65,6 +66,7 @@ export function CustomProviderCard({
 	onCommit: (provider: CustomProvider) => void;
 	onRemove: () => void;
 }) {
+	const { t, f } = useI18n();
 	const [draft, setDraft] = useState(provider);
 	const [fetchState, setFetchState] = useState<FetchState>({
 		loading: false,
@@ -111,7 +113,7 @@ export function CustomProviderCard({
 			const models = await adapter.fetchModels(draft);
 			setFetchState({
 				loading: false,
-				error: models.length ? null : "No models returned by the endpoint.",
+				error: models.length ? null : t("No models returned by the endpoint."),
 			});
 			commit({ models });
 		} catch (error) {
@@ -162,11 +164,17 @@ export function CustomProviderCard({
 			className="flex h-8 min-w-0 flex-1 cursor-pointer items-center justify-between gap-2 rounded-lg border border-border/50 bg-background/40 px-3 text-left text-[13px] text-foreground hover:bg-muted/40"
 		>
 			<span className={cn("truncate", !hasModels && "text-muted-foreground")}>
-				{fetchState.loading
-					? "Fetching models…"
-					: hasModels
-						? `${draft.models.length} model${draft.models.length === 1 ? "" : "s"}`
-						: "Add models manually"}
+				{fetchState.loading ? (
+					<I18nText source="Fetching models…" />
+				) : hasModels ? (
+					draft.models.length === 1 ? (
+						<I18nText source="1 model" />
+					) : (
+						f("{count} models", { count: draft.models.length })
+					)
+				) : (
+					<I18nText source="Add models manually" />
+				)}
 			</span>
 			{hasModels ? (
 				<Pencil className="size-3.5 shrink-0 opacity-50" />
@@ -271,8 +279,12 @@ export function CustomProviderCard({
 
 					{fetchState.error ? (
 						<p className="text-[12px] text-amber-600 dark:text-amber-400">
-							Couldn't fetch models ({fetchState.error}). Add them manually
-							instead.
+							{f(
+								"Couldn't fetch models ({error}). Add them manually instead.",
+								{
+									error: fetchState.error,
+								},
+							)}
 						</p>
 					) : null}
 				</div>
@@ -297,7 +309,9 @@ function StyleSelect({
 		<DropdownMenu>
 			<DropdownMenuTrigger className="flex h-8 cursor-interactive items-center justify-between rounded-lg border border-border/50 bg-background/40 px-3 text-[13px] text-foreground hover:bg-muted/40">
 				<span className="flex min-w-0 items-center gap-2">
-					<span className="text-muted-foreground">{label}</span>
+					<span className="text-muted-foreground">
+						<I18nText source={label} />
+					</span>
 					<span className="truncate">{current?.label}</span>
 				</span>
 				<ChevronDown className="size-3 shrink-0 opacity-40" />
@@ -312,7 +326,7 @@ function StyleSelect({
 						<span className="text-[13px] text-foreground">{style.label}</span>
 						{style.hint ? (
 							<span className="text-[11px] text-muted-foreground">
-								{style.hint}
+								<I18nText source={style.hint} />
 							</span>
 						) : null}
 					</DropdownMenuItem>

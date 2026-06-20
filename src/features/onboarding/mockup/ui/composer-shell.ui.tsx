@@ -1,6 +1,7 @@
 import { ArrowUp } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 /**
@@ -23,9 +24,10 @@ export function ComposerShellUI({
 	submit?: ReactNode;
 	className?: string;
 }) {
+	const { t } = useI18n();
 	return (
 		<div
-			aria-label="Workspace composer"
+			aria-label={t("Workspace composer")}
 			className={cn(
 				"relative flex flex-col rounded-2xl border border-border/40 bg-sidebar shadow-[0_-1px_8px_rgba(0,0,0,0.05),0_0_0_1px_rgba(255,255,255,0.02)] px-4 pb-3 pt-3",
 				className,
@@ -51,9 +53,10 @@ export function ComposerInputPlaceholderUI({
 }: {
 	placeholder?: string;
 }) {
+	const { t } = useI18n();
 	return (
 		<div className="min-h-[64px] max-h-[240px] whitespace-pre-wrap break-words bg-transparent text-body leading-5 tracking-[-0.01em] text-muted-foreground outline-none">
-			{placeholder}
+			{t(placeholder)}
 		</div>
 	);
 }

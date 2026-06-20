@@ -5,6 +5,7 @@ import {
 	type TerminalHandle,
 	TerminalOutput,
 } from "@/components/terminal-output";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { presetBootCommand, resumeBootCommand } from "./terminal-presets";
 import {
@@ -52,6 +53,7 @@ export function TerminalSessionPanel({
 	workspaceReady = true,
 }: TerminalSessionPanelProps) {
 	const queryClient = useQueryClient();
+	const { f } = useI18n();
 	const termRef = useRef<TerminalHandle | null>(null);
 	// Spawn-to-first-byte takes a moment (worktree finalize + CLI cold start
 	// + the boot-echo gate); show an overlay instead of a blank screen.
@@ -191,9 +193,11 @@ export function TerminalSessionPanel({
 					<div className="flex items-center gap-2.5 text-small text-muted-foreground">
 						<Loader2 className="size-4 animate-spin" strokeWidth={1.8} />
 						<span>
-							{workspaceReady
-								? `Starting ${agentLabel}…`
-								: "Preparing workspace…"}
+							{workspaceReady ? (
+								f("Starting {agentLabel}…", { agentLabel })
+							) : (
+								<I18nText source={"Preparing workspace…"} />
+							)}
 						</span>
 					</div>
 				</div>

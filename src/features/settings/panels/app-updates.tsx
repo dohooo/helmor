@@ -9,33 +9,45 @@ import {
 	installDownloadedAppUpdate,
 	listenAppUpdateStatus,
 } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
 import { SettingsNotice, SettingsRow } from "../components/settings-row";
 
-function formatStatusDescription(status: AppUpdateStatus): string {
+function formatStatusDescription(
+	status: AppUpdateStatus,
+	t: (source: string) => string,
+): string {
 	if (!status.configured) {
-		return "Updater is not configured in this build.";
+		return t("Updater is not configured in this build.");
 	}
 
 	switch (status.stage) {
 		case "checking":
-			return "Checking GitHub releases in the background.";
+			return t("Checking GitHub releases in the background.");
 		case "downloading":
 			return status.update
-				? `Downloading ${status.update.version} in the background.`
-				: "Downloading an update in the background.";
+				? t("Downloading {version} in the background.").replace(
+						"{version}",
+						status.update.version,
+					)
+				: t("Downloading an update in the background.");
 		case "downloaded":
 			return status.update
-				? `${status.update.version} has been downloaded and is ready to install.`
-				: "The latest update has been downloaded and is ready to install.";
+				? t("{version} has been downloaded and is ready to install.").replace(
+						"{version}",
+						status.update.version,
+					)
+				: t("The latest update has been downloaded and is ready to install.");
 		case "error":
-			return status.lastError ?? "The last update check failed.";
+			return status.lastError ?? t("The last update check failed.");
 		case "disabled":
 			return status.autoUpdateEnabled
-				? "Automatic update checks are waiting for updater configuration."
-				: "Automatic update checks are disabled.";
+				? t("Automatic update checks are waiting for updater configuration.")
+				: t("Automatic update checks are disabled.");
 		default:
-			return "Checks GitHub releases, downloads updates quietly, then prompts when ready.";
+			return t(
+				"Checks GitHub releases, downloads updates quietly, then prompts when ready.",
+			);
 	}
 }
 
@@ -77,6 +89,7 @@ function DownloadProgressBar({ status }: { status: AppUpdateStatus }) {
 }
 
 export function AppUpdatesPanel() {
+	const { t } = useI18n();
 	const [status, setStatus] = useState<AppUpdateStatus | null>(null);
 	const [checking, setChecking] = useState(false);
 	const [installing, setInstalling] = useState(false);
@@ -118,12 +131,12 @@ export function AppUpdatesPanel() {
 	const anyBusy = checkBusy || isDownloading || installBusy;
 
 	const checkLabel = isDownloading
-		? "Downloading"
+		? t("Downloading")
 		: installBusy
-			? "Installing"
+			? t("Installing")
 			: checkBusy
-				? "Checking"
-				: "Check now";
+				? t("Checking")
+				: t("Check now");
 
 	return (
 		<SettingsRow
@@ -131,10 +144,12 @@ export function AppUpdatesPanel() {
 			title="App Updates"
 			description={
 				<>
-					{status ? formatStatusDescription(status) : "Loading updater status…"}
+					{status
+						? formatStatusDescription(status, t)
+						: t("Loading updater status…")}
 					{status?.update ? (
 						<SettingsNotice tone="info">
-							Current {status.update.currentVersion} · Available{" "}
+							{t("Current")} {status.update.currentVersion} · {t("Available")}{" "}
 							{status.update.version}
 						</SettingsNotice>
 					) : null}
@@ -152,12 +167,12 @@ export function AppUpdatesPanel() {
 							.then((nextStatus) => {
 								setStatus(nextStatus);
 								if (nextStatus.stage === "idle") {
-									toast.success("Helmor is up to date");
+									toast.success(t("Helmor is up to date"));
 								}
 								if (nextStatus.stage === "error") {
-									toast.error("Update check failed", {
+									toast.error(t("Update check failed"), {
 										description:
-											nextStatus.lastError ?? "Unable to check for updates.",
+											nextStatus.lastError ?? t("Unable to check for updates."),
 									});
 								}
 							})
@@ -180,11 +195,11 @@ export function AppUpdatesPanel() {
 							void installDownloadedAppUpdate()
 								.then(setStatus)
 								.catch((error: unknown) => {
-									toast.error("Install failed", {
+									toast.error(t("Install failed"), {
 										description:
 											error instanceof Error
 												? error.message
-												: "Unable to install the downloaded update.",
+												: t("Unable to install the downloaded update."),
 									});
 								})
 								.finally(() => setInstalling(false));

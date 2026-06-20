@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { memo, useState } from "react";
 import type { ToolCallPart } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import {
 	getSubagentIdentity,
 	type SubagentIdentity,
@@ -144,12 +145,16 @@ function SpawnAgentRow({
 					className={cn("size-3.5 shrink-0", tokens.icon)}
 					strokeWidth={1.8}
 				/>
-				<span>Created</span>
+				<span>
+					<I18nText source={"Created"} />
+				</span>
 				<span className="font-medium" style={accent}>
 					{label}
 				</span>
 				{role ? <span className={tokens.secondary}>({role})</span> : null}
-				<span className={tokens.secondary}>with the instructions:</span>
+				<span className={tokens.secondary}>
+					<I18nText source={"with the instructions:"} />
+				</span>
 				{expandable ? (
 					<ChevronDown
 						className={cn(
@@ -210,7 +215,9 @@ export function SubAgentSpawnGroup({ parts }: { parts: ToolCallPart[] }) {
 					className="size-3.5 shrink-0 text-muted-foreground"
 					strokeWidth={1.8}
 				/>
-				<span className="font-medium">Spawned {count} agents</span>
+				<span className="font-medium">
+					<I18nText source={"Spawned"} /> {count} <I18nText source={"agents"} />
+				</span>
 				<ChevronDown
 					className={cn(
 						"size-3 shrink-0 text-muted-foreground/40 transition-transform",

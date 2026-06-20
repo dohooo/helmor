@@ -18,6 +18,7 @@ import type {
 	WorkspaceDetail,
 } from "@/lib/api";
 import type { ActiveEditorTarget, DiffOpenOptions } from "@/lib/editor-session";
+import { useI18n } from "@/lib/i18n";
 import type { WorkspaceRightSidebarMode } from "@/lib/settings";
 import type { ContextCard } from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
@@ -107,6 +108,7 @@ export function ShellInspectorPane({
 	workspaceForgeIsRefreshing,
 	onOpenSettings,
 }: Props) {
+	const { t } = useI18n();
 	// The view-mode bits (`isStart` / `isEditor`) come from the ROUTER (Stage 3b:
 	// navigation intent is router-owned) and stay router-instant. The inspector's
 	// DATA target arrives as the settle-gated `workspaceId` prop (see above), so a
@@ -152,7 +154,7 @@ export function ShellInspectorPane({
 		<aside
 			ref={asideRef}
 			aria-hidden={collapsed}
-			aria-label="Inspector sidebar"
+			aria-label={t("Inspector sidebar")}
 			data-shell-pane="inspector"
 			className={cn(
 				"group/inspector relative h-full shrink-0 overflow-hidden bg-inspector has-[[data-tabs-zoomed=true]]:z-50 has-[[data-tabs-zoomed=true]]:overflow-visible max-[960px]:absolute max-[960px]:bottom-[18px] max-[960px]:right-0 max-[960px]:top-9 max-[960px]:z-50 max-[960px]:h-auto max-[960px]:!w-6 max-[960px]:!max-w-[calc(100vw-12px)] max-[960px]:overflow-visible max-[960px]:rounded-xl max-[960px]:border max-[960px]:border-transparent max-[960px]:bg-transparent max-[960px]:shadow-none max-[960px]:ring-0",

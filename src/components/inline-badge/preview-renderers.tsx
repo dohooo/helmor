@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { CodeBlock } from "@/components/ai/code-block";
 import type { ComposerPreviewPayload } from "@/lib/composer-insert";
+import { I18nText } from "@/lib/i18n";
 import { convertFileSrc } from "@/lib/ipc";
 
 export type { ComposerPreviewPayload } from "@/lib/composer-insert";
@@ -150,7 +151,7 @@ export function PreviewErrorFrame({ title }: { title: string }) {
 			bodyClassName="flex items-center justify-center px-4 py-6"
 		>
 			<span className="text-small text-muted-foreground">
-				Unable to preview
+				<I18nText source={"Unable to preview"} />
 			</span>
 		</PreviewFrame>
 	);
@@ -163,7 +164,9 @@ export function PreviewLoadingFrame({ title }: { title: string }) {
 			title={title}
 			bodyClassName="flex items-center justify-center px-4 py-6"
 		>
-			<span className="text-small text-muted-foreground">Loading…</span>
+			<span className="text-small text-muted-foreground">
+				<I18nText source={"Loading…"} />
+			</span>
 		</PreviewFrame>
 	);
 }

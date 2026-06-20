@@ -44,6 +44,7 @@ import type {
 	WorkspaceMode,
 } from "@/lib/api";
 import type { ComposerInsertTarget } from "@/lib/composer-insert";
+import { I18nText } from "@/lib/i18n";
 import { useSettings } from "@/lib/settings";
 import type { ContextCard } from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
@@ -304,7 +305,7 @@ export function WorkspaceStartPage({
 											: "max-w-[32rem] translate-y-0 opacity-100",
 									)}
 								>
-									What should we work on?
+									<I18nText source={"What should we work on?"} />
 								</span>
 							) : (
 								<>
@@ -316,7 +317,7 @@ export function WorkspaceStartPage({
 												: "max-w-[22rem] translate-y-0 opacity-100",
 										)}
 									>
-										What should we build
+										<I18nText source={"What should we build"} />
 									</span>
 									<span
 										className={cn(
@@ -326,7 +327,7 @@ export function WorkspaceStartPage({
 												: "max-w-[2rem] translate-y-0 opacity-100",
 										)}
 									>
-										in
+										<I18nText source={"in"} />
 									</span>
 									<DropdownMenu>
 										<Tooltip>
@@ -463,7 +464,9 @@ export function WorkspaceStartPage({
 												/>
 											</>
 										) : (
-											<span className="truncate">Repository</span>
+											<span className="truncate">
+												<I18nText source={"Repository"} />
+											</span>
 										)}
 									</button>
 								</DropdownMenuTrigger>
@@ -718,7 +721,11 @@ export function WorkspaceStartPage({
 															}}
 														>
 															<Plus className="size-3.5" strokeWidth={2} />
-															<span>Create and checkout new branch…</span>
+															<span>
+																<I18nText
+																	source={"Create and checkout new branch…"}
+																/>
+															</span>
 														</button>
 													)
 												: undefined

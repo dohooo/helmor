@@ -1,5 +1,6 @@
 import { Minus, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useI18n } from "@/lib/i18n";
 
 export type FontSizeStepperProps = {
 	value: number;
@@ -23,8 +24,12 @@ export function FontSizeStepper({
 	unit = "px",
 	ariaLabel,
 }: FontSizeStepperProps) {
+	const { t } = useI18n();
 	return (
-		<div className="flex items-center gap-3" aria-label={ariaLabel}>
+		<div
+			className="flex items-center gap-3"
+			aria-label={ariaLabel ? t(ariaLabel) : undefined}
+		>
 			<Button
 				variant="outline"
 				size="icon-sm"

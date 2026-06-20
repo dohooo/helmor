@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
+import { useLocalizedNode } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 /**
@@ -35,6 +36,8 @@ export function InteractionHeader({
 	truncateTitle = false,
 	className,
 }: InteractionHeaderProps) {
+	const localizedTitle = useLocalizedNode(title);
+	const localizedDescription = useLocalizedNode(description);
 	return (
 		<div className={cn("space-y-1 px-1 pb-3", className)}>
 			<div className="flex items-center gap-2">
@@ -49,12 +52,14 @@ export function InteractionHeader({
 						truncateTitle && "truncate",
 					)}
 				>
-					{title}
+					{localizedTitle}
 				</h3>
 				{trailing}
 			</div>
 			{description ? (
-				<p className="pl-6 text-small text-muted-foreground">{description}</p>
+				<p className="pl-6 text-small text-muted-foreground">
+					{localizedDescription}
+				</p>
 			) : null}
 		</div>
 	);

@@ -4,6 +4,7 @@ import { AgentLoginDialog } from "@/components/agent-login/agent-login-dialog";
 import type { ClaudeIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import type { AgentLoginProvider } from "@/lib/api";
+import { useI18n, useLocalizedNode } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 export function ProviderRow({
@@ -151,12 +152,14 @@ export function ProviderConfigRow({
 	description?: ReactNode;
 	children: ReactNode;
 }) {
+	const { t } = useI18n();
+	const localizedDescription = useLocalizedNode(description);
 	return (
 		<div className="flex gap-6 pb-4 pl-8">
 			<div className="min-w-0 flex-1 pt-0.5">
 				{label ? (
 					<div className="text-ui font-medium leading-snug text-foreground">
-						{label}
+						{t(label)}
 					</div>
 				) : null}
 				{description ? (
@@ -166,7 +169,7 @@ export function ProviderConfigRow({
 							label && "mt-1",
 						)}
 					>
-						{description}
+						{localizedDescription}
 					</div>
 				) : null}
 			</div>
@@ -176,19 +179,21 @@ export function ProviderConfigRow({
 }
 
 function StatusBadge() {
+	const { t } = useI18n();
 	return (
 		<span className="flex shrink-0 items-center gap-1.5 rounded-full bg-emerald-500/10 px-2 py-0.5 text-mini font-medium text-emerald-500">
 			<span className="size-1.5 rounded-full bg-emerald-500" />
-			Ready
+			{t("Ready")}
 		</span>
 	);
 }
 
 function ConnectingBadge() {
+	const { t } = useI18n();
 	return (
 		<span className="flex shrink-0 items-center gap-1.5 rounded-full bg-muted px-2 py-0.5 text-mini font-medium text-muted-foreground">
 			<span className="size-1.5 animate-pulse rounded-full bg-muted-foreground/60" />
-			Connecting
+			{t("Connecting")}
 		</span>
 	);
 }

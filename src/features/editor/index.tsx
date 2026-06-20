@@ -35,6 +35,7 @@ import {
 	type InspectorFileItem,
 	isMarkdownPath,
 } from "@/lib/editor-session";
+import { useI18n } from "@/lib/i18n";
 import {
 	helmorQueryKeys,
 	workspaceChangesQueryOptions,
@@ -210,6 +211,7 @@ function EditorFileTabs({
 	onCloseTab: (tabId: string) => void;
 	onOpenSearch: () => void;
 }) {
+	const { t } = useI18n();
 	return (
 		<div
 			data-tauri-drag-region
@@ -225,7 +227,7 @@ function EditorFileTabs({
 					className="h-full min-w-max gap-0"
 				>
 					<TabsList
-						aria-label="Open files"
+						aria-label={t("Open files")}
 						className="inline-flex h-full w-max justify-start self-start bg-transparent p-0"
 					>
 						{tabs.map((tab) => {
@@ -250,7 +252,7 @@ function EditorFileTabs({
 										</span>
 										{tab.session.dirty ? (
 											<span
-												aria-label="Modified"
+												aria-label={t("Modified")}
 												className="size-1.5 shrink-0 rounded-full bg-muted-foreground/55"
 											/>
 										) : null}
@@ -258,7 +260,9 @@ function EditorFileTabs({
 									<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible">
 										<span
 											role="button"
-											aria-label={`Close ${getBaseName(tab.session.path)}`}
+											aria-label={`${t("Close")} ${getBaseName(
+												tab.session.path,
+											)}`}
 											onPointerDown={(event) => {
 												event.preventDefault();
 												event.stopPropagation();
@@ -281,7 +285,7 @@ function EditorFileTabs({
 			</div>
 			<button
 				type="button"
-				aria-label="Open file"
+				aria-label={t("Open file")}
 				onClick={onOpenSearch}
 				className="ml-1 flex h-full w-6 shrink-0 cursor-interactive items-center justify-center self-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-0"
 			>
@@ -312,6 +316,7 @@ function FileSearchOverlay({
 	onOpen: (file: InspectorFileItem) => void;
 	onClose: () => void;
 }) {
+	const { t } = useI18n();
 	const inputRef = useRef<HTMLInputElement>(null);
 	const selectedItemRef = useRef<HTMLButtonElement | null>(null);
 
@@ -326,11 +331,11 @@ function FileSearchOverlay({
 	}, [selectedIndex]);
 
 	const statusText = loading
-		? "Loading files"
+		? t("Loading files")
 		: error
 			? error
 			: files.length === 0
-				? "No files found"
+				? t("No files found")
 				: null;
 
 	return (
@@ -374,7 +379,7 @@ function FileSearchOverlay({
 								if (file) onOpen(file);
 							}
 						}}
-						placeholder="Search files"
+						placeholder={t("Search files")}
 						className="h-full min-w-0 flex-1 bg-transparent text-body font-medium text-foreground outline-none placeholder:text-muted-foreground/55"
 					/>
 				</div>
@@ -424,6 +429,7 @@ export function WorkspaceEditorSurface({
 	onExit,
 	onError,
 }: WorkspaceEditorSurfaceProps) {
+	const { t } = useI18n();
 	const queryClient = useQueryClient();
 	// Read the workspace id from the ROUTER (Stage 3b: navigation intent is
 	// router-owned). Same value AppShell used to read off the store's
@@ -461,7 +467,9 @@ export function WorkspaceEditorSurface({
 		editorSession.originalText !== undefined &&
 		editorSession.modifiedText !== undefined;
 	const closeLabel =
-		editorSession.kind === "diff" ? "Close diff view" : "Close editor view";
+		editorSession.kind === "diff"
+			? t("Close diff view")
+			: t("Close editor view");
 	const isMarkdown = isMarkdownPath(editorSession.path);
 	const viewMode: EditorViewMode = isMarkdown
 		? (editorSession.viewMode ?? "source")
@@ -839,10 +847,10 @@ export function WorkspaceEditorSurface({
 				} catch (error) {
 					const message = describeUnknownError(
 						error,
-						"Unable to start the editor.",
+						t("Unable to start the editor."),
 					);
 					setSurfaceStatus({ kind: "error", message });
-					onErrorRef.current?.(message, "Editor startup failed");
+					onErrorRef.current?.(message, t("Editor startup failed"));
 				}
 			})();
 		} else {
@@ -871,10 +879,10 @@ export function WorkspaceEditorSurface({
 				} catch (error) {
 					const message = describeUnknownError(
 						error,
-						"Unable to start the review surface.",
+						t("Unable to start the review surface."),
 					);
 					setSurfaceStatus({ kind: "error", message });
-					onErrorRef.current?.(message, "Review surface failed");
+					onErrorRef.current?.(message, t("Review surface failed"));
 				}
 			})();
 		}
@@ -886,7 +894,7 @@ export function WorkspaceEditorSurface({
 			// changes), and the separate unmount effect handles final cleanup.
 			disposed = true;
 		};
-	}, [canRenderDiff, canRenderFile, editorSession.kind, editorSession.path]);
+	}, [canRenderDiff, canRenderFile, editorSession.kind, editorSession.path, t]);
 
 	useEffect(() => {
 		if (
@@ -1102,7 +1110,7 @@ export function WorkspaceEditorSurface({
 	return (
 		<section
 			ref={surfaceRef}
-			aria-label="Workspace editor surface"
+			aria-label={t("Workspace editor surface")}
 			data-focus-scope="editor"
 			tabIndex={-1}
 			className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground focus:outline-none"
@@ -1132,17 +1140,17 @@ export function WorkspaceEditorSurface({
 						<Tabs
 							value={viewMode}
 							onValueChange={handleViewModeChange}
-							aria-label="Markdown view mode"
+							aria-label={t("Markdown view mode")}
 						>
 							{/* No tray: bg-transparent + p-0. Pill highlight only on the active trigger. */}
 							<TabsList className="h-5 gap-0 bg-transparent p-0">
 								<TabsTrigger value="source" className={SEGMENT_CLASS}>
 									<FileCode strokeWidth={1.8} />
-									Source
+									{t("Source")}
 								</TabsTrigger>
 								<TabsTrigger value="preview" className={SEGMENT_CLASS}>
 									<Eye strokeWidth={1.8} />
-									Preview
+									{t("Preview")}
 								</TabsTrigger>
 							</TabsList>
 						</Tabs>
@@ -1155,7 +1163,7 @@ export function WorkspaceEditorSurface({
 							onClick={handleEnterEditMode}
 							className="gap-1 px-1.5 text-muted-foreground hover:text-foreground"
 						>
-							<span>Edit</span>
+							<span>{t("Edit")}</span>
 							<EditorShortcutHint hotkey={editShortcut} />
 						</Button>
 					)}
@@ -1167,7 +1175,7 @@ export function WorkspaceEditorSurface({
 							onClick={handleReturnToDiffMode}
 							className="gap-1 px-1.5 text-muted-foreground hover:text-foreground"
 						>
-							<span>Diff</span>
+							<span>{t("Diff")}</span>
 							<EditorShortcutHint hotkey={editShortcut} />
 						</Button>
 					)}
@@ -1179,7 +1187,7 @@ export function WorkspaceEditorSurface({
 						aria-label={closeLabel}
 						className="gap-1 px-1.5 text-muted-foreground hover:text-foreground"
 					>
-						<span>Close</span>
+						<span>{t("Close")}</span>
 						<EditorShortcutHint hotkey="Escape" />
 					</Button>
 				</div>
@@ -1208,7 +1216,7 @@ export function WorkspaceEditorSurface({
 							workspaceFilesQuery.isError
 								? describeUnknownError(
 										workspaceFilesQuery.error,
-										"Unable to list workspace files.",
+										t("Unable to list workspace files."),
 									)
 								: null
 						}
@@ -1221,7 +1229,7 @@ export function WorkspaceEditorSurface({
 				{/* Monaco host stays mounted in preview mode so model + dirty state survive toggling. */}
 				<div
 					ref={editorHostRef}
-					aria-label="Editor canvas"
+					aria-label={t("Editor canvas")}
 					className="h-full min-h-0 flex-1"
 					aria-hidden={showPreview}
 					style={showPreview ? { visibility: "hidden" } : undefined}
@@ -1229,7 +1237,7 @@ export function WorkspaceEditorSurface({
 
 				{showPreview && (
 					<div
-						aria-label="Markdown preview"
+						aria-label={t("Markdown preview")}
 						className="absolute inset-0 overflow-y-auto bg-background"
 					>
 						<div className="conversation-markdown mx-auto max-w-3xl break-words px-8 py-6 text-ui leading-6 text-foreground">

@@ -1,6 +1,7 @@
 import { cva, type VariantProps } from "class-variance-authority";
 import type * as React from "react";
 
+import { useLocalizedNode } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 function Empty({ className, ...props }: React.ComponentProps<"div">) {
@@ -56,17 +57,29 @@ function EmptyMedia({
 	);
 }
 
-function EmptyTitle({ className, ...props }: React.ComponentProps<"div">) {
+function EmptyTitle({
+	className,
+	children,
+	...props
+}: React.ComponentProps<"div">) {
+	const localizedChildren = useLocalizedNode(children);
 	return (
 		<div
 			data-slot="empty-title"
 			className={cn("font-heading text-title font-medium", className)}
 			{...props}
-		/>
+		>
+			{localizedChildren}
+		</div>
 	);
 }
 
-function EmptyDescription({ className, ...props }: React.ComponentProps<"p">) {
+function EmptyDescription({
+	className,
+	children,
+	...props
+}: React.ComponentProps<"p">) {
+	const localizedChildren = useLocalizedNode(children);
 	return (
 		<div
 			data-slot="empty-description"
@@ -75,11 +88,18 @@ function EmptyDescription({ className, ...props }: React.ComponentProps<"p">) {
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{localizedChildren}
+		</div>
 	);
 }
 
-function EmptyContent({ className, ...props }: React.ComponentProps<"div">) {
+function EmptyContent({
+	className,
+	children,
+	...props
+}: React.ComponentProps<"div">) {
+	const localizedChildren = useLocalizedNode(children);
 	return (
 		<div
 			data-slot="empty-content"
@@ -88,7 +108,9 @@ function EmptyContent({ className, ...props }: React.ComponentProps<"div">) {
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{localizedChildren}
+		</div>
 	);
 }
 

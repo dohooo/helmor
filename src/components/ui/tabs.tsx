@@ -2,6 +2,7 @@ import * as TabsPrimitive from "@radix-ui/react-tabs";
 import { cva, type VariantProps } from "class-variance-authority";
 import type * as React from "react";
 
+import { useI18n, useLocalizedNode } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 function Tabs({
@@ -40,13 +41,16 @@ const tabsListVariants = cva(
 function TabsList({
 	className,
 	variant = "default",
+	"aria-label": ariaLabel,
 	...props
 }: React.ComponentProps<typeof TabsPrimitive.List> &
 	VariantProps<typeof tabsListVariants>) {
+	const { t } = useI18n();
 	return (
 		<TabsPrimitive.List
 			data-slot="tabs-list"
 			data-variant={variant}
+			aria-label={typeof ariaLabel === "string" ? t(ariaLabel) : ariaLabel}
 			className={cn(tabsListVariants({ variant }), className)}
 			{...props}
 		/>
@@ -55,11 +59,16 @@ function TabsList({
 
 function TabsTrigger({
 	className,
+	children,
+	"aria-label": ariaLabel,
 	...props
 }: React.ComponentProps<typeof TabsPrimitive.Trigger>) {
+	const { t } = useI18n();
+	const localizedChildren = useLocalizedNode(children);
 	return (
 		<TabsPrimitive.Trigger
 			data-slot="tabs-trigger"
+			aria-label={typeof ariaLabel === "string" ? t(ariaLabel) : ariaLabel}
 			className={cn(
 				"relative inline-flex h-[calc(100%-1px)] flex-1 cursor-interactive items-center justify-center gap-1.5 rounded-[6px] border border-transparent px-1.5 py-0.5 text-ui font-medium leading-none whitespace-nowrap text-foreground/60 transition-all group-data-vertical/tabs:w-full group-data-vertical/tabs:justify-start hover:text-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 has-data-[icon=inline-end]:pr-1 has-data-[icon=inline-start]:pl-1 dark:text-muted-foreground dark:hover:text-foreground group-data-[variant=default]/tabs-list:data-active:shadow-sm group-data-[variant=line]/tabs-list:data-active:shadow-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
 				"group-data-[variant=default]/tabs-list:aria-selected:shadow-sm group-data-[variant=line]/tabs-list:aria-selected:shadow-none",
@@ -69,7 +78,9 @@ function TabsTrigger({
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{localizedChildren}
+		</TabsPrimitive.Trigger>
 	);
 }
 

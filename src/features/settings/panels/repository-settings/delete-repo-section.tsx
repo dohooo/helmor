@@ -6,6 +6,7 @@ import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { deleteRepository, type RepositoryCreateOption } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 
 export function DeleteRepoSection({
 	repo,
@@ -36,11 +37,14 @@ export function DeleteRepoSection({
 			<div className="py-5">
 				<div className="flex items-center gap-2 text-ui font-medium leading-snug text-foreground">
 					<Trash2 className="size-3.5 text-destructive" strokeWidth={1.8} />
-					Delete Repository
+					<I18nText source={"Delete Repository"} />
 				</div>
 				<div className="mt-1 text-small leading-snug text-muted-foreground">
-					Permanently remove this repository and all its workspaces, sessions,
-					and messages.
+					<I18nText
+						source={
+							"Permanently remove this repository and all its workspaces, sessions, and messages."
+						}
+					/>
 				</div>
 				<Button
 					variant="destructive"

@@ -1,11 +1,11 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { FolderOpen, LoaderCircle } from "lucide-react";
 import { useEffect } from "react";
-
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cloneRepositoryFromUrl, forkHelmorUpstream } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import { describeUnknownError } from "@/lib/workspace-helpers";
 
 import { HELMOR_UPSTREAM_SLUG } from "./constants";
@@ -108,16 +108,23 @@ export function StepClone({
 							strokeWidth={2.1}
 						/>
 						<span className="text-muted-foreground">
-							Forking {HELMOR_UPSTREAM_SLUG} to your GitHub account…
+							<I18nText source={"Forking"} /> {HELMOR_UPSTREAM_SLUG}{" "}
+							<I18nText source={"to your GitHub account…"} />
 						</span>
 					</>
 				) : forkedCloneUrl ? (
 					<span className="text-muted-foreground">
-						Fork ready. Choose where to clone it on your machine.
+						<I18nText
+							source={"Fork ready. Choose where to clone it on your machine."}
+						/>
 					</span>
 				) : (
 					<span className="text-muted-foreground">
-						We'll fork the upstream Helmor repo into your GitHub account.
+						<I18nText
+							source={
+								"We'll fork the upstream Helmor repo into your GitHub account."
+							}
+						/>
 					</span>
 				)}
 			</div>

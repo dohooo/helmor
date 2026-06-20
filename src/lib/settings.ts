@@ -1,4 +1,9 @@
 import { createContext, useContext } from "react";
+import {
+	type AppLanguage,
+	DEFAULT_APP_LANGUAGE,
+	isAppLanguage,
+} from "@/lib/i18n/types";
 import type { WorkspaceBranchIntent } from "./api";
 // Routed through the transport shim so settings load works in the mobile
 // browser companion too (not just the Tauri webview).
@@ -259,6 +264,7 @@ export type StartSurfacePreferences = {
 };
 
 export type AppSettings = {
+	language: AppLanguage;
 	/** Chat message body font size (px). Migrated from the legacy `fontSize`
 	 *  field, which only ever affected chat rendering. */
 	chatFontSize: number;
@@ -398,6 +404,7 @@ export function writeRepoPreference<V>(
 export const CONTEXT_USAGE_AUTO_REVEAL_THRESHOLD = 70;
 
 export const DEFAULT_SETTINGS: AppSettings = {
+	language: DEFAULT_APP_LANGUAGE,
 	chatFontSize: 14,
 	uiFontFamily: null,
 	codeFontFamily: null,
@@ -474,6 +481,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 };
 
 export const THEME_STORAGE_KEY = "helmor-theme";
+export const LANGUAGE_STORAGE_KEY = "helmor-language";
 export const LIGHT_THEME_STORAGE_KEY = "helmor-light-theme";
 export const DARK_THEME_STORAGE_KEY = "helmor-dark-theme";
 export const SIDEBAR_GROUPING_STORAGE_KEY = "helmor-sidebar-grouping";
@@ -487,6 +495,7 @@ export const TERMINAL_FONT_FAMILY_STORAGE_KEY = "helmor-terminal-font-family";
  *  Anything visible in the first paint must live here so we don't wait
  *  on the async SQLite round-trip. */
 const LOCALSTORAGE_KEYS = {
+	language: LANGUAGE_STORAGE_KEY,
 	theme: THEME_STORAGE_KEY,
 	lightTheme: LIGHT_THEME_STORAGE_KEY,
 	darkTheme: DARK_THEME_STORAGE_KEY,
@@ -532,6 +541,14 @@ export function getPreloadedTheme(): ThemeMode {
 	return (raw as ThemeMode | null) ?? DEFAULT_SETTINGS.theme;
 }
 
+export function getPreloadedLanguage(): AppLanguage {
+	if (typeof localStorage === "undefined") {
+		return DEFAULT_SETTINGS.language;
+	}
+	const raw = localStorage.getItem(LANGUAGE_STORAGE_KEY);
+	return isAppLanguage(raw) ? raw : DEFAULT_SETTINGS.language;
+}
+
 function readLocalStorageString(key: string): string | null {
 	if (typeof localStorage === "undefined") return null;
 	const v = localStorage.getItem(key);
@@ -568,6 +585,7 @@ export function getPreloadedSettings(): AppSettings {
 	})();
 	return {
 		...DEFAULT_SETTINGS,
+		language: getPreloadedLanguage(),
 		theme: getPreloadedTheme(),
 		lightTheme,
 		darkTheme,
@@ -1266,6 +1284,7 @@ export async function loadSettings(): Promise<AppSettings> {
 			theme:
 				(localStorage.getItem(THEME_STORAGE_KEY) as AppSettings["theme"]) ??
 				DEFAULT_SETTINGS.theme,
+			language: getPreloadedLanguage(),
 			lightTheme: readColorTheme(
 				LIGHT_THEME_STORAGE_KEY,
 				DEFAULT_SETTINGS.lightTheme,

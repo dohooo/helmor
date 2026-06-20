@@ -6,6 +6,7 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { hideQuickPanel, revealWorkspaceInMainWindow } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 
 function ActionButton({
 	label,
@@ -16,6 +17,7 @@ function ActionButton({
 	onClick: () => void;
 	children: React.ReactNode;
 }) {
+	const { t } = useI18n();
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>
@@ -24,7 +26,7 @@ function ActionButton({
 					variant="ghost"
 					size="sm"
 					onClick={onClick}
-					aria-label={label}
+					aria-label={t(label)}
 					className="px-2 text-muted-foreground hover:text-foreground"
 				>
 					{children}
@@ -35,7 +37,7 @@ function ActionButton({
 				sideOffset={4}
 				className="flex h-[24px] items-center rounded-md px-2 text-small leading-none"
 			>
-				<span>{label}</span>
+				<span>{t(label)}</span>
 			</TooltipContent>
 		</Tooltip>
 	);

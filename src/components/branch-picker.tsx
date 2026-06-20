@@ -9,6 +9,7 @@ import {
 import { CommandPopoverContent } from "@/components/ui/command-popover";
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
 import type { BranchPickerEntry, WorkspaceBranchIntent } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 // Scoped thin scrollbar: 3px, sits in the right padding gap.
@@ -103,7 +104,7 @@ export function BranchPickerPopover({
 									className="size-3.5 animate-spin"
 									strokeWidth={2}
 								/>
-								Loading branches...
+								<I18nText source={"Loading branches..."} />
 							</div>
 						) : null}
 						<CommandEmpty>No branches found</CommandEmpty>

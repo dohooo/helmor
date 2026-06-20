@@ -2,6 +2,7 @@ import { ArrowRight, ChevronDown, GitBranch } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { HyperText } from "@/components/ui/hyper-text";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { branchToneClasses, type WorkspaceBranchTone } from "./shared";
 
@@ -30,9 +31,10 @@ export function ConversationHeaderUI({
 	rightSlot,
 	leadingSlot,
 }: ConversationHeaderUIProps) {
+	const { t } = useI18n();
 	return (
 		<div
-			aria-label="Workspace header"
+			aria-label={t("Workspace header")}
 			className="flex h-9 items-center justify-between gap-3 px-[18px]"
 			data-tauri-drag-region
 		>

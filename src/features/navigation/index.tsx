@@ -41,6 +41,7 @@ import type {
 	WorkspaceRow,
 	WorkspaceStatus,
 } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import type { SidebarGrouping, SidebarSort } from "@/lib/settings";
 import { isTeamModeActive } from "@/lib/team-mode";
 import { cn } from "@/lib/utils";
@@ -1159,7 +1160,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 
 			<div className="mt-1 flex items-center justify-between px-3">
 				<h2 className="text-title font-medium text-muted-foreground">
-					Workspaces
+					<I18nText source={"Workspaces"} />
 				</h2>
 
 				<div className="flex items-center gap-1 text-muted-foreground">

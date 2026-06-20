@@ -13,6 +13,7 @@ import {
 	installCli,
 	installHelmorSkills,
 } from "@/lib/api";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { SetupItem } from "../components/setup-item";
 import type { OnboardingStep } from "../types";
 
@@ -59,6 +60,7 @@ export function SkillsStep({
 	onNext: () => void;
 	isRoutingImport: boolean;
 }) {
+	const { t } = useI18n();
 	const [isInstallingCli, setIsInstallingCli] = useState(true);
 	const [cliInstalled, setCliInstalled] = useState(false);
 	const [cliInstallFailed, setCliInstallFailed] = useState(false);
@@ -125,7 +127,7 @@ export function SkillsStep({
 
 	return (
 		<section
-			aria-label="MCP and skills setup"
+			aria-label={t("MCP and skills setup")}
 			aria-hidden={step !== "skills"}
 			className={`absolute left-[calc(30vw-260px)] top-20 z-30 w-[520px] transition-all duration-1000 ease-[cubic-bezier(.22,.82,.2,1)] ${
 				step === "skills"
@@ -210,12 +212,14 @@ Options:
 
 				<div className="w-full text-center">
 					<h2 className="text-3xl font-semibold tracking-normal text-foreground">
-						Power up Helmor
+						<I18nText source={"Power up Helmor"} />
 					</h2>
 					<p className="mx-auto mt-3 max-w-md text-body leading-6 text-muted-foreground">
-						Helmor is installing the CLI and skills in the background so it can
-						split work, run agents, call tools, and carry context across your
-						workspaces.
+						<I18nText
+							source={
+								"Helmor is installing the CLI and skills in the background so it can split work, run agents, call tools, and carry context across your workspaces."
+							}
+						/>
 					</p>
 				</div>
 

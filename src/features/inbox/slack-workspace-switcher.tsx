@@ -9,6 +9,7 @@ import {
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { type SlackWorkspace, slackDisconnectWorkspace } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 import { InboxActionMenuButton } from "./actions";
@@ -66,7 +67,7 @@ export function SlackWorkspaceSwitcher({
 			<DropdownMenuContent align="end" className="min-w-[220px]">
 				{workspaces.length === 0 ? (
 					<div className="px-2 py-1.5 text-mini text-muted-foreground">
-						No connected workspaces
+						<I18nText source={"No connected workspaces"} />
 					</div>
 				) : (
 					workspaces.map((ws) => (

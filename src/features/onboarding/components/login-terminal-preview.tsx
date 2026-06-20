@@ -6,6 +6,7 @@ import {
 	TerminalOutput,
 } from "@/components/terminal-output";
 import type { AgentLoginProvider } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 export function OnboardingTerminalPreview({
@@ -35,6 +36,7 @@ export function OnboardingTerminalPreview({
 	terminalRef: RefObject<TerminalHandle | null>;
 	padding?: string;
 }) {
+	const { t } = useI18n();
 	return (
 		<div
 			aria-hidden={!active}
@@ -61,7 +63,7 @@ export function OnboardingTerminalPreview({
 						<button
 							type="button"
 							onClick={onClose}
-							aria-label="Close login terminal"
+							aria-label={t("Close login terminal")}
 							className="group/close grid size-2.5 cursor-interactive place-items-center rounded-full bg-muted-foreground/35 leading-none transition-colors hover:bg-status-danger"
 						>
 							<X

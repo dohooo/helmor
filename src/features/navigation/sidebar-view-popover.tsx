@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/tooltip";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import type { RepositoryCreateOption } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import type { SidebarGrouping, SidebarSort } from "@/lib/settings";
 import { WorkspaceAvatar } from "./avatar";
 
@@ -211,7 +212,7 @@ export function SidebarViewPopover({
 			<PopoverContent align="start" className="w-[260px] gap-2 p-2">
 				<div className="grid gap-1 px-1">
 					<div className="text-mini font-medium text-muted-foreground">
-						Repository
+						<I18nText source={"Repository"} />
 					</div>
 					<SidebarRepoFilterPicker
 						repositories={repositories}
@@ -221,7 +222,7 @@ export function SidebarViewPopover({
 				</div>
 				<div className="h-px bg-border/60" />
 				<div className="px-1 text-mini font-medium text-muted-foreground">
-					Group by
+					<I18nText source={"Group by"} />
 				</div>
 				<div className="grid gap-0.5">
 					{[
@@ -252,7 +253,7 @@ export function SidebarViewPopover({
 				</div>
 				<div className="h-px bg-border/60" />
 				<div className="px-1 text-mini font-medium text-muted-foreground">
-					Sort by
+					<I18nText source={"Sort by"} />
 				</div>
 				<div className="grid gap-0.5">
 					{SIDEBAR_SORT_OPTIONS.map((option) => {

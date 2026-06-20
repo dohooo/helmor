@@ -26,6 +26,7 @@ import type {
 import type { ComposerInsertTarget } from "@/lib/composer-insert";
 import { forgeLabelsFor } from "@/lib/forge-labels";
 import { parseForgeRepoHost } from "@/lib/forge-repo-filter";
+import { I18nText } from "@/lib/i18n";
 import { inboxKindLabelsQueryOptions } from "@/lib/query-client";
 import {
 	DEFAULT_INBOX_ACCOUNT_TOGGLES,
@@ -630,7 +631,9 @@ export const InboxSidebar = memo(function InboxSidebar({
 										className="inbox-coming-soon-pickaxe size-3.5 shrink-0"
 										strokeWidth={2}
 									/>
-									<span className="text-ui font-medium">Coming Soon</span>
+									<span className="text-ui font-medium">
+										<I18nText source={"Coming Soon"} />
+									</span>
 								</div>
 								<div className="my-7 flex items-center gap-2 px-2">
 									<div className="h-px flex-1 bg-border" />
@@ -720,7 +723,9 @@ function InboxLoadingState() {
 	return (
 		<div className="mt-8 flex flex-col items-center gap-2 px-6 text-muted-foreground/70">
 			<Loader2 className="size-4 animate-spin" strokeWidth={2} />
-			<div className="text-small leading-5">Loading items…</div>
+			<div className="text-small leading-5">
+				<I18nText source={"Loading items…"} />
+			</div>
 		</div>
 	);
 }
@@ -736,7 +741,9 @@ function InboxErrorState({
 		error instanceof Error ? error.message : "Couldn't load context items.";
 	return (
 		<div className="mt-8 flex flex-col items-center gap-2 px-6 text-center">
-			<div className="text-ui font-medium text-foreground">Couldn't load</div>
+			<div className="text-ui font-medium text-foreground">
+				<I18nText source={"Couldn't load"} />
+			</div>
 			<div className="text-small leading-5 text-muted-foreground">
 				{message}
 			</div>
@@ -860,7 +867,7 @@ function ConfigureInboxLink({ onClick }: { onClick: () => void }) {
 			)}
 		>
 			<SlidersHorizontal className="size-3" strokeWidth={2} />
-			Configure
+			<I18nText source={"Configure"} />
 		</button>
 	);
 }
@@ -922,10 +929,11 @@ function KindDisabledState({
 				<SlidersHorizontal className="size-4" strokeWidth={2} />
 			</div>
 			<div className="text-ui font-medium text-foreground">
-				{plural} are off
+				{plural} <I18nText source={"are off"} />
 			</div>
 			<div className="text-small leading-5 text-muted-foreground">
-				Turn {lower} back on in Contexts settings.
+				<I18nText source={"Turn"} /> {lower}{" "}
+				<I18nText source={"back on in Contexts settings."} />
 			</div>
 			<Button
 				type="button"

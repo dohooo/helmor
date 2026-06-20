@@ -24,6 +24,7 @@ import {
 	listConductorRepos,
 	listConductorWorkspaces,
 } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
@@ -303,11 +304,14 @@ export function ConductorImportDialog({
 							<Loader2 className="size-5 animate-spin text-muted-foreground" />
 							<div className="text-center">
 								<p className="text-ui font-medium text-foreground">
-									Importing {selectedIds.size} workspace
+									<I18nText source={"Importing"} /> {selectedIds.size}{" "}
+									<I18nText source={"workspace"} />
 									{selectedIds.size === 1 ? "" : "s"}
 								</p>
 								<p className="mt-1 text-mini text-muted-foreground">
-									Setting up repositories and copying data...
+									<I18nText
+										source={"Setting up repositories and copying data..."}
+									/>
 								</p>
 							</div>
 						</div>
@@ -463,7 +467,7 @@ function WorkspaceRow({
 						{workspace.prTitle || humanize(workspace.directoryName)}
 					</span>
 					<span className="block text-mini tracking-[0.04em] text-muted-foreground">
-						Already imported
+						<I18nText source={"Already imported"} />
 					</span>
 				</div>
 			</div>
@@ -496,7 +500,7 @@ function WorkspaceRow({
 					)}
 					<span>{statusLabel(workspace)}</span>
 					<span>
-						{workspace.sessionCount} session
+						{workspace.sessionCount} <I18nText source={"session"} />
 						{workspace.sessionCount === 1 ? "" : "s"}
 					</span>
 				</div>

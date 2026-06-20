@@ -2,6 +2,7 @@ import { XIcon } from "lucide-react";
 import { Dialog as SheetPrimitive } from "radix-ui";
 import type * as React from "react";
 import { Button } from "@/components/ui/button";
+import { useLocalizedNode } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
@@ -104,8 +105,10 @@ function SheetFooter({ className, ...props }: React.ComponentProps<"div">) {
 
 function SheetTitle({
 	className,
+	children,
 	...props
 }: React.ComponentProps<typeof SheetPrimitive.Title>) {
+	const localizedChildren = useLocalizedNode(children);
 	return (
 		<SheetPrimitive.Title
 			data-slot="sheet-title"
@@ -114,20 +117,26 @@ function SheetTitle({
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{localizedChildren}
+		</SheetPrimitive.Title>
 	);
 }
 
 function SheetDescription({
 	className,
+	children,
 	...props
 }: React.ComponentProps<typeof SheetPrimitive.Description>) {
+	const localizedChildren = useLocalizedNode(children);
 	return (
 		<SheetPrimitive.Description
 			data-slot="sheet-description"
 			className={cn("text-body text-muted-foreground", className)}
 			{...props}
-		/>
+		>
+			{localizedChildren}
+		</SheetPrimitive.Description>
 	);
 }
 

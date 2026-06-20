@@ -10,6 +10,7 @@
 import { useMemo } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import type { SettingsSection } from "@/features/settings";
+import { translateSource } from "@/lib/i18n";
 import { resolveTheme } from "@/lib/settings";
 import { AppShellProviderStack } from "@/shell/components/app-shell-provider-stack";
 import { buildWorkspacePaneProps } from "@/shell/components/workspace-pane-props";
@@ -68,7 +69,7 @@ export function QuickShell({
 				visibleToasts={3}
 			/>
 			<main
-				aria-label="Quick panel"
+				aria-label={translateSource("Quick panel", s.appSettings.language)}
 				className="h-dvh w-dvw overflow-hidden bg-transparent font-sans text-foreground antialiased"
 			>
 				<div className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border/60 bg-background">

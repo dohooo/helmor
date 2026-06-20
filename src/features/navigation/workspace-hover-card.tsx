@@ -33,6 +33,7 @@ import type {
 	WorkspaceRow,
 	WorkspaceSessionSummary,
 } from "@/lib/api";
+import { I18nText, useI18n } from "@/lib/i18n";
 import {
 	workspaceGitActionStatusQueryOptions,
 	workspaceSessionsQueryOptions,
@@ -91,6 +92,7 @@ function CompactStat({
 
 /** Compact git status: chips when dirty, single green icon when clean. */
 function GitStats({ workspaceId }: { workspaceId: string }) {
+	const { f } = useI18n();
 	const { data, isLoading, isError } = useQuery(
 		workspaceGitActionStatusQueryOptions(workspaceId),
 	);
@@ -108,7 +110,10 @@ function GitStats({ workspaceId }: { workspaceId: string }) {
 				key="uncommitted"
 				icon={FileDiff}
 				value={String(uncommitted)}
-				label={`${uncommitted} uncommitted change${uncommitted === 1 ? "" : "s"}`}
+				label={f("{count} uncommitted {changeLabel}", {
+					count: uncommitted,
+					changeLabel: uncommitted === 1 ? "change" : "changes",
+				})}
 				tone="warning"
 			/>,
 		);
@@ -119,7 +124,11 @@ function GitStats({ workspaceId }: { workspaceId: string }) {
 				key="behind"
 				icon={ArrowDown}
 				value={String(behind)}
-				label={`${behind} commit${behind === 1 ? "" : "s"} behind ${targetLabel}`}
+				label={f("{count} {commitLabel} behind {target}", {
+					count: behind,
+					commitLabel: behind === 1 ? "commit" : "commits",
+					target: targetLabel,
+				})}
 				tone="danger"
 			/>,
 		);
@@ -130,7 +139,10 @@ function GitStats({ workspaceId }: { workspaceId: string }) {
 				key="ahead"
 				icon={ArrowUp}
 				value={String(ahead)}
-				label={`${ahead} unpushed commit${ahead === 1 ? "" : "s"}`}
+				label={f("{count} unpushed {commitLabel}", {
+					count: ahead,
+					commitLabel: ahead === 1 ? "commit" : "commits",
+				})}
 				tone="default"
 			/>,
 		);
@@ -140,8 +152,12 @@ function GitStats({ workspaceId }: { workspaceId: string }) {
 		return (
 			<span
 				className="inline-flex shrink-0 items-center"
-				title={`Branch up to date with ${targetLabel} · no uncommitted changes`}
-				aria-label={`Branch up to date with ${targetLabel}`}
+				title={f("Branch up to date with {target} · no uncommitted changes", {
+					target: targetLabel,
+				})}
+				aria-label={f("Branch up to date with {target}", {
+					target: targetLabel,
+				})}
 			>
 				<GitBranch className="size-3 text-emerald-500/90" strokeWidth={2} />
 			</span>
@@ -417,7 +433,7 @@ function LiveSessionPreview({
 	if (blocks.length === 0) {
 		return (
 			<span className="text-mini italic text-muted-foreground/70">
-				Thinking…
+				<I18nText source={"Thinking…"} />
 			</span>
 		);
 	}
@@ -500,6 +516,7 @@ export function WorkspaceHoverCard({
 	isSending?: boolean;
 	children: React.ReactNode;
 }) {
+	const { f } = useI18n();
 	// Measured on open so the card's left edge snaps to the sidebar divider.
 	const [sideOffset, setSideOffset] = useState(HOVER_CARD_DEFAULT_SIDE_OFFSET);
 	const [open, setOpen] = useState(false);
@@ -721,7 +738,10 @@ export function WorkspaceHoverCard({
 							<span
 								title={
 									createdAt
-										? `${lastActivityLabel} · created ${createdAt}`
+										? f("{activity} · created {createdAt}", {
+												activity: lastActivityLabel,
+												createdAt,
+											})
 										: lastActivityLabel
 								}
 							>

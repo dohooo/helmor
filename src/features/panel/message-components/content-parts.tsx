@@ -22,6 +22,7 @@ import {
 	type TodoListPart,
 	type WorkflowPart,
 } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import { convertFileSrc } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 
@@ -38,7 +39,8 @@ export function TodoList({ part }: { part: TodoListPart }) {
 			<div className="mb-0.5 flex items-center gap-1.5 text-mini text-muted-foreground">
 				<MessageSquareText className="size-3" strokeWidth={1.8} />
 				<span>
-					Plan - {completed}/{total} done
+					<I18nText source={"Plan -"} /> {completed}/{total}{" "}
+					<I18nText source={"done"} />
 				</span>
 			</div>
 			{part.items.map((todo, index) => {
@@ -170,7 +172,7 @@ export function PlanReviewCard({ part }: { part: PlanReviewPart }) {
 		<div className="rounded-xl border-[1.5px] border-border/70 bg-background/60 px-3.5 py-3">
 			<div className="flex items-center gap-1.5 text-mini font-medium uppercase tracking-[0.06em] text-muted-foreground">
 				<ClipboardList className="size-3.5" strokeWidth={1.8} />
-				Plan
+				<I18nText source={"Plan"} />
 			</div>
 			{part.planFilePath ? (
 				<p className="mt-2 break-words text-small leading-5 text-muted-foreground">
@@ -193,7 +195,7 @@ export function PlanReviewCard({ part }: { part: PlanReviewPart }) {
 			{(part.allowedPrompts ?? []).length > 0 ? (
 				<div className="mt-3 grid gap-2 rounded-lg border border-border/50 bg-muted/20 p-2.5">
 					<p className="text-mini font-medium uppercase tracking-[0.06em] text-muted-foreground">
-						Approved Prompts
+						<I18nText source={"Approved Prompts"} />
 					</p>
 					{part.allowedPrompts?.map((entry) => (
 						<div
@@ -262,7 +264,9 @@ export function ImageBlock({ part }: { part: ImagePart }) {
 								className={imageMenuItemClassName}
 							>
 								<Copy className="size-4 shrink-0" strokeWidth={1.6} />
-								<span>Copy Image</span>
+								<span>
+									<I18nText source={"Copy Image"} />
+								</span>
 							</button>
 							<button
 								type="button"
@@ -279,7 +283,9 @@ export function ImageBlock({ part }: { part: ImagePart }) {
 								)}
 							>
 								<FolderOpen className="size-4 shrink-0" strokeWidth={1.6} />
-								<span>Show in Finder</span>
+								<span>
+									<I18nText source={"Show in Finder"} />
+								</span>
 							</button>
 						</div>,
 						document.body,

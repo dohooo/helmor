@@ -21,6 +21,7 @@ import { Goal, Play, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { type CodexGoalState, mutateCodexGoal } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import {
 	helmorQueryKeys,
 	sessionCodexGoalQueryOptions,
@@ -125,7 +126,7 @@ export function CodexGoalBanner({
 				{STATUS_LABEL[goal.status]}
 			</span>
 			<span className="shrink-0 text-mini tabular-nums text-muted-foreground/70">
-				Used: {budget ? `${used} / ${budget}` : used}
+				<I18nText source={"Used:"} /> {budget ? `${used} / ${budget}` : used}
 			</span>
 			<div className="ml-auto flex shrink-0 items-center gap-1">
 				{isPaused && onResume ? (
