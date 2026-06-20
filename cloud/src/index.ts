@@ -74,9 +74,9 @@ export interface Env {
 const SERVE_START_CMD = "/usr/local/bin/helmor-start-serve";
 const HEALTH_CHECK_TIMEOUT_MS = 1_500;
 const RESTORE_BACKUP_TIMEOUT_MS = 15_000;
-const START_PROCESS_TIMEOUT_MS = 15_000;
+const START_PROCESS_TIMEOUT_MS = 90_000;
 const IDENTITY_MINT_TIMEOUT_MS = 15_000;
-const SERVE_READY_TIMEOUT_MS = 120_000;
+const SERVE_READY_TIMEOUT_MS = 180_000;
 const SERVE_POLL_INTERVAL_MS = 500;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
