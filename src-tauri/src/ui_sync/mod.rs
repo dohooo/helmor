@@ -4,7 +4,7 @@ mod socket;
 
 use tauri::{ipc::Channel, AppHandle, Manager, Runtime};
 
-pub use events::{UiMutationEnvelope, UiMutationEvent};
+pub use events::{PresenceActivity, UiMutationEnvelope, UiMutationEvent};
 pub use manager::UiSyncManager;
 pub use socket::{is_listener_running, notify_running_app, socket_path, start_listener};
 

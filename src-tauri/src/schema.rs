@@ -920,6 +920,11 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         .execute_batch(SESSION_PLAN_STATE_DDL)
         .context("Failed to create session_plan_state table")?;
 
+    // Per-member read cursors (team-mode per-member unread). Idempotent.
+    connection
+        .execute_batch(SESSION_READ_STATE_DDL)
+        .context("Failed to create session_read_state table")?;
+
     Ok(())
 }
 
@@ -947,6 +952,20 @@ CREATE TABLE IF NOT EXISTS session_plan_state (
     plan_json TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"#;
+
+// Per-(member, session) read cursor for team mode. Unread in a shared sandbox
+// is per-member: a session is unread for a member when it holds messages newer
+// than that member's `last_read_at`. An absent row = never read (unread if the
+// session has any messages). Local/desktop (no member id) keeps using the
+// global `sessions.unread_count` / `workspaces.unread` columns instead.
+const SESSION_READ_STATE_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS session_read_state (
+    member_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    last_read_at TEXT NOT NULL,
+    PRIMARY KEY (member_id, session_id)
 );
 "#;
 

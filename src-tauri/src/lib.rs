@@ -551,6 +551,7 @@ fn build_app(mode: AppMode) -> tauri::App {
             agents::list_slash_commands,
             agents::prewarm_slash_commands_for_workspace,
             agents::prewarm_slash_commands_for_repo,
+            commands::presence_commands::report_presence,
             commands::workspace_commands::prepare_archive_workspace,
             commands::workspace_commands::start_archive_workspace,
             commands::workspace_commands::validate_archive_workspace,

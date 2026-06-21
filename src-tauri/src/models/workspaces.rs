@@ -207,6 +207,41 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
     LEFT JOIN primary_session ps ON ps.workspace_id = w.id
 "#;
 
+/// Team mode: per-workspace count of sessions that are unread FOR `member_id`.
+/// A session is unread when it holds a message newer than that member's
+/// `last_read_at` (absent row ⇒ never read ⇒ unread if it has any messages).
+/// Only workspaces with ≥1 such session appear in the map. Used to override the
+/// global `has_unread` / `unread_session_count` for one member; local mode never
+/// calls this.
+pub fn load_member_unread_counts(member_id: &str) -> Result<HashMap<String, i64>> {
+    let connection = db::read_conn()?;
+    let mut statement = connection.prepare(
+        r#"
+        SELECT s.workspace_id, COUNT(*) AS cnt
+        FROM sessions s
+        WHERE s.workspace_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM session_messages m
+            WHERE m.session_id = s.id
+              AND m.sent_at > COALESCE(
+                  (SELECT last_read_at FROM session_read_state
+                   WHERE member_id = ?1 AND session_id = s.id),
+                  '')
+          )
+        GROUP BY s.workspace_id
+        "#,
+    )?;
+    let rows = statement.query_map([member_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+    })?;
+    let mut counts = HashMap::new();
+    for row in rows {
+        let (workspace_id, count) = row?;
+        counts.insert(workspace_id, count);
+    }
+    Ok(counts)
+}
+
 pub fn load_workspace_records() -> Result<Vec<WorkspaceRecord>> {
     let connection = db::read_conn()?;
     let sql = format!(

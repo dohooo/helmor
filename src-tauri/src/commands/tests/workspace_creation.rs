@@ -410,7 +410,7 @@ fn move_workspace_in_sidebar_updates_status_and_group_order() {
     workspaces::move_workspace_in_sidebar("workspace-alpha", "review", Some("workspace-charlie"))
         .unwrap();
 
-    let groups = workspaces::list_workspace_groups().unwrap();
+    let groups = workspaces::list_workspace_groups(None).unwrap();
     let review = groups.iter().find(|group| group.id == "review").unwrap();
     let review_ids = review
         .rows

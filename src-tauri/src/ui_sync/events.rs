@@ -139,6 +139,30 @@ pub enum UiMutationEvent {
         workspace_id: String,
         session_id: Option<String>,
     },
+    /// A team member's transient activity in a shared workspace (composer
+    /// typing or an agent working). Ephemeral: no DB row, broadcast over the
+    /// shared `/v1/stream` to every connected member; clients self-expire it
+    /// by `ts` + a client-side TTL (there is no reliable disconnect signal).
+    /// `member_id` is the SERVER-derived trusted member id (same source as
+    /// room-chat `author_id`), never client-asserted. `ts` is server unix-ms.
+    RoomPresenceChanged {
+        member_id: String,
+        workspace_id: String,
+        session_id: Option<String>,
+        activity: PresenceActivity,
+        ts: u64,
+    },
+}
+
+/// Transient presence activity for a shared-workspace member. `Idle` is an
+/// explicit clear (e.g. composer blur / send) so peers can drop the indicator
+/// before the TTL elapses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PresenceActivity {
+    Typing,
+    Working,
+    Idle,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -247,6 +271,13 @@ mod tests {
             UiMutationEvent::FastModeUnavailable {
                 session_id: "s".into(),
                 reason: "extra usage not enabled".into(),
+            },
+            UiMutationEvent::RoomPresenceChanged {
+                member_id: "1".into(),
+                workspace_id: "w".into(),
+                session_id: Some("s".into()),
+                activity: PresenceActivity::Typing,
+                ts: 0,
             },
         ];
         for event in cases {
@@ -368,5 +399,172 @@ mod tests {
         let envelope: UiMutationEnvelope = serde_json::from_value(json).unwrap();
         assert_eq!(envelope.version, 1);
         assert_eq!(envelope.event, UiMutationEvent::WorkspaceListChanged);
+    }
+
+    /// Coverage guard: every `UiMutationEvent` variant must be CONSTRUCTED
+    /// somewhere in `src-tauri/src` outside `events.rs` — i.e. something
+    /// actually produces (and publishes) it. A variant defined but never built
+    /// is dead weight: the wire contract drifts and the frontend silently never
+    /// updates. The exhaustive `variant_ident` match also forces a new variant
+    /// to be classified here (compile error) and listed in `samples()`.
+    #[test]
+    fn every_variant_is_produced_in_source() {
+        // Variants intentionally NOT constructed in normal Rust source (e.g. a
+        // future event only ever deserialized from an off-process payload).
+        // Empty today — every variant has an in-repo producer (`UiMutationEvent::X`
+        // or the socket alias `E::X`).
+        const EXEMPT: &[&str] = &[];
+
+        let src = concat_rust_sources();
+        for event in samples() {
+            let ident = variant_ident(&event);
+            if EXEMPT.contains(&ident) {
+                continue;
+            }
+            assert!(
+                src.contains(&format!("::{ident}")),
+                "UiMutationEvent::{ident} is never constructed outside events.rs — \
+                 nothing publishes it (wire a producer, or add it to EXEMPT with a reason)."
+            );
+        }
+    }
+
+    /// The Rust variant ident for a `UiMutationEvent`. Exhaustive on purpose: a
+    /// new variant won't compile until it's listed here AND in `samples()`.
+    fn variant_ident(event: &UiMutationEvent) -> &'static str {
+        use UiMutationEvent as E;
+        match event {
+            E::WorkspaceListChanged => "WorkspaceListChanged",
+            E::WorkspaceChanged { .. } => "WorkspaceChanged",
+            E::SessionListChanged { .. } => "SessionListChanged",
+            E::ContextUsageChanged { .. } => "ContextUsageChanged",
+            E::CodexGoalChanged { .. } => "CodexGoalChanged",
+            E::SessionPlanChanged { .. } => "SessionPlanChanged",
+            E::SessionMessagesAppended { .. } => "SessionMessagesAppended",
+            E::SessionTurnPersisted { .. } => "SessionTurnPersisted",
+            E::WorkspaceFilesChanged { .. } => "WorkspaceFilesChanged",
+            E::WorkspaceGitStateChanged { .. } => "WorkspaceGitStateChanged",
+            E::WorkspaceForgeChanged { .. } => "WorkspaceForgeChanged",
+            E::WorkspaceChangeRequestChanged { .. } => "WorkspaceChangeRequestChanged",
+            E::RepositoryListChanged => "RepositoryListChanged",
+            E::RepositoryChanged { .. } => "RepositoryChanged",
+            E::RepoRunActionsChanged { .. } => "RepoRunActionsChanged",
+            E::SettingsChanged { .. } => "SettingsChanged",
+            E::PendingCliSendQueued { .. } => "PendingCliSendQueued",
+            E::ActiveStreamsChanged => "ActiveStreamsChanged",
+            E::TerminalActivityChanged { .. } => "TerminalActivityChanged",
+            E::TerminalSessionIdle { .. } => "TerminalSessionIdle",
+            E::TerminalPromptCaptured { .. } => "TerminalPromptCaptured",
+            E::SlackWorkspacesChanged => "SlackWorkspacesChanged",
+            E::SlackTokenInvalidated { .. } => "SlackTokenInvalidated",
+            E::TriageConfigChanged => "TriageConfigChanged",
+            E::TriageActiveStatusChanged => "TriageActiveStatusChanged",
+            E::TriageWorkspaceCreated { .. } => "TriageWorkspaceCreated",
+            E::FastModeUnavailable { .. } => "FastModeUnavailable",
+            E::PairedDevicesChanged => "PairedDevicesChanged",
+            E::WorkspaceRevealRequested { .. } => "WorkspaceRevealRequested",
+            E::RoomPresenceChanged { .. } => "RoomPresenceChanged",
+        }
+    }
+
+    /// One instance of every variant. Keep in sync with `variant_ident`.
+    fn samples() -> Vec<UiMutationEvent> {
+        use UiMutationEvent as E;
+        let w = || "w".to_string();
+        let s = || "s".to_string();
+        vec![
+            E::WorkspaceListChanged,
+            E::WorkspaceChanged { workspace_id: w() },
+            E::SessionListChanged { workspace_id: w() },
+            E::ContextUsageChanged { session_id: s() },
+            E::CodexGoalChanged { session_id: s() },
+            E::SessionPlanChanged { session_id: s() },
+            E::SessionMessagesAppended { session_id: s() },
+            E::SessionTurnPersisted { session_id: s() },
+            E::WorkspaceFilesChanged { workspace_id: w() },
+            E::WorkspaceGitStateChanged { workspace_id: w() },
+            E::WorkspaceForgeChanged { workspace_id: w() },
+            E::WorkspaceChangeRequestChanged { workspace_id: w() },
+            E::RepositoryListChanged,
+            E::RepositoryChanged {
+                repo_id: "r".into(),
+            },
+            E::RepoRunActionsChanged {
+                repo_id: "r".into(),
+            },
+            E::SettingsChanged { key: None },
+            E::PendingCliSendQueued {
+                workspace_id: w(),
+                session_id: s(),
+                prompt: "p".into(),
+                model_id: None,
+                permission_mode: None,
+            },
+            E::ActiveStreamsChanged,
+            E::TerminalActivityChanged {
+                session_id: s(),
+                workspace_id: w(),
+                busy: true,
+            },
+            E::TerminalSessionIdle {
+                session_id: s(),
+                workspace_id: w(),
+            },
+            E::TerminalPromptCaptured {
+                session_id: s(),
+                workspace_id: w(),
+                prompt: "p".into(),
+            },
+            E::SlackWorkspacesChanged,
+            E::SlackTokenInvalidated {
+                team_id: "t".into(),
+            },
+            E::TriageConfigChanged,
+            E::TriageActiveStatusChanged,
+            E::TriageWorkspaceCreated { workspace_id: w() },
+            E::FastModeUnavailable {
+                session_id: s(),
+                reason: "r".into(),
+            },
+            E::PairedDevicesChanged,
+            E::WorkspaceRevealRequested {
+                workspace_id: w(),
+                session_id: Some(s()),
+            },
+            E::RoomPresenceChanged {
+                member_id: "1".into(),
+                workspace_id: w(),
+                session_id: Some(s()),
+                activity: PresenceActivity::Typing,
+                ts: 0,
+            },
+        ]
+    }
+
+    /// Concatenate every `.rs` under `src/` except `events.rs` (whose own test
+    /// samples would otherwise count as producers).
+    fn concat_rust_sources() -> String {
+        fn walk(dir: &std::path::Path, out: &mut String) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("rs")
+                    && path.file_name().and_then(|n| n.to_str()) != Some("events.rs")
+                {
+                    if let Ok(text) = std::fs::read_to_string(&path) {
+                        out.push_str(&text);
+                        out.push('\n');
+                    }
+                }
+            }
+        }
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut out = String::new();
+        walk(&src, &mut out);
+        out
     }
 }

@@ -2429,6 +2429,14 @@ export type UiMutationEvent =
 			type: "workspaceRevealRequested";
 			workspaceId: string;
 			sessionId: string | null;
+	  }
+	| {
+			type: "roomPresenceChanged";
+			memberId: string;
+			workspaceId: string;
+			sessionId: string | null;
+			activity: "typing" | "working" | "idle";
+			ts: number;
 	  };
 
 export type TriageConfig = {
@@ -2706,6 +2714,19 @@ export async function subscribeUiMutations(
 		closeChannel(onEvent);
 		void invoke("unsubscribe_ui_mutations", { subscriptionId });
 	};
+}
+
+export type PresenceActivity = "typing" | "working" | "idle";
+
+/** Report this member's transient presence (typing / working) in a shared team
+ *  workspace. The server stamps the trusted member id + timestamp and broadcasts
+ *  it to peers over the shared UI-sync stream; non-team / local invokes no-op. */
+export async function reportPresence(
+	workspaceId: string,
+	sessionId: string | null,
+	activity: PresenceActivity,
+): Promise<void> {
+	await invoke("report_presence", { workspaceId, sessionId, activity });
 }
 
 export type PrefetchRemoteRefsResponse = {

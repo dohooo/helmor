@@ -73,4 +73,29 @@ describe("useActiveStreamsReattach", () => {
 		rerender();
 		expect(invalidate).not.toHaveBeenCalled();
 	});
+
+	it("re-syncs shared team-state queries on reconnect (predicate sweep)", () => {
+		ipcState.connection = "reconnecting";
+		const { invalidate, rerender } = setup();
+
+		ipcState.connection = "online";
+		rerender();
+
+		// The remote /v1/stream replays nothing on reconnect, so we conservatively
+		// invalidate shared-state roots a teammate could have mutated mid-drop.
+		const predicateCall = invalidate.mock.calls.find(
+			([arg]) =>
+				typeof (arg as { predicate?: unknown })?.predicate === "function",
+		);
+		expect(predicateCall).toBeDefined();
+		const predicate = (
+			predicateCall?.[0] as {
+				predicate: (q: { queryKey: unknown[] }) => boolean;
+			}
+		).predicate;
+		expect(predicate({ queryKey: ["workspaceGroups"] })).toBe(true);
+		expect(predicate({ queryKey: ["workspaceDetail", "w1"] })).toBe(true);
+		// A non-shared, per-session query must NOT be swept.
+		expect(predicate({ queryKey: ["sessionContextUsage", "s1"] })).toBe(false);
+	});
 });

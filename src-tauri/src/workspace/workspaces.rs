@@ -200,7 +200,7 @@ pub struct WorkspaceDetail {
 
 // ---- Sidebar groups ----
 
-pub fn list_workspace_groups() -> Result<Vec<WorkspaceSidebarGroup>> {
+pub fn list_workspace_groups(member_id: Option<&str>) -> Result<Vec<WorkspaceSidebarGroup>> {
     let mut ai_tasks = Vec::new();
     let mut pinned = Vec::new();
     let mut chats = Vec::new();
@@ -210,15 +210,28 @@ pub fn list_workspace_groups() -> Result<Vec<WorkspaceSidebarGroup>> {
     let mut backlog = Vec::new();
     let mut canceled = Vec::new();
 
+    // Team mode: unread is per-member. The shared record SQL fills `has_unread`
+    // / `unread_session_count` from the GLOBAL columns; override them with this
+    // member's read cursors. Local/desktop (`None`) keeps the global values.
+    let member_unread = match member_id {
+        Some(member) => Some(workspace_models::load_member_unread_counts(member)?),
+        None => None,
+    };
+
     // `load_workspace_records` already returns rows in newest-created-first
     // order. Iterating in that order and bucketing into status groups means
     // each group naturally inherits the same stable order, no per-group
     // re-sort needed.
     //
     // Chat and AI-triage workspaces live in their own buckets, separate from status/pinned.
-    for record in workspace_models::load_workspace_records()? {
+    for mut record in workspace_models::load_workspace_records()? {
         if record.state == WorkspaceState::Archived {
             continue;
+        }
+        if let Some(ref counts) = member_unread {
+            let count = counts.get(&record.id).copied().unwrap_or(0);
+            record.unread_session_count = count;
+            record.has_unread = count > 0;
         }
         let is_chat = record.mode == WorkspaceMode::Chat;
         let is_pinned = record.pinned_at.is_some();

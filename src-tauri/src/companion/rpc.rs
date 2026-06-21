@@ -24,13 +24,12 @@ use crate::error::CommandError;
 /// [`super::build_stream_starter`]).
 pub fn build_dispatcher(app: tauri::AppHandle) -> Dispatcher {
     std::sync::Arc::new(
-        move |command: String, args: Value, _author_id: Option<String>| {
+        move |command: String, args: Value, author_id: Option<String>| {
             let app = app.clone();
-            // `_author_id` is the trusted member id from `X-Helmor-Member-Id`. No
-            // non-streaming RPC persists a user-prompt today (the streaming
-            // `send_agent_message_stream` path owns author attribution), so it's
-            // threaded for parity but intentionally unused here.
-            async move { dispatch(&app, &command, args).await }.boxed()
+            // `author_id` is the trusted member id from `X-Helmor-Member-Id`.
+            // Threaded into `dispatch` so the few member-aware commands (e.g.
+            // `report_presence`) attribute server-side; the rest ignore it.
+            async move { dispatch(&app, &command, args, author_id).await }.boxed()
         },
     )
 }
@@ -41,6 +40,7 @@ async fn dispatch(
     app: &tauri::AppHandle,
     command: &str,
     args: Value,
+    author_id: Option<String>,
 ) -> Result<Value, CommandError> {
     match command {
         // Settings: redact credential-bearing keys before handing them to a
@@ -189,15 +189,32 @@ async fn dispatch(
         "list_workspace_candidate_directories" => to_value(crate::commands::workspace_commands::list_workspace_candidate_directories(arg_opt_string(&args, "excludeWorkspaceId")).await?),
         "list_workspace_changes" => to_value(crate::commands::editor_commands::list_workspace_changes(arg_string(&args, "workspaceRootPath")?, arg_opt_string(&args, "workspaceId")).await?),
         "list_workspace_files" => to_value(crate::commands::editor_commands::list_workspace_files(arg_string(&args, "workspaceRootPath")?).await?),
-        "list_workspace_groups" => to_value(crate::commands::workspace_commands::list_workspace_groups().await?),
+        "list_workspace_groups" => to_value(crate::commands::workspace_commands::list_workspace_groups_for_member(author_id).await?),
         "list_workspace_linked_directories" => to_value(crate::commands::workspace_commands::list_workspace_linked_directories(arg_string(&args, "workspaceId")?).await?),
         "list_workspace_sessions" => to_value(crate::commands::session_commands::list_workspace_sessions(arg_string(&args, "workspaceId")?).await?),
         "load_auto_close_action_kinds" => to_value(crate::commands::settings_commands::load_auto_close_action_kinds().await?),
         "load_auto_close_opt_in_asked" => to_value(crate::commands::settings_commands::load_auto_close_opt_in_asked().await?),
         "load_repo_preferences" => to_value(crate::commands::repository_commands::load_repo_preferences(arg_string(&args, "repoId")?).await?),
         "load_repo_scripts" => to_value(crate::commands::repository_commands::load_repo_scripts(arg_string(&args, "repoId")?, arg_opt_string(&args, "workspaceId")).await?),
+        // Team-mode presence: broadcast this member's transient typing/working
+        // signal to peers. The member id is the SERVER-derived `author_id` (the
+        // trusted header), never the client-supplied body.
+        "report_presence" => {
+            crate::commands::presence_commands::publish_presence(
+                app,
+                author_id,
+                arg_string(&args, "workspaceId")?,
+                arg_opt_string(&args, "sessionId"),
+                arg_json(&args, "activity")?,
+            )?;
+            Ok(Value::Null)
+        }
         "mark_session_read" => {
-            crate::commands::session_commands::mark_session_read(arg_string(&args, "sessionId")?).await?;
+            crate::commands::session_commands::mark_session_read_for_member(
+                arg_string(&args, "sessionId")?,
+                author_id,
+            )
+            .await?;
             Ok(Value::Null)
         }
         "mark_session_unread" => {

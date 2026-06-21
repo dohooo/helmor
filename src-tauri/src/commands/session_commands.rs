@@ -270,6 +270,20 @@ pub async fn mark_session_read(session_id: String) -> CmdResult<()> {
     run_blocking(move || sessions::mark_session_read(&session_id)).await
 }
 
+/// Companion/team variant: with a trusted `member_id`, advance that member's
+/// per-session read cursor; without one (`None`) fall back to the global
+/// local-mode clear so the desktop path is unchanged.
+pub async fn mark_session_read_for_member(
+    session_id: String,
+    member_id: Option<String>,
+) -> CmdResult<()> {
+    run_blocking(move || match member_id {
+        Some(member) => sessions::mark_session_read_for_member(&session_id, &member),
+        None => sessions::mark_session_read(&session_id),
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn mark_session_unread(session_id: String) -> CmdResult<()> {
     run_blocking(move || sessions::mark_session_unread(&session_id)).await

@@ -372,6 +372,27 @@ pub fn mark_session_read(session_id: &str) -> Result<()> {
         .context("Failed to commit session read transaction")
 }
 
+/// Team mode: move `member_id`'s read cursor for `session_id` to now. Unread is
+/// derived per-member from `session_read_state` vs message timestamps, so this
+/// only advances this member's cursor; the global `unread_count` (local mode) is
+/// left untouched.
+pub fn mark_session_read_for_member(session_id: &str, member_id: &str) -> Result<()> {
+    let now = db::current_timestamp()?;
+    let connection = db::write_conn()?;
+    connection
+        .execute(
+            "INSERT INTO session_read_state (member_id, session_id, last_read_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(member_id, session_id)
+             DO UPDATE SET last_read_at = excluded.last_read_at",
+            rusqlite::params![member_id, session_id, now],
+        )
+        .with_context(|| {
+            format!("Failed to record read state for session {session_id} (member {member_id})")
+        })?;
+    Ok(())
+}
+
 pub fn mark_session_unread(session_id: &str) -> Result<()> {
     let mut connection = db::write_conn()?;
     let transaction = connection

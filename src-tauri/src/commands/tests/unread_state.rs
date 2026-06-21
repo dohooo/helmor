@@ -320,3 +320,55 @@ fn hide_session_clears_its_unread_and_drops_workspace_flag() {
     // And the workspace flag should drop because nothing is unread any more.
     assert_eq!(workspace_unread, 0);
 }
+
+#[test]
+fn per_member_unread_is_independent_and_timestamp_driven() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = ArchiveTestHarness::new();
+    let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+
+    // A message older than any read cursor exists in the harness session.
+    connection
+        .execute(
+            "INSERT INTO session_messages (id, session_id, role, content, created_at, sent_at) \
+             VALUES ('msg-pm-1', ?1, 'user', '{}', '2020-01-01 00:00:00', '2020-01-01 00:00:00')",
+            [&harness.session_id],
+        )
+        .unwrap();
+
+    let ws = harness.workspace_id.clone();
+    let unread_for = |member: &str| {
+        crate::models::workspaces::load_member_unread_counts(member)
+            .unwrap()
+            .get(&ws)
+            .copied()
+            .unwrap_or(0)
+    };
+
+    // Nobody has read yet → both members see the session as unread.
+    assert!(unread_for("member-1") >= 1);
+    assert!(unread_for("member-2") >= 1);
+
+    // member-1 opens the session → their cursor advances past the message.
+    sessions::mark_session_read_for_member(&harness.session_id, "member-1").unwrap();
+
+    // Per-member: member-1 is caught up, member-2 is still behind.
+    assert_eq!(unread_for("member-1"), 0, "member-1 caught up");
+    assert!(unread_for("member-2") >= 1, "member-2 still behind");
+
+    // A NEW message (after member-1's cursor) flips member-1 back to unread —
+    // the timestamp model needs no explicit unread write.
+    connection
+        .execute(
+            "INSERT INTO session_messages (id, session_id, role, content, created_at, sent_at) \
+             VALUES ('msg-pm-2', ?1, 'user', '{}', '2099-01-01 00:00:00', '2099-01-01 00:00:00')",
+            [&harness.session_id],
+        )
+        .unwrap();
+    assert!(
+        unread_for("member-1") >= 1,
+        "a newer message re-marks member-1 unread"
+    );
+}
