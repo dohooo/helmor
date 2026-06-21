@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.41.0
+
+### Minor Changes
+
+- [#828](https://github.com/dohooo/helmor/pull/828) [`286574e`](https://github.com/dohooo/helmor/commit/286574eca05c21da7646bf9fe4c779a0c0f5bd68) Thanks [@dohooo](https://github.com/dohooo)! - Add English and Simplified Chinese localization across Helmor, including language pickers in Settings and onboarding.
+
+### Patch Changes
+
+- [#871](https://github.com/dohooo/helmor/pull/871) [`d7d0217`](https://github.com/dohooo/helmor/commit/d7d0217afbc262cc9ed1b03f4b7d44281df9bbb7) Thanks [@dohooo](https://github.com/dohooo)! - Hide the Inject sessions scrollbar while keeping session chips horizontally scrollable.
+
+- [#865](https://github.com/dohooo/helmor/pull/865) [`62739e6`](https://github.com/dohooo/helmor/commit/62739e65f47f6db5c46cc555d564565cc199f953) Thanks [@passion729](https://github.com/passion729)! - Fix Windows MSI bundling failing with WiX ICE30 by removing the duplicate `helmor-cli` from `externalBin`. The CLI was packaged twice — once via `externalBin` and once via Tauri auto-bundling the crate's `[[bin]]` — which collided on the same install path. Tauri's `[[bin]]` copy alone satisfies the runtime CLI lookup.
+
+- [#874](https://github.com/dohooo/helmor/pull/874) [`303fbdf`](https://github.com/dohooo/helmor/commit/303fbdf33ab44614aeb08b6668b22904fc750e2a) Thanks [@daniel-mf28](https://github.com/daniel-mf28)! - Stop swallowing the Apple-keyboard media keys on macOS. Play/pause, next, previous, fast-forward, and rewind now reach Spotify, Apple Music, and the system Now Playing app instead of triggering an NSBeep "pop" inside Helmor.
+
 ## 0.40.1
 
 ### Patch Changes
