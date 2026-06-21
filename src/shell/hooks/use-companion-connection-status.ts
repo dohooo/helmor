@@ -19,8 +19,10 @@ import { useCompanionConnectionState } from "@/shell/hooks/use-companion-connect
  *   - Returning to `online` clears the timer and the `disconnected` flag.
  */
 
-/** Just past the 120s cold-start ceiling — escalate to red only after this. */
-const DISCONNECT_AFTER_MS = 135_000;
+/** Comfortably past the ~120s cold-start ceiling, with margin for a slow wake —
+ *  escalate to red only after this so a healthy-but-slow cold start never flashes
+ *  red moments before it connects. */
+const DISCONNECT_AFTER_MS = 165_000;
 
 export type ConnectionPhase =
 	| "online"
@@ -28,11 +30,8 @@ export type ConnectionPhase =
 	| "reconnecting"
 	| "disconnected";
 
-export type ConnectionTone = "ok" | "pending" | "error";
-
 export interface ConnectionStatus {
 	phase: ConnectionPhase;
-	tone: ConnectionTone;
 }
 
 export function useCompanionConnectionStatus(): ConnectionStatus {
@@ -73,7 +72,7 @@ export function useCompanionConnectionStatus(): ConnectionStatus {
 		};
 	}, []);
 
-	if (state === "online") return { phase: "online", tone: "ok" };
-	if (disconnected) return { phase: "disconnected", tone: "error" };
-	return { phase: state, tone: "pending" };
+	if (state === "online") return { phase: "online" };
+	if (disconnected) return { phase: "disconnected" };
+	return { phase: state };
 }

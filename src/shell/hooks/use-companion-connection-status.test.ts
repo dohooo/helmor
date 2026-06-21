@@ -38,36 +38,36 @@ describe("useCompanionConnectionStatus", () => {
 
 	it("reports online/ok while connected and never escalates", () => {
 		const { result } = renderHook(() => useCompanionConnectionStatus());
-		expect(result.current).toEqual({ phase: "online", tone: "ok" });
+		expect(result.current).toEqual({ phase: "online" });
 
 		// Time passing while healthy must never flip to disconnected.
 		act(() => {
 			vi.advanceTimersByTime(10 * 60_000);
 		});
-		expect(result.current).toEqual({ phase: "online", tone: "ok" });
+		expect(result.current).toEqual({ phase: "online" });
 	});
 
-	it("escalates non-online → disconnected after ~2min, then online resets", () => {
+	it("escalates non-online → disconnected past the cold-start ceiling, then online resets", () => {
 		const { result } = renderHook(() => useCompanionConnectionStatus());
 
 		act(() => setState("connecting"));
-		expect(result.current).toEqual({ phase: "connecting", tone: "pending" });
+		expect(result.current).toEqual({ phase: "connecting" });
 
 		// Just before the ceiling: still pending, not yet red.
 		act(() => {
-			vi.advanceTimersByTime(134_000);
+			vi.advanceTimersByTime(164_000);
 		});
-		expect(result.current).toEqual({ phase: "connecting", tone: "pending" });
+		expect(result.current).toEqual({ phase: "connecting" });
 
-		// Cross the 135s ceiling: escalate to red.
+		// Cross the 165s ceiling: escalate to red.
 		act(() => {
 			vi.advanceTimersByTime(2_000);
 		});
-		expect(result.current).toEqual({ phase: "disconnected", tone: "error" });
+		expect(result.current).toEqual({ phase: "disconnected" });
 
 		// Recovery clears the escalation immediately.
 		act(() => setState("online"));
-		expect(result.current).toEqual({ phase: "online", tone: "ok" });
+		expect(result.current).toEqual({ phase: "online" });
 	});
 
 	it("keeps the timer running across connecting → reconnecting (no reset)", () => {
@@ -75,18 +75,18 @@ describe("useCompanionConnectionStatus", () => {
 
 		act(() => setState("connecting"));
 		act(() => {
-			vi.advanceTimersByTime(130_000);
+			vi.advanceTimersByTime(160_000);
 		});
 		// Swap to reconnecting partway through — must NOT restart the countdown.
 		act(() => setState("reconnecting"));
-		expect(result.current).toEqual({ phase: "reconnecting", tone: "pending" });
+		expect(result.current).toEqual({ phase: "reconnecting" });
 
-		// Only 5s more (135s total since first leaving online) → escalates. If the
+		// Only 5s more (165s total since first leaving online) → escalates. If the
 		// timer had reset on the swap, this would still read pending.
 		act(() => {
 			vi.advanceTimersByTime(5_000);
 		});
-		expect(result.current).toEqual({ phase: "disconnected", tone: "error" });
+		expect(result.current).toEqual({ phase: "disconnected" });
 	});
 
 	it("returning online before the ceiling cancels the escalation", () => {
@@ -97,13 +97,13 @@ describe("useCompanionConnectionStatus", () => {
 			vi.advanceTimersByTime(100_000);
 		});
 		act(() => setState("online"));
-		expect(result.current).toEqual({ phase: "online", tone: "ok" });
+		expect(result.current).toEqual({ phase: "online" });
 
 		// The previously-armed timer must be dead — advancing past the old deadline
 		// must not retroactively flip to disconnected.
 		act(() => {
 			vi.advanceTimersByTime(60_000);
 		});
-		expect(result.current).toEqual({ phase: "online", tone: "ok" });
+		expect(result.current).toEqual({ phase: "online" });
 	});
 });

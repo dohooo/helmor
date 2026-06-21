@@ -882,7 +882,14 @@ async function pumpNdjson(
  *  hasn't surfaced a TCP error yet — the server pings every ~15s, so a longer
  *  gap is a silent drop. pumpSse cancels + throws so runEventStream flips to
  *  `reconnecting` promptly instead of waiting out a (possibly minutes-long)
- *  TCP timeout. */
+ *  TCP timeout.
+ *
+ *  CONTRACT: that ~15s cadence is the companion's keepalive (Rust `server.rs`
+ *  `/v1/stream`); in desktop team mode it reaches us proxied through the cloud
+ *  Worker, whose ping interval lives outside this repo. This threshold must stay
+ *  comfortably above the upstream ping interval — if the companion/Worker
+ *  keepalive cadence changes, bump this to match or healthy streams false-trip a
+ *  reconnect. */
 const SSE_STALL_TIMEOUT_MS = 22_000;
 
 /**

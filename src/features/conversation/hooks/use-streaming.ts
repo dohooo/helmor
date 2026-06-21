@@ -280,6 +280,14 @@ export function useConversationStreaming({
 		providerCapabilitiesQueryOptions(),
 	);
 	const providerCapabilitiesTable = providerCapabilitiesQuery.data ?? null;
+	// Keep the team roster warm so the room-context carry block (built in the
+	// send path below) can attribute carried messages to real teammates by id.
+	// Since the carry became always-on, the toggle UI that used to subscribe to
+	// this query was removed — this is now the sole subscriber that populates
+	// the cache `getQueryData` reads there. Disabled (no fetch) outside team mode.
+	useQuery(
+		teamMembersQueryOptions(isTeamModeActive() ? getTeamConfig() : null),
+	);
 	// Value-stable fingerprint for effects that only care about the set
 	// of active session ids, not the array's reference.
 	const activeSessionIdsKey = useMemo(() => {

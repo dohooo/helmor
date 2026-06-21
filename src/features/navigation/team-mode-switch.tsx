@@ -153,6 +153,15 @@ export function TeamModeSwitch() {
 					)}
 				</HoverCardContent>
 			</HoverCard>
+			{/* Invisible live region: announce team-connection drops/recoveries to
+			    assistive tech. The visual cue is icon color + hover text only, which
+			    a screen reader can't perceive — this restores the announce-on-change
+			    that the removed reconnecting banner provided. */}
+			{active ? (
+				<span className="sr-only" role="status">
+					{`Team backend: ${PHASE_LABEL[status.phase]}`}
+				</span>
+			) : null}
 			<DropdownMenuContent align="end" className="min-w-44">
 				<DropdownMenuLabel>Workspace location</DropdownMenuLabel>
 				<DropdownMenuSeparator />
