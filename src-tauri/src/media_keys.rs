@@ -18,8 +18,9 @@
 //! have direct system behaviour and are not reported as being
 //! swallowed by Helmor. Re-introduce them only after verifying the
 //! same beep.
-
-#![cfg(target_os = "macos")]
+//!
+//! The module is already `#[cfg(target_os = "macos")]`-gated at its `pub mod`
+//! declaration in `lib.rs`, so no inner `#![cfg]` is needed here.
 
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
