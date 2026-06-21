@@ -26,7 +26,22 @@ import {
 	stripInboundMemberHeader,
 } from "./team-gateway/core";
 
-export class Sandbox extends CloudflareSandbox {
+export class Sandbox extends CloudflareSandbox<Env> {
+	// Stored explicitly (typed as our Env) for the idle-sleep backup; the base's
+	// generic env field would otherwise need a cast.
+	private readonly helmorEnv: Env;
+
+	constructor(ctx: DurableObjectState<Record<never, never>>, env: Env) {
+		super(ctx, env);
+		this.helmorEnv = env;
+		// Idle auto-sleep so an unused team sandbox stops billing. The container
+		// stops after this much inactivity (no open companion connection / no
+		// in-flight requests); the next request cold-starts via `ensureServe`,
+		// restoring from the last backup. The base reads `this.sleepAfter` AFTER
+		// this constructor runs (it defers via blockConcurrencyWhile).
+		this.sleepAfter = env.SANDBOX_IDLE_TIMEOUT ?? "15m";
+	}
+
 	async fetch(request: Request): Promise<Response> {
 		const url = new URL(request.url);
 		const match = url.pathname.match(/^\/__helmor-companion\/(\d+)(\/.*)?$/);
@@ -67,13 +82,72 @@ export class Sandbox extends CloudflareSandbox {
 
 		internals.inflightRequests = (internals.inflightRequests ?? 0) + 1;
 		internals.renewActivityTimeout?.();
+		let released = false;
+		const release = () => {
+			if (released) return;
+			released = true;
+			internals.decrementInflight?.();
+		};
 		try {
 			const response = await tcpPort.fetch(target, request);
-			internals.decrementInflight?.();
-			return response;
+			if (!response.body) {
+				release();
+				return response;
+			}
+			// Stay "busy" (inflightRequests > 0) until the response body closes,
+			// not just until the headers arrive. For a long-lived `/v1/stream`
+			// SSE this keeps the sandbox awake for the whole connection, so an
+			// open desktop blocks the idle-sleep alarm; the moment the client
+			// disconnects (body cancels) it drops to idle and `sleepAfter` starts.
+			// Non-streaming bodies close immediately, so they release right away.
+			const reader = response.body.getReader();
+			const monitored = new ReadableStream<Uint8Array>({
+				async pull(controller) {
+					try {
+						const { done, value } = await reader.read();
+						if (done) {
+							release();
+							controller.close();
+							return;
+						}
+						controller.enqueue(value);
+					} catch (error) {
+						release();
+						controller.error(error);
+					}
+				},
+				cancel(reason) {
+					release();
+					void reader.cancel(reason);
+				},
+			});
+			return new Response(monitored, response);
 		} catch (error) {
-			internals.decrementInflight?.();
+			release();
 			throw error;
+		}
+	}
+
+	/** Snapshot the session right before the idle timeout sleeps the container,
+	 *  then let the base stop it. Best-effort — a backup failure must not block
+	 *  sleep (cold start just restores the prior post-turn snapshot). */
+	async onActivityExpired(): Promise<void> {
+		await this.backupBeforeSleep();
+		await super.onActivityExpired();
+	}
+
+	private async backupBeforeSleep(): Promise<void> {
+		try {
+			const handle = await this.createBackup({
+				dir: "/home/helmor",
+				localBucket: true,
+				name: `helmor-idle-${new Date().toISOString()}`,
+				ttl: 259200, // 3 days
+				excludes: ["workspaces", "cache", "logs", "run", "local-llm"],
+			});
+			await writeBackupHandle(this.helmorEnv, handle);
+		} catch (error) {
+			console.error("idle-sleep backup failed", error);
 		}
 	}
 }
@@ -91,6 +165,10 @@ export interface Env {
 	HELMOR_SANDBOX_ID: string;
 	/** Companion port inside the container (matches HELMOR_SERVE_PORT). */
 	HELMOR_COMPANION_PORT: string;
+	/** Idle auto-sleep threshold for the Sandbox DO (e.g. "15m", "1h", or
+	 *  seconds). After this much inactivity the container stops; the next request
+	 *  cold-starts it. Defaults to "15m" when unset. */
+	SANDBOX_IDLE_TIMEOUT?: string;
 	/** Capability token the serve host accepts (secret). */
 	HELMOR_COMPANION_TOKEN: string;
 	/** PAT for PR6 clone / push, injected into the serve process env (secret). */

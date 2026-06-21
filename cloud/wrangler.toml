@@ -78,3 +78,7 @@ bucket_name = "helmor-team-backups"
 HELMOR_SANDBOX_ID = "helmor-team-0"
 # Port the in-container companion server binds (matches HELMOR_SERVE_PORT).
 HELMOR_COMPANION_PORT = "8080"
+# Idle auto-sleep: stop the container after this much inactivity (no open
+# companion connection). The next request cold-starts it and restores the last
+# backup. Accepts "30s", "15m", "1h", or a number of seconds.
+SANDBOX_IDLE_TIMEOUT = "15m"

@@ -742,6 +742,29 @@ function teardownEventStream(): void {
 	eventStreamGeneration++;
 }
 
+/**
+ * Idle-suspend the shared `/v1/stream` (TEAM transport only) so a remote sandbox
+ * can idle-sleep while the app is hidden/idle. Drops the SSE WITHOUT surfacing
+ * the reconnecting banner — it's an intentional pause, not a drop. No-op on the
+ * native transport (no companion stream) or when already suspended. Listeners
+ * are preserved, so {@link resumeEventStream} reconnects in place.
+ */
+export function suspendEventStream(): void {
+	if (!transport.remote || !eventStreamController) return;
+	teardownEventStream();
+	setCompanionConnectionState("online");
+}
+
+/**
+ * Resume the shared `/v1/stream` after {@link suspendEventStream} (e.g. the
+ * window regained focus). The wake cold-start surfaces the normal reconnecting
+ * banner. No-op on the native transport.
+ */
+export function resumeEventStream(): void {
+	if (!transport.remote) return;
+	ensureEventStream();
+}
+
 // Reconnect backoff: full-jitter exponential, base 1s, ×2 per attempt, capped
 // at 30s. No attempt ceiling — a sleeping sandbox legitimately takes ~120s to
 // cold-start (the `fetch` itself blocks that long inside the Worker's

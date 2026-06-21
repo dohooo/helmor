@@ -21,6 +21,7 @@ import { useSettings } from "@/lib/settings";
 import { isQuickPanelWindow } from "@/lib/window-role";
 import { useRouterSelection } from "@/router/use-router-selection";
 import { publishShellEvent } from "@/shell/event-bus";
+import { useCompanionIdleSuspend } from "@/shell/hooks/use-companion-idle-suspend";
 import { useEnsureDefaultModel } from "@/shell/hooks/use-ensure-default-model";
 import { useGlobalShortcutHandlers } from "@/shell/hooks/use-global-shortcut-handlers";
 import { useNavigationSidebar } from "@/shell/hooks/use-navigation-sidebar";
@@ -246,6 +247,9 @@ export function useAppShellState({
 		// Quick-panel "Open in Helmor": only the main window navigates.
 		onWorkspaceReveal: isQuickPanelWindow ? undefined : handleWorkspaceReveal,
 	});
+	// Team mode: drop the companion SSE while the window is hidden so the remote
+	// sandbox can idle-sleep; re-focusing wakes it. Inert outside team mode.
+	useCompanionIdleSuspend();
 	// Event-fresh threads (`staleTime: Infinity`) get a focus-time backstop
 	// so a missed `sessionTurnPersisted` can't leave the on-screen thread
 	// stale forever.
