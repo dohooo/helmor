@@ -279,7 +279,6 @@ describe("useConversationStreaming", () => {
 				effortLevel: "medium",
 				permissionMode: "default",
 				fastMode: false,
-				carryRoomContext: false,
 			});
 		});
 
@@ -406,7 +405,6 @@ describe("useConversationStreaming", () => {
 				effortLevel: "medium",
 				permissionMode: "plan",
 				fastMode: false,
-				carryRoomContext: false,
 			});
 		});
 
@@ -447,7 +445,6 @@ describe("useConversationStreaming", () => {
 				effortLevel: "medium",
 				permissionMode: "plan",
 				fastMode: false,
-				carryRoomContext: false,
 			});
 		});
 
@@ -468,7 +465,6 @@ describe("useConversationStreaming", () => {
 				effortLevel: "medium",
 				permissionMode: "bypassPermissions",
 				fastMode: false,
-				carryRoomContext: false,
 			});
 		});
 
@@ -514,7 +510,6 @@ describe("useConversationStreaming", () => {
 				effortLevel: "medium",
 				permissionMode: "default",
 				fastMode: false,
-				carryRoomContext: false,
 			});
 		});
 
@@ -532,7 +527,6 @@ describe("useConversationStreaming", () => {
 				effortLevel: "medium",
 				permissionMode: "default",
 				fastMode: false,
-				carryRoomContext: false,
 			});
 		});
 
@@ -592,7 +586,6 @@ describe("useConversationStreaming", () => {
 				effortLevel: "medium",
 				permissionMode: "default",
 				fastMode: false,
-				carryRoomContext: false,
 			});
 		});
 
@@ -665,7 +658,6 @@ describe("useConversationStreaming", () => {
 				effortLevel: "high",
 				permissionMode: "default",
 				fastMode: false,
-				carryRoomContext: false,
 			});
 		});
 
@@ -729,7 +721,6 @@ describe("useConversationStreaming", () => {
 				effortLevel: "high",
 				permissionMode: "default",
 				fastMode: false,
-				carryRoomContext: false,
 			});
 		});
 
@@ -806,7 +797,6 @@ describe("useConversationStreaming", () => {
 				effortLevel: "high",
 				permissionMode: "default",
 				fastMode: false,
-				carryRoomContext: false,
 			});
 		});
 
@@ -860,7 +850,6 @@ describe("useConversationStreaming", () => {
 				effortLevel: "medium",
 				permissionMode: "default",
 				fastMode: false,
-				carryRoomContext: false,
 			});
 		});
 
@@ -878,7 +867,6 @@ describe("useConversationStreaming", () => {
 				effortLevel: "medium",
 				permissionMode: "default",
 				fastMode: false,
-				carryRoomContext: false,
 			});
 		});
 
@@ -911,7 +899,6 @@ describe("useConversationStreaming", () => {
 				effortLevel: null,
 				unreadCount: 0,
 				fastMode: false,
-				carryRoomContext: false,
 				createdAt: "2026-04-17T00:00:00Z",
 				updatedAt: "2026-04-17T00:00:00Z",
 				lastUserMessageAt: null,
@@ -1005,7 +992,6 @@ describe("useConversationStreaming", () => {
 				effortLevel: "medium",
 				permissionMode: "default",
 				fastMode: false,
-				carryRoomContext: false,
 			});
 		});
 
@@ -1069,7 +1055,6 @@ describe("useConversationStreaming", () => {
 				effortLevel: "medium",
 				permissionMode: "default",
 				fastMode: false,
-				carryRoomContext: false,
 			});
 		});
 
@@ -1159,7 +1144,6 @@ describe("useConversationStreaming", () => {
 				effortLevel: "medium",
 				permissionMode: "default",
 				fastMode: false,
-				carryRoomContext: false,
 			});
 		});
 
@@ -1260,7 +1244,6 @@ describe("useConversationStreaming", () => {
 				effortLevel: "medium",
 				permissionMode: "default",
 				fastMode: false,
-				carryRoomContext: false,
 			});
 		});
 
@@ -1345,7 +1328,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 
@@ -1406,7 +1388,6 @@ describe("useConversationStreaming", () => {
 				effortLevel: "medium",
 				permissionMode: "default",
 				fastMode: false,
-				carryRoomContext: false,
 			});
 		});
 
@@ -1495,7 +1476,6 @@ describe("useConversationStreaming", () => {
 				effortLevel: "medium",
 				permissionMode: "default",
 				fastMode: false,
-				carryRoomContext: false,
 			});
 		});
 		act(() => {
@@ -1523,7 +1503,6 @@ describe("useConversationStreaming", () => {
 				effortLevel: "medium",
 				permissionMode: "default",
 				fastMode: false,
-				carryRoomContext: false,
 			});
 		});
 
@@ -1566,7 +1545,6 @@ describe("useConversationStreaming", () => {
 				effortLevel: "medium",
 				permissionMode: "default",
 				fastMode: false,
-				carryRoomContext: false,
 			});
 		});
 
@@ -1909,7 +1887,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 			expect(streamCallbacks).toHaveLength(1);
@@ -1927,7 +1904,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 			expect(apiMocks.steerAgentStream).not.toHaveBeenCalled();
@@ -1978,7 +1954,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 
@@ -2036,7 +2011,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 
@@ -2112,7 +2086,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 					followUpBehaviorOverride: "steer",
 				});
 			});
@@ -2167,7 +2140,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				},
 			);
 			useStreamingStore
@@ -2256,7 +2228,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 			rerender({ activeStreams: session1Active });
@@ -2273,7 +2244,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 			expect(queue.snapshot().get("session-1")).toHaveLength(1);
@@ -2320,7 +2290,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				},
 			);
 
@@ -2386,7 +2355,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 
@@ -2402,7 +2370,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 
@@ -2480,7 +2447,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 			rerender({
@@ -2501,7 +2467,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 			expect(queue.snapshot().get("session-A")).toHaveLength(1);
@@ -2585,7 +2550,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 			expect(result.current.isSending).toBe(true);
@@ -2602,7 +2566,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 					forceQueue: true,
 				});
 			});
@@ -2652,7 +2615,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 			expect(result.current.isSending).toBe(true);
@@ -2668,7 +2630,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 					followUpBehaviorOverride: "queue",
 				});
 			});
@@ -2715,7 +2676,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 			expect(result.current.isSending).toBe(true);
@@ -2731,7 +2691,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 					followUpBehaviorOverride: "steer",
 				});
 			});
@@ -2774,7 +2733,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 			expect(result.current.isSending).toBe(true);
@@ -2790,7 +2748,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 					forceQueue: true,
 					followUpBehaviorOverride: "steer",
 				});
@@ -2845,7 +2802,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 			await act(async () => {
@@ -2859,7 +2815,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 			expect(queue.snapshot().get("session-1")).toHaveLength(1);
@@ -2921,7 +2876,6 @@ describe("useConversationStreaming", () => {
 						effortLevel: "medium",
 						permissionMode: "default",
 						fastMode: false,
-						carryRoomContext: false,
 					},
 				);
 			});
@@ -2992,7 +2946,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 			rerender({ activeStreams: session1Active });
@@ -3009,7 +2962,6 @@ describe("useConversationStreaming", () => {
 						effortLevel: "medium",
 						permissionMode: "default",
 						fastMode: false,
-						carryRoomContext: false,
 					});
 				});
 			}
@@ -3108,7 +3060,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 			rerender({ activeStreams: session1Active });
@@ -3123,7 +3074,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 
@@ -3189,7 +3139,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 
@@ -3242,7 +3191,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 
@@ -3285,7 +3233,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 
@@ -3324,7 +3271,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 
@@ -3363,7 +3309,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 
@@ -3429,7 +3374,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: false,
 				});
 			});
 
@@ -3448,9 +3392,9 @@ describe("useConversationStreaming", () => {
 			expect(result.current.activeSendError).toBe("network error");
 		});
 
-		it("team mode + @agent + carryRoomContext=true: promptPrefix contains room-context block, prompt stays trimmedPrompt", async () => {
-			// Verifies the context-carry assembler fold: when the toggle is ON
-			// and there are isRoomChat messages since the last agent turn, the
+		it("team mode + @agent: promptPrefix contains room-context block, prompt stays trimmedPrompt", async () => {
+			// Verifies the context-carry assembler fold: when there are
+			// isRoomChat messages since the last agent turn, the
 			// <helmor-room-context> block is included in promptPrefix (wire-only).
 			// The persisted user_prompt body (prompt field) must stay byte-identical
 			// to what the user typed — not include the carry block.
@@ -3511,7 +3455,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: true,
 				});
 			});
 
@@ -3536,71 +3479,6 @@ describe("useConversationStreaming", () => {
 
 			// The prompt field itself must NOT contain the carry block.
 			expect(callArg.prompt).not.toContain("<helmor-room-context>");
-		});
-
-		it("team mode + @agent + carryRoomContext=false: promptPrefix does NOT contain room-context block", async () => {
-			// When the toggle is OFF the assembler must not fold any room-chat
-			// messages into promptPrefix, even if isRoomChat messages exist.
-			teamModeMocks.isTeamModeActive.mockReturnValue(true);
-			apiMocks.startAgentMessageStream.mockImplementation(async () => {});
-
-			const { Wrapper, queryClient } = createWrapper();
-
-			// Seed the thread with an isRoomChat message — same setup as the
-			// carry=true test above, but toggle is OFF.
-			const roomMessages: ThreadMessageLike[] = [
-				{
-					id: "room-3",
-					role: "user",
-					content: [{ type: "text", text: "Carol: LGTM", id: "room-3-t" }],
-					isRoomChat: true,
-				},
-			];
-			queryClient.setQueryData(
-				sessionThreadCacheKey("session-1"),
-				roomMessages,
-			);
-
-			const { result } = renderHook(
-				() =>
-					useConversationStreaming({
-						composerContextKey: "session:session-1",
-						displayedSelectedModelId: MODEL.id,
-						displayedSessionId: "session-1",
-						displayedWorkspaceId: "workspace-1",
-						selectionPending: false,
-						followUpBehavior: "steer",
-						submitQueue: noopSubmitQueue,
-						activeStreams: NO_ACTIVE_STREAMS,
-					}),
-				{ wrapper: Wrapper },
-			);
-
-			await act(async () => {
-				await result.current.handleComposerSubmit({
-					prompt: "deploy it @agent",
-					imagePaths: [],
-					filePaths: [],
-					customTags: [],
-					model: MODEL,
-					workingDirectory: "/tmp/helmor",
-					effortLevel: "medium",
-					permissionMode: "default",
-					fastMode: false,
-					carryRoomContext: false,
-				});
-			});
-
-			expect(apiMocks.startAgentMessageStream).toHaveBeenCalledOnce();
-
-			const callArg = apiMocks.startAgentMessageStream.mock.calls[0][0] as {
-				prompt: string;
-				promptPrefix?: string | null;
-			};
-
-			// Toggle is OFF — the carry block must be absent from promptPrefix.
-			const prefix = callArg.promptPrefix ?? "";
-			expect(prefix).not.toContain("<helmor-room-context>");
 		});
 
 		it("REPRO (room chat → @agent): the just-sent room chat is carried into the @agent prompt", async () => {
@@ -3642,7 +3520,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: true,
 				});
 			});
 
@@ -3669,7 +3546,6 @@ describe("useConversationStreaming", () => {
 					effortLevel: "medium",
 					permissionMode: "default",
 					fastMode: false,
-					carryRoomContext: true,
 				});
 			});
 

@@ -9,7 +9,6 @@ import { ShimmerText } from "@/components/ui/shimmer-text";
 import { ShineBorder } from "@/components/ui/shine-border";
 import type { PendingPermission } from "@/features/conversation/hooks/use-streaming";
 import type { PendingUserInput } from "@/features/conversation/pending-user-input";
-import { buildRoomCarryTranscript } from "@/features/conversation/room-context-carry";
 import {
 	getShortcut,
 	getShortcutConflicts,
@@ -41,9 +40,7 @@ import {
 	helmorQueryKeys,
 	providerCapabilitiesQueryOptions,
 	sessionCodexGoalQueryOptions,
-	sessionThreadMessagesQueryOptions,
 	slashCommandsQueryOptions,
-	teamMembersQueryOptions,
 	workspaceCandidateDirectoriesQueryOptions,
 	workspaceDetailQueryOptions,
 	workspaceGroupsQueryOptions,
@@ -52,7 +49,6 @@ import {
 } from "@/lib/query-client";
 import { readSessionThread } from "@/lib/session-thread-cache";
 import { type ModelRef, useSettings } from "@/lib/settings";
-import { getTeamConfig, isTeamModeActive } from "@/lib/team-mode";
 import type { QueuedSubmit } from "@/lib/use-submit-queue";
 import { cn } from "@/lib/utils";
 import {
@@ -189,7 +185,6 @@ type WorkspaceComposerContainerProps = {
 	effortLevels: Record<string, string>;
 	permissionModes: Record<string, string>;
 	fastModes: Record<string, boolean>;
-	carryRoomContexts: Record<string, boolean>;
 	activeFastPreludes?: Record<string, boolean>;
 	onSelectModel: (
 		contextKey: string,
@@ -199,7 +194,6 @@ type WorkspaceComposerContainerProps = {
 	onSelectEffort: (contextKey: string, level: string) => void;
 	onChangePermissionMode: (contextKey: string, mode: string) => void;
 	onChangeFastMode: (contextKey: string, enabled: boolean) => void;
-	onChangeCarryRoomContext: (contextKey: string, enabled: boolean) => void;
 	onSwitchSession?: (sessionId: string) => void;
 	onSubmit: (payload: {
 		prompt: string;
@@ -211,7 +205,6 @@ type WorkspaceComposerContainerProps = {
 		effortLevel: string;
 		permissionMode: string;
 		fastMode: boolean;
-		carryRoomContext?: boolean;
 		/** Force queue (bypass `followUpBehavior`) if a turn is streaming. */
 		forceQueue?: boolean;
 		/** When set, override the user's `followUpBehavior` setting for this
@@ -310,13 +303,11 @@ export const WorkspaceComposerContainer = memo(
 		effortLevels = {},
 		permissionModes = {},
 		fastModes = {},
-		carryRoomContexts = {},
 		activeFastPreludes = {},
 		onSelectModel,
 		onSelectEffort,
 		onChangePermissionMode,
 		onChangeFastMode,
-		onChangeCarryRoomContext,
 		onSwitchSession,
 		onSubmit,
 		pendingPromptForSession = null,
@@ -641,40 +632,6 @@ export const WorkspaceComposerContainer = memo(
 			? (cachedFastMode ?? sessionFastMode ?? settings.defaultFastMode ?? false)
 			: false;
 		const showFastModePrelude = activeFastPreludes[composerContextKey] === true;
-
-		// Context-carry toggle (team mode only). Default ON.
-		const showRoomContextToggle = isTeamModeActive();
-		const teamCfg = showRoomContextToggle ? getTeamConfig() : null;
-		const teamMembersQuery = useQuery(teamMembersQueryOptions(teamCfg));
-		const cachedCarryRoomContext = carryRoomContexts[composerContextKey];
-		const sessionCarryRoomContext = sessionIsConfigured
-			? currentSession?.carryRoomContext
-			: undefined;
-		const carryRoomContext =
-			cachedCarryRoomContext ?? sessionCarryRoomContext ?? true;
-		// Reactive room-chat count for the carry-toggle tooltip. Subscribing to
-		// the thread query — instead of an imperative readSessionThread inside a
-		// useMemo whose deps never change as the thread grows — makes the count
-		// update the moment a new room-chat message lands. `select` narrows the
-		// subscription to the count, so an agent turn's per-frame thread ticks
-		// don't re-render the composer (the count stays stable mid-turn). Gated
-		// on team mode → single-user adds no subscription.
-		const carryRoomContextCount =
-			useQuery({
-				...sessionThreadMessagesQueryOptions(displayedSessionId ?? ""),
-				enabled: showRoomContextToggle && Boolean(displayedSessionId),
-				select: (thread) =>
-					thread && thread.length > 0
-						? buildRoomCarryTranscript(thread, teamMembersQuery.data ?? [])
-								.count
-						: 0,
-			}).data ?? 0;
-		const handleChangeCarryRoomContextInner = useCallback(
-			(enabled: boolean) => {
-				onChangeCarryRoomContext(composerContextKey, enabled);
-			},
-			[onChangeCarryRoomContext, composerContextKey],
-		);
 
 		const loadingConversationContext =
 			Boolean(displayedWorkspaceId) &&
@@ -1025,7 +982,6 @@ export const WorkspaceComposerContainer = memo(
 					permissionMode:
 						options?.permissionModeOverride ?? effectivePermissionMode,
 					fastMode: supportsFastMode ? fastMode : false,
-					carryRoomContext,
 					followUpBehaviorOverride,
 					startSubmitMode: options?.startSubmitMode,
 					editorStateSnapshot: options?.editorStateSnapshot,
@@ -1043,7 +999,6 @@ export const WorkspaceComposerContainer = memo(
 				effortLevel,
 				effectivePermissionMode,
 				fastMode,
-				carryRoomContext,
 				supportsFastMode,
 				settings.followUpBehavior,
 				effectiveTerminalMode,
@@ -1183,7 +1138,6 @@ export const WorkspaceComposerContainer = memo(
 				effortLevel,
 				permissionMode: effectivePermissionMode,
 				fastMode: supportsFastMode ? fastMode : false,
-				carryRoomContext,
 				forceQueue: pendingPromptForSession.forceQueue,
 			});
 			onPendingPromptConsumed?.();
@@ -1410,14 +1364,6 @@ export const WorkspaceComposerContainer = memo(
 						showFastModePrelude={showFastModePrelude}
 						onChangeFastMode={
 							supportsFastMode ? handleChangeFastModeInner : undefined
-						}
-						showRoomContextToggle={showRoomContextToggle}
-						carryRoomContext={carryRoomContext}
-						carryRoomContextCount={carryRoomContextCount}
-						onChangeCarryRoomContext={
-							showRoomContextToggle
-								? handleChangeCarryRoomContextInner
-								: undefined
 						}
 						terminalMode={effectiveTerminalMode}
 						onChangeTerminalMode={

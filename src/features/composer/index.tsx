@@ -158,16 +158,6 @@ type WorkspaceComposerProps = {
 	fastMode?: boolean;
 	showFastModePrelude?: boolean;
 	onChangeFastMode?: (enabled: boolean) => void;
-	/** Number of room-chat messages that would be carried to the next @agent
-	 *  dispatch. Drives the toolbar toggle tooltip. Only meaningful in team
-	 *  mode; the toggle is hidden when `showRoomContextToggle` is false. */
-	carryRoomContextCount?: number;
-	/** When true, show the context-carry toggle button (team mode only). */
-	showRoomContextToggle?: boolean;
-	/** Current carry-context toggle state (default ON → true). */
-	carryRoomContext?: boolean;
-	/** Called when the user toggles context-carry. */
-	onChangeCarryRoomContext?: (enabled: boolean) => void;
 	/** Terminal-Mode toggle; undefined handler hides the button. When on,
 	 *  sending opens the prompt in the agent's TUI instead of a GUI turn. */
 	terminalMode?: boolean;
@@ -325,10 +315,6 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	fastMode = false,
 	showFastModePrelude = false,
 	onChangeFastMode,
-	carryRoomContextCount = 0,
-	showRoomContextToggle = false,
-	carryRoomContext = true,
-	onChangeCarryRoomContext,
 	terminalMode = false,
 	onChangeTerminalMode,
 	sendError,
@@ -1217,44 +1203,6 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 													<span>
 														{t("fastMode")}
 														{fastMode ? ` ${t("on")}` : ""}
-													</span>
-												</TooltipContent>
-											</Tooltip>
-										)}
-
-										{showRoomContextToggle && onChangeCarryRoomContext && (
-											<Tooltip>
-												<TooltipTrigger asChild>
-													<ComposerButton
-														aria-label="Carry room context"
-														disabled={toolbarDisabled}
-														className={cn(
-															composerToolbarTriggerClassName,
-															carryRoomContext
-																? "text-blue-500 hover:bg-blue-500/10 hover:text-blue-500"
-																: "text-muted-foreground",
-															toolbarDisabled
-																? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
-																: null,
-														)}
-														onClick={() =>
-															onChangeCarryRoomContext(!carryRoomContext)
-														}
-													>
-														<MessageSquareMore
-															className={cn(
-																"size-[14px]",
-																carryRoomContext ? null : "opacity-55",
-															)}
-															strokeWidth={1.8}
-														/>
-													</ComposerButton>
-												</TooltipTrigger>
-												<TooltipContent side="top" sideOffset={4}>
-													<span>
-														{carryRoomContextCount > 0
-															? `Carry ${carryRoomContextCount} message${carryRoomContextCount === 1 ? "" : "s"} since last agent turn`
-															: "No room messages to carry"}
 													</span>
 												</TooltipContent>
 											</Tooltip>

@@ -34,10 +34,6 @@ export type QueuedSubmitPayload = {
 	effortLevel: string;
 	permissionMode: string;
 	fastMode: boolean;
-	/** Context-carry toggle state at enqueue time. Defaults to ON (true).
-	 *  Applied when the queue item is drained and dispatched as an @agent
-	 *  turn in team mode. */
-	carryRoomContext?: boolean;
 	/** Full Lexical editor state at enqueue time. Lets `Edit` round-trip the
 	 *  queued message back into the composer without lossy reverse-parsing
 	 *  of `prompt` (which has `@<path>` references inlined and would otherwise

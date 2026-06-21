@@ -256,9 +256,6 @@ export const WorkspaceConversationContainer = memo(
 		const [composerFastModes, setComposerFastModes] = useState<
 			Record<string, boolean>
 		>({});
-		const [composerCarryRoomContexts, setComposerCarryRoomContexts] = useState<
-			Record<string, boolean>
-		>({});
 		// P0-B: this file is `"use no memo"` (intentional render-phase ref
 		// mutation near the top), so the React Compiler will NOT memoize the
 		// FileLink context value for us. An inline object literal would change
@@ -607,17 +604,6 @@ export const WorkspaceConversationContainer = memo(
 			[persistSessionSetting],
 		);
 
-		const handleChangeCarryRoomContext = useCallback(
-			(contextKey: string, enabled: boolean) => {
-				setComposerCarryRoomContexts((current) => ({
-					...current,
-					[contextKey]: enabled,
-				}));
-				persistSessionSetting(contextKey, { carryRoomContext: enabled });
-			},
-			[persistSessionSetting],
-		);
-
 		// Fast mode didn't engage: flip the toggle off and clear the prelude
 		// animation (this turn never ran fast — unlike a mid-stream manual
 		// toggle, which keeps the cue).
@@ -821,13 +807,11 @@ export const WorkspaceConversationContainer = memo(
 						effortLevels={composerEffortLevels}
 						permissionModes={composerPermissionModes}
 						fastModes={composerFastModes}
-						carryRoomContexts={composerCarryRoomContexts}
 						activeFastPreludes={activeFastPreludes}
 						onSelectModel={handleSelectModel}
 						onSelectEffort={handleSelectEffort}
 						onChangePermissionMode={handleChangePermissionMode}
 						onChangeFastMode={handleChangeFastMode}
-						onChangeCarryRoomContext={handleChangeCarryRoomContext}
 						onSwitchSession={onSelectSession}
 						onSubmit={handleComposerSubmitWrapper}
 						onStop={handleStopStream}

@@ -106,12 +106,6 @@ type SubmitPayload = {
 	effortLevel: string;
 	permissionMode: string;
 	fastMode: boolean;
-	/** Per-session context-carry toggle (team collaboration room). When
-	 *  true (or omitted — defaults to ON) and teamMode is active and the
-	 *  message has an @agent mention, room-chat messages since the last
-	 *  agent turn are folded into promptPrefix as an author-tagged
-	 *  transcript. */
-	carryRoomContext?: boolean;
 	/** When true, route to the follow-up queue instead of steering if a
 	 *  turn is already streaming — regardless of the user's
 	 *  `followUpBehavior` setting. Set by host-triggered submits (e.g.
@@ -661,7 +655,6 @@ export function useConversationStreaming({
 				effortLevel,
 				permissionMode,
 				fastMode,
-				carryRoomContext = true,
 				forceQueue,
 				followUpBehaviorOverride,
 				editorStateSnapshot,
@@ -858,7 +851,6 @@ export function useConversationStreaming({
 							effortLevel,
 							permissionMode,
 							fastMode,
-							carryRoomContext,
 							editorStateSnapshot,
 						},
 					);
@@ -979,12 +971,12 @@ export function useConversationStreaming({
 			// optimistically render in the chat bubble and what the Rust
 			// side persists to `session_messages` as the user_prompt body.
 			//
-			// Team mode + @agent: also fold the room-context carry block when
-			// the toggle is ON and there are room-chat messages since the last
-			// agent turn. The carried block is wire-only (in promptPrefix) —
-			// the persisted user_prompt body stays byte-identical.
+			// Team mode + @agent: always fold the room-context carry block when
+			// there are room-chat messages since the last agent turn. The carried
+			// block is wire-only (in promptPrefix) — the persisted user_prompt
+			// body stays byte-identical.
 			const roomCarryBlock: string | null = (() => {
-				if (!isTeamModeActive() || !carryRoomContext) return null;
+				if (!isTeamModeActive()) return null;
 				if (!currentThread || currentThread.length === 0) return null;
 				const teamCfg = getTeamConfig();
 				const members: TeamMember[] = teamCfg

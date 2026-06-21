@@ -327,12 +327,10 @@ describe("WorkspaceComposerContainer", () => {
 					effortLevels={{}}
 					permissionModes={{}}
 					fastModes={{}}
-					carryRoomContexts={{}}
 					onSelectModel={vi.fn()}
 					onSelectEffort={vi.fn()}
 					onChangePermissionMode={vi.fn()}
 					onChangeFastMode={vi.fn()}
-					onChangeCarryRoomContext={vi.fn()}
 					onSubmit={vi.fn()}
 				/>
 			</QueryClientProvider>
@@ -390,12 +388,10 @@ describe("WorkspaceComposerContainer", () => {
 					effortLevels={{}}
 					permissionModes={{}}
 					fastModes={{}}
-					carryRoomContexts={{}}
 					onSelectModel={handleSelectModel}
 					onSelectEffort={vi.fn()}
 					onChangePermissionMode={vi.fn()}
 					onChangeFastMode={vi.fn()}
-					onChangeCarryRoomContext={vi.fn()}
 					onSubmit={vi.fn()}
 				/>
 			</QueryClientProvider>,
@@ -446,12 +442,10 @@ describe("WorkspaceComposerContainer", () => {
 					effortLevels={{ "start:repo:repo-1": "low" }}
 					permissionModes={{ "start:repo:repo-1": "plan" }}
 					fastModes={{ "start:repo:repo-1": true }}
-					carryRoomContexts={{}}
 					onSelectModel={vi.fn()}
 					onSelectEffort={handleSelectEffort}
 					onChangePermissionMode={handleChangePermissionMode}
 					onChangeFastMode={handleChangeFastMode}
-					onChangeCarryRoomContext={vi.fn()}
 					onSubmit={vi.fn()}
 				/>
 			</QueryClientProvider>,
@@ -512,12 +506,10 @@ describe("WorkspaceComposerContainer", () => {
 					effortLevels={{}}
 					permissionModes={{}}
 					fastModes={{}}
-					carryRoomContexts={{}}
 					onSelectModel={vi.fn()}
 					onSelectEffort={vi.fn()}
 					onChangePermissionMode={vi.fn()}
 					onChangeFastMode={vi.fn()}
-					onChangeCarryRoomContext={vi.fn()}
 					onSubmit={handleSubmit}
 					startSubmitMenu
 				/>
@@ -581,12 +573,10 @@ describe("WorkspaceComposerContainer", () => {
 						effortLevels={{}}
 						permissionModes={{}}
 						fastModes={{}}
-						carryRoomContexts={{}}
 						onSelectModel={vi.fn()}
 						onSelectEffort={vi.fn()}
 						onChangePermissionMode={vi.fn()}
 						onChangeFastMode={vi.fn()}
-						onChangeCarryRoomContext={vi.fn()}
 						onSubmit={vi.fn()}
 						startSubmitMenu
 					/>
@@ -645,12 +635,10 @@ describe("WorkspaceComposerContainer", () => {
 						effortLevels={{}}
 						permissionModes={{}}
 						fastModes={{}}
-						carryRoomContexts={{}}
 						onSelectModel={vi.fn()}
 						onSelectEffort={vi.fn()}
 						onChangePermissionMode={vi.fn()}
 						onChangeFastMode={vi.fn()}
-						onChangeCarryRoomContext={vi.fn()}
 						onSubmit={vi.fn()}
 					/>
 				</QueryClientProvider>
@@ -698,12 +686,10 @@ describe("WorkspaceComposerContainer", () => {
 			effortLevels: {},
 			permissionModes: {},
 			fastModes: {},
-			carryRoomContexts: {},
 			onSelectModel: vi.fn(),
 			onSelectEffort: vi.fn(),
 			onChangePermissionMode: vi.fn(),
 			onChangeFastMode: vi.fn(),
-			onChangeCarryRoomContext: vi.fn(),
 			onSubmit: vi.fn(),
 		};
 
@@ -799,12 +785,10 @@ describe("WorkspaceComposerContainer", () => {
 			effortLevels: {},
 			permissionModes: {},
 			fastModes: {},
-			carryRoomContexts: {},
 			onSelectModel: vi.fn(),
 			onSelectEffort: vi.fn(),
 			onChangePermissionMode: vi.fn(),
 			onChangeFastMode: vi.fn(),
-			onChangeCarryRoomContext: vi.fn(),
 			onSubmit: vi.fn(),
 		};
 
@@ -876,12 +860,10 @@ describe("WorkspaceComposerContainer", () => {
 					effortLevels={{}}
 					permissionModes={{}}
 					fastModes={{}}
-					carryRoomContexts={{}}
 					onSelectModel={vi.fn()}
 					onSelectEffort={vi.fn()}
 					onChangePermissionMode={vi.fn()}
 					onChangeFastMode={vi.fn()}
-					onChangeCarryRoomContext={vi.fn()}
 					onSubmit={onSubmit}
 					pendingPromptForSession={{
 						sessionId: "session-1",
@@ -937,12 +919,10 @@ describe("WorkspaceComposerContainer", () => {
 					effortLevels={{}}
 					permissionModes={{}}
 					fastModes={{}}
-					carryRoomContexts={{}}
 					onSelectModel={vi.fn()}
 					onSelectEffort={vi.fn()}
 					onChangePermissionMode={vi.fn()}
 					onChangeFastMode={vi.fn()}
-					onChangeCarryRoomContext={vi.fn()}
 					onSubmit={vi.fn()}
 				/>
 			</QueryClientProvider>,
@@ -1017,12 +997,10 @@ describe("WorkspaceComposerContainer", () => {
 						effortLevels={{}}
 						permissionModes={{}}
 						fastModes={{}}
-						carryRoomContexts={{}}
 						onSelectModel={vi.fn()}
 						onSelectEffort={vi.fn()}
 						onChangePermissionMode={vi.fn()}
 						onChangeFastMode={vi.fn()}
-						onChangeCarryRoomContext={vi.fn()}
 						onSubmit={vi.fn()}
 					/>
 				</QueryClientProvider>
@@ -1071,12 +1049,10 @@ describe("WorkspaceComposerContainer", () => {
 					effortLevels={{}}
 					permissionModes={{}}
 					fastModes={{}}
-					carryRoomContexts={{}}
 					onSelectModel={vi.fn()}
 					onSelectEffort={vi.fn()}
 					onChangePermissionMode={vi.fn()}
 					onChangeFastMode={vi.fn()}
-					onChangeCarryRoomContext={vi.fn()}
 					onSubmit={vi.fn()}
 				/>
 			</QueryClientProvider>,
@@ -1141,12 +1117,10 @@ describe("WorkspaceComposerContainer", () => {
 						effortLevels={{}}
 						permissionModes={{}}
 						fastModes={{}}
-						carryRoomContexts={{}}
 						onSelectModel={vi.fn()}
 						onSelectEffort={vi.fn()}
 						onChangePermissionMode={vi.fn()}
 						onChangeFastMode={vi.fn()}
-						onChangeCarryRoomContext={vi.fn()}
 						onSubmit={vi.fn()}
 						queueItems={[
 							{
@@ -1226,12 +1200,10 @@ describe("WorkspaceComposerContainer", () => {
 						effortLevels={{}}
 						permissionModes={{}}
 						fastModes={{}}
-						carryRoomContexts={{}}
 						onSelectModel={vi.fn()}
 						onSelectEffort={vi.fn()}
 						onChangePermissionMode={vi.fn()}
 						onChangeFastMode={vi.fn()}
-						onChangeCarryRoomContext={vi.fn()}
 						onSubmit={vi.fn()}
 					/>
 				</QueryClientProvider>,
@@ -1481,12 +1453,10 @@ describe("WorkspaceComposerContainer", () => {
 								effortLevels={{}}
 								permissionModes={{}}
 								fastModes={{}}
-								carryRoomContexts={{}}
 								onSelectModel={vi.fn()}
 								onSelectEffort={vi.fn()}
 								onChangePermissionMode={vi.fn()}
 								onChangeFastMode={vi.fn()}
-								onChangeCarryRoomContext={vi.fn()}
 								onSubmit={onSubmit}
 							/>
 						</SettingsContext.Provider>
