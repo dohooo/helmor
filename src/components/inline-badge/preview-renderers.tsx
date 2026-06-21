@@ -151,7 +151,7 @@ export function PreviewErrorFrame({ title }: { title: string }) {
 			bodyClassName="flex items-center justify-center px-4 py-6"
 		>
 			<span className="text-small text-muted-foreground">
-				<I18nText source={"Unable to preview"} />
+				<I18nText source="unablePreview" />
 			</span>
 		</PreviewFrame>
 	);
@@ -165,7 +165,7 @@ export function PreviewLoadingFrame({ title }: { title: string }) {
 			bodyClassName="flex items-center justify-center px-4 py-6"
 		>
 			<span className="text-small text-muted-foreground">
-				<I18nText source={"Loading…"} />
+				<I18nText source="loading2" />
 			</span>
 		</PreviewFrame>
 	);

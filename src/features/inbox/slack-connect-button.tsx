@@ -7,7 +7,7 @@ import {
 	type SlackWorkspace,
 	slackImportFromDesktop,
 } from "@/lib/api";
-import { I18nText } from "@/lib/i18n";
+import { formatSource, I18nText, translateSource } from "@/lib/i18n";
 import { isMac } from "@/lib/platform";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
@@ -51,21 +51,13 @@ export function SlackConnectState({
 			<SlackBrandIcon className="text-muted-foreground/80" size={28} />
 			<div className="space-y-1">
 				<div className="text-ui font-medium text-foreground">
-					<I18nText source={"Connect a Slack workspace"} />
+					<I18nText source="connectSlackWorkspace" />
 				</div>
 				<div className="text-pretty text-small leading-5 text-muted-foreground">
 					{desktopImportSupported ? (
-						<I18nText
-							source={
-								"Connects to your signed-in Slack desktop app. Everything stays local and secure on your device."
-							}
-						/>
+						<I18nText source="connectsSignedSlackDesktopAppEverything" />
 					) : (
-						<I18nText
-							source={
-								"Slack desktop import is available on macOS. Windows support is not wired up yet."
-							}
-						/>
+						<I18nText source="slackDesktopImportAvailableMacosWindows" />
 					)}
 				</div>
 			</div>
@@ -80,10 +72,10 @@ export function SlackConnectState({
 				{importMutation.isPending ? (
 					<>
 						<Loader2 className="size-3.5 animate-spin" strokeWidth={2} />
-						Reading session…
+						<I18nText source="readingSession" />
 					</>
 				) : (
-					"Connect Slack"
+					<I18nText source="inboxConnectSlack" />
 				)}
 			</Button>
 		</div>
@@ -108,8 +100,8 @@ function handleImportResult(
 	// render success in red.
 	if (importedCount === 0 && alreadyCount === 0 && failedCount === 0) {
 		pushToast(
-			"No signed-in Slack workspaces were found in your desktop app.",
-			"Nothing to connect",
+			translateSource("inboxNoSignedInSlackWorkspaces"),
+			translateSource("inboxNothingToConnect"),
 			"default",
 		);
 		return;
@@ -118,19 +110,26 @@ function handleImportResult(
 	const parts: string[] = [];
 	if (importedCount > 0)
 		parts.push(
-			`Connected ${importedCount} workspace${importedCount === 1 ? "" : "s"}`,
+			importedCount === 1
+				? translateSource("inboxConnectedWorkspaceSingular")
+				: formatSource("inboxConnectedWorkspaces", { count: importedCount }),
 		);
-	if (alreadyCount > 0) parts.push(`${alreadyCount} already connected`);
+	if (alreadyCount > 0)
+		parts.push(formatSource("inboxAlreadyConnected", { count: alreadyCount }));
 	const message =
 		failedCount > 0
-			? `${parts.join(", ")}. ${failedCount} failed: ${result.failed
+			? `${parts.join(", ")}. ${formatSource("inboxFailedCount", {
+					count: failedCount,
+				})}: ${result.failed
 					.map((f) => `${f.teamName} (${f.reason})`)
 					.join("; ")}`
 			: `${parts.join(", ")}.`;
 
 	pushToast(
 		message,
-		failedCount > 0 ? "Slack connect: partial" : "Slack connect",
+		failedCount > 0
+			? translateSource("inboxSlackConnectPartial")
+			: translateSource("inboxSlackConnect"),
 		failedCount > 0 ? "destructive" : "default",
 	);
 }
@@ -188,8 +187,8 @@ export function useSlackImportMutation(opts?: {
 			const message =
 				error instanceof Error
 					? error.message
-					: "Couldn't read Slack desktop session.";
-			pushToast(message, "Connect failed", "destructive");
+					: translateSource("inboxCouldntReadSlackDesktopSession");
+			pushToast(message, translateSource("inboxConnectFailed"), "destructive");
 		},
 	});
 }

@@ -21,28 +21,28 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { I18nText } from "@/lib/i18n";
+import { I18nText, useI18n } from "@/lib/i18n";
 import type { WorkspaceScriptType } from "@/lib/workspace-script-actions";
 import { formatWorkspaceStarProgress } from "@/lib/workspace-star-collection";
 
+// `title` / `description` are i18n catalog KEYS, resolved at render via t().
 const SCRIPT_ACTION_COPY: Record<
 	WorkspaceScriptType,
 	{ title: string; description: string; icon: LucideIcon }
 > = {
 	setup: {
-		title: "Create setup script",
-		description: "Bootstrap dependencies after a workspace is created.",
+		title: "createSetupScript",
+		description: "bootstrapDependenciesAfterWorkspaceCreated",
 		icon: Hammer,
 	},
 	run: {
-		title: "Create run actions",
-		description:
-			"Named commands you'll pick from the Inspector's Run dropdown.",
+		title: "createRunActions",
+		description: "namedCommandsLlPickFromInspector",
 		icon: Play,
 	},
 	archive: {
-		title: "Create archive script",
-		description: "Light cleanup or handoff before archiving.",
+		title: "createArchiveScript",
+		description: "lightCleanupHandoffBeforeArchiving",
 		icon: Archive,
 	},
 };
@@ -60,6 +60,7 @@ export function EmptyState({
 	missingScriptTypes?: WorkspaceScriptType[];
 	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
 }) {
+	const { t } = useI18n();
 	const isCreatingWorkspace = workspaceState === "initializing";
 	const showScriptActions =
 		hasSession &&
@@ -88,18 +89,20 @@ export function EmptyState({
 					}
 				>
 					{isCreatingWorkspace
-						? "Creating workspace"
+						? t("creatingWorkspace")
 						: hasSession
-							? "Nothing here yet"
-							: "No session selected"}
+							? t("nothingHereYet")
+							: t("noSessionSelected")}
 				</EmptyTitle>
 				<EmptyDescription>
 					{isCreatingWorkspace ? (
-						"Helmor is still preparing this workspace. Messaging will unlock automatically when setup finishes."
+						t("helmorStillPreparingWorkspaceMessagingWill")
 					) : hasSession ? (
 						workspaceName ? (
 							<span className="inline-flex items-center justify-center gap-1 whitespace-nowrap text-muted-foreground/75">
-								<span>New session in</span>
+								<span>
+									<I18nText source="newSession2" />
+								</span>
 								<Tooltip>
 									<TooltipTrigger asChild>
 										<button
@@ -120,10 +123,10 @@ export function EmptyState({
 								</Tooltip>
 							</span>
 						) : (
-							"New session"
+							t("newSession")
 						)
 					) : (
-						"Choose a session from the header to inspect its timeline."
+						t("chooseSessionFromHeaderInspectIts")
 					)}
 				</EmptyDescription>
 			</EmptyHeader>
@@ -155,10 +158,10 @@ export function EmptyState({
 								</span>
 								<span className="flex min-w-0 flex-1 flex-col">
 									<span className="block text-small font-medium leading-[1.4] tracking-[-0.005em] text-foreground">
-										{item.title}
+										{t(item.title)}
 									</span>
 									<span className="mt-0.5 block text-mini leading-[1.5] text-muted-foreground">
-										{item.description}
+										{t(item.description)}
 									</span>
 								</span>
 							</button>
@@ -172,11 +175,9 @@ export function EmptyState({
 						/>
 						<span>
 							<span className="font-medium text-foreground/80">
-								<I18nText source={"Tips:"} />
+								<I18nText source="tips" />
 							</span>{" "}
-							<I18nText
-								source={"Configuring these scripts upgrades your dev loop."}
-							/>
+							<I18nText source="configuringTheseScriptsUpgradesDevLoop" />
 						</span>
 					</p>
 				</EmptyContent>

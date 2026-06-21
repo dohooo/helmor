@@ -3,7 +3,7 @@
 import * as ContextMenuPrimitive from "@radix-ui/react-context-menu";
 import { CheckIcon, ChevronRightIcon } from "lucide-react";
 import type * as React from "react";
-import { useLocalizedNode } from "@/lib/i18n";
+
 import { cn } from "@/lib/utils";
 
 function ContextMenu({
@@ -88,7 +88,6 @@ function ContextMenuItem({
 	inset?: boolean;
 	variant?: "default" | "destructive";
 }) {
-	const localizedChildren = useLocalizedNode(children);
 	return (
 		<ContextMenuPrimitive.Item
 			data-slot="context-menu-item"
@@ -100,7 +99,7 @@ function ContextMenuItem({
 			)}
 			{...props}
 		>
-			{localizedChildren}
+			{children}
 		</ContextMenuPrimitive.Item>
 	);
 }
@@ -113,7 +112,6 @@ function ContextMenuSubTrigger({
 }: React.ComponentProps<typeof ContextMenuPrimitive.SubTrigger> & {
 	inset?: boolean;
 }) {
-	const localizedChildren = useLocalizedNode(children);
 	return (
 		<ContextMenuPrimitive.SubTrigger
 			data-slot="context-menu-sub-trigger"
@@ -124,7 +122,7 @@ function ContextMenuSubTrigger({
 			)}
 			{...props}
 		>
-			{localizedChildren}
+			{children}
 			<ChevronRightIcon className="ml-auto" />
 		</ContextMenuPrimitive.SubTrigger>
 	);
@@ -155,7 +153,6 @@ function ContextMenuCheckboxItem({
 }: React.ComponentProps<typeof ContextMenuPrimitive.CheckboxItem> & {
 	inset?: boolean;
 }) {
-	const localizedChildren = useLocalizedNode(children);
 	return (
 		<ContextMenuPrimitive.CheckboxItem
 			data-slot="context-menu-checkbox-item"
@@ -172,7 +169,7 @@ function ContextMenuCheckboxItem({
 					<CheckIcon />
 				</ContextMenuPrimitive.ItemIndicator>
 			</span>
-			{localizedChildren}
+			{children}
 		</ContextMenuPrimitive.CheckboxItem>
 	);
 }
@@ -185,7 +182,6 @@ function ContextMenuRadioItem({
 }: React.ComponentProps<typeof ContextMenuPrimitive.RadioItem> & {
 	inset?: boolean;
 }) {
-	const localizedChildren = useLocalizedNode(children);
 	return (
 		<ContextMenuPrimitive.RadioItem
 			data-slot="context-menu-radio-item"
@@ -201,7 +197,7 @@ function ContextMenuRadioItem({
 					<CheckIcon />
 				</ContextMenuPrimitive.ItemIndicator>
 			</span>
-			{localizedChildren}
+			{children}
 		</ContextMenuPrimitive.RadioItem>
 	);
 }
@@ -214,7 +210,6 @@ function ContextMenuLabel({
 }: React.ComponentProps<typeof ContextMenuPrimitive.Label> & {
 	inset?: boolean;
 }) {
-	const localizedChildren = useLocalizedNode(children);
 	return (
 		<ContextMenuPrimitive.Label
 			data-slot="context-menu-label"
@@ -225,7 +220,7 @@ function ContextMenuLabel({
 			)}
 			{...props}
 		>
-			{localizedChildren}
+			{children}
 		</ContextMenuPrimitive.Label>
 	);
 }
@@ -248,7 +243,6 @@ function ContextMenuShortcut({
 	children,
 	...props
 }: React.ComponentProps<"span">) {
-	const localizedChildren = useLocalizedNode(children);
 	return (
 		<span
 			data-slot="context-menu-shortcut"
@@ -258,7 +252,7 @@ function ContextMenuShortcut({
 			)}
 			{...props}
 		>
-			{localizedChildren}
+			{children}
 		</span>
 	);
 }

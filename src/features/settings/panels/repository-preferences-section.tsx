@@ -15,7 +15,7 @@ import {
 	type RepoPreferences,
 	updateRepoPreferences,
 } from "@/lib/api";
-import { I18nText } from "@/lib/i18n";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { helmorQueryKeys } from "@/lib/query-client";
 import {
 	REPO_PREFERENCE_DESCRIPTIONS,
@@ -34,6 +34,7 @@ const PREFERENCE_KEYS: RepoPreferenceKey[] = [
 ];
 
 export function RepositoryPreferencesSection({ repoId }: { repoId: string }) {
+	const { t, f } = useI18n();
 	const queryClient = useQueryClient();
 	const preferencesQuery = useQuery({
 		queryKey: helmorQueryKeys.repoPreferences(repoId),
@@ -61,14 +62,10 @@ export function RepositoryPreferencesSection({ repoId }: { repoId: string }) {
 		<>
 			<div className="py-5">
 				<div className="text-ui font-medium leading-snug text-foreground">
-					<I18nText source={"Preferences"} />
+					<I18nText source="preferences" />
 				</div>
 				<div className="mt-1 text-small leading-snug text-muted-foreground">
-					<I18nText
-						source={
-							"Repo-level built-in prompts used by Helmor actions and new chats."
-						}
-					/>
+					<I18nText source="repoLevelBuiltPromptsUsedBy" />
 				</div>
 				<div className="mt-4 divide-y divide-app-border/20">
 					{PREFERENCE_KEYS.map((key) => {
@@ -88,10 +85,12 @@ export function RepositoryPreferencesSection({ repoId }: { repoId: string }) {
 										>
 											<div>
 												<div className="text-ui font-medium text-app-foreground">
-													{REPO_PREFERENCE_LABELS[key]}
+													<I18nText source={REPO_PREFERENCE_LABELS[key]} />
 												</div>
 												<div className="mt-1 text-small leading-snug text-muted-foreground">
-													{REPO_PREFERENCE_DESCRIPTIONS[key]}
+													<I18nText
+														source={REPO_PREFERENCE_DESCRIPTIONS[key]}
+													/>
 												</div>
 											</div>
 											<ChevronDown
@@ -107,8 +106,8 @@ export function RepositoryPreferencesSection({ repoId }: { repoId: string }) {
 											className="min-h-[140px] resize-y bg-app-base/30 font-mono text-small placeholder:text-small"
 											placeholder={
 												key === "general"
-													? "Add custom instructions for all agents working in this repo."
-													: "Add your preferences here. The agent will be told to prioritize these instructions over its default instructions."
+													? "addCustomInstructionsAllAgentsWorking"
+													: "addPreferencesHereAgentWillTold"
 											}
 											value={value}
 											onChange={(event) =>
@@ -126,7 +125,7 @@ export function RepositoryPreferencesSection({ repoId }: { repoId: string }) {
 											>
 												<Eye className="size-3.5" strokeWidth={1.8} />
 												<span>
-													<I18nText source={"Preview"} />
+													<I18nText source="preview" />
 												</span>
 											</button>
 											<Button
@@ -147,7 +146,7 @@ export function RepositoryPreferencesSection({ repoId }: { repoId: string }) {
 														.finally(() => setSavingKey(null));
 												}}
 											>
-												{savingKey === key ? "Saving..." : "Save"}
+												{savingKey === key ? t("saving") : t("settingsSave")}
 											</Button>
 										</div>
 									</CollapsibleContent>
@@ -166,8 +165,10 @@ export function RepositoryPreferencesSection({ repoId }: { repoId: string }) {
 					<div className="px-6 pt-4">
 						<DialogTitle className="text-heading font-semibold text-foreground">
 							{previewKey
-								? `${REPO_PREFERENCE_LABELS[previewKey]} prompt`
-								: "Prompt preview"}
+								? f("namePrompt", {
+										name: t(REPO_PREFERENCE_LABELS[previewKey]),
+									})
+								: t("promptPreview")}
 						</DialogTitle>
 					</div>
 					<div className="max-h-[78vh] overflow-y-auto px-6 pb-5 pt-1">

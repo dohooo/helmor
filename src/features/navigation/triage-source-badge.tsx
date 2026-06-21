@@ -50,7 +50,7 @@ export function TriageSourceBadge({
 	const { label, Icon } = meta;
 	return (
 		<span
-			aria-label={f("AI proposal from {source} — open to review", {
+			aria-label={f("aiProposalFromSourceOpenReview", {
 				source: label,
 			})}
 			className={cn(

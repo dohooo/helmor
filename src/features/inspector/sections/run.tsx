@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/hover-card";
 import { getShortcut } from "@/features/shortcuts/registry";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
-import { I18nText } from "@/lib/i18n";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
@@ -82,6 +82,7 @@ type RunTabProps = {
  * in the script store.
  */
 export function OpenDevServerButton({ urls }: { urls: string[] }) {
+	const { t, f } = useI18n();
 	const handleOpen = useCallback((url: string) => {
 		void openUrl(url);
 	}, []);
@@ -96,10 +97,10 @@ export function OpenDevServerButton({ urls }: { urls: string[] }) {
 				size="xs"
 				className="text-muted-foreground hover:text-foreground"
 				disabled
-				aria-label="Open dev server (no URL detected yet)"
+				aria-label="openDevServerNoUrlDetected"
 			>
 				<ExternalLink strokeWidth={1.8} />
-				Open
+				<I18nText source="open" />
 			</Button>
 		);
 	}
@@ -115,10 +116,10 @@ export function OpenDevServerButton({ urls }: { urls: string[] }) {
 				size="xs"
 				className="text-muted-foreground hover:text-foreground"
 				onClick={() => handleOpen(url)}
-				aria-label={`Open dev server at ${url}`}
+				aria-label={f("inspectorOpenDevServerAt", { url })}
 			>
 				<ExternalLink strokeWidth={1.8} />
-				{port ? `Open:${port}` : "Open"}
+				{port ? f("inspectorOpenPort", { port }) : t("open")}
 			</Button>
 		);
 	}
@@ -133,10 +134,12 @@ export function OpenDevServerButton({ urls }: { urls: string[] }) {
 					variant="outline"
 					size="xs"
 					className="text-muted-foreground hover:text-foreground"
-					aria-label={`Open dev server (${urls.length} URLs detected)`}
+					aria-label={f("inspectorOpenDevServerUrlsDetected", {
+						count: urls.length,
+					})}
 				>
 					<ExternalLink strokeWidth={1.8} />
-					Open
+					<I18nText source="open" />
 				</Button>
 			</HoverCardTrigger>
 			<HoverCardContent side="top" align="end" className="w-auto min-w-48 p-1">
@@ -180,6 +183,7 @@ export function RunTab({
 	onStatusChange,
 	onUrlsChange,
 }: RunTabProps) {
+	const { t, f } = useI18n();
 	const termRef = useRef<TerminalHandle | null>(null);
 	const [status, setStatus] = useState<ScriptStatus>("idle");
 	const [stopping, setStopping] = useState(false);
@@ -361,8 +365,12 @@ export function RunTab({
 									size="sm"
 									className="text-small shadow-sm backdrop-blur-sm transition-none"
 									onClick={handleCleanup}
-									title={`Run stop command: ${trimmedStopCommand}`}
-									aria-label={`Run stop command: ${trimmedStopCommand}`}
+									title={f("inspectorRunStopCommandValue", {
+										command: trimmedStopCommand,
+									})}
+									aria-label={f("inspectorRunStopCommandValue", {
+										command: trimmedStopCommand,
+									})}
 								>
 									<CircleStop className="size-3" strokeWidth={2} />
 								</Button>
@@ -376,7 +384,9 @@ export function RunTab({
 								// Title clarifies the escalation semantic when a
 								// cleanup command is still running — second click
 								// short-circuits to SIGKILL on the backend.
-								title={stopping ? "Skip cleanup and force-kill" : undefined}
+								title={
+									stopping ? t("inspectorSkipCleanupForceKill") : undefined
+								}
 							>
 								{status === "running" ? (
 									<Square className="size-3" strokeWidth={2} />
@@ -385,9 +395,9 @@ export function RunTab({
 								)}
 								{status === "running"
 									? stopping
-										? "Force Stop"
-										: "Stop"
-									: "Rerun"}
+										? t("inspectorForceStop")
+										: t("stop")
+									: t("inspectorRerun")}
 								{runShortcut ? (
 									<InlineShortcutDisplay
 										hotkey={runShortcut}
@@ -411,14 +421,10 @@ export function RunTab({
 						onClick={onOpenSettings}
 					>
 						<Settings2 className="size-3.5" strokeWidth={1.8} />
-						Add run script
+						<I18nText source="addRunScript" />
 					</Button>
 					<p className="text-small text-muted-foreground/70">
-						<I18nText
-							source={
-								"Run tests or a development server to test changes in this workspace."
-							}
-						/>
+						<I18nText source="runTestsDevelopmentServerTestChanges" />
 					</p>
 				</div>
 			) : (
@@ -428,15 +434,13 @@ export function RunTab({
 					    trigger — important now that one workspace can have
 					    several. */}
 					<p className="text-ui text-muted-foreground">
-						<I18nText source={"No output for"} />{" "}
+						<I18nText source="noOutput" />{" "}
 						<span className="font-medium text-foreground">
-							{activeRunActionName ?? "Default"}
+							{activeRunActionName ?? t("default")}
 						</span>
 					</p>
 					<p className="text-small text-muted-foreground/70">
-						<I18nText
-							source={"Run script output will appear here after running."}
-						/>
+						<I18nText source="runScriptOutputWillAppearHere" />
 					</p>
 					<Button
 						variant="outline"
@@ -446,7 +450,7 @@ export function RunTab({
 						disabled={!hasScript}
 					>
 						<Play className="size-3" strokeWidth={2} />
-						Run
+						<I18nText source="run" />
 						{runShortcut ? (
 							<InlineShortcutDisplay
 								hotkey={runShortcut}

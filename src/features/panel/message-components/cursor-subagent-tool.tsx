@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { memo, useState } from "react";
 import type { ToolCallPart } from "@/lib/api";
-import { I18nText } from "@/lib/i18n";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { getSubagentIdentity } from "@/lib/subagent-identity";
 import { cn } from "@/lib/utils";
 
@@ -75,9 +75,10 @@ export const CursorSubagentToolCall = memo(function CursorSubagentToolCall({
 }: {
 	part: ToolCallPart;
 }) {
+	const { t } = useI18n();
 	const args = part.args;
 	const agentId = str(args.agentId);
-	const subagentType = str(args.subagentType) ?? "Sub-agent";
+	const subagentType = str(args.subagentType) ?? t("panelSubAgent");
 	const description = str(args.description);
 	const prompt = str(args.prompt);
 	const model = str(args.model);
@@ -140,7 +141,7 @@ export const CursorSubagentToolCall = memo(function CursorSubagentToolCall({
 					{prompt ? (
 						<div className="flex flex-col gap-1">
 							<span className="text-mini uppercase tracking-wide text-muted-foreground/50">
-								<I18nText source={"Prompt"} />
+								<I18nText source="prompt" />
 							</span>
 							<div className="whitespace-pre-wrap break-words rounded-md bg-accent/35 px-2.5 py-1.5 text-small leading-5 text-muted-foreground/85">
 								{prompt}
@@ -149,7 +150,7 @@ export const CursorSubagentToolCall = memo(function CursorSubagentToolCall({
 					) : null}
 					<div className="flex flex-col gap-1">
 						<span className="text-mini uppercase tracking-wide text-muted-foreground/50">
-							<I18nText source={"Result"} />
+							<I18nText source="result" />
 						</span>
 						{resultText ? (
 							<div className="whitespace-pre-wrap break-words rounded-md bg-accent/35 px-2.5 py-1.5 text-small leading-5 text-muted-foreground/85">
@@ -164,12 +165,12 @@ export const CursorSubagentToolCall = memo(function CursorSubagentToolCall({
 											strokeWidth={2}
 										/>
 										<span>
-											<I18nText source={"Waiting for subagent…"} />
+											<I18nText source="waitingSubagent" />
 										</span>
 									</>
 								) : (
 									<span>
-										<I18nText source={"No output captured."} />
+										<I18nText source="noOutputCaptured" />
 									</span>
 								)}
 							</div>

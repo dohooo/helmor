@@ -6,6 +6,7 @@ import {
 	PopoverContent,
 } from "@/components/ui/popover";
 import type { ComposerPreviewPayload } from "@/lib/composer-insert";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
 	PreviewErrorFrame,
@@ -75,12 +76,14 @@ export function InlineBadge({
 	preview = null,
 	previewLoader,
 	onRemove,
-	removeLabel = "Remove item",
+	removeLabel,
 	className,
 	labelClassName,
 	nonSelectable = true,
 	onEdit,
 }: InlineBadgeProps) {
+	const { t } = useI18n();
+	const resolvedRemoveLabel = removeLabel ?? t("miscRemoveItem");
 	const [open, setOpen] = useState(false);
 	const [loaderState, setLoaderState] = useState<LoaderState>({
 		status: "idle",
@@ -206,7 +209,7 @@ export function InlineBadge({
 				{onRemove ? (
 					<button
 						type="button"
-						aria-label={removeLabel}
+						aria-label={resolvedRemoveLabel}
 						className="inline-flex size-3.5 shrink-0 cursor-interactive items-center justify-center rounded-sm text-muted-foreground/40 transition-colors hover:text-muted-foreground"
 						onMouseDown={(event) => {
 							event.preventDefault();

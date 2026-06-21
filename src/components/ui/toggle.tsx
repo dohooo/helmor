@@ -4,7 +4,7 @@ import * as TogglePrimitive from "@radix-ui/react-toggle";
 import { cva, type VariantProps } from "class-variance-authority";
 import type * as React from "react";
 
-import { useI18n, useLocalizedNode } from "@/lib/i18n";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const toggleVariants = cva(
@@ -40,7 +40,7 @@ function Toggle({
 }: React.ComponentProps<typeof TogglePrimitive.Root> &
 	VariantProps<typeof toggleVariants>) {
 	const { t } = useI18n();
-	const localizedChildren = useLocalizedNode(children);
+
 	return (
 		<TogglePrimitive.Root
 			data-slot="toggle"
@@ -49,7 +49,7 @@ function Toggle({
 			className={cn(toggleVariants({ variant, size, className }))}
 			{...props}
 		>
-			{localizedChildren}
+			{children}
 		</TogglePrimitive.Root>
 	);
 }

@@ -18,6 +18,7 @@ import { HelmorLogoAnimated } from "@/components/helmor-logo-animated";
 import { Button } from "@/components/ui/button";
 import type { ThreadMessageLike } from "@/lib/api";
 import { HelmorProfiler } from "@/lib/dev-react-profiler";
+import { useI18n } from "@/lib/i18n";
 import { estimateThreadRowHeights } from "@/lib/message-layout-estimator";
 import { measureSync } from "@/lib/perf-marks";
 import { hasUnresolvedPlanReview } from "@/lib/plan-review";
@@ -438,7 +439,7 @@ function ChatThread({
 							scrollToBottom("instant");
 						}}
 						className={`conversation-scroll-button ${isAtBottom || sendingJustStarted ? "conversation-scroll-button-hidden" : ""}`}
-						aria-label="Scroll to latest message"
+						aria-label="scrollLatestMessage"
 					>
 						<ArrowDown className="size-4" strokeWidth={2} />
 					</Button>
@@ -630,6 +631,7 @@ function ProgressiveConversationViewport({
 	streamingFooterMessageIndex: number | null;
 	streamingIndicatorStartTime?: number;
 }) {
+	const { f } = useI18n();
 	const [committedScrollState, setCommittedScrollState] = useState({
 		scrollTop: 0,
 		viewportHeight: 0,
@@ -1136,7 +1138,7 @@ function ProgressiveConversationViewport({
 		<div ref={contentRef} style={{ minHeight: totalContentHeight }}>
 			{Header ? createElement(Header) : null}
 			<div
-				aria-label={`Conversation rows for session ${sessionId}`}
+				aria-label={f("panelConversationRowsForSession", { sessionId })}
 				style={{ height: totalRowsHeight, position: "relative" }}
 			>
 				{visibleRows.map((row) => {
@@ -1292,6 +1294,7 @@ function LoadEarlierBanner({
 	loading: boolean;
 	onClick: () => void;
 }) {
+	const { t } = useI18n();
 	const sentinelRef = useRef<HTMLDivElement | null>(null);
 	const onClickRef = useRef(onClick);
 	useEffect(() => {
@@ -1336,7 +1339,9 @@ function LoadEarlierBanner({
 					<ArrowUp className="size-3.5" strokeWidth={2} />
 				)}
 				<span>
-					{loading ? "Loading earlier messages…" : "Load earlier messages"}
+					{loading
+						? t("loadingEarlierMessages")
+						: t("panelLoadEarlierMessages")}
 				</span>
 			</Button>
 		</div>

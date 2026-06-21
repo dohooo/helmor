@@ -3,7 +3,7 @@ import type { VariantProps } from "class-variance-authority";
 import * as React from "react";
 
 import { toggleVariants } from "@/components/ui/toggle";
-import { useI18n, useLocalizedNode } from "@/lib/i18n";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const ToggleGroupContext = React.createContext<
@@ -65,7 +65,6 @@ function ToggleGroupItem({
 	VariantProps<typeof toggleVariants>) {
 	const context = React.useContext(ToggleGroupContext);
 	const { t } = useI18n();
-	const localizedChildren = useLocalizedNode(children);
 
 	return (
 		<ToggleGroupPrimitive.Item
@@ -84,7 +83,7 @@ function ToggleGroupItem({
 			)}
 			{...props}
 		>
-			{localizedChildren}
+			{children}
 		</ToggleGroupPrimitive.Item>
 	);
 }

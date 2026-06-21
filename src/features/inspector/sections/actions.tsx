@@ -35,7 +35,7 @@ import {
 	type WorkspaceGitActionStatus,
 } from "@/lib/api";
 import { buildComposerPreviewPayload } from "@/lib/composer-insert";
-import { I18nText, useI18n } from "@/lib/i18n";
+import { formatSource, I18nText, translateSource, useI18n } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
 import {
 	helmorQueryKeys,
@@ -64,18 +64,20 @@ interface GitStatusItem {
 	};
 }
 
+// `label` is an i18n key (see buildGitRows action labels). Maps the action
+// key to the loading-state label key, both resolved via t() at the call site.
 function loadingActionLabel(label: string): string {
 	switch (label) {
-		case "Push":
-			return "Pushing";
-		case "Pull":
-			return "Pulling";
-		case "Resolve":
-			return "Resolving";
-		case "Commit and push":
-			return "Committing";
+		case "push":
+			return "pushing";
+		case "pull":
+			return "pulling";
+		case "resolve":
+			return "resolving";
+		case "commitPush":
+			return "committing";
 		default:
-			return "Loading";
+			return "loading";
 	}
 }
 
@@ -257,9 +259,9 @@ export function ActionsSection({
 			const result = await syncWorkspaceWithTargetBranch(workspaceId);
 			const target = result.targetBranch;
 			if (result.outcome === "updated") {
-				toast.success(`Pulled latest from ${target}`);
+				toast.success(formatSource("inspectorPulledLatestFrom", { target }));
 			} else if (result.outcome === "alreadyUpToDate") {
-				toast(`Already up to date with ${target}`);
+				toast(formatSource("inspectorAlreadyUpToDateWith", { target }));
 			} else {
 				// conflict or stashPopConflict — both hand off to the agent
 				// with a kind-specific narrow prompt.
@@ -269,7 +271,7 @@ export function ActionsSection({
 			const message =
 				error instanceof Error
 					? error.message
-					: "Unable to pull target updates.";
+					: translateSource("inspectorUnableToPullTargetUpdates");
 			toast.error(message);
 		} finally {
 			requestSidebarReconcile(queryClient);
@@ -328,7 +330,7 @@ export function ActionsSection({
 	return (
 		<section
 			ref={sectionRef}
-			aria-label="Inspector section Actions"
+			aria-label={t("inspectorSectionActions")}
 			className={cn(
 				"flex min-h-0 shrink-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar transition-colors",
 			)}
@@ -341,10 +343,12 @@ export function ActionsSection({
 					!open && "border-b-transparent",
 				)}
 			>
-				<span className={INSPECTOR_SECTION_TITLE_CLASS}>Actions</span>
+				<span className={INSPECTOR_SECTION_TITLE_CLASS}>
+					<I18nText source="actions" />
+				</span>
 				<Button
 					type="button"
-					aria-label="Toggle inspector actions section"
+					aria-label="toggleInspectorActionsSection"
 					onClick={onToggle}
 					variant="ghost"
 					size="icon-sm"
@@ -367,14 +371,14 @@ export function ActionsSection({
 			{open && (
 				<div className="min-h-0 flex-1">
 					<ScrollArea
-						aria-label={t("Actions panel body")}
+						aria-label={t("actionsPanelBody")}
 						className="h-full min-h-0 bg-muted/18 text-ui"
 					>
 						{showHelpersGroup && (
 							<>
 								<div className="px-2.5 pb-1 pt-2">
 									<span className="text-mini font-medium tracking-wide text-muted-foreground/70">
-										<I18nText source={"Helpers"} />
+										<I18nText source="helpers" />
 									</span>
 								</div>
 								{showReviewHelper && (
@@ -390,14 +394,14 @@ export function ActionsSection({
 											strokeWidth={2}
 										/>
 										<span className="truncate">
-											<I18nText source={"Review changes"} />
+											<I18nText source="reviewChanges" />
 										</span>
 										<button
 											type="button"
 											onClick={() => void handleReviewChanges()}
 											disabled={reviewPending || workspaceId === null}
 											aria-busy={reviewPending ? true : undefined}
-											aria-label={reviewPending ? t("Reviewing") : undefined}
+											aria-label={reviewPending ? t("reviewing") : undefined}
 											className="ml-auto shrink-0 cursor-interactive text-micro text-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
 										>
 											<span className="inline-flex items-center gap-1">
@@ -408,7 +412,7 @@ export function ActionsSection({
 														strokeWidth={2}
 													/>
 												) : null}
-												{reviewPending ? null : <I18nText source={"Review"} />}
+												{reviewPending ? null : <I18nText source="review2" />}
 											</span>
 										</button>
 									</div>
@@ -417,7 +421,7 @@ export function ActionsSection({
 						)}
 						<div className="px-2.5 pb-1 pt-2">
 							<span className="text-mini font-medium tracking-wide text-muted-foreground/70">
-								<I18nText source={"Git"} />
+								<I18nText source="git" />
 							</span>
 						</div>
 						{gitRows.map((item) => {
@@ -486,7 +490,7 @@ export function ActionsSection({
 							<>
 								<div className="px-2.5 pb-1 pt-2.5">
 									<span className="text-mini font-medium tracking-wide text-muted-foreground/70">
-										<I18nText source={"Review"} />
+										<I18nText source="review2" />
 									</span>
 								</div>
 								{reviewRows.map((item) => (
@@ -508,7 +512,7 @@ export function ActionsSection({
 							<>
 								<div className="px-2.5 pb-1 pt-2.5">
 									<span className="text-mini font-medium tracking-wide text-muted-foreground/70">
-										<I18nText source={"Deployments"} />
+										<I18nText source="deployments" />
 									</span>
 								</div>
 								{sortedDeployments.map((item) => (
@@ -521,7 +525,7 @@ export function ActionsSection({
 							<>
 								<div className="px-2.5 pb-1 pt-2.5">
 									<span className="text-mini font-medium tracking-wide text-muted-foreground/70">
-										<I18nText source={"Checks"} />
+										<I18nText source="checks" />
 									</span>
 								</div>
 								{sortedChecks.map((item) => (
@@ -563,7 +567,7 @@ function StatusIcon({ status }: { status: ActionStatusKind }) {
 	if (status === "success") {
 		return (
 			<CheckIcon
-				aria-label={t("Passed")}
+				aria-label={t("passed")}
 				className="size-3 shrink-0 text-chart-2"
 				strokeWidth={2.2}
 			/>
@@ -573,7 +577,7 @@ function StatusIcon({ status }: { status: ActionStatusKind }) {
 	if (status === "skipped") {
 		return (
 			<CircleSlashIcon
-				aria-label={t("Skipped")}
+				aria-label={t("skipped2")}
 				className="size-3 shrink-0 text-muted-foreground"
 				strokeWidth={2}
 			/>
@@ -582,10 +586,10 @@ function StatusIcon({ status }: { status: ActionStatusKind }) {
 
 	const label =
 		status === "running"
-			? "Running"
+			? "running"
 			: status === "failure"
-				? "Failed"
-				: "Pending";
+				? "failed"
+				: "pending";
 	const color =
 		status === "running"
 			? "rgb(245, 158, 11)"
@@ -624,77 +628,83 @@ function buildGitRows(
 	return [
 		uncommittedCount === 0
 			? {
-					label: "No uncommitted changes",
+					label: translateSource("noUncommittedChanges"),
 					status: "success",
 				}
 			: {
-					label:
-						uncommittedCount === 1
-							? "1 uncommitted change"
-							: `${uncommittedCount} uncommitted changes`,
+					label: formatSource("countUncommittedChangelabel", {
+						count: uncommittedCount,
+						changeLabel: uncommittedCount === 1 ? "change" : "changes",
+					}),
 					status: "pending",
 					action: {
-						label: "Commit and push",
+						label: "commitPush",
 						kind: "commit",
 						mode: "commit-and-push",
 					},
 				},
 		gitStatus.pushStatus === "unpublished"
 			? {
-					label: "Branch not published to remote",
+					label: translateSource("branchNotPublishedRemote"),
 					status: "pending",
 					action: {
-						label: "Push",
+						label: "push",
 						kind: "commit",
 						mode: "push",
 					},
 				}
 			: (gitStatus.aheadOfRemoteCount ?? 0) > 0
 				? {
-						label:
-							gitStatus.aheadOfRemoteCount === 1
-								? `1 commit ahead of ${gitStatus.remoteTrackingRef ?? "upstream"}`
-								: `${gitStatus.aheadOfRemoteCount} commits ahead of ${gitStatus.remoteTrackingRef ?? "upstream"}`,
+						label: formatSource("inspectorCommitsAheadOf", {
+							count: gitStatus.aheadOfRemoteCount,
+							commitLabel:
+								gitStatus.aheadOfRemoteCount === 1 ? "commit" : "commits",
+							target: gitStatus.remoteTrackingRef ?? "upstream",
+						}),
 						status: "pending",
 						action: {
-							label: "Push",
+							label: "push",
 							kind: "commit",
 							mode: "push",
 						},
 					}
 				: {
-						label: "Branch fully pushed",
+						label: translateSource("branchFullyPushed"),
 						status: "success",
 					},
 		conflictCount > 0
 			? {
-					label: "Merge conflicts detected",
+					label: translateSource("mergeConflictsDetected"),
 					status: "failure",
 					action: {
-						label: "Resolve",
+						label: "resolve",
 						kind: "commit",
 						mode: "resolve-conflicts",
 					},
 				}
 			: gitStatus.syncStatus === "behind"
 				? {
-						label:
-							gitStatus.behindTargetCount === 1
-								? `1 commit behind ${syncTargetBranch}`
-								: `${gitStatus.behindTargetCount} commits behind ${syncTargetBranch}`,
+						label: formatSource("countCommitlabelBehindTarget", {
+							count: gitStatus.behindTargetCount,
+							commitLabel:
+								gitStatus.behindTargetCount === 1 ? "commit" : "commits",
+							target: syncTargetBranch,
+						}),
 						status: "pending",
 						action: {
-							label: "Pull",
+							label: "pull",
 							kind: "sync",
 						},
 					}
 				: gitStatus.syncStatus === "upToDate"
 					? {
-							label: `Up to date with ${syncTargetBranch}`,
+							label: formatSource("inspectorUpToDateWithTarget", {
+								target: syncTargetBranch,
+							}),
 							status: "success",
 						}
 					: {
-							label: "Sync status unavailable",
+							label: translateSource("syncStatusUnavailable"),
 							status: "pending",
 						},
 	];
@@ -706,7 +716,7 @@ function formatSyncTargetRef(
 ): string {
 	const branch = syncTargetBranch?.trim();
 	if (!branch) {
-		return "target branch";
+		return translateSource("inspectorTargetBranch");
 	}
 	if (branch.includes("/")) {
 		return branch;
@@ -729,25 +739,37 @@ function buildReviewRows(
 
 	if (forgeStatus.remoteState === "unauthenticated") {
 		rows.push({
-			label: `${providerName} CLI authentication required`,
+			label: formatSource("inspectorProviderCliAuthRequired", {
+				provider: providerName,
+			}),
 			status: "pending",
 		});
 	} else if (isMerged || forgeStatus.reviewDecision === "APPROVED") {
-		rows.push({ label: "Review approved", status: "success" });
+		rows.push({ label: translateSource("reviewApproved"), status: "success" });
 	} else if (currentChangeRequest?.state === "CLOSED") {
-		rows.push({ label: `${changeRequestName} closed`, status: "failure" });
+		rows.push({
+			label: formatSource("inspectorChangeRequestClosed", {
+				name: changeRequestName,
+			}),
+			status: "failure",
+		});
 	} else if (forgeStatus.reviewDecision === "CHANGES_REQUESTED") {
-		rows.push({ label: "Changes requested", status: "failure" });
+		rows.push({
+			label: translateSource("changesRequested"),
+			status: "failure",
+		});
 	} else if (forgeStatus.remoteState !== "noPr") {
 		rows.push({
-			label: `Waiting for ${changeRequestName} review`,
+			label: formatSource("inspectorWaitingForReview", {
+				name: changeRequestName,
+			}),
 			status: "pending",
 		});
 	}
 
 	if (hasMergeConflict) {
 		rows.push({
-			label: "Merge conflicts detected",
+			label: translateSource("mergeConflictsDetected"),
 			status: "failure",
 		});
 	}
@@ -764,6 +786,7 @@ function ActionStatusRow({
 		item: ForgeActionItem,
 	) => AppendContextPayloadResult | Promise<AppendContextPayloadResult>;
 }) {
+	const { t, f } = useI18n();
 	const actionButtonClassName = cn(
 		"size-5 rounded-sm text-muted-foreground opacity-55 transition-[opacity,color,background-color] hover:opacity-100 focus-visible:opacity-100 [&_svg]:size-3.5",
 		INSPECTOR_ACTION_ICON_STATE_CLASS,
@@ -791,7 +814,7 @@ function ActionStatusRow({
 				</span>
 				{item.status === "skipped" ? (
 					<span className="shrink-0 text-micro text-muted-foreground/70">
-						<I18nText source={"skipped"} />
+						<I18nText source={"skipped2"} />
 					</span>
 				) : (
 					item.duration && (
@@ -806,7 +829,7 @@ function ActionStatusRow({
 					<AppendContextButton
 						subjectLabel={item.name}
 						getPayload={() => onInsertToComposer(item)}
-						errorTitle="Couldn't insert check"
+						errorTitle={t("inspectorCouldntInsertCheck")}
 						className={appendActionButtonClassName}
 					/>
 				)}
@@ -815,7 +838,7 @@ function ActionStatusRow({
 						type="button"
 						variant="ghost"
 						size="icon-xs"
-						aria-label={`Open ${item.name}`}
+						aria-label={f("inspectorOpenName", { name: item.name })}
 						onClick={() => {
 							if (!item.url) {
 								return;

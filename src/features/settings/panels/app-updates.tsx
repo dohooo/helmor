@@ -9,7 +9,7 @@ import {
 	installDownloadedAppUpdate,
 	listenAppUpdateStatus,
 } from "@/lib/api";
-import { useI18n } from "@/lib/i18n";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
 import { SettingsNotice, SettingsRow } from "../components/settings-row";
 
@@ -18,36 +18,34 @@ function formatStatusDescription(
 	t: (source: string) => string,
 ): string {
 	if (!status.configured) {
-		return t("Updater is not configured in this build.");
+		return t("updaterNotConfiguredBuild");
 	}
 
 	switch (status.stage) {
 		case "checking":
-			return t("Checking GitHub releases in the background.");
+			return t("checkingGithubReleasesBackground");
 		case "downloading":
 			return status.update
-				? t("Downloading {version} in the background.").replace(
+				? t("downloadingVersionBackground").replace(
 						"{version}",
 						status.update.version,
 					)
-				: t("Downloading an update in the background.");
+				: t("downloadingUpdateBackground");
 		case "downloaded":
 			return status.update
-				? t("{version} has been downloaded and is ready to install.").replace(
+				? t("versionHasBeenDownloadedReadyInstall").replace(
 						"{version}",
 						status.update.version,
 					)
-				: t("The latest update has been downloaded and is ready to install.");
+				: t("latestUpdateHasBeenDownloadedReady");
 		case "error":
-			return status.lastError ?? t("The last update check failed.");
+			return status.lastError ?? t("lastUpdateCheckFailed");
 		case "disabled":
 			return status.autoUpdateEnabled
-				? t("Automatic update checks are waiting for updater configuration.")
-				: t("Automatic update checks are disabled.");
+				? t("automaticUpdateChecksWaitingUpdaterConfiguration")
+				: t("automaticUpdateChecksDisabled");
 		default:
-			return t(
-				"Checks GitHub releases, downloads updates quietly, then prompts when ready.",
-			);
+			return t("checksGithubReleasesDownloadsUpdatesQuietly");
 	}
 }
 
@@ -131,25 +129,25 @@ export function AppUpdatesPanel() {
 	const anyBusy = checkBusy || isDownloading || installBusy;
 
 	const checkLabel = isDownloading
-		? t("Downloading")
+		? t("downloading")
 		: installBusy
-			? t("Installing")
+			? t("installing")
 			: checkBusy
-				? t("Checking")
-				: t("Check now");
+				? t("checking")
+				: t("checkNow");
 
 	return (
 		<SettingsRow
 			align="start"
-			title="App Updates"
+			title="appUpdates"
 			description={
 				<>
 					{status
 						? formatStatusDescription(status, t)
-						: t("Loading updater status…")}
+						: t("loadingUpdaterStatus")}
 					{status?.update ? (
 						<SettingsNotice tone="info">
-							{t("Current")} {status.update.currentVersion} · {t("Available")}{" "}
+							{t("current")} {status.update.currentVersion} · {t("available")}{" "}
 							{status.update.version}
 						</SettingsNotice>
 					) : null}
@@ -167,12 +165,12 @@ export function AppUpdatesPanel() {
 							.then((nextStatus) => {
 								setStatus(nextStatus);
 								if (nextStatus.stage === "idle") {
-									toast.success(t("Helmor is up to date"));
+									toast.success(t("helmorUpDate"));
 								}
 								if (nextStatus.stage === "error") {
-									toast.error(t("Update check failed"), {
+									toast.error(t("updateCheckFailed"), {
 										description:
-											nextStatus.lastError ?? t("Unable to check for updates."),
+											nextStatus.lastError ?? t("unableCheckUpdates"),
 									});
 								}
 							})
@@ -195,18 +193,18 @@ export function AppUpdatesPanel() {
 							void installDownloadedAppUpdate()
 								.then(setStatus)
 								.catch((error: unknown) => {
-									toast.error(t("Install failed"), {
+									toast.error(t("installFailed"), {
 										description:
 											error instanceof Error
 												? error.message
-												: t("Unable to install the downloaded update."),
+												: t("unableInstallDownloadedUpdate"),
 									});
 								})
 								.finally(() => setInstalling(false));
 						}}
 						disabled={anyBusy}
 					>
-						Update and restart
+						<I18nText source="updateRestart" />
 					</Button>
 				)}
 				{status?.update?.releaseUrl && (
@@ -215,7 +213,7 @@ export function AppUpdatesPanel() {
 						size="sm"
 						onClick={() => void openUrl(status.update?.releaseUrl ?? "")}
 					>
-						Change log
+						<I18nText source="changeLog" />
 					</Button>
 				)}
 			</div>

@@ -34,8 +34,8 @@ export function ArchiveCleanupPanel() {
 			if (result.failures.length === 0) {
 				toast.success(
 					result.deletedCount === 0
-						? t("No archived workspaces to clean up")
-						: f("Cleaned up {count} archived {workspaceLabel}", {
+						? t("noArchivedWorkspacesCleanUp")
+						: f("cleanedUpCountArchivedWorkspacelabel", {
 								count: result.deletedCount,
 								workspaceLabel:
 									result.deletedCount === 1 ? "workspace" : "workspaces",
@@ -44,15 +44,12 @@ export function ArchiveCleanupPanel() {
 				return;
 			}
 			toast.error(
-				f(
-					"Cleaned up {deletedCount}, but {failureCount} {workspaceLabel} could not be deleted",
-					{
-						deletedCount: result.deletedCount,
-						failureCount: result.failures.length,
-						workspaceLabel:
-							result.failures.length === 1 ? "workspace" : "workspaces",
-					},
-				),
+				f("cleanedUpDeletedcountButFailurecountWorkspacelab", {
+					deletedCount: result.deletedCount,
+					failureCount: result.failures.length,
+					workspaceLabel:
+						result.failures.length === 1 ? "workspace" : "workspaces",
+				}),
 				{
 					description: result.failures
 						.map((failure) =>
@@ -65,7 +62,7 @@ export function ArchiveCleanupPanel() {
 			);
 		},
 		onError: (error) => {
-			toast.error(t("Archive cleanup failed"), {
+			toast.error(t("archiveCleanupFailed"), {
 				description: error instanceof Error ? error.message : String(error),
 			});
 		},
@@ -77,18 +74,14 @@ export function ArchiveCleanupPanel() {
 
 	return (
 		<SettingsRow
-			title="Clean up archived workspaces"
+			title="cleanUpArchivedWorkspaces"
 			description={
 				archivedCount === 0
-					? "No archived workspaces."
-					: f(
-							"Permanently delete all {count} archived {workspaceLabel}, including their sessions and chat history.",
-							{
-								count: archivedCount,
-								workspaceLabel:
-									archivedCount === 1 ? "workspace" : "workspaces",
-							},
-						)
+					? "noArchivedWorkspaces"
+					: f("permanentlyDeleteAllCountArchivedWorkspacelabel", {
+							count: archivedCount,
+							workspaceLabel: archivedCount === 1 ? "workspace" : "workspaces",
+						})
 			}
 		>
 			<Button
@@ -102,7 +95,7 @@ export function ArchiveCleanupPanel() {
 				) : (
 					<Trash2 className="size-3.5" />
 				)}
-				{cleanup.isPending ? "Cleaning up" : "Clean up"}
+				{cleanup.isPending ? t("settingsCleaningUp") : t("settingsCleanUp")}
 			</Button>
 			<ConfirmDialog
 				open={confirmOpen}
@@ -113,15 +106,12 @@ export function ArchiveCleanupPanel() {
 						setConfirmOpen(open);
 					}
 				}}
-				title="Clean up archived workspaces?"
-				description={f(
-					"This will permanently delete all {count} archived {workspaceLabel}, including their sessions and chat history. This cannot be undone.",
-					{
-						count: archivedCount,
-						workspaceLabel: archivedCount === 1 ? "workspace" : "workspaces",
-					},
-				)}
-				confirmLabel="Delete All"
+				title="cleanUpArchivedWorkspaces2"
+				description={f("willPermanentlyDeleteAllCountArchived", {
+					count: archivedCount,
+					workspaceLabel: archivedCount === 1 ? "workspace" : "workspaces",
+				})}
+				confirmLabel="deleteAll"
 				onConfirm={() => cleanup.mutate()}
 				loading={cleanup.isPending}
 			/>

@@ -35,10 +35,10 @@ export function RepoImportStep({
 	onBack: () => void;
 	onComplete: () => void;
 }) {
-	const { t } = useI18n();
+	const { t, f } = useI18n();
 	return (
 		<section
-			aria-label={t("Repository import")}
+			aria-label={t("repositoryImport")}
 			aria-hidden={step !== "repoImport"}
 			className={`absolute left-[calc(30vw-260px)] top-20 z-30 w-[520px] transition-all duration-1000 ease-[cubic-bezier(.22,.82,.2,1)] ${
 				step === "repoImport"
@@ -51,14 +51,10 @@ export function RepoImportStep({
 			<div className="flex h-[660px] flex-col">
 				<div className="text-center">
 					<h2 className="text-3xl font-semibold tracking-normal text-foreground">
-						<I18nText source={"Bring in your first repositories"} />
+						<I18nText source="bringFirstRepositories" />
 					</h2>
 					<p className="mx-auto mt-3 max-w-md text-body leading-6 text-muted-foreground">
-						<I18nText
-							source={
-								"Start with a local project, or pull a remote repository from GitHub. You can add more than one before entering Helmor."
-							}
-						/>
+						<I18nText source="startLocalProjectPullRemoteRepository" />
 					</p>
 				</div>
 
@@ -79,16 +75,16 @@ export function RepoImportStep({
 						</div>
 						<div className="mt-4 text-body font-medium text-foreground">
 							{isAddingLocalRepository ? (
-								<I18nText source={"Adding repository…"} />
+								<I18nText source="addingRepository" />
 							) : (
-								<I18nText source={"Choose local project"} />
+								<I18nText source="chooseLocalProject" />
 							)}
 						</div>
 						<p className="mt-1 text-small leading-5 text-muted-foreground">
 							{isAddingLocalRepository ? (
-								<I18nText source={"Pick a folder, then we'll wire it up."} />
+								<I18nText source="pickFolderThenWeLlWire" />
 							) : (
-								<I18nText source={"Add a folder already on this machine."} />
+								<I18nText source="addFolderAlreadyMachine" />
 							)}
 						</p>
 					</button>
@@ -102,10 +98,10 @@ export function RepoImportStep({
 							<Cloud className="size-5" />
 						</div>
 						<div className="mt-4 text-body font-medium text-foreground">
-							<I18nText source={"Import from GitHub"} />
+							<I18nText source="importFromGithub" />
 						</div>
 						<p className="mt-1 text-small leading-5 text-muted-foreground">
-							<I18nText source={"Clone a remote project into Helmor."} />
+							<I18nText source="cloneRemoteProjectIntoHelmor" />
 						</p>
 						{githubImportProgress !== null ? (
 							<div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-muted">
@@ -130,7 +126,7 @@ export function RepoImportStep({
 				<div className="mt-7 min-h-0 flex-1">
 					<div className="mb-2 flex items-center justify-between text-small text-muted-foreground">
 						<span>
-							<I18nText source={"Imported repositories"} />
+							<I18nText source="importedRepositories" />
 						</span>
 						{importedRepositories.length > 0 ? (
 							<span>{importedRepositories.length}</span>
@@ -159,7 +155,7 @@ export function RepoImportStep({
 										</div>
 										<button
 											type="button"
-											aria-label={`Remove ${repo.name}`}
+											aria-label={f("removeLabel", { label: repo.name })}
 											disabled={removingRepositoryIds.has(repo.id)}
 											onClick={() => {
 												onRemoveRepository(repo.id);
@@ -173,11 +169,7 @@ export function RepoImportStep({
 							</div>
 						) : (
 							<div className="flex h-full min-h-32 items-center justify-center text-center text-small leading-5 text-muted-foreground">
-								<I18nText
-									source={
-										"Choose a local folder or import from GitHub to build your first queue."
-									}
-								/>
+								<I18nText source="chooseLocalFolderImportFromGithub" />
 							</div>
 						)}
 					</div>
@@ -192,7 +184,7 @@ export function RepoImportStep({
 						className="h-11 gap-2 px-4 text-title"
 					>
 						<ArrowLeft data-icon="inline-start" className="size-4" />
-						Back
+						<I18nText source="back" />
 					</Button>
 					<Button
 						type="button"
@@ -200,7 +192,7 @@ export function RepoImportStep({
 						onClick={onComplete}
 						className="h-11 gap-2 px-4 text-title"
 					>
-						Let&apos;s ship
+						<I18nText source="letAposSShip" />
 						<ArrowRight data-icon="inline-end" className="size-4" />
 					</Button>
 				</div>

@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { APP_LANGUAGE_OPTIONS, type AppLanguage } from "@/lib/i18n/types";
 import {
 	type AppSettings,
@@ -36,7 +37,7 @@ type ColorThemeOption = {
 const COLOR_THEME_OPTIONS: readonly ColorThemeOption[] = [
 	{
 		id: "default",
-		label: "Default",
+		label: "default",
 		bg: "oklch(0.38 0 0)",
 		accent: "oklch(0.18 0 0)",
 		lightBg: "oklch(0.88 0 0)",
@@ -44,7 +45,7 @@ const COLOR_THEME_OPTIONS: readonly ColorThemeOption[] = [
 	},
 	{
 		id: "midnight",
-		label: "Midnight",
+		label: "midnight",
 		bg: "oklch(0.62 0.14 258)",
 		accent: "oklch(0.30 0.10 260)",
 		lightBg: "oklch(0.82 0.09 258)",
@@ -52,7 +53,7 @@ const COLOR_THEME_OPTIONS: readonly ColorThemeOption[] = [
 	},
 	{
 		id: "forest",
-		label: "Forest",
+		label: "forest",
 		bg: "oklch(0.58 0.13 150)",
 		accent: "oklch(0.28 0.08 155)",
 		lightBg: "oklch(0.80 0.09 152)",
@@ -60,7 +61,7 @@ const COLOR_THEME_OPTIONS: readonly ColorThemeOption[] = [
 	},
 	{
 		id: "ember",
-		label: "Ember",
+		label: "ember",
 		bg: "oklch(0.66 0.15 55)",
 		accent: "oklch(0.32 0.09 48)",
 		lightBg: "oklch(0.84 0.11 60)",
@@ -68,7 +69,7 @@ const COLOR_THEME_OPTIONS: readonly ColorThemeOption[] = [
 	},
 	{
 		id: "aurora",
-		label: "Aurora",
+		label: "aurora",
 		bg: "oklch(0.60 0.15 286)",
 		accent: "oklch(0.28 0.09 292)",
 		lightBg: "oklch(0.80 0.10 289)",
@@ -76,7 +77,7 @@ const COLOR_THEME_OPTIONS: readonly ColorThemeOption[] = [
 	},
 	{
 		id: "aubergine",
-		label: "Aubergine",
+		label: "aubergine",
 		bg: "oklch(0.46 0.20 295)",
 		accent: "oklch(0.22 0.06 320)",
 		lightBg: "oklch(0.84 0.06 320)",
@@ -84,7 +85,7 @@ const COLOR_THEME_OPTIONS: readonly ColorThemeOption[] = [
 	},
 	{
 		id: "hoth",
-		label: "Hoth",
+		label: "hoth",
 		bg: "oklch(0.55 0.05 230)",
 		accent: "oklch(0.25 0.02 230)",
 		lightBg: "oklch(0.86 0.02 230)",
@@ -92,7 +93,7 @@ const COLOR_THEME_OPTIONS: readonly ColorThemeOption[] = [
 	},
 	{
 		id: "choco-mint",
-		label: "Choco Mint",
+		label: "chocoMint",
 		bg: "oklch(0.62 0.12 175)",
 		accent: "oklch(0.26 0.04 50)",
 		lightBg: "oklch(0.84 0.02 65)",
@@ -100,7 +101,7 @@ const COLOR_THEME_OPTIONS: readonly ColorThemeOption[] = [
 	},
 	{
 		id: "banana",
-		label: "Banana",
+		label: "banana",
 		bg: "oklch(0.80 0.13 70)",
 		accent: "oklch(0.30 0.06 75)",
 		lightBg: "oklch(0.92 0.04 90)",
@@ -141,6 +142,7 @@ function ColorThemePicker({
 	isLight: boolean;
 	onChange: (next: ColorTheme) => void;
 }) {
+	const { t } = useI18n();
 	const [open, setOpen] = useState(false);
 	const current =
 		COLOR_THEME_OPTIONS.find((o) => o.id === value) ?? COLOR_THEME_OPTIONS[0];
@@ -155,7 +157,7 @@ function ColorThemePicker({
 				>
 					<span className="flex min-w-0 items-center gap-2">
 						<ThemeSwatch option={current} isLight={isLight} size={16} />
-						<span className="truncate">{current.label}</span>
+						<span className="truncate">{t(current.label)}</span>
 					</span>
 					<ChevronDown
 						className="size-3.5 shrink-0 text-muted-foreground"
@@ -184,7 +186,7 @@ function ColorThemePicker({
 							>
 								<span className="flex min-w-0 items-center gap-2">
 									<ThemeSwatch option={opt} isLight={isLight} size={16} />
-									<span className="truncate">{opt.label}</span>
+									<span className="truncate">{t(opt.label)}</span>
 								</span>
 								{selected ? (
 									<Check
@@ -255,20 +257,17 @@ export function AppearancePanel({
 
 	return (
 		<SettingsGroup>
-			<SettingsRow title="Language" description="Choose the interface language">
+			<SettingsRow title="language" description="chooseInterfaceLanguage">
 				<SettingsSelect<AppLanguage>
 					value={settings.language}
 					options={APP_LANGUAGE_OPTIONS}
 					onChange={(next) => updateSettings({ language: next })}
-					ariaLabel="Language"
+					ariaLabel="language"
 				/>
 			</SettingsRow>
 
 			{/* ── Mode ─────────────────────────────────────────────────────── */}
-			<SettingsRow
-				title="Theme"
-				description="Use light, dark, or match your system"
-			>
+			<SettingsRow title="theme" description="useLightDarkMatchSystem">
 				<ToggleGroup
 					type="single"
 					value={settings.theme}
@@ -279,9 +278,9 @@ export function AppearancePanel({
 				>
 					{(
 						[
-							{ value: "light", icon: Sun, label: "Light" },
-							{ value: "dark", icon: Moon, label: "Dark" },
-							{ value: "system", icon: Monitor, label: "System" },
+							{ value: "light", icon: Sun, label: "light" },
+							{ value: "dark", icon: Moon, label: "dark" },
+							{ value: "system", icon: Monitor, label: "system" },
 						] as const
 					).map(({ value, icon: Icon, label }) => (
 						<ToggleGroupItem
@@ -290,14 +289,14 @@ export function AppearancePanel({
 							className="gap-1.5 rounded-lg px-3 py-1.5 text-small font-medium text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground"
 						>
 							<Icon className="size-3.5" strokeWidth={1.8} />
-							{label}
+							<I18nText source={label} />
 						</ToggleGroupItem>
 					))}
 				</ToggleGroup>
 			</SettingsRow>
 
 			{/* ── Color theme ──────────────────────────────────────────────── */}
-			<SettingsRow title="Color Theme" description="Choose an accent palette">
+			<SettingsRow title="colorTheme" description="chooseAccentPalette">
 				<ColorThemePicker
 					value={activeColorTheme}
 					isLight={isLight}
@@ -306,51 +305,48 @@ export function AppearancePanel({
 			</SettingsRow>
 
 			{/* ── Chat font size ────────────────────────────────────────────── */}
-			<SettingsRow
-				title="Chat font size"
-				description="Size used for chat message bodies"
-			>
+			<SettingsRow title="chatFontSize" description="sizeUsedChatMessageBodies">
 				<FontSizeStepper
 					value={settings.chatFontSize}
 					onChange={(next) => updateSettings({ chatFontSize: next })}
 					min={12}
 					max={24}
-					ariaLabel="Chat font size"
+					ariaLabel="chatFontSize"
 				/>
 			</SettingsRow>
 
 			{/* ── Fonts (free-form text inputs) ─────────────────────────────── */}
-			<SettingsRow title="UI font">
+			<SettingsRow title="uiFont">
 				<FontPicker
 					value={settings.uiFontFamily}
 					onChange={(next) => updateSettings({ uiFontFamily: next })}
 					effectivePlaceholder={effective.fontSans}
-					ariaLabel="UI font family"
+					ariaLabel="settingsUiFontFamily"
 				/>
 			</SettingsRow>
 
-			<SettingsRow title="Code font">
+			<SettingsRow title="codeFont">
 				<FontPicker
 					value={settings.codeFontFamily}
 					onChange={(next) => updateSettings({ codeFontFamily: next })}
 					effectivePlaceholder={effective.fontMono}
-					ariaLabel="Code font family"
+					ariaLabel="settingsCodeFontFamily"
 				/>
 			</SettingsRow>
 
-			<SettingsRow title="Terminal font">
+			<SettingsRow title="terminalFont">
 				<FontPicker
 					value={settings.terminalFontFamily}
 					onChange={(next) => updateSettings({ terminalFontFamily: next })}
 					effectivePlaceholder={effective.fontTerminal}
-					ariaLabel="Terminal font family"
+					ariaLabel="settingsTerminalFontFamily"
 				/>
 			</SettingsRow>
 
 			{/* ── Cursors ──────────────────────────────────────────────────── */}
 			<SettingsRow
-				title="Use pointer cursors"
-				description="Change the cursor to a pointer when hovering over interactive elements"
+				title="usePointerCursors"
+				description="changeCursorPointerWhenHoveringOver"
 			>
 				<Switch
 					checked={settings.usePointerCursors}

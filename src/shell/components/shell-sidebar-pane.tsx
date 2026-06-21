@@ -116,7 +116,7 @@ export function ShellSidebarPane({
 		<aside
 			ref={asideRef}
 			aria-hidden={collapsed}
-			aria-label={t("Workspace sidebar")}
+			aria-label={t("workspaceSidebar")}
 			data-helmor-sidebar-root
 			data-shell-pane="sidebar"
 			className={cn(
@@ -131,7 +131,7 @@ export function ShellSidebarPane({
 				<EdgeSwipeLayer
 					side="left"
 					open={peekOpen}
-					label="workspace sidebar"
+					label="workspaceSidebar2"
 					onClose={close}
 					swipeHandlers={swipeHandlers}
 				/>
@@ -177,7 +177,7 @@ export function ShellSidebarPane({
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<Button
-									aria-label="Collapse left sidebar"
+									aria-label="collapseLeftSidebar"
 									onClick={onCollapseSidebar}
 									variant="ghost"
 									size="icon-xs"
@@ -190,7 +190,7 @@ export function ShellSidebarPane({
 								side="bottom"
 								className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 							>
-								<span>Collapse left sidebar</span>
+								<span>{t("collapseLeftSidebar")}</span>
 								{leftSidebarToggleShortcut ? (
 									<InlineShortcutDisplay
 										hotkey={leftSidebarToggleShortcut}

@@ -34,7 +34,7 @@ import type {
 	ComposerCustomTag,
 	ResolvedComposerInsertRequest,
 } from "@/lib/composer-insert";
-import { I18nText } from "@/lib/i18n";
+import { I18nText, useI18n } from "@/lib/i18n";
 import {
 	agentModelSectionsQueryOptions,
 	autoCloseActionKindsQueryOptions,
@@ -95,22 +95,24 @@ const EMPTY_SELECTED_CONTEXT_SESSION_IDS: readonly string[] = [];
  * Host-app slash commands. Prepended to the agent-supplied list so they
  * always appear at the top of the popup.
  */
+// Built-in command descriptions carry catalog keys; they get translated when
+// the slash-command list is assembled (agent-supplied descriptions stay raw).
 const ADD_DIR_COMMAND: SlashCommandEntry = {
 	name: "add-dir",
-	description: "Link extra directories to this workspace",
+	description: "linkExtraDirectoriesWorkspace",
 	source: "client-action",
 };
 
 const CODEX_COMPACT_COMMAND: SlashCommandEntry = {
 	name: "compact",
-	description: "Compact this Codex thread's context",
+	description: "compactCodexThreadSContext",
 	source: "builtin",
 	providers: ["codex"],
 };
 
 const OPENCODE_COMPACT_COMMAND: SlashCommandEntry = {
 	name: "compact",
-	description: "Compact this conversation's context",
+	description: "compactConversationSContext",
 	source: "builtin",
 	// MiMo Code is an opencode-protocol fork; same /compact wire path.
 	providers: ["opencode", "mimo"],
@@ -118,8 +120,7 @@ const OPENCODE_COMPACT_COMMAND: SlashCommandEntry = {
 
 const CODEX_GOAL_COMMAND: SlashCommandEntry = {
 	name: "goal",
-	description:
-		"Set a persistent goal Codex pursues turn-after-turn until done or paused",
+	description: "setPersistentGoalCodexPursuesTurn",
 	argumentHint: "<objective>",
 	source: "builtin",
 	providers: ["codex"],
@@ -127,7 +128,7 @@ const CODEX_GOAL_COMMAND: SlashCommandEntry = {
 
 const CLAUDE_GOAL_COMMAND: SlashCommandEntry = {
 	name: "goal",
-	description: "Set a completion condition for Claude to work toward",
+	description: "setCompletionConditionClaudeWorkToward",
 	argumentHint: "<condition>",
 	source: "builtin",
 	providers: ["claude"],
@@ -135,7 +136,7 @@ const CLAUDE_GOAL_COMMAND: SlashCommandEntry = {
 
 const CLAUDE_WORKFLOWS_COMMAND: SlashCommandEntry = {
 	name: "workflows",
-	description: "View this conversation's workflow runs",
+	description: "viewConversationSWorkflowRuns",
 	source: "client-action",
 	providers: ["claude"],
 };
@@ -337,6 +338,7 @@ export const WorkspaceComposerContainer = memo(
 		terminalModeAvailable = true,
 	}: WorkspaceComposerContainerProps) {
 		const queryClient = useQueryClient();
+		const { t } = useI18n();
 		const { settings, updateSettings } = useSettings();
 		// Per-session input recall list. Resolved lazily from the live
 		// thread cache on every ArrowUp/Down — the plugin doesn't subscribe,
@@ -851,7 +853,12 @@ export const WorkspaceComposerContainer = memo(
 			const builtinCommands = BUILTIN_CLIENT_COMMANDS.filter(
 				(command) =>
 					!command.providers || command.providers.includes(slashProvider),
-			);
+			).map((command) => ({
+				...command,
+				// Built-in descriptions are catalog keys; agent-supplied ones below
+				// are raw strings and stay untranslated.
+				description: t(command.description),
+			}));
 			const builtinNames = new Set(
 				builtinCommands.map((command) => command.name),
 			);
@@ -861,7 +868,7 @@ export const WorkspaceComposerContainer = memo(
 					(command) => !builtinNames.has(command.name),
 				),
 			];
-		}, [agentSlashCommands, slashProvider]);
+		}, [agentSlashCommands, slashProvider, t]);
 		// Pending only (`isPending`) covers the very first fetch with no data
 		// yet; once we have data, `isFetching` covers background refetches but
 		// users don't need a spinner for those — the cached list is fine.
@@ -1221,8 +1228,7 @@ export const WorkspaceComposerContainer = memo(
 			[onChangeFastMode, composerContextKey],
 		);
 
-		const autoCloseHelpText =
-			"When enabled, action sessions will close automatically when finished.";
+		const autoCloseHelpText = t("composerAutoCloseHelp");
 
 		// Start/Dismiss quick actions for un-engaged triage workspaces. Dismiss reuses the sidebar controller's archive path.
 		const [triageGraduating, setTriageGraduating] = useState(false);
@@ -1291,7 +1297,7 @@ export const WorkspaceComposerContainer = memo(
 									durationMs={1900}
 									className="truncate text-small font-medium tracking-[0.02em] text-muted-foreground"
 								>
-									<I18nText source={"Working..."} />
+									<I18nText source="working" />
 								</ShimmerText>
 							) : (
 								<>
@@ -1310,7 +1316,9 @@ export const WorkspaceComposerContainer = memo(
 							<ActionRowButton
 								active={autoCloseEnabled}
 								aria-label={
-									autoCloseEnabled ? "Disable Auto Close" : "Enable Auto Close"
+									autoCloseEnabled
+										? "composerDisableAutoClose"
+										: "composerEnableAutoClose"
 								}
 								disabled={composerUnavailable}
 								onClick={() => {
@@ -1322,7 +1330,9 @@ export const WorkspaceComposerContainer = memo(
 									strokeWidth={1.8}
 								/>
 								<span className="inline-flex items-center">
-									{autoCloseEnabled ? "Auto Close On" : "Enable Auto Close"}
+									{autoCloseEnabled
+										? t("composerAutoCloseOn")
+										: t("composerEnableAutoClose")}
 								</span>
 							</ActionRowButton>
 						}

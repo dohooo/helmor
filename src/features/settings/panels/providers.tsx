@@ -130,16 +130,16 @@ export function ProvidersPanel() {
 					    — even custom providers. Lock the whole section until then. */}
 					<LoginGate
 						locked={!statusLoading && !status?.kimi}
-						message="Sign in to Kimi to use it — even custom providers require login. Use the “Log in” button above."
+						message="settingsSignInToKimiEvenCustom"
 					>
 						<ProviderConfigRow
-							label="Models"
-							description="Pick which Kimi models appear in the composer's picker."
+							label="models"
+							description="settingsPickWhichKimiModelsAppearComposer"
 						>
 							<KimiModels />
 						</ProviderConfigRow>
 						<ProviderConfigRow
-							label="Custom Providers"
+							label="customProviders"
 							description={KIMI_CONFIG_ADAPTER.customProvidersDescription}
 						>
 							<CustomProvidersList adapter={KIMI_CONFIG_ADAPTER} />
@@ -152,7 +152,7 @@ export function ProvidersPanel() {
 					ready={Boolean(status?.cursor)}
 					loginProvider={null}
 				>
-					<ProviderConfigRow description="Add your API key, then pick which models appear in the composer's picker.">
+					<ProviderConfigRow description="addApiKeyThenPickWhich">
 						<CursorCardBody />
 					</ProviderConfigRow>
 				</ProviderRow>
@@ -200,13 +200,13 @@ function SlugProviderRow({
 			collapsible
 		>
 			<ProviderConfigRow
-				label="Models"
-				description="Pick which models appear in the composer's picker."
+				label="models"
+				description="pickWhichModelsAppearComposerS"
 			>
 				<SlugProviderModels adapter={adapter} ref={modelsRef} />
 			</ProviderConfigRow>
 			<ProviderConfigRow
-				label="Custom Providers"
+				label="customProviders"
 				description={configAdapter.customProvidersDescription}
 			>
 				<CustomProvidersList adapter={configAdapter} />

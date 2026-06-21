@@ -2,7 +2,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { useMemo } from "react";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { useLocalizedNode } from "@/lib/i18n";
+
 import { cn } from "@/lib/utils";
 
 function FieldSet({ className, ...props }: React.ComponentProps<"fieldset">) {
@@ -24,7 +24,6 @@ function FieldLegend({
 	children,
 	...props
 }: React.ComponentProps<"legend"> & { variant?: "legend" | "label" }) {
-	const localizedChildren = useLocalizedNode(children);
 	return (
 		<legend
 			data-slot="field-legend"
@@ -35,7 +34,7 @@ function FieldLegend({
 			)}
 			{...props}
 		>
-			{localizedChildren}
+			{children}
 		</legend>
 	);
 }
@@ -122,7 +121,6 @@ function FieldTitle({
 	children,
 	...props
 }: React.ComponentProps<"div">) {
-	const localizedChildren = useLocalizedNode(children);
 	return (
 		<div
 			data-slot="field-label"
@@ -132,7 +130,7 @@ function FieldTitle({
 			)}
 			{...props}
 		>
-			{localizedChildren}
+			{children}
 		</div>
 	);
 }
@@ -142,7 +140,6 @@ function FieldDescription({
 	children,
 	...props
 }: React.ComponentProps<"p">) {
-	const localizedChildren = useLocalizedNode(children);
 	return (
 		<p
 			data-slot="field-description"
@@ -154,7 +151,7 @@ function FieldDescription({
 			)}
 			{...props}
 		>
-			{localizedChildren}
+			{children}
 		</p>
 	);
 }
@@ -166,7 +163,6 @@ function FieldSeparator({
 }: React.ComponentProps<"div"> & {
 	children?: React.ReactNode;
 }) {
-	const localizedChildren = useLocalizedNode(children);
 	return (
 		<div
 			data-slot="field-separator"
@@ -183,7 +179,7 @@ function FieldSeparator({
 					className="relative mx-auto block w-fit bg-background px-2 text-muted-foreground"
 					data-slot="field-separator-content"
 				>
-					{localizedChildren}
+					{children}
 				</span>
 			)}
 		</div>

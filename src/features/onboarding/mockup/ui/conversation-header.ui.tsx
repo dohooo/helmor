@@ -34,7 +34,7 @@ export function ConversationHeaderUI({
 	const { t } = useI18n();
 	return (
 		<div
-			aria-label={t("Workspace header")}
+			aria-label={t("workspaceHeader")}
 			className="flex h-9 items-center justify-between gap-3 px-[18px]"
 			data-tauri-drag-region
 		>

@@ -23,7 +23,7 @@ export function OnboardingLanguageMenu() {
 					type="button"
 					variant="ghost"
 					size="xs"
-					aria-label="Language"
+					aria-label="language"
 					className="h-7 gap-1 rounded-md px-2 text-small font-normal text-muted-foreground hover:text-foreground"
 				>
 					<span>{current.label}</span>

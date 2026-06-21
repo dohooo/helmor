@@ -35,6 +35,7 @@ import {
 	type WorkspaceMode,
 } from "@/lib/api";
 import { extractError } from "@/lib/errors";
+import { translateSource } from "@/lib/i18n";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { sessionThreadCacheKey } from "@/lib/session-thread-cache";
 import {
@@ -462,9 +463,9 @@ export function useStartSurfaceController(
 					pushToastRef.current(
 						describeUnknownError(
 							error,
-							"Could not move workspace into a new worktree.",
+							translateSource("miscCouldNotMoveToWorktree"),
 						),
-						"Move to worktree failed",
+						translateSource("miscMoveToWorktreeFailed"),
 					);
 				});
 		},
@@ -494,8 +495,8 @@ export function useStartSurfaceController(
 			// mode does.
 			if (startMode !== "chat" && !startRepository?.id) {
 				pushToastRef.current(
-					"Pick a repository before sending.",
-					"Can't create workspace",
+					translateSource("miscPickRepositoryBeforeSending"),
+					translateSource("miscCantCreateWorkspace"),
 				);
 				return { shouldStream: false };
 			}
@@ -628,8 +629,8 @@ export function useStartSurfaceController(
 								error,
 							);
 							pushToastRef.current(
-								"Couldn't open a terminal — sent as a chat message instead.",
-								"Terminal Mode unavailable",
+								translateSource("miscTerminalSentAsChat"),
+								translateSource("miscTerminalModeUnavailable"),
 							);
 						}
 					}
@@ -688,8 +689,11 @@ export function useStartSurfaceController(
 								current?.id === pendingId ? null : current,
 							);
 							pushToastRef.current(
-								describeUnknownError(error, "Workspace setup failed."),
-								"Workspace setup failed",
+								describeUnknownError(
+									error,
+									translateSource("miscWorkspaceSetupFailedDot"),
+								),
+								translateSource("miscWorkspaceSetupFailed"),
 							);
 							requestSidebarReconcile(queryClient);
 							return { shouldStream: false };
@@ -727,14 +731,14 @@ export function useStartSurfaceController(
 			} catch (error) {
 				const { code, message } = extractError(
 					error,
-					"Could not create workspace.",
+					translateSource("miscCouldNotCreateWorkspace"),
 				);
 				const title =
 					code === "BranchInUse"
-						? "Branch already in use"
+						? translateSource("miscBranchAlreadyInUse")
 						: code === "BranchNotFound"
-							? "Branch not found"
-							: "Can't create workspace";
+							? translateSource("miscBranchNotFound")
+							: translateSource("miscCantCreateWorkspace");
 				pushToastRef.current(message, title);
 				return { shouldStream: false };
 			}

@@ -58,7 +58,7 @@ import {
 	type InspectorFileItem,
 	isActiveEditorTarget,
 } from "@/lib/editor-session";
-import { I18nText, useI18n } from "@/lib/i18n";
+import { formatSource, I18nText, translateSource, useI18n } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
 import {
 	helmorQueryKeys,
@@ -164,7 +164,7 @@ function ChangesSectionImpl({
 	forgeIsRefreshing = false,
 	sectionRef,
 }: ChangesSectionProps) {
-	const { t } = useI18n();
+	const { t, f } = useI18n();
 	const queryClient = useQueryClient();
 	const {
 		changesOpen,
@@ -306,17 +306,20 @@ function ChangesSectionImpl({
 	const handleOpenExternalEditor = useCallback(
 		(path: string) => {
 			if (!preferredEditor) {
-				pushToast("Select a default editor before opening files.", "No editor");
+				pushToast(
+					t("inspectorSelectDefaultEditorFirst"),
+					t("inspectorNoEditor"),
+				);
 				return;
 			}
 			void openFileInEditor(path, preferredEditor.id).catch((error) => {
 				pushToast(
 					error instanceof Error ? error.message : String(error),
-					`Failed to open ${preferredEditor.name}`,
+					f("failedOpenEditor", { editor: preferredEditor.name }),
 				);
 			});
 		},
-		[preferredEditor, pushToast],
+		[preferredEditor, pushToast, t, f],
 	);
 
 	// Header shimmer is owned by App: it knows when the change-request and
@@ -327,7 +330,7 @@ function ChangesSectionImpl({
 	return (
 		<section
 			ref={sectionRef}
-			aria-label="Inspector section Git"
+			aria-label={t("inspectorSectionGit")}
 			className="flex min-h-0 shrink-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar"
 			// Height written via `sectionRef` by `useWorkspaceInspectorSidebar`
 			// — kept out of JSX so incidental re-renders can't clobber it.
@@ -353,14 +356,14 @@ function ChangesSectionImpl({
 			/>
 
 			<ScrollArea
-				aria-label={t("Changes panel body")}
+				aria-label={t("changesPanelBody")}
 				className="min-h-0 flex-1 bg-muted/20 font-sans text-ui leading-5"
 			>
 				{hasUncommittedChanges && (
 					<>
 						{stagedChanges.length > 0 && (
 							<ChangesGroup
-								label="Staged Changes"
+								label="stagedChanges"
 								count={stagedChanges.length}
 								open={stagedOpen}
 								onToggle={() => toggleStagedOpen()}
@@ -383,7 +386,7 @@ function ChangesSectionImpl({
 						)}
 						{unstagedChanges.length > 0 && (
 							<ChangesGroup
-								label="Changes"
+								label="changes"
 								icon={
 									<LaptopIcon
 										className="size-3 shrink-0 text-muted-foreground/70"
@@ -435,7 +438,7 @@ function ChangesSectionImpl({
 
 				{changesLoaded && !hasChanges && !branchSwitching && (
 					<div className="px-3 py-3 text-small leading-5 text-muted-foreground/70">
-						<I18nText source={"No changes on this branch yet."} />
+						<I18nText source="noChangesBranchYet" />
 					</div>
 				)}
 			</ScrollArea>
@@ -497,6 +500,7 @@ function ChangesGroup({
 	 * (so the editor reads the working tree from disk). */
 	modifiedRef?: string;
 }) {
+	const { t } = useI18n();
 	const handleOpenFile = useCallback(
 		(path: string, options?: DiffOpenOptions) => {
 			onOpenEditorFile(path, {
@@ -537,13 +541,15 @@ function ChangesGroup({
 						strokeWidth={2}
 					/>
 					{icon}
-					<span className="truncate">{label}</span>
+					<span className="truncate">{t(label)}</span>
 				</Button>
 				<ViewToggleButton treeView={treeView} onToggle={onToggleTreeView} />
 				{onBatchAction && (
 					<RowIconButton
 						aria-label={
-							action === "stage" ? "Stage all changes" : "Unstage all changes"
+							action === "stage"
+								? "inspectorStageAllChanges"
+								: "inspectorUnstageAllChanges"
 						}
 						onClick={onBatchAction}
 						className="text-transparent hover:bg-transparent group-hover/header:text-muted-foreground group-hover/header:hover:text-foreground"
@@ -632,6 +638,7 @@ function BranchDiffSection({
 	workspaceBranch: string | null;
 	workspaceRemoteUrl: string | null;
 }) {
+	const { t } = useI18n();
 	const remoteOriginalRef = targetBranch ?? undefined;
 	const remoteModifiedRef = "HEAD";
 	const handleOpenFile = useCallback(
@@ -675,7 +682,7 @@ function BranchDiffSection({
 						className="size-3 shrink-0 text-muted-foreground/70"
 						strokeWidth={2}
 					/>
-					<span className="truncate">Remote</span>
+					<span className="truncate">{t("remote")}</span>
 				</Button>
 				<ViewToggleButton treeView={treeView} onToggle={onToggleTreeView} />
 				<Badge
@@ -698,7 +705,7 @@ function BranchDiffSection({
 				>
 					{loading && changes.length === 0 ? (
 						<div className="px-2 py-2 text-micro text-muted-foreground/70">
-							<I18nText source={"Switching target branch…"} />
+							<I18nText source="switchingTargetBranch" />
 						</div>
 					) : treeView ? (
 						<ChangesTreeView
@@ -1218,8 +1225,8 @@ function RowHoverActions({
 		<span className="ml-auto hidden items-center gap-0.5 group-hover/row:inline-flex">
 			{canOpenExternalEditor && (
 				<RowIconButton
-					aria-label="Open in editor"
-					title="Open in editor"
+					aria-label="openEditor"
+					title="openEditor"
 					onClick={() => onOpenExternalEditor(absolutePath)}
 					className={CHANGES_ROW_ICON_STATE_CLASS}
 				>
@@ -1228,8 +1235,8 @@ function RowHoverActions({
 			)}
 			{onDiscard && (
 				<RowIconButton
-					aria-label="Discard file changes"
-					title="Discard file changes"
+					aria-label="discardFileChanges"
+					title="discardFileChanges"
 					onClick={() => onDiscard(path)}
 					className={CHANGES_ROW_ICON_STATE_CLASS}
 				>
@@ -1238,8 +1245,12 @@ function RowHoverActions({
 			)}
 			{action && onStageAction && (
 				<RowIconButton
-					aria-label={action === "stage" ? "Stage file" : "Unstage file"}
-					title={action === "stage" ? "Stage file" : "Unstage file"}
+					aria-label={
+						action === "stage" ? "inspectorStageFile" : "inspectorUnstageFile"
+					}
+					title={
+						action === "stage" ? "inspectorStageFile" : "inspectorUnstageFile"
+					}
 					onClick={() => onStageAction(path)}
 					className={CHANGES_ROW_ICON_STATE_CLASS}
 				>
@@ -1301,7 +1312,9 @@ function ViewToggleButton({
 }) {
 	return (
 		<RowIconButton
-			aria-label={treeView ? "Switch to list view" : "Switch to tree view"}
+			aria-label={
+				treeView ? "inspectorSwitchListView" : "inspectorSwitchTreeView"
+			}
 			onClick={onToggle}
 			className="text-transparent hover:bg-transparent group-hover/header:text-muted-foreground group-hover/header:hover:text-foreground"
 		>
@@ -1314,12 +1327,16 @@ function ViewToggleButton({
 	);
 }
 
-async function copyToClipboard(value: string, label: string) {
+async function copyToClipboard(value: string, labelKey: string) {
+	const label = translateSource(labelKey);
 	try {
 		await navigator.clipboard.writeText(value);
-		toast.success(`${label} copied`, { description: value, duration: 2000 });
+		toast.success(formatSource("labelCopied", { label }), {
+			description: value,
+			duration: 2000,
+		});
 	} catch {
-		toast.error(`Failed to copy ${label.toLowerCase()}`);
+		toast.error(formatSource("failedCopyLabel", { label }));
 	}
 }
 
@@ -1381,6 +1398,7 @@ function FileRowContextMenuContent({
 	workspaceBranch: string | null;
 	workspaceRemoteUrl: string | null;
 }) {
+	const { t } = useI18n();
 	const remoteFileUrl = useMemo(
 		() => buildRemoteFileUrl(workspaceRemoteUrl, workspaceBranch, file.path),
 		[file.path, workspaceBranch, workspaceRemoteUrl],
@@ -1391,42 +1409,44 @@ function FileRowContextMenuContent({
 			await revealPathInFinder(file.absolutePath);
 		} catch (error) {
 			const message =
-				error instanceof Error ? error.message : "Failed to reveal in Finder";
+				error instanceof Error
+					? error.message
+					: translateSource("inspectorFailedRevealFinder");
 			toast.error(message);
 		}
 	}, [file.absolutePath]);
 
 	const handleCopyAbsolute = useCallback(
-		() => copyToClipboard(file.absolutePath, "Path"),
+		() => copyToClipboard(file.absolutePath, "path"),
 		[file.absolutePath],
 	);
 	const handleCopyRelative = useCallback(
-		() => copyToClipboard(file.path, "Relative path"),
+		() => copyToClipboard(file.path, "relativePath"),
 		[file.path],
 	);
 	const handleCopyRemoteUrl = useCallback(() => {
 		if (!remoteFileUrl) return;
-		void copyToClipboard(remoteFileUrl, "Remote file URL");
+		void copyToClipboard(remoteFileUrl, "remoteFileUrl");
 	}, [remoteFileUrl]);
 
 	return (
 		<ContextMenuContent className="min-w-52">
 			<ContextMenuItem onClick={() => void handleReveal()}>
 				<FolderOpenIcon />
-				<span>Reveal in Finder</span>
+				<span>{t("revealFinder")}</span>
 			</ContextMenuItem>
 			<ContextMenuSeparator />
 			<ContextMenuItem onClick={handleCopyAbsolute}>
 				<CopyIcon />
-				<span>Copy Path</span>
+				<span>{t("copyPath")}</span>
 			</ContextMenuItem>
 			<ContextMenuItem onClick={handleCopyRelative}>
 				<CopyIcon />
-				<span>Copy Relative Path</span>
+				<span>{t("copyRelativePath")}</span>
 			</ContextMenuItem>
 			<ContextMenuItem onClick={handleCopyRemoteUrl} disabled={!remoteFileUrl}>
 				<LinkIcon />
-				<span>Copy Remote File URL</span>
+				<span>{t("copyRemoteFileUrl")}</span>
 			</ContextMenuItem>
 		</ContextMenuContent>
 	);

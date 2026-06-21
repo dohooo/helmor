@@ -147,7 +147,7 @@ function ReleaseAnnouncementToast({
 						className="shrink-0 opacity-90"
 					/>
 					<div className="truncate text-ui font-semibold leading-none text-foreground">
-						<I18nText source={"New in v"} />
+						<I18nText source="newV" />
 						{announcement.version}
 					</div>
 				</div>
@@ -159,8 +159,8 @@ function ReleaseAnnouncementToast({
 						className="text-muted-foreground hover:text-foreground"
 						aria-label={
 							collapsed
-								? "Expand release announcement"
-								: "Collapse release announcement"
+								? "miscExpandReleaseAnnouncement"
+								: "miscCollapseReleaseAnnouncement"
 						}
 						onClick={() => setCollapsed((value) => !value)}
 					>
@@ -175,7 +175,7 @@ function ReleaseAnnouncementToast({
 						variant="ghost"
 						size="icon-xs"
 						className="text-muted-foreground hover:text-foreground"
-						aria-label="Dismiss release announcement"
+						aria-label="dismissReleaseAnnouncement"
 						onClick={onClose}
 					>
 						<XIcon className="size-3.5" />
@@ -212,7 +212,7 @@ function ReleaseAnnouncementToast({
 								onClick={onOpenChangelog}
 							>
 								<GithubBrandIcon size={14} />
-								Changelogs
+								<I18nText source="changelogs" />
 								<ExternalLinkIcon className="size-3" />
 							</Button>
 						</div>

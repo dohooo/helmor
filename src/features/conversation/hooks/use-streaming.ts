@@ -40,6 +40,7 @@ import {
 	locatePastedTextRanges,
 } from "@/lib/composer-insert";
 import { extractError, isRecoverableByPurge } from "@/lib/errors";
+import { translateSource } from "@/lib/i18n";
 import {
 	agentModelSectionsQueryOptions,
 	helmorQueryKeys,
@@ -619,7 +620,7 @@ export function useConversationStreaming({
 				console.error("[conversation] user-input response:", error);
 				const { code, message: errorMsg } = extractError(
 					error,
-					"Failed to deliver user-input response.",
+					translateSource("composerFailedDeliverResponse"),
 				);
 				if (isRecoverableByPurge(code) && displayedWorkspaceId) {
 					showWorkspaceBrokenToast({
@@ -1199,7 +1200,7 @@ export function useConversationStreaming({
 				console.error("[conversation] invoke error:", error);
 				const { code, message: errorMsg } = extractError(
 					error,
-					"Failed to send message.",
+					translateSource("composerFailedSendMessage"),
 				);
 				if (isRecoverableByPurge(code) && targetWorkspaceId) {
 					showWorkspaceBrokenToast({

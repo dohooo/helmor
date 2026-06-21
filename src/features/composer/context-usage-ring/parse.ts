@@ -2,6 +2,8 @@
 // The ring shows whatever was recorded at the last turn end — switching the
 // composer model in-place does not invalidate it; the next turn refreshes it.
 
+import { formatSource, translateSource } from "@/lib/i18n";
+
 export type ContextCategory = {
 	readonly name: string;
 	readonly tokens: number;
@@ -256,21 +258,26 @@ function parseCodexNotes(
 
 	const planRaw = root.plan_type ?? root.planType;
 	const planLabel = formatCodexPlan(planRaw);
-	if (planLabel) notes.push({ label: "Plan", value: planLabel });
+	if (planLabel)
+		notes.push({ label: translateSource("plan"), value: planLabel });
 
 	const credits = asObject(root.credits);
 	if (credits) {
 		const unlimited = credits.unlimited === true;
 		const hasCredits =
 			credits.has_credits === true || credits.hasCredits === true;
+		const creditsLabel = translateSource("credits");
 		if (unlimited) {
-			notes.push({ label: "Credits", value: "Unlimited" });
+			notes.push({
+				label: creditsLabel,
+				value: translateSource("composerCreditsUnlimited"),
+			});
 		} else {
 			const balance = parseCreditsBalance(credits.balance);
 			if (balance !== null) {
-				notes.push({ label: "Credits", value: formatCredits(balance) });
+				notes.push({ label: creditsLabel, value: formatCredits(balance) });
 			} else if (hasCredits === false) {
-				notes.push({ label: "Credits", value: "0.00" });
+				notes.push({ label: creditsLabel, value: "0.00" });
 			}
 		}
 	}
@@ -451,8 +458,8 @@ function claudeExtraSuffix(key: string): string | null {
 function humanizeClaudeSuffix(suffix: string): string {
 	if (suffix === "sonnet") return "Sonnet";
 	if (suffix === "opus") return "Opus";
-	if (suffix === "omelette") return "Designs";
-	if (suffix === "cowork") return "Daily Routines";
+	if (suffix === "omelette") return translateSource("composerUsageDesigns");
+	if (suffix === "cowork") return translateSource("composerUsageDailyRoutines");
 	return suffix
 		.split("_")
 		.filter(Boolean)
@@ -462,9 +469,11 @@ function humanizeClaudeSuffix(suffix: string): string {
 
 function formatWindowLabel(minutes: number | null): string | null {
 	if (minutes === null || minutes <= 0) return null;
-	if (minutes % (60 * 24) === 0) return `${minutes / 60 / 24}d limit`;
-	if (minutes % 60 === 0) return `${minutes / 60}h limit`;
-	return `${minutes}m limit`;
+	if (minutes % (60 * 24) === 0)
+		return formatSource("composerDayLimit", { count: minutes / 60 / 24 });
+	if (minutes % 60 === 0)
+		return formatSource("composerHourLimit", { count: minutes / 60 });
+	return formatSource("composerMinuteLimit", { count: minutes });
 }
 
 /** Format a unix-seconds timestamp like "Apr 23, 1:29 PM". */

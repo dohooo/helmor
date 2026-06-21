@@ -4,7 +4,7 @@ import { AgentLoginDialog } from "@/components/agent-login/agent-login-dialog";
 import type { ClaudeIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import type { AgentLoginProvider } from "@/lib/api";
-import { useI18n, useLocalizedNode } from "@/lib/i18n";
+import { I18nText, useI18n, useLocalizedNode } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 export function ProviderRow({
@@ -62,7 +62,7 @@ export function ProviderRow({
 					}}
 				>
 					<LogIn className="size-3.5" />
-					Log in
+					<I18nText source="log" />
 				</Button>
 			) : null}
 		</>
@@ -183,7 +183,7 @@ function StatusBadge() {
 	return (
 		<span className="flex shrink-0 items-center gap-1.5 rounded-full bg-emerald-500/10 px-2 py-0.5 text-mini font-medium text-emerald-500">
 			<span className="size-1.5 rounded-full bg-emerald-500" />
-			{t("Ready")}
+			{t("ready")}
 		</span>
 	);
 }
@@ -193,7 +193,7 @@ function ConnectingBadge() {
 	return (
 		<span className="flex shrink-0 items-center gap-1.5 rounded-full bg-muted px-2 py-0.5 text-mini font-medium text-muted-foreground">
 			<span className="size-1.5 animate-pulse rounded-full bg-muted-foreground/60" />
-			{t("Connecting")}
+			{t("connecting")}
 		</span>
 	);
 }

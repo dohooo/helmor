@@ -18,6 +18,8 @@ pub mod local_llm;
 pub mod logging;
 pub mod maintenance;
 pub mod mcp;
+#[cfg(target_os = "macos")]
+pub mod media_keys;
 pub mod models;
 pub mod pipeline;
 pub(crate) mod platform;
@@ -515,6 +517,13 @@ fn build_app(mode: AppMode) -> tauri::App {
             // confirmation dialog as the close button.
             #[cfg(target_os = "macos")]
             install_macos_menu(app.handle())?;
+
+            // Stop WKWebView from swallowing Apple-keyboard transport
+            // keys (play/pause, next, previous, fast, rewind). Without
+            // this, those keys produce a "pop" NSBeep and never reach
+            // Spotify / Apple Music.
+            #[cfg(target_os = "macos")]
+            media_keys::install();
 
             Ok(())
         })

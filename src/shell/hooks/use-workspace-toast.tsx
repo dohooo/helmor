@@ -1,6 +1,7 @@
 import { CircleAlertIcon } from "lucide-react";
 import { useCallback } from "react";
 import { toast } from "sonner";
+import { useI18n } from "@/lib/i18n";
 import type { WorkspaceToastOptions } from "@/lib/workspace-toast-context";
 
 /**
@@ -12,10 +13,11 @@ import type { WorkspaceToastOptions } from "@/lib/workspace-toast-context";
  * stable across renders — `WorkspaceToastProvider`'s value never churns.
  */
 export function useWorkspaceToast() {
+	const { t } = useI18n();
 	return useCallback(
 		(
 			description: string,
-			title = "Action failed",
+			title = t("miscActionFailed"),
 			variant: "default" | "destructive" = "destructive",
 			opts?: {
 				action?: WorkspaceToastOptions["action"];
@@ -34,7 +36,7 @@ export function useWorkspaceToast() {
 				: undefined;
 			const cancel = opts?.action
 				? {
-						label: "Dismiss",
+						label: t("dismiss"),
 						onClick: () => {
 							toast.dismiss(id);
 						},
@@ -64,6 +66,6 @@ export function useWorkspaceToast() {
 
 			toast(title, toastOptions);
 		},
-		[],
+		[t],
 	);
 }

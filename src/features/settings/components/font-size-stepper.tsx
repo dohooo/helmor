@@ -35,7 +35,7 @@ export function FontSizeStepper({
 				size="icon-sm"
 				onClick={() => onChange(Math.max(min, value - step))}
 				disabled={value <= min}
-				aria-label="Decrease"
+				aria-label="decrease"
 			>
 				<Minus className="size-3.5" strokeWidth={2} />
 			</Button>
@@ -48,7 +48,7 @@ export function FontSizeStepper({
 				size="icon-sm"
 				onClick={() => onChange(Math.min(max, value + step))}
 				disabled={value >= max}
-				aria-label="Increase"
+				aria-label="increase"
 			>
 				<Plus className="size-3.5" strokeWidth={2} />
 			</Button>

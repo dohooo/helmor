@@ -48,10 +48,10 @@ function useSessionWorkflows(sessionId: string | null): WorkflowPart[] {
 }
 
 const WORKFLOW_STATUS_LABEL: Record<WorkflowPart["status"], string> = {
-	running: "running",
-	completed: "done",
-	failed: "failed",
-	stopped: "stopped",
+	running: "composerWorkflowStatusRunning",
+	completed: "composerWorkflowStatusDone",
+	failed: "composerWorkflowStatusFailed",
+	stopped: "composerWorkflowStatusStopped",
 };
 
 function statusTone(status: WorkflowPart["status"]): string {
@@ -312,9 +312,9 @@ export function WorkflowProgressPanel({
 
 	const headerTitle =
 		level === 0
-			? "Workflows"
+			? t("workflows")
 			: level === 1
-				? (run?.name ?? "Workflow")
+				? (run?.name ?? t("composerWorkflow"))
 				: (flat[Math.min(agentIndex, Math.max(0, flat.length - 1))]?.label ??
 					"Agent");
 
@@ -338,7 +338,7 @@ export function WorkflowProgressPanel({
 							strokeWidth={1.8}
 						/>
 						<span className="text-mini font-medium uppercase tracking-[0.06em] text-muted-foreground">
-							<I18nText source={"Workflows"} />
+							<I18nText source="workflows" />
 						</span>
 					</>
 				) : (
@@ -361,7 +361,7 @@ export function WorkflowProgressPanel({
 					<button
 						type="button"
 						onClick={onClose}
-						aria-label={t("Close workflows")}
+						aria-label={t("closeWorkflows")}
 						className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
 					>
 						<X className="size-3.5" strokeWidth={1.8} />
@@ -375,11 +375,7 @@ export function WorkflowProgressPanel({
 						<div ref={scrollContentRef}>
 							{workflows.length === 0 ? (
 								<p className="px-1 py-2 text-ui leading-6 text-muted-foreground">
-									<I18nText
-										source={
-											"No workflows in this conversation yet. They appear here when the agent runs a dynamic workflow."
-										}
-									/>
+									<I18nText source="noWorkflowsConversationYetTheyAppear" />
 								</p>
 							) : (
 								<div className="flex flex-col gap-0.5">
@@ -407,7 +403,7 @@ export function WorkflowProgressPanel({
 											<span
 												className={cn("text-mini", statusTone(part.status))}
 											>
-												{WORKFLOW_STATUS_LABEL[part.status]}
+												{t(WORKFLOW_STATUS_LABEL[part.status])}
 											</span>
 											<span className="ml-auto shrink-0 truncate text-mini text-muted-foreground/60">
 												{runMeta(part)}
@@ -427,7 +423,7 @@ export function WorkflowProgressPanel({
 						<div ref={scrollContentRef} className="flex flex-col gap-0.5">
 							{flat.length === 0 ? (
 								<p className="px-1 py-2 text-ui leading-6 text-muted-foreground">
-									<I18nText source={"No agents reported yet."} />
+									<I18nText source="noAgentsReportedYet" />
 								</p>
 							) : (
 								rows.map((row) =>
@@ -496,7 +492,7 @@ export function WorkflowProgressPanel({
 						if (!agent) {
 							return (
 								<p className="px-1 py-2 text-ui text-muted-foreground">
-									<I18nText source={"Agent unavailable."} />
+									<I18nText source="agentUnavailable" />
 								</p>
 							);
 						}
@@ -523,7 +519,9 @@ export function WorkflowProgressPanel({
 											{agent.label}
 										</span>
 										<span className="ml-auto shrink-0 text-mini text-muted-foreground/60">
-											{done ? "done" : "running"}
+											{done
+												? t("composerWorkflowStatusDone")
+												: t("composerWorkflowStatusRunning")}
 										</span>
 									</div>
 									{meta ? (
@@ -553,7 +551,7 @@ export function WorkflowProgressPanel({
 									</div>
 								) : (
 									<div className="text-ui text-muted-foreground/60">
-										<I18nText source={"No result preview."} />
+										<I18nText source="noResultPreview" />
 									</div>
 								)}
 							</div>

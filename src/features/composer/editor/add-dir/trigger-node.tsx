@@ -88,7 +88,7 @@ export class AddDirTriggerNode extends DecoratorNode<ReactNode> {
 				data-testid="add-dir-pill"
 				className="inline-flex h-5 items-center rounded-[5px] px-1 font-mono text-small leading-none bg-[color-mix(in_srgb,var(--workspace-pr-merged-accent)_10%,transparent)] text-[var(--workspace-pr-merged-accent)]"
 			>
-				<I18nText source={"/add-dir"} />
+				<I18nText source="addDir" />
 			</span>
 		);
 	}

@@ -5,6 +5,7 @@ import {
 	stopTerminal,
 	writeTerminalStdin,
 } from "@/lib/api";
+import { formatSource, translateSource } from "@/lib/i18n";
 
 // Module-level store for Terminal tab instances. Mirrors script-store but
 // keyed per (workspace, instanceId) so multiple shells can coexist.
@@ -30,8 +31,8 @@ export type TerminalInstance = {
 
 /** Positional label: 1 instance → "Terminal", 2+ → "Terminal N". */
 export function getTerminalDisplayTitle(index: number, total: number): string {
-	if (total <= 1) return "Terminal";
-	return `Terminal ${index + 1}`;
+	if (total <= 1) return translateSource("terminal");
+	return formatSource("inspectorTerminalN", { index: index + 1 });
 }
 
 /** Soft cap on concurrent terminals per workspace (memory + reflow cost). */

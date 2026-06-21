@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { type OsGlobalHotkeyId, syncGlobalHotkey } from "@/lib/api";
+import { translateSource } from "@/lib/i18n";
 import type { ShortcutOverrides } from "@/lib/settings";
 import { isQuickPanelWindow } from "@/lib/window-role";
 import { getShortcut, updateShortcutOverride } from "./registry";
@@ -42,7 +43,7 @@ export function useGlobalHotkeySync({
 						toast.error(
 							error instanceof Error
 								? error.message
-								: "Failed to register global hotkey",
+								: translateSource("miscFailedRegisterGlobalHotkey"),
 						);
 					}
 

@@ -381,16 +381,12 @@ export function LocalLlmPanel({
 				<div className="min-w-0 flex-1">
 					<div className="flex flex-wrap items-center gap-1.5 text-[13px] font-medium leading-snug text-foreground">
 						<span className="min-w-0">
-							<I18nText source={"Local LLM"} />
+							<I18nText source="localLlm" />
 						</span>
 						<SettingsReleaseBadge marker={{ kind: "feature" }} />
 					</div>
 					<p className="mt-1 text-[12px] leading-snug text-muted-foreground">
-						<I18nText
-							source={
-								"Powers session title / branch name generation and Smart Triage — both run entirely on your device."
-							}
-						/>
+						<I18nText source="powersSessionTitleBranchNameGeneration" />
 					</p>
 				</div>
 				<Switch
@@ -411,11 +407,7 @@ export function LocalLlmPanel({
 					/>
 					{!hasModel ? (
 						<NoticeBanner tone="warning">
-							<I18nText
-								source={
-									"No model selected. Pick one from the Models dropdown below to start — including Custom if you already have a GGUF on disk."
-								}
-							/>
+							<I18nText source="noModelSelectedPickOneFrom" />
 						</NoticeBanner>
 					) : null}
 
@@ -524,22 +516,22 @@ export function LocalLlmPanel({
 				onOpenChange={(open) => {
 					if (!open) setDeleteTargetId(null);
 				}}
-				title="Delete this model?"
+				title="deleteModel"
 				description={
 					deleteTargetEntry ? (
 						<>
-							This will remove{" "}
+							<I18nText source="willRemove" />{" "}
 							<span className="font-medium text-foreground">
 								{deleteTargetEntry.label}
 							</span>{" "}
-							({formatBytes(localLlmEntryTotalBytes(deleteTargetEntry))}) from
-							disk. You'll have to download it again to use it.
+							({formatBytes(localLlmEntryTotalBytes(deleteTargetEntry))}
+							<I18nText source="fromDiskLlHaveDownloadAgain" />
 						</>
 					) : (
-						"This will remove the model from disk."
+						"settingsRemoveModelFromDisk"
 					)
 				}
-				confirmLabel="Delete"
+				confirmLabel="delete"
 				onConfirm={confirmDelete}
 			/>
 		</div>
@@ -567,23 +559,24 @@ function StatusHeader({
 	activeModelLabel: string | null;
 	activeContextTokens: number | null;
 }) {
+	const { t } = useI18n();
 	let label: string;
 	let dotClass: string;
 	let showSpinner = false;
 	let showEndpoint = false;
 	if (starting) {
-		label = "Starting";
+		label = t("settingsStatusStarting");
 		dotClass = "bg-amber-500";
 		showSpinner = true;
 	} else if (running) {
-		label = "Running";
+		label = t("running");
 		dotClass = "bg-emerald-500";
 		showEndpoint = true;
 	} else if (!hasModel) {
-		label = "No model";
+		label = t("settingsStatusNoModel");
 		dotClass = "bg-amber-500";
 	} else {
-		label = "Stopped";
+		label = t("settingsStatusStopped");
 		dotClass = "bg-destructive";
 	}
 
@@ -726,10 +719,12 @@ function ModelsSection({
 	if (loading) {
 		return (
 			<div className="grid gap-1.5">
-				<Label className="text-[12px] text-muted-foreground">Models</Label>
+				<Label className="text-[12px] text-muted-foreground">
+					<I18nText source="models" />
+				</Label>
 				<div className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
 					<Loader2 className="size-3 animate-spin" />
-					<I18nText source={"Loading models…"} />
+					<I18nText source="loadingModels" />
 				</div>
 			</div>
 		);
@@ -748,7 +743,9 @@ function ModelsSection({
 
 	return (
 		<div className="grid gap-1.5">
-			<Label className="text-[12px] text-muted-foreground">Models</Label>
+			<Label className="text-[12px] text-muted-foreground">
+				<I18nText source="models" />
+			</Label>
 			<div className="flex items-center gap-1.5">
 				<DropdownMenu open={open} onOpenChange={setOpen}>
 					<DropdownMenuTrigger asChild>
@@ -760,7 +757,7 @@ function ModelsSection({
 								<>
 									<div className="flex min-w-0 items-center gap-1.5">
 										<span className="truncate font-medium text-foreground">
-											<I18nText source={"Custom"} />
+											<I18nText source="custom" />
 										</span>
 										{customBasename ? (
 											<span className="truncate text-muted-foreground">
@@ -771,7 +768,7 @@ function ModelsSection({
 									<div className="flex shrink-0 items-center gap-2">
 										{customIsActive ? (
 											<Badge className="rounded-full border-foreground/30 bg-foreground/10 px-1.5 py-0 text-[10px] font-medium text-foreground">
-												Active
+												<I18nText source="active" />
 											</Badge>
 										) : null}
 										<ChevronDown
@@ -829,7 +826,7 @@ function ModelsSection({
 										<span className="size-3 shrink-0" />
 									)}
 									<span className="truncate font-medium text-foreground">
-										Custom
+										<I18nText source="custom" />
 									</span>
 									{customBasename ? (
 										<span className="truncate text-muted-foreground">
@@ -840,13 +837,13 @@ function ModelsSection({
 								<div className="flex shrink-0 items-center gap-2">
 									{customIsActive ? (
 										<Badge className="rounded-full border-foreground/30 bg-foreground/10 px-1.5 py-0 text-[10px] font-medium text-foreground">
-											Active
+											<I18nText source="active" />
 										</Badge>
 									) : null}
 								</div>
 							</div>
 							<p className="pl-[18px] text-[11px] leading-4 text-muted-foreground">
-								Use your own GGUF file. Set the path below.
+								<I18nText source="useOwnGgufFileSetPath" />
 							</p>
 						</DropdownMenuItem>
 						{catalog.map((entry) => {
@@ -1015,7 +1012,9 @@ function ContextSelector({
 	return (
 		<div className="grid grid-cols-[auto_144px_44px_auto_1fr_auto] items-center gap-3 text-[12px]">
 			<div className="flex shrink-0 items-center gap-1">
-				<Label className="text-[12px] text-muted-foreground">Context</Label>
+				<Label className="text-[12px] text-muted-foreground">
+					<I18nText source="context" />
+				</Label>
 				{/* SettingsDialog renders outside AppShell's TooltipProvider. */}
 				<TooltipProvider>
 					<Tooltip>
@@ -1023,7 +1022,7 @@ function ContextSelector({
 							<button
 								type="button"
 								className="cursor-help text-muted-foreground hover:text-foreground"
-								aria-label={t("What is context size?")}
+								aria-label={t("whatContextSize")}
 							>
 								<CircleHelp className="size-3.5" strokeWidth={1.8} />
 							</button>
@@ -1032,13 +1031,12 @@ function ContextSelector({
 							side="top"
 							className="max-w-[280px] text-[11px] leading-5"
 						>
-							The total token budget for input + generated output combined.
-							Bigger context lets you send longer prompts but uses more RAM and
-							takes longer to start.
+							<I18nText source="totalTokenBudgetInputGeneratedOutput" />
 							<br />
 							<br />
-							If you're unsure, the default ({formatContext(defaultTokens)}) is
-							sized to fit your hardware — leave it as is.
+							<I18nText source="ifReUnsureDefault" />
+							{formatContext(defaultTokens)}
+							<I18nText source="sizedFitHardwareLeave" />
 						</TooltipContent>
 					</Tooltip>
 				</TooltipProvider>
@@ -1073,7 +1071,7 @@ function ContextSelector({
 			    cleanly. Color carries the fit state (no extra warn text
 			    so the width doesn't change character by character). */}
 			<span className={cn("whitespace-nowrap tabular-nums", fitColor)}>
-				<I18nText source={"KV"} /> {formatBytes(kvBytes)}
+				<I18nText source="kv" /> {formatBytes(kvBytes)}
 				{totalRamGb
 					? ` · ${formatBytes(totalBytes).replace(" GB", "")}/${totalRamGb} GB`
 					: ""}
@@ -1104,11 +1102,11 @@ function ContextSelector({
 						}
 					}}
 					title={
-						pending !== null ? "Discard pending change" : "Reset to default"
+						pending !== null ? "settingsDiscardPendingChange" : "resetDefault"
 					}
 				>
 					<Undo2 className="size-3" strokeWidth={1.8} />
-					Reset
+					<I18nText source="reset" />
 				</Button>
 				<Button
 					type="button"
@@ -1119,7 +1117,7 @@ function ContextSelector({
 						if (pending !== null) onCommit(target.id, pending);
 					}}
 				>
-					Apply
+					<I18nText source="apply" />
 				</Button>
 			</div>
 		</div>
@@ -1151,28 +1149,28 @@ function StateIndicator({
 	if (state === "downloading") {
 		return (
 			<Badge className="rounded-full border-foreground/30 bg-foreground/10 px-1.5 py-0 text-[10px] font-medium text-foreground">
-				Downloading
+				<I18nText source="downloading" />
 			</Badge>
 		);
 	}
 	if (state === "paused") {
 		return (
 			<Badge className="rounded-full border-muted-foreground/30 bg-muted/40 px-1.5 py-0 text-[10px] font-medium text-muted-foreground">
-				Paused
+				<I18nText source="paused" />
 			</Badge>
 		);
 	}
 	if (state === "failed") {
 		return (
 			<Badge className="rounded-full border-destructive/30 bg-destructive/15 px-1.5 py-0 text-[10px] font-medium text-destructive">
-				Failed
+				<I18nText source="failed" />
 			</Badge>
 		);
 	}
 	if (state === "downloaded") {
 		return (
 			<Badge className="rounded-full border-muted-foreground/30 bg-muted/40 px-1.5 py-0 text-[10px] font-medium text-muted-foreground">
-				Downloaded
+				<I18nText source="downloaded" />
 			</Badge>
 		);
 	}
@@ -1180,7 +1178,7 @@ function StateIndicator({
 	if (!recommended) return null;
 	return (
 		<Badge className="rounded-full border-emerald-500/30 bg-emerald-500/15 px-1.5 py-0 text-[10px] font-medium text-emerald-700 dark:text-emerald-300">
-			Recommended
+			<I18nText source="recommended" />
 		</Badge>
 	);
 }
@@ -1230,7 +1228,7 @@ function ContextualActions({
 						onClick={onDownload}
 					>
 						<Download className="size-3.5" strokeWidth={1.8} />
-						Add vision
+						<I18nText source="addVision" />
 					</Button>
 				)}
 				<Button
@@ -1240,7 +1238,7 @@ function ContextualActions({
 					onClick={onDelete}
 				>
 					<Trash2 className="size-3.5" strokeWidth={1.8} />
-					Delete
+					<I18nText source="delete" />
 				</Button>
 			</>
 		);
@@ -1249,7 +1247,7 @@ function ContextualActions({
 		return (
 			<Button type="button" size="sm" variant="destructive" onClick={onCancel}>
 				<X className="size-3.5" strokeWidth={1.8} />
-				Cancel
+				<I18nText source="cancel" />
 			</Button>
 		);
 	}
@@ -1258,7 +1256,7 @@ function ContextualActions({
 			<>
 				<Button type="button" size="sm" variant="default" onClick={onResume}>
 					<Play className="size-3.5" strokeWidth={1.8} />
-					Resume
+					<I18nText source="resume" />
 				</Button>
 				<Button
 					type="button"
@@ -1267,7 +1265,7 @@ function ContextualActions({
 					onClick={onCancel}
 				>
 					<X className="size-3.5" strokeWidth={1.8} />
-					Cancel
+					<I18nText source="cancel" />
 				</Button>
 			</>
 		);
@@ -1277,7 +1275,7 @@ function ContextualActions({
 			<>
 				<Button type="button" size="sm" variant="default" onClick={onDownload}>
 					<RotateCcw className="size-3.5" strokeWidth={1.8} />
-					Retry
+					<I18nText source="retry" />
 				</Button>
 				<Button
 					type="button"
@@ -1286,7 +1284,7 @@ function ContextualActions({
 					onClick={onCancel}
 				>
 					<X className="size-3.5" strokeWidth={1.8} />
-					Cancel
+					<I18nText source="cancel" />
 				</Button>
 			</>
 		);
@@ -1294,7 +1292,7 @@ function ContextualActions({
 	return (
 		<Button type="button" size="sm" variant="default" onClick={onDownload}>
 			<Download className="size-3.5" strokeWidth={1.8} />
-			Download
+			<I18nText source="download" />
 		</Button>
 	);
 }
@@ -1317,7 +1315,7 @@ function DownloadsSection({
 	return (
 		<div className="grid gap-2 rounded-md border border-border/50 bg-muted/20 p-3">
 			<div className="text-[11px] uppercase tracking-wide text-muted-foreground">
-				<I18nText source={"Downloads"} />
+				<I18nText source="downloads" />
 			</div>
 			<div className="grid gap-3">
 				{rows.map(({ entry, download }) => (
@@ -1367,17 +1365,17 @@ function DownloadRowView({
 							onClick={onResume}
 						>
 							<Play className="size-3" strokeWidth={1.8} />
-							Resume
+							<I18nText source="resume" />
 						</Button>
 					) : (
 						<Button type="button" size="xs" variant="outline" onClick={onPause}>
 							<Pause className="size-3" strokeWidth={1.8} />
-							Pause
+							<I18nText source="pause" />
 						</Button>
 					)}
 					<Button type="button" size="xs" variant="outline" onClick={onCancel}>
 						<X className="size-3" strokeWidth={1.8} />
-						Cancel
+						<I18nText source="cancel" />
 					</Button>
 				</div>
 			</div>
@@ -1430,7 +1428,7 @@ function CustomModelPathSection({
 					htmlFor="local-llm-model"
 					className="text-[12px] text-muted-foreground"
 				>
-					Custom model path
+					<I18nText source="customModelPath" />
 				</Label>
 				{/* SettingsDialog renders outside AppShell's TooltipProvider. */}
 				<TooltipProvider>
@@ -1439,7 +1437,7 @@ function CustomModelPathSection({
 							<button
 								type="button"
 								className="cursor-help text-muted-foreground hover:text-foreground"
-								aria-label={t("About custom model path")}
+								aria-label={t("aboutCustomModelPath")}
 							>
 								<CircleHelp className="size-3.5" strokeWidth={1.8} />
 							</button>
@@ -1452,9 +1450,8 @@ function CustomModelPathSection({
 							    text into multiple flex items in TooltipContent's
 							    inline-flex layout. */}
 							<span>
-								Point this at a <code>.gguf</code> you've downloaded yourself.
-								Curated models above take precedence — clear this field to
-								switch back to the picker.
+								<I18nText source="point" /> <code>.gguf</code>{" "}
+								<I18nText source="veDownloadedYourselfCuratedModelsAbove" />
 							</span>
 						</TooltipContent>
 					</Tooltip>
@@ -1494,7 +1491,7 @@ function DownloadProgress({
 	bytesPerSec: number;
 	paused: boolean;
 }) {
-	const { t } = useI18n();
+	const { t, f } = useI18n();
 	const hasTotal = total > 0 && downloaded <= total;
 	const percent = hasTotal
 		? Math.min(100, Math.round((downloaded / total) * 100))
@@ -1526,11 +1523,11 @@ function DownloadProgress({
 				</span>
 				<span>
 					{paused
-						? t("Paused")
+						? t("paused")
 						: bytesPerSec > 0
-							? `${formatBytes(bytesPerSec)}/s${etaLabel ? ` · ${etaLabel} left` : ""}`
+							? `${formatBytes(bytesPerSec)}/s${etaLabel ? ` · ${f("settingsEtaLeft", { eta: etaLabel })}` : ""}`
 							: downloaded === 0
-								? t("Connecting…")
+								? t("connecting2")
 								: null}
 				</span>
 			</div>

@@ -90,7 +90,7 @@ export function MockInspector({
 				bodyClassName="bg-muted/18 text-mini"
 			>
 				<InspectorActionGroupTitleUI>
-					<I18nText source={"Git"} />
+					<I18nText source="git" />
 				</InspectorActionGroupTitleUI>
 				{mockInspector.gitActions.map((item) => (
 					<InspectorActionRowUI
@@ -101,7 +101,7 @@ export function MockInspector({
 					/>
 				))}
 				<InspectorActionGroupTitleUI>
-					<I18nText source={"Review"} />
+					<I18nText source="review2" />
 				</InspectorActionGroupTitleUI>
 				{mockInspector.reviewActions.map((item) => (
 					<InspectorActionRowUI

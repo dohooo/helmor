@@ -53,7 +53,7 @@ export function WorkspaceStartContextSidebar({
 		>
 			<div className="flex h-8 shrink-0 items-center border-border/60 border-b bg-muted/30 px-3">
 				<h2 className="text-ui font-medium leading-8 tracking-[-0.01em] text-muted-foreground">
-					<I18nText source={"Contexts"} />
+					<I18nText source="contexts" />
 				</h2>
 			</div>
 			{inboxMounted ? (

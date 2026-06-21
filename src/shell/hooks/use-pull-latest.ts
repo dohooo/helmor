@@ -4,6 +4,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { toast } from "sonner";
 import { syncWorkspaceWithTargetBranch } from "@/lib/api";
+import { formatSource, translateSource } from "@/lib/i18n";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 
@@ -18,17 +19,29 @@ export function usePullLatest(opts: {
 		try {
 			const result = await syncWorkspaceWithTargetBranch(selectedWorkspaceId);
 			if (result.outcome === "updated") {
-				toast.success(`Pulled latest from ${result.targetBranch}`);
+				toast.success(
+					formatSource("miscPulledLatestFromTarget", {
+						target: result.targetBranch,
+					}),
+				);
 			} else if (result.outcome === "alreadyUpToDate") {
-				toast(`Already up to date with ${result.targetBranch}`);
+				toast(
+					formatSource("miscAlreadyUpToDateWithTarget", {
+						target: result.targetBranch,
+					}),
+				);
 			} else {
-				toast.error(`Pull from ${result.targetBranch} needs attention`);
+				toast.error(
+					formatSource("miscPullFromTargetNeedsAttention", {
+						target: result.targetBranch,
+					}),
+				);
 			}
 		} catch (error) {
 			toast.error(
 				error instanceof Error
 					? error.message
-					: "Unable to pull target branch updates.",
+					: translateSource("miscUnableToPullTargetUpdates"),
 			);
 		} finally {
 			requestSidebarReconcile(queryClient);

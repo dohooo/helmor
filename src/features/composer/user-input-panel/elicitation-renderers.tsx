@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { PendingUserInput } from "@/features/conversation/pending-user-input";
-import { I18nText } from "@/lib/i18n";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
 import { cn } from "@/lib/utils";
 import type {
@@ -52,7 +52,10 @@ type FormResponseState = {
 
 type FieldValidationState = {
 	blocking: boolean;
-	message: string | null;
+	/** Catalog key for the message, or null when there is no message. */
+	messageKey: string | null;
+	/** Interpolation values for the message key. */
+	messageValues?: Record<string, number>;
 };
 
 function buildInitialResponseState(
@@ -95,8 +98,8 @@ function getFieldValidationState(
 	if (field.kind === "boolean") {
 		const value = responses.booleanValues[field.key] ?? null;
 		return field.required && value === null
-			? { blocking: true, message: "Select an answer to continue." }
-			: { blocking: false, message: null };
+			? { blocking: true, messageKey: "selectAnswerContinue" }
+			: { blocking: false, messageKey: null };
 	}
 
 	if (field.kind === "single-select") {
@@ -104,12 +107,12 @@ function getFieldValidationState(
 		if (value === "__other__") {
 			const otherText = (responses.otherValues[field.key] ?? "").trim();
 			return otherText.length === 0
-				? { blocking: true, message: "Enter a custom value." }
-				: { blocking: false, message: null };
+				? { blocking: true, messageKey: "enterCustomValue" }
+				: { blocking: false, messageKey: null };
 		}
 		return field.required && !value
-			? { blocking: true, message: "Choose one option to continue." }
-			: { blocking: false, message: null };
+			? { blocking: true, messageKey: "chooseOneOptionContinue" }
+			: { blocking: false, messageKey: null };
 	}
 
 	if (field.kind === "multi-select") {
@@ -117,91 +120,97 @@ function getFieldValidationState(
 		if (field.required && value.length === 0) {
 			return {
 				blocking: true,
-				message: "Choose at least one option to continue.",
+				messageKey: "chooseLeastOneOptionContinue",
 			};
 		}
 		if (field.minItems !== null && value.length < field.minItems) {
 			return {
 				blocking: true,
-				message: `Choose at least ${field.minItems} option${field.minItems === 1 ? "" : "s"}.`,
+				messageKey: "composerChooseAtLeastOptions",
+				messageValues: { count: field.minItems },
 			};
 		}
 		if (field.maxItems !== null && value.length > field.maxItems) {
 			return {
 				blocking: true,
-				message: `Choose no more than ${field.maxItems} option${field.maxItems === 1 ? "" : "s"}.`,
+				messageKey: "composerChooseNoMoreOptions",
+				messageValues: { count: field.maxItems },
 			};
 		}
-		return { blocking: false, message: null };
+		return { blocking: false, messageKey: null };
 	}
 
 	const text = (responses.stringValues[field.key] ?? "").trim();
 	if (field.required && text.length === 0) {
-		return { blocking: true, message: null };
+		return { blocking: true, messageKey: null };
 	}
 	if (text.length === 0) {
-		return { blocking: false, message: null };
+		return { blocking: false, messageKey: null };
 	}
 
 	if (field.kind === "string") {
 		if (field.minLength !== null && text.length < field.minLength) {
 			return {
 				blocking: true,
-				message: `Use at least ${field.minLength} character${field.minLength === 1 ? "" : "s"}.`,
+				messageKey: "composerUseAtLeastCharacters",
+				messageValues: { count: field.minLength },
 			};
 		}
 		if (field.maxLength !== null && text.length > field.maxLength) {
 			return {
 				blocking: true,
-				message: `Use no more than ${field.maxLength} character${field.maxLength === 1 ? "" : "s"}.`,
+				messageKey: "composerUseNoMoreCharacters",
+				messageValues: { count: field.maxLength },
 			};
 		}
 		if (field.format === "email") {
 			return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)
-				? { blocking: false, message: null }
-				: { blocking: true, message: "Enter a valid email address." };
+				? { blocking: false, messageKey: null }
+				: { blocking: true, messageKey: "enterValidEmailAddress" };
 		}
 		if (field.format === "uri") {
 			try {
 				new URL(text);
-				return { blocking: false, message: null };
+				return { blocking: false, messageKey: null };
 			} catch {
-				return { blocking: true, message: "Enter a valid URL." };
+				return { blocking: true, messageKey: "enterValidUrl" };
 			}
 		}
 		if (field.format === "date") {
 			return /^\d{4}-\d{2}-\d{2}$/.test(text)
-				? { blocking: false, message: null }
-				: { blocking: true, message: "Use YYYY-MM-DD." };
+				? { blocking: false, messageKey: null }
+				: { blocking: true, messageKey: "useYyyyMmDd" };
 		}
 		if (field.format === "date-time") {
 			return Number.isNaN(Date.parse(text))
-				? { blocking: true, message: "Enter a valid date and time." }
-				: { blocking: false, message: null };
+				? { blocking: true, messageKey: "enterValidDateTime" }
+				: { blocking: false, messageKey: null };
 		}
-		return { blocking: false, message: null };
+		return { blocking: false, messageKey: null };
 	}
 
 	const numericValue = Number(text);
 	if (!Number.isFinite(numericValue)) {
-		return { blocking: true, message: "Enter a valid number." };
+		return { blocking: true, messageKey: "enterValidNumber" };
 	}
 	if (field.kind === "integer" && !Number.isInteger(numericValue)) {
-		return { blocking: true, message: "Enter a whole number." };
+		return { blocking: true, messageKey: "enterWholeNumber" };
 	}
 	if (field.minimum !== null && numericValue < field.minimum) {
 		return {
 			blocking: true,
-			message: `Use a value of at least ${field.minimum}.`,
+			messageKey: "composerUseValueAtLeast",
+			messageValues: { count: field.minimum },
 		};
 	}
 	if (field.maximum !== null && numericValue > field.maximum) {
 		return {
 			blocking: true,
-			message: `Use a value of no more than ${field.maximum}.`,
+			messageKey: "composerUseValueNoMore",
+			messageValues: { count: field.maximum },
 		};
 	}
-	return { blocking: false, message: null };
+	return { blocking: false, messageKey: null };
 }
 
 function getFieldPlaceholder(field: ElicitationFormField): string {
@@ -279,6 +288,7 @@ function FormElicitationPanel({
 	disabled: boolean;
 	onResponse: UserInputResponseHandler;
 }) {
+	const { t, f } = useI18n();
 	const [fieldIndex, setFieldIndex] = useState(0);
 	const [responses, setResponses] = useState<FormResponseState>(() =>
 		buildInitialResponseState(viewModel),
@@ -370,6 +380,11 @@ function FormElicitationPanel({
 	const currentValidation = currentField
 		? fieldValidation[currentField.key]
 		: null;
+	const currentValidationMessage = currentValidation?.messageKey
+		? currentValidation.messageValues
+			? f(currentValidation.messageKey, currentValidation.messageValues)
+			: t(currentValidation.messageKey)
+		: null;
 
 	const handleSubmit = useCallback(() => {
 		const content = buildResponseContent(viewModel, responses);
@@ -403,7 +418,7 @@ function FormElicitationPanel({
 									type="button"
 									variant="ghost"
 									size="icon-xs"
-									aria-label="Previous field"
+									aria-label="previousField"
 									disabled={disabled || fieldIndex === 0}
 									onClick={() =>
 										setFieldIndex((current) => Math.max(0, current - 1))
@@ -415,7 +430,7 @@ function FormElicitationPanel({
 									type="button"
 									variant="ghost"
 									size="icon-xs"
-									aria-label="Next field"
+									aria-label="nextField"
 									disabled={
 										disabled || fieldIndex === viewModel.fields.length - 1
 									}
@@ -480,8 +495,8 @@ function FormElicitationPanel({
 				{currentField.kind === "boolean" ? (
 					<div className="grid gap-1">
 						{[
-							{ label: "Yes", value: true },
-							{ label: "No", value: false },
+							{ label: "yes", value: true },
+							{ label: "no", value: false },
 						].map((option) => {
 							const selected =
 								responses.booleanValues[currentField.key] === option.value;
@@ -564,7 +579,7 @@ function FormElicitationPanel({
 									</span>
 									<Input
 										disabled={disabled}
-										placeholder="Other"
+										placeholder="other"
 										value={responses.otherValues[currentField.key] ?? ""}
 										onFocus={() => {
 											if (
@@ -591,10 +606,10 @@ function FormElicitationPanel({
 				<p
 					className={cn(
 						"px-3 pt-1 text-mini leading-5 min-h-5",
-						currentValidation?.message ? "text-muted-foreground" : "invisible",
+						currentValidationMessage ? "text-muted-foreground" : "invisible",
 					)}
 				>
-					{currentValidation?.message || "\u00A0"}
+					{currentValidationMessage || "\u00A0"}
 				</p>
 			</div>
 
@@ -606,7 +621,7 @@ function FormElicitationPanel({
 					onClick={() => onResponse(userInput, "cancel")}
 				>
 					<X className="size-3.5" strokeWidth={2} />
-					<span>Cancel</span>
+					<span>{t("cancel")}</span>
 				</Button>
 				<Button
 					variant="outline"
@@ -615,7 +630,7 @@ function FormElicitationPanel({
 					onClick={() => onResponse(userInput, "decline")}
 				>
 					<Info className="size-3.5" strokeWidth={2} />
-					<span>Decline</span>
+					<span>{t("decline")}</span>
 				</Button>
 				<Button
 					variant="default"
@@ -624,7 +639,7 @@ function FormElicitationPanel({
 					onClick={handleSubmit}
 				>
 					<Check className="size-3.5" strokeWidth={2} />
-					<span>Send Response</span>
+					<span>{t("sendResponse")}</span>
 				</Button>
 			</InteractionFooter>
 		</UserInputCard>
@@ -642,6 +657,7 @@ function UrlElicitationPanel({
 	disabled: boolean;
 	onResponse: UserInputResponseHandler;
 }) {
+	const { t, f } = useI18n();
 	const [copied, setCopied] = useState(false);
 
 	const handleCopy = useCallback(() => {
@@ -667,8 +683,8 @@ function UrlElicitationPanel({
 				title={viewModel.message}
 				description={
 					viewModel.host
-						? `Open ${viewModel.host} to continue.`
-						: "Open the requested URL to continue."
+						? f("composerOpenHostToContinue", { host: viewModel.host })
+						: t("openRequestedUrlContinue")
 				}
 				trailing={
 					<span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-micro font-medium text-muted-foreground">
@@ -680,18 +696,14 @@ function UrlElicitationPanel({
 			<div className="grid gap-2 px-1 pb-2">
 				<div className="rounded-lg bg-accent/35 px-3 py-2">
 					<p className="text-mini uppercase tracking-[0.08em] text-muted-foreground">
-						<I18nText source={"Target URL"} />
+						<I18nText source="targetUrl" />
 					</p>
 					<p className="mt-1 break-all text-small leading-5 text-foreground">
 						{viewModel.url}
 					</p>
 				</div>
 				<div className="rounded-lg border border-border/40 bg-background/60 px-3 py-2 text-small leading-5 text-muted-foreground">
-					<I18nText
-						source={
-							"Only continue if you trust this MCP server and understand why it needs an external URL."
-						}
-					/>
+					<I18nText source="onlyContinueIfTrustMcpServer" />
 				</div>
 			</div>
 
@@ -703,7 +715,7 @@ function UrlElicitationPanel({
 					onClick={() => onResponse(userInput, "cancel")}
 				>
 					<X className="size-3.5" strokeWidth={2} />
-					<span>Cancel</span>
+					<span>{t("cancel")}</span>
 				</Button>
 				<Button
 					variant="outline"
@@ -712,7 +724,7 @@ function UrlElicitationPanel({
 					onClick={() => onResponse(userInput, "decline")}
 				>
 					<Info className="size-3.5" strokeWidth={2} />
-					<span>Decline</span>
+					<span>{t("decline")}</span>
 				</Button>
 				<Button
 					variant="outline"
@@ -725,7 +737,7 @@ function UrlElicitationPanel({
 					) : (
 						<Copy className="size-3.5" strokeWidth={2} />
 					)}
-					<span>{copied ? "Copied" : "Copy Link"}</span>
+					<span>{copied ? t("copied") : t("composerCopyLink")}</span>
 				</Button>
 				<Button
 					variant="default"
@@ -734,7 +746,7 @@ function UrlElicitationPanel({
 					onClick={() => void handleOpen()}
 				>
 					<ExternalLink className="size-3.5" strokeWidth={2} />
-					<span>Open Link</span>
+					<span>{t("openLink")}</span>
 				</Button>
 			</InteractionFooter>
 		</UserInputCard>
@@ -757,6 +769,7 @@ function ToolApprovalElicitationPanel({
 	disabled: boolean;
 	onResponse: UserInputResponseHandler;
 }) {
+	const { t } = useI18n();
 	const handleAccept = useCallback(
 		(persist: "session" | "always" | null) => {
 			onResponse(userInput, "submit", {
@@ -772,10 +785,7 @@ function ToolApprovalElicitationPanel({
 			<InteractionHeader
 				icon={Settings2}
 				title={viewModel.serverName}
-				description={
-					viewModel.message ||
-					"This MCP tool needs your approval before it can run."
-				}
+				description={viewModel.message || t("composerMcpToolNeedsApproval")}
 			/>
 
 			<InteractionFooter>
@@ -786,7 +796,7 @@ function ToolApprovalElicitationPanel({
 					onClick={() => onResponse(userInput, "decline")}
 				>
 					<X className="size-3.5" strokeWidth={2} />
-					<span>Decline</span>
+					<span>{t("decline")}</span>
 				</Button>
 				{viewModel.allowAlways ? (
 					<Button
@@ -796,7 +806,7 @@ function ToolApprovalElicitationPanel({
 						onClick={() => handleAccept("always")}
 					>
 						<Check className="size-3.5" strokeWidth={2} />
-						<span>Always allow</span>
+						<span>{t("alwaysAllow")}</span>
 					</Button>
 				) : null}
 				{viewModel.allowSession ? (
@@ -807,7 +817,7 @@ function ToolApprovalElicitationPanel({
 						onClick={() => handleAccept("session")}
 					>
 						<Check className="size-3.5" strokeWidth={2} />
-						<span>Allow for session</span>
+						<span>{t("allowSession")}</span>
 					</Button>
 				) : null}
 				<Button
@@ -817,7 +827,7 @@ function ToolApprovalElicitationPanel({
 					onClick={() => handleAccept(null)}
 				>
 					<Check className="size-3.5" strokeWidth={2} />
-					<span>Allow</span>
+					<span>{t("allow")}</span>
 				</Button>
 			</InteractionFooter>
 		</UserInputCard>
@@ -835,6 +845,7 @@ function UnsupportedElicitationPanel({
 	disabled: boolean;
 	onResponse: UserInputResponseHandler;
 }) {
+	const { t } = useI18n();
 	return (
 		<UserInputCard>
 			<InteractionHeader
@@ -850,7 +861,7 @@ function UnsupportedElicitationPanel({
 					onClick={() => onResponse(userInput, "cancel")}
 				>
 					<X className="size-3.5" strokeWidth={2} />
-					<span>Cancel</span>
+					<span>{t("cancel")}</span>
 				</Button>
 				<Button
 					variant="outline"
@@ -859,7 +870,7 @@ function UnsupportedElicitationPanel({
 					onClick={() => onResponse(userInput, "decline")}
 				>
 					<Info className="size-3.5" strokeWidth={2} />
-					<span>Decline</span>
+					<span>{t("decline")}</span>
 				</Button>
 			</InteractionFooter>
 		</UserInputCard>

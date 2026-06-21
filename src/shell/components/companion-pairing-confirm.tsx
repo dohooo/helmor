@@ -16,14 +16,10 @@ export function CompanionPairingConfirm() {
 				<HelmorLogoAnimated size={56} className="opacity-90" />
 				<div className="flex flex-col gap-2">
 					<h1 className="font-semibold text-foreground text-heading">
-						<I18nText source={"Pair this browser"} />
+						<I18nText source="pairBrowser" />
 					</h1>
 					<p className="text-muted-foreground text-body">
-						<I18nText
-							source={
-								"Connect this browser to your Helmor desktop so you can open your workspaces, sessions, and agents from here. Only continue if you started this pairing yourself."
-							}
-						/>
+						<I18nText source="connectBrowserHelmorDesktopSoCan" />
 					</p>
 				</div>
 				<Button
@@ -32,7 +28,7 @@ export function CompanionPairingConfirm() {
 						confirmCompanionPairing();
 					}}
 				>
-					Confirm pairing
+					<I18nText source="confirmPairing" />
 				</Button>
 			</div>
 		</div>

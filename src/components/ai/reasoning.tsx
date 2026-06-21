@@ -162,20 +162,20 @@ function defaultGetThinkingMessage(isStreaming: boolean, duration?: number) {
 	if (isStreaming) {
 		return (
 			<ShimmerText>
-				<I18nText source={"Thinking..."} />
+				<I18nText source="thinking2" />
 			</ShimmerText>
 		);
 	}
 	if (duration === undefined) {
 		return (
 			<span>
-				<I18nText source={"Thinking"} />
+				<I18nText source="thinking" />
 			</span>
 		);
 	}
 	return (
 		<span>
-			<I18nText source={"Thought for"} /> {duration}s
+			<I18nText source="thought" /> {duration}s
 		</span>
 	);
 }

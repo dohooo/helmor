@@ -68,20 +68,22 @@ export function CreateBranchDialog({
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className="gap-3 sm:max-w-md">
 				<DialogHeader>
-					<DialogTitle>Create and checkout branch</DialogTitle>
+					<DialogTitle>
+						<I18nText source="createCheckoutBranch" />
+					</DialogTitle>
 				</DialogHeader>
 				<form onSubmit={handleSubmit} className="flex flex-col gap-1.5">
 					<label
 						htmlFor="create-branch-name"
 						className="text-small font-medium text-muted-foreground"
 					>
-						<I18nText source={"Branch name"} />
+						<I18nText source="branchName" />
 					</label>
 					<Input
 						id="create-branch-name"
 						value={value}
 						autoFocus
-						placeholder="feature/awesome"
+						placeholder="featureAwesome"
 						disabled={submitting}
 						aria-invalid={error ? true : undefined}
 						onChange={(e) => {
@@ -105,10 +107,10 @@ export function CreateBranchDialog({
 							disabled={submitting}
 							onClick={() => onOpenChange(false)}
 						>
-							Close
+							<I18nText source="close" />
 						</Button>
 						<Button type="submit" size="sm" disabled={!canSubmit}>
-							Create and checkout
+							<I18nText source="createCheckout" />
 						</Button>
 					</div>
 				</form>

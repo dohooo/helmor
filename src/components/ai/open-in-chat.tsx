@@ -14,12 +14,12 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useI18n } from "@/lib/i18n";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const providers = {
 	github: {
-		title: "Open in GitHub",
+		title: "openGithub",
 		createUrl: (url: string) => url,
 		icon: (
 			<svg fill="currentColor" role="img" viewBox="0 0 24 24">
@@ -29,7 +29,7 @@ const providers = {
 		),
 	},
 	scira: {
-		title: "Open in Scira",
+		title: "openScira",
 		createUrl: (q: string) =>
 			`https://scira.ai/?${new URLSearchParams({
 				q,
@@ -94,7 +94,7 @@ const providers = {
 		),
 	},
 	chatgpt: {
-		title: "Open in ChatGPT",
+		title: "openChatgpt",
 		createUrl: (prompt: string) =>
 			`https://chatgpt.com/?${new URLSearchParams({
 				hints: "search",
@@ -113,7 +113,7 @@ const providers = {
 		),
 	},
 	claude: {
-		title: "Open in Claude",
+		title: "openClaude",
 		createUrl: (q: string) =>
 			`https://claude.ai/new?${new URLSearchParams({
 				q,
@@ -135,7 +135,7 @@ const providers = {
 		),
 	},
 	t3: {
-		title: "Open in T3 Chat",
+		title: "openT3Chat",
 		createUrl: (q: string) =>
 			`https://t3.chat/new?${new URLSearchParams({
 				q,
@@ -143,7 +143,7 @@ const providers = {
 		icon: <MessageCircleIcon />,
 	},
 	v0: {
-		title: "Open in v0",
+		title: "openV0",
 		createUrl: (q: string) =>
 			`https://v0.app?${new URLSearchParams({
 				q,
@@ -161,7 +161,7 @@ const providers = {
 		),
 	},
 	cursor: {
-		title: "Open in Cursor",
+		title: "openCursor",
 		createUrl: (text: string) => {
 			const url = new URL("https://cursor.com/link/prompt");
 			url.searchParams.set("text", text);
@@ -237,7 +237,7 @@ export const OpenInTrigger = ({ children, ...props }: OpenInTriggerProps) => (
 	<DropdownMenuTrigger {...props}>
 		{children ?? (
 			<Button type="button" variant="outline">
-				Open in chat
+				<I18nText source="openChat" />
 				<ChevronDownIcon className="size-4" />
 			</Button>
 		)}
@@ -252,14 +252,14 @@ export const OpenInChatGPT = (props: OpenInChatGPTProps) => {
 	return (
 		<DropdownMenuItem {...props} asChild>
 			<a
-				aria-label={t("Open")}
+				aria-label={t("open")}
 				className="flex items-center gap-2"
 				href={providers.chatgpt.createUrl(query)}
 				rel="noopener"
 				target="_blank"
 			>
 				<span className="shrink-0">{providers.chatgpt.icon}</span>
-				<span className="flex-1">{providers.chatgpt.title}</span>
+				<span className="flex-1">{t(providers.chatgpt.title)}</span>
 				<ExternalLinkIcon className="shrink-0" />
 			</a>
 		</DropdownMenuItem>
@@ -274,14 +274,14 @@ export const OpenInClaude = (props: OpenInClaudeProps) => {
 	return (
 		<DropdownMenuItem {...props} asChild>
 			<a
-				aria-label={t("Open")}
+				aria-label={t("open")}
 				className="flex items-center gap-2"
 				href={providers.claude.createUrl(query)}
 				rel="noopener"
 				target="_blank"
 			>
 				<span className="shrink-0">{providers.claude.icon}</span>
-				<span className="flex-1">{providers.claude.title}</span>
+				<span className="flex-1">{t(providers.claude.title)}</span>
 				<ExternalLinkIcon className="shrink-0" />
 			</a>
 		</DropdownMenuItem>
@@ -296,14 +296,14 @@ export const OpenInT3 = (props: OpenInT3Props) => {
 	return (
 		<DropdownMenuItem {...props} asChild>
 			<a
-				aria-label={t("Open")}
+				aria-label={t("open")}
 				className="flex items-center gap-2"
 				href={providers.t3.createUrl(query)}
 				rel="noopener"
 				target="_blank"
 			>
 				<span className="shrink-0">{providers.t3.icon}</span>
-				<span className="flex-1">{providers.t3.title}</span>
+				<span className="flex-1">{t(providers.t3.title)}</span>
 				<ExternalLinkIcon className="shrink-0" />
 			</a>
 		</DropdownMenuItem>
@@ -318,14 +318,14 @@ export const OpenInScira = (props: OpenInSciraProps) => {
 	return (
 		<DropdownMenuItem {...props} asChild>
 			<a
-				aria-label={t("Open")}
+				aria-label={t("open")}
 				className="flex items-center gap-2"
 				href={providers.scira.createUrl(query)}
 				rel="noopener"
 				target="_blank"
 			>
 				<span className="shrink-0">{providers.scira.icon}</span>
-				<span className="flex-1">{providers.scira.title}</span>
+				<span className="flex-1">{t(providers.scira.title)}</span>
 				<ExternalLinkIcon className="shrink-0" />
 			</a>
 		</DropdownMenuItem>
@@ -340,14 +340,14 @@ export const OpenInv0 = (props: OpenInv0Props) => {
 	return (
 		<DropdownMenuItem {...props} asChild>
 			<a
-				aria-label={t("Open")}
+				aria-label={t("open")}
 				className="flex items-center gap-2"
 				href={providers.v0.createUrl(query)}
 				rel="noopener"
 				target="_blank"
 			>
 				<span className="shrink-0">{providers.v0.icon}</span>
-				<span className="flex-1">{providers.v0.title}</span>
+				<span className="flex-1">{t(providers.v0.title)}</span>
 				<ExternalLinkIcon className="shrink-0" />
 			</a>
 		</DropdownMenuItem>
@@ -362,14 +362,14 @@ export const OpenInCursor = (props: OpenInCursorProps) => {
 	return (
 		<DropdownMenuItem {...props} asChild>
 			<a
-				aria-label={t("Open")}
+				aria-label={t("open")}
 				className="flex items-center gap-2"
 				href={providers.cursor.createUrl(query)}
 				rel="noopener"
 				target="_blank"
 			>
 				<span className="shrink-0">{providers.cursor.icon}</span>
-				<span className="flex-1">{providers.cursor.title}</span>
+				<span className="flex-1">{t(providers.cursor.title)}</span>
 				<ExternalLinkIcon className="shrink-0" />
 			</a>
 		</DropdownMenuItem>

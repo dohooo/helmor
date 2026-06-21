@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { SlackInboxItem, SlackSearchSort } from "@/lib/api";
 import type { ComposerInsertTarget } from "@/lib/composer-insert";
-import { I18nText } from "@/lib/i18n";
+import { formatSource, I18nText, useI18n } from "@/lib/i18n";
 import { formatSlackTextPlain } from "@/lib/slack-text";
 import type { ContextCard, SlackThreadMeta } from "@/lib/sources/types";
 import { InboxActionMenuButton, InboxSearchField } from "./actions";
@@ -31,9 +31,10 @@ import { useSlackWorkspaces } from "./use-slack-workspaces";
 /** Sort-mode labels for the right-side dropdown. Order matches Slack's
  *  own UI: timestamp first because the inbox is fundamentally a "what's
  *  new" surface. */
+// `label` values are i18n catalog KEYS, resolved at render via t().
 const SORT_OPTIONS: { id: SlackSearchSort; label: string }[] = [
-	{ id: "newest", label: "Newest" },
-	{ id: "relevance", label: "Most relevant" },
+	{ id: "newest", label: "newest" },
+	{ id: "relevance", label: "mostRelevant" },
 ];
 
 /** Self-contained Slack subtree of the Contexts sidebar. Owns:
@@ -56,6 +57,7 @@ export function SlackInboxSection({
 	appendContextTarget?: ComposerInsertTarget;
 	horizontalPaddingClass: string;
 }) {
+	const { t, f } = useI18n();
 	const workspacesQuery = useSlackWorkspaces();
 	const workspaces = workspacesQuery.data ?? [];
 	const [activeTeamId, setActiveTeamId] = useState<string | null>(null);
@@ -119,8 +121,9 @@ export function SlackInboxSection({
 	const isImporting =
 		useIsMutating({ mutationKey: SLACK_IMPORT_MUTATION_KEY }) > 0;
 
-	const activeSortLabel = SORT_OPTIONS.find((option) => option.id === sort)
+	const activeSortLabelKey = SORT_OPTIONS.find((option) => option.id === sort)
 		?.label as string; // both SlackSearchSort values are in SORT_OPTIONS
+	const activeSortLabel = t(activeSortLabelKey);
 
 	const sentinelRef = useRef<HTMLDivElement | null>(null);
 	useEffect(() => {
@@ -148,12 +151,14 @@ export function SlackInboxSection({
 					value={searchInput}
 					onChange={(e) => setSearchInput(e.target.value)}
 					onClear={() => setSearchInput("")}
-					ariaLabel="Search Slack messages"
+					ariaLabel="inboxSearchSlackMessages"
 				/>
 				{isSearching ? (
 					<DropdownMenu>
 						<DropdownMenuTrigger asChild>
-							<InboxActionMenuButton aria-label={`Sort by ${activeSortLabel}`}>
+							<InboxActionMenuButton
+								aria-label={f("inboxSortBy", { label: activeSortLabel })}
+							>
 								<span>{activeSortLabel}</span>
 								<ChevronDown className="size-3" strokeWidth={2} />
 							</InboxActionMenuButton>
@@ -169,7 +174,7 @@ export function SlackInboxSection({
 										value={option.id}
 										className="text-mini"
 									>
-										{option.label}
+										{t(option.label)}
 									</DropdownMenuRadioItem>
 								))}
 							</DropdownMenuRadioGroup>
@@ -267,7 +272,7 @@ function InboxLoadingState() {
 		<div className="mt-8 flex flex-col items-center gap-2 px-6 text-muted-foreground/70">
 			<Loader2 className="size-4 animate-spin" strokeWidth={2} />
 			<div className="text-small leading-5">
-				<I18nText source={"Loading Slack…"} />
+				<I18nText source="loadingSlack" />
 			</div>
 		</div>
 	);
@@ -280,12 +285,13 @@ function InboxErrorState({
 	error: unknown;
 	onRetry: () => void;
 }) {
+	const { t } = useI18n();
 	const message =
-		error instanceof Error ? error.message : "Couldn't load Slack inbox.";
+		error instanceof Error ? error.message : t("inboxCouldntLoadSlackInbox");
 	return (
 		<div className="mt-8 flex flex-col items-center gap-2 px-6 text-center">
 			<div className="text-ui font-medium text-foreground">
-				<I18nText source={"Couldn't load"} />
+				<I18nText source="couldnTLoad" />
 			</div>
 			<div className="text-small leading-5 text-muted-foreground">
 				{message}
@@ -297,7 +303,7 @@ function InboxErrorState({
 				onClick={onRetry}
 				className="mt-1 cursor-interactive text-small"
 			>
-				Try again
+				<I18nText source="tryAgain" />
 			</Button>
 		</div>
 	);
@@ -312,15 +318,16 @@ function EmptyState({
 	query: string;
 	onRefresh: () => void;
 }) {
+	const { t, f } = useI18n();
 	// Two distinct empty states: searching with zero hits is a UX
 	// dead-end if we say "no new activity" — the user can see they
 	// just typed something. The activity-feed empty state stays
 	// reassuring ("nothing waiting for you"); the search empty state
 	// reminds them what they searched for.
-	const title = isSearching ? "No matches" : "No new activity";
+	const title = isSearching ? t("noMatches") : t("inboxNoNewActivity");
 	const subtitle = isSearching
-		? `Nothing in this workspace matches "${query}".`
-		: "Mentions and unread DMs will appear here.";
+		? f("inboxNothingMatchesQuery", { query })
+		: t("inboxMentionsUnreadDmsAppear");
 	return (
 		<div className="mt-10 flex flex-col items-center gap-2 px-6 text-center">
 			<div className="text-ui font-medium text-foreground">{title}</div>
@@ -335,7 +342,7 @@ function EmptyState({
 					onClick={onRefresh}
 					className="mt-1 cursor-interactive text-small"
 				>
-					Refresh
+					<I18nText source="refresh" />
 				</Button>
 			) : null}
 		</div>
@@ -374,6 +381,6 @@ function titleForItem(item: SlackInboxItem): string {
 	const cleaned = formatSlackTextPlain(item.textSnippet);
 	if (cleaned) return cleaned;
 	return item.kind === "mention"
-		? `${item.authorName} mentioned you`
-		: `${item.authorName} sent a message`;
+		? formatSource("inboxAuthorMentionedYou", { author: item.authorName })
+		: formatSource("inboxAuthorSentMessage", { author: item.authorName });
 }

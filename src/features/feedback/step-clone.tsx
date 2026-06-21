@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cloneRepositoryFromUrl, forkHelmorUpstream } from "@/lib/api";
-import { I18nText } from "@/lib/i18n";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { describeUnknownError } from "@/lib/workspace-helpers";
 
 import { HELMOR_UPSTREAM_SLUG } from "./constants";
@@ -35,6 +35,7 @@ export function StepClone({
 	onFailed,
 	onCloneSucceeded,
 }: StepCloneProps) {
+	const { t } = useI18n();
 	// Kick off the fork as soon as the step mounts. Reducer seeds phase =
 	// "forking" on entry; if we're back in "idle" after a failure the user
 	// can hit "Try again" manually.
@@ -51,9 +52,7 @@ export function StepClone({
 				}
 			} catch (error) {
 				if (!cancelled) {
-					onFailed(
-						describeUnknownError(error, "Failed to fork helmor on GitHub."),
-					);
+					onFailed(describeUnknownError(error, t("feedbackFailedForkHelmor")));
 				}
 			}
 		})();
@@ -75,7 +74,7 @@ export function StepClone({
 			}
 		} catch (error) {
 			onFailed(
-				describeUnknownError(error, "Unable to open the folder picker."),
+				describeUnknownError(error, t("feedbackUnableOpenFolderPicker")),
 			);
 		}
 	};
@@ -90,7 +89,7 @@ export function StepClone({
 			});
 			onCloneSucceeded(response.repositoryId);
 		} catch (error) {
-			onFailed(describeUnknownError(error, "Failed to clone repository."));
+			onFailed(describeUnknownError(error, t("feedbackFailedCloneRepository")));
 		}
 	};
 
@@ -108,23 +107,17 @@ export function StepClone({
 							strokeWidth={2.1}
 						/>
 						<span className="text-muted-foreground">
-							<I18nText source={"Forking"} /> {HELMOR_UPSTREAM_SLUG}{" "}
-							<I18nText source={"to your GitHub account…"} />
+							<I18nText source="forking" /> {HELMOR_UPSTREAM_SLUG}{" "}
+							<I18nText source="githubAccount" />
 						</span>
 					</>
 				) : forkedCloneUrl ? (
 					<span className="text-muted-foreground">
-						<I18nText
-							source={"Fork ready. Choose where to clone it on your machine."}
-						/>
+						<I18nText source="forkReadyChooseWhereCloneMachine" />
 					</span>
 				) : (
 					<span className="text-muted-foreground">
-						<I18nText
-							source={
-								"We'll fork the upstream Helmor repo into your GitHub account."
-							}
-						/>
+						<I18nText source="weLlForkUpstreamHelmorRepo" />
 					</span>
 				)}
 			</div>
@@ -135,7 +128,7 @@ export function StepClone({
 						htmlFor="feedback-clone-location"
 						className="text-small font-medium tracking-[-0.01em]"
 					>
-						Clone location
+						<I18nText source="cloneLocation" />
 					</Label>
 					<div className="flex items-center gap-1.5">
 						<Input
@@ -143,7 +136,7 @@ export function StepClone({
 							type="text"
 							value={cloneDirectory ?? ""}
 							readOnly
-							placeholder="Choose a folder…"
+							placeholder="chooseFolder"
 							className="h-7 text-ui"
 						/>
 						<Button
@@ -156,7 +149,7 @@ export function StepClone({
 							disabled={phase === "cloning"}
 						>
 							<FolderOpen data-icon="inline-start" />
-							Browse…
+							<I18nText source="browse" />
 						</Button>
 					</div>
 				</div>
@@ -176,7 +169,7 @@ export function StepClone({
 						size="sm"
 						onClick={handleRetryFork}
 					>
-						Try again
+						<I18nText source="tryAgain" />
 					</Button>
 				) : null}
 				<Button
@@ -199,10 +192,10 @@ export function StepClone({
 								className="animate-spin"
 								strokeWidth={2.1}
 							/>
-							Cloning…
+							{t("cloning")}
 						</>
 					) : (
-						"Clone to this folder"
+						t("feedbackCloneToThisFolder")
 					)}
 				</Button>
 			</div>

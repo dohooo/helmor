@@ -24,7 +24,7 @@ import {
 	listConductorRepos,
 	listConductorWorkspaces,
 } from "@/lib/api";
-import { I18nText } from "@/lib/i18n";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
@@ -38,9 +38,9 @@ function humanize(directoryName: string): string {
 }
 
 function statusLabel(ws: ConductorWorkspace): string {
-	if (ws.state === "archived") return "Archived";
-	if (ws.status === "done") return "Done";
-	if (ws.status === "in-progress") return "In progress";
+	if (ws.state === "archived") return "archived";
+	if (ws.status === "done") return "done";
+	if (ws.status === "in-progress") return "progress";
 	return ws.status ?? ws.state;
 }
 
@@ -83,6 +83,7 @@ export function ConductorImportDialog({
 	onClose: () => void;
 	onImported: () => void;
 }) {
+	const { t, f } = useI18n();
 	const panelRef = useRef<HTMLDivElement>(null);
 
 	// --- data state ---
@@ -227,17 +228,23 @@ export function ConductorImportDialog({
 			}
 			if (result.errors.length > 0) {
 				setImportError(
-					`${result.importedCount} imported, ${result.errors.length} failed: ${result.errors[0]}`,
+					f("settingsImportPartialFailed", {
+						count: result.importedCount,
+						failed: result.errors.length,
+						error: result.errors[0],
+					}),
 				);
 			} else {
 				onClose();
 			}
 		} catch (e) {
-			setImportError(e instanceof Error ? e.message : "Import failed");
+			setImportError(
+				e instanceof Error ? e.message : t("settingsImportFailed"),
+			);
 		} finally {
 			setImporting(false);
 		}
-	}, [importing, selectedIds, onImported, onClose]);
+	}, [importing, selectedIds, onImported, onClose, t, f]);
 
 	const selectedRepo = repos.find((r) => r.id === selectedRepoId);
 
@@ -267,7 +274,7 @@ export function ConductorImportDialog({
 						/>
 					)}
 					<DialogTitle className="flex-1 text-ui font-medium tracking-[-0.01em] text-foreground">
-						{selectedRepoId ? selectedRepo?.name : "Import from Conductor"}
+						{selectedRepoId ? selectedRepo?.name : t("importFromConductor")}
 					</DialogTitle>
 				</div>
 
@@ -286,7 +293,9 @@ export function ConductorImportDialog({
 								type="text"
 								value={searchQuery}
 								placeholder={
-									selectedRepoId ? "Search workspaces" : "Search repositories"
+									selectedRepoId
+										? "settingsSearchWorkspaces"
+										: "searchRepositories"
 								}
 								onChange={(e) => setSearchQuery(e.target.value)}
 								onKeyDown={(e) => e.stopPropagation()}
@@ -304,14 +313,12 @@ export function ConductorImportDialog({
 							<Loader2 className="size-5 animate-spin text-muted-foreground" />
 							<div className="text-center">
 								<p className="text-ui font-medium text-foreground">
-									<I18nText source={"Importing"} /> {selectedIds.size}{" "}
-									<I18nText source={"workspace"} />
+									<I18nText source="importing" /> {selectedIds.size}{" "}
+									<I18nText source={"workspace2"} />
 									{selectedIds.size === 1 ? "" : "s"}
 								</p>
 								<p className="mt-1 text-mini text-muted-foreground">
-									<I18nText
-										source={"Setting up repositories and copying data..."}
-									/>
+									<I18nText source="settingUpRepositoriesCopyingData" />
 								</p>
 							</div>
 						</div>
@@ -330,8 +337,8 @@ export function ConductorImportDialog({
 									onClick={toggleAll}
 								>
 									{selectedIds.size === importableWorkspaces.length
-										? "Deselect all"
-										: "Select all"}
+										? t("settingsDeselectAll")
+										: t("settingsSelectAll")}
 								</Button>
 							)}
 							{filteredWorkspaces.length > 0 ? (
@@ -346,7 +353,9 @@ export function ConductorImportDialog({
 							) : (
 								<Empty className="py-6">
 									<EmptyHeader>
-										<EmptyTitle>No workspaces found</EmptyTitle>
+										<EmptyTitle>
+											<I18nText source="noWorkspacesFound" />
+										</EmptyTitle>
 									</EmptyHeader>
 								</Empty>
 							)}
@@ -364,9 +373,11 @@ export function ConductorImportDialog({
 						<Empty className="py-6">
 							<EmptyHeader>
 								<EmptyTitle>
-									{repos.length === 0
-										? "No Conductor repositories found"
-										: "No matches"}
+									{repos.length === 0 ? (
+										<I18nText source="settingsNoConductorRepositories" />
+									) : (
+										<I18nText source="noMatches" />
+									)}
 								</EmptyTitle>
 							</EmptyHeader>
 						</Empty>
@@ -396,8 +407,9 @@ export function ConductorImportDialog({
 								className="size-3.5"
 								strokeWidth={1.8}
 							/>
-							Import {selectedIds.size} workspace
-							{selectedIds.size === 1 ? "" : "s"}
+							{f("settingsImportCountWorkspaces", {
+								count: selectedIds.size,
+							})}
 						</Button>
 					</div>
 				)}
@@ -417,6 +429,7 @@ function RepoRow({
 	repo: ConductorRepo;
 	onClick: () => void;
 }) {
+	const { t, f } = useI18n();
 	const allImported =
 		repo.workspaceCount > 0 && repo.alreadyImportedCount >= repo.workspaceCount;
 
@@ -439,10 +452,15 @@ function RepoRow({
 				</span>
 				<span className="block text-mini tracking-[0.04em] text-muted-foreground">
 					{allImported
-						? "All imported"
+						? t("settingsAllImported")
 						: repo.alreadyImportedCount > 0
-							? `${repo.alreadyImportedCount}/${repo.workspaceCount} imported`
-							: `${repo.workspaceCount} workspace${repo.workspaceCount === 1 ? "" : "s"}`}
+							? f("settingsCountTotalImported", {
+									count: repo.alreadyImportedCount,
+									total: repo.workspaceCount,
+								})
+							: f("settingsCountWorkspaces", {
+									count: repo.workspaceCount,
+								})}
 				</span>
 			</div>
 		</Button>
@@ -458,6 +476,7 @@ function WorkspaceRow({
 	checked: boolean;
 	onToggle: (id: string) => void;
 }) {
+	const { t, f } = useI18n();
 	if (workspace.alreadyImported) {
 		return (
 			<div className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 opacity-40">
@@ -467,7 +486,7 @@ function WorkspaceRow({
 						{workspace.prTitle || humanize(workspace.directoryName)}
 					</span>
 					<span className="block text-mini tracking-[0.04em] text-muted-foreground">
-						<I18nText source={"Already imported"} />
+						<I18nText source="alreadyImported" />
 					</span>
 				</div>
 			</div>
@@ -485,7 +504,9 @@ function WorkspaceRow({
 				id={checkboxId}
 				checked={checked}
 				onCheckedChange={() => onToggle(workspace.id)}
-				aria-label={`Select ${workspace.prTitle || humanize(workspace.directoryName)}`}
+				aria-label={f("settingsSelectName", {
+					name: workspace.prTitle || humanize(workspace.directoryName),
+				})}
 			/>
 			<div className="min-w-0 flex-1">
 				<span className="block truncate text-ui font-medium text-foreground">
@@ -498,9 +519,9 @@ function WorkspaceRow({
 							{workspace.branch}
 						</span>
 					)}
-					<span>{statusLabel(workspace)}</span>
+					<span>{t(statusLabel(workspace))}</span>
 					<span>
-						{workspace.sessionCount} <I18nText source={"session"} />
+						{workspace.sessionCount} <I18nText source={"session2"} />
 						{workspace.sessionCount === 1 ? "" : "s"}
 					</span>
 				</div>

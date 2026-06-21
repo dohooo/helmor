@@ -11,7 +11,7 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { InputGroup, InputGroupAddon } from "@/components/ui/input-group";
-import { useI18n, useLocalizedNode } from "@/lib/i18n";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 function Command({
@@ -113,14 +113,13 @@ function CommandEmpty({
 	children,
 	...props
 }: React.ComponentProps<typeof CommandPrimitive.Empty>) {
-	const localizedChildren = useLocalizedNode(children);
 	return (
 		<CommandPrimitive.Empty
 			data-slot="command-empty"
 			className={cn("py-6 text-center text-body", className)}
 			{...props}
 		>
-			{localizedChildren}
+			{children}
 		</CommandPrimitive.Empty>
 	);
 }
@@ -132,7 +131,7 @@ function CommandGroup({
 	...props
 }: React.ComponentProps<typeof CommandPrimitive.Group>) {
 	const { t } = useI18n();
-	const localizedChildren = useLocalizedNode(children);
+
 	return (
 		<CommandPrimitive.Group
 			data-slot="command-group"
@@ -143,7 +142,7 @@ function CommandGroup({
 			)}
 			{...props}
 		>
-			{localizedChildren}
+			{children}
 		</CommandPrimitive.Group>
 	);
 }
@@ -166,7 +165,6 @@ function CommandItem({
 	children,
 	...props
 }: React.ComponentProps<typeof CommandPrimitive.Item>) {
-	const localizedChildren = useLocalizedNode(children);
 	return (
 		<CommandPrimitive.Item
 			data-slot="command-item"
@@ -176,7 +174,7 @@ function CommandItem({
 			)}
 			{...props}
 		>
-			{localizedChildren}
+			{children}
 			<CheckIcon className="ml-auto opacity-0 group-has-data-[slot=command-shortcut]/command-item:hidden group-data-[checked=true]/command-item:opacity-100" />
 		</CommandPrimitive.Item>
 	);
@@ -187,7 +185,6 @@ function CommandShortcut({
 	children,
 	...props
 }: React.ComponentProps<"span">) {
-	const localizedChildren = useLocalizedNode(children);
 	return (
 		<span
 			data-slot="command-shortcut"
@@ -197,7 +194,7 @@ function CommandShortcut({
 			)}
 			{...props}
 		>
-			{localizedChildren}
+			{children}
 		</span>
 	);
 }

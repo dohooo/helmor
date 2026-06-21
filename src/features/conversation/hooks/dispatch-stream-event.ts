@@ -39,6 +39,7 @@ import type {
 	ThreadMessageLike,
 } from "@/lib/api";
 import type { ComposerCustomTag } from "@/lib/composer-insert";
+import { translateSource } from "@/lib/i18n";
 import {
 	replaceStreamingTail,
 	restoreSnapshot,
@@ -272,8 +273,8 @@ export function createStreamEventDispatcher(
 			deps.clearFastPrelude(deps.contextKey);
 			if (event.internal) {
 				deps.pushToast(
-					"Something went wrong. Please try again.",
-					"Error",
+					translateSource("composerSomethingWentWrong"),
+					translateSource("error"),
 					"destructive",
 				);
 			}

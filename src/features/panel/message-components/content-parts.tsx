@@ -22,7 +22,7 @@ import {
 	type TodoListPart,
 	type WorkflowPart,
 } from "@/lib/api";
-import { I18nText } from "@/lib/i18n";
+import { I18nText, translateSource, useI18n } from "@/lib/i18n";
 import { convertFileSrc } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 
@@ -39,8 +39,8 @@ export function TodoList({ part }: { part: TodoListPart }) {
 			<div className="mb-0.5 flex items-center gap-1.5 text-mini text-muted-foreground">
 				<MessageSquareText className="size-3" strokeWidth={1.8} />
 				<span>
-					<I18nText source={"Plan -"} /> {completed}/{total}{" "}
-					<I18nText source={"done"} />
+					<I18nText source="plan2" /> {completed}/{total}{" "}
+					<I18nText source={"done2"} />
 				</span>
 			</div>
 			{part.items.map((todo, index) => {
@@ -74,11 +74,12 @@ export function TodoList({ part }: { part: TodoListPart }) {
 	);
 }
 
+// Values are i18n catalog KEYS, resolved at render via t().
 const WORKFLOW_STATUS_LABEL: Record<WorkflowPart["status"], string> = {
-	running: "running",
-	completed: "done",
-	failed: "failed",
-	stopped: "stopped",
+	running: "panelWorkflowStatusRunning",
+	completed: "panelWorkflowStatusDone",
+	failed: "panelWorkflowStatusFailed",
+	stopped: "panelWorkflowStatusStopped",
 };
 
 export function formatWorkflowDuration(ms: number): string {
@@ -97,9 +98,10 @@ export function formatWorkflowDuration(ms: number): string {
  * there's no looping animation or layout jitter on a finished card.
  */
 export function WorkflowCard({ part }: { part: WorkflowPart }) {
+	const { t, f } = useI18n();
 	const running = part.status === "running";
 	const agents = part.agents ?? [];
-	const headerLabel = `Workflow · ${part.name}`;
+	const headerLabel = f("panelWorkflowName", { name: part.name });
 	const statusTone =
 		part.status === "failed"
 			? "text-destructive"
@@ -108,10 +110,12 @@ export function WorkflowCard({ part }: { part: WorkflowPart }) {
 				: "text-muted-foreground";
 	const footer = [
 		agents.length > 0
-			? `${agents.length} agent${agents.length === 1 ? "" : "s"}`
+			? agents.length === 1
+				? f("panelAgentCountSingular", { count: agents.length })
+				: f("panelAgentCount", { count: agents.length })
 			: null,
 		typeof part.totalTokens === "number"
-			? `${formatTokens(part.totalTokens)} tokens`
+			? f("panelTokensCount", { count: formatTokens(part.totalTokens) })
 			: null,
 		typeof part.durationMs === "number"
 			? formatWorkflowDuration(part.durationMs)
@@ -129,7 +133,7 @@ export function WorkflowCard({ part }: { part: WorkflowPart }) {
 					<span className={statusTone}>{headerLabel}</span>
 				)}
 				<span className="ml-auto text-mini text-muted-foreground/60">
-					{WORKFLOW_STATUS_LABEL[part.status]}
+					{t(WORKFLOW_STATUS_LABEL[part.status])}
 				</span>
 			</div>
 			{agents.map((agent, index) => {
@@ -168,11 +172,12 @@ export function WorkflowCard({ part }: { part: WorkflowPart }) {
 }
 
 export function PlanReviewCard({ part }: { part: PlanReviewPart }) {
+	const { t } = useI18n();
 	return (
 		<div className="rounded-xl border-[1.5px] border-border/70 bg-background/60 px-3.5 py-3">
 			<div className="flex items-center gap-1.5 text-mini font-medium uppercase tracking-[0.06em] text-muted-foreground">
 				<ClipboardList className="size-3.5" strokeWidth={1.8} />
-				<I18nText source={"Plan"} />
+				<I18nText source="plan" />
 			</div>
 			{part.planFilePath ? (
 				<p className="mt-2 break-words text-small leading-5 text-muted-foreground">
@@ -183,19 +188,19 @@ export function PlanReviewCard({ part }: { part: PlanReviewPart }) {
 				<Suspense
 					fallback={
 						<pre className="whitespace-pre-wrap break-words">
-							{part.plan?.trim() || "No plan content."}
+							{part.plan?.trim() || t("panelNoPlanContent")}
 						</pre>
 					}
 				>
 					<LazyStreamdown className="conversation-streamdown" mode="static">
-						{part.plan?.trim() || "No plan content."}
+						{part.plan?.trim() || t("panelNoPlanContent")}
 					</LazyStreamdown>
 				</Suspense>
 			</div>
 			{(part.allowedPrompts ?? []).length > 0 ? (
 				<div className="mt-3 grid gap-2 rounded-lg border border-border/50 bg-muted/20 p-2.5">
 					<p className="text-mini font-medium uppercase tracking-[0.06em] text-muted-foreground">
-						<I18nText source={"Approved Prompts"} />
+						<I18nText source="approvedPrompts" />
 					</p>
 					{part.allowedPrompts?.map((entry) => (
 						<div
@@ -265,7 +270,7 @@ export function ImageBlock({ part }: { part: ImagePart }) {
 							>
 								<Copy className="size-4 shrink-0" strokeWidth={1.6} />
 								<span>
-									<I18nText source={"Copy Image"} />
+									<I18nText source="copyImage" />
 								</span>
 							</button>
 							<button
@@ -284,7 +289,7 @@ export function ImageBlock({ part }: { part: ImagePart }) {
 							>
 								<FolderOpen className="size-4 shrink-0" strokeWidth={1.6} />
 								<span>
-									<I18nText source={"Show in Finder"} />
+									<I18nText source="showFinder" />
 								</span>
 							</button>
 						</div>,
@@ -329,14 +334,16 @@ async function copyImage(part: ImagePart) {
 	try {
 		if (part.source.kind === "file") {
 			await copyImageToClipboard(part.source.path);
-			toast.success("Image copied");
+			toast.success(translateSource("panelImageCopied"));
 			return;
 		}
 
 		await copyImageBlobToClipboard(await imageBlob(part));
-		toast.success("Image copied");
+		toast.success(translateSource("panelImageCopied"));
 	} catch (error) {
-		toast.error("Copy failed", { description: String(error) });
+		toast.error(translateSource("panelCopyFailed"), {
+			description: String(error),
+		});
 	}
 }
 
@@ -344,7 +351,7 @@ async function showInFinder(path: string) {
 	try {
 		await showImageInFinder(path);
 	} catch (error) {
-		toast.error("Unable to show image in Finder", {
+		toast.error(translateSource("panelUnableShowImageFinder"), {
 			description: String(error),
 		});
 	}

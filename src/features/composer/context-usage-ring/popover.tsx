@@ -58,7 +58,7 @@ export function ContextUsagePopoverContent({
 				<div className="flex items-center gap-2 text-mini text-muted-foreground">
 					<HelmorThinkingIndicator size={12} />
 					<span>
-						<I18nText source={"Loading context details…"} />
+						<I18nText source="loadingContextDetails" />
 					</span>
 				</div>
 			) : null}

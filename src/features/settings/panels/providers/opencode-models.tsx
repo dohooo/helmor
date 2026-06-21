@@ -154,7 +154,7 @@ export function SlugProviderModels({
 						type="button"
 						variant="outline"
 						size="icon-sm"
-						aria-label="Sync models"
+						aria-label="syncModels"
 						disabled={isSyncing}
 						onClick={onSyncClick}
 					>
@@ -164,7 +164,7 @@ export function SlugProviderModels({
 					</Button>
 				</TooltipTrigger>
 				<TooltipContent>
-					{f("Sync models — re-reads {path}", {
+					{f("syncModelsReReadsPath", {
 						path: adapter.configPathLabel,
 					})}
 				</TooltipContent>
@@ -174,19 +174,18 @@ export function SlugProviderModels({
 				onOpenChange={(open) => {
 					if (!isSyncing) setConfirmOpen(open);
 				}}
-				title={f("Sync {name} models?", { name: adapter.displayName })}
+				title={f("syncNameModels", { name: adapter.displayName })}
 				description={
 					runningCount === 1
-						? f(
-								"Re-reading your config restarts {name} and will stop 1 running chat.",
-								{ name: adapter.displayName },
-							)
-						: f(
-								"Re-reading your config restarts {name} and will stop {count} running chats.",
-								{ name: adapter.displayName, count: runningCount },
-							)
+						? f("reReadingConfigRestartsNameWill", {
+								name: adapter.displayName,
+							})
+						: f("reReadingConfigRestartsNameWill2", {
+								name: adapter.displayName,
+								count: runningCount,
+							})
 				}
-				confirmLabel="Sync anyway"
+				confirmLabel="syncAnyway"
 				onConfirm={() => {
 					void reloadSync().finally(() => setConfirmOpen(false));
 				}}

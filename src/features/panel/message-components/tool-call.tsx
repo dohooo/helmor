@@ -19,7 +19,7 @@ import {
 	partKey,
 	type ToolCallPart,
 } from "@/lib/api";
-import { I18nText } from "@/lib/i18n";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { childrenStructurallyEqual } from "@/lib/structural-equality";
 import { cn } from "@/lib/utils";
 import { TodoList, WorkflowCard } from "./content-parts";
@@ -91,7 +91,8 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 	compact = false,
 	childParts,
 }: AssistantToolCallProps) {
-	const info = getToolInfo(toolName, args);
+	const { t, f } = useI18n();
+	const info = getToolInfo(toolName, args, t, f);
 	const isEdit = toolName === "Edit";
 	const isApplyPatch = toolName === "apply_patch";
 	const oldStr =
@@ -413,11 +414,11 @@ const ToolCallErrorRow = memo(function ToolCallErrorRow({
 			>
 				<AlertCircle className="size-3.5 shrink-0" strokeWidth={1.8} />
 				<span className="shrink-0 font-medium">
-					<I18nText source={"Error"} />
+					<I18nText source="error" />
 				</span>
 				{exitCode != null ? (
 					<span className="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 font-mono text-mini">
-						<I18nText source={"Exit code"} /> {exitCode}
+						<I18nText source="exitCode" /> {exitCode}
 					</span>
 				) : null}
 				{preview ? (
@@ -487,9 +488,10 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 	isRunning,
 	parts,
 }: AgentChildrenBlockProps) {
+	const { t, f } = useI18n();
 	const isLive = isLiveStreamingStatus(streamingStatus);
 	const streaming = isLive || (!streamingStatus && !!isRunning);
-	const info = getToolInfo(toolName, toolArgs);
+	const info = getToolInfo(toolName, toolArgs, t, f);
 	const toolCallParts = useMemo(
 		() =>
 			parts.filter((part): part is ToolCallPart => part.type === "tool-call"),
@@ -581,10 +583,10 @@ const COLLAPSED_GROUP_NOUNS: Record<
 	CollapsedGroupPart["category"],
 	TruncatedNoun
 > = {
-	shell: { one: "command", other: "commands" },
-	search: { one: "search", other: "searches" },
-	read: { one: "file", other: "files" },
-	mixed: { one: "tool", other: "tools" },
+	shell: { one: "panelNounCommand", other: "panelNounCommands" },
+	search: { one: "panelNounSearch", other: "panelNounSearches" },
+	read: { one: "panelNounFile", other: "panelNounFiles" },
+	mixed: { one: "panelNounTool", other: "panelNounTools" },
 };
 
 export function CollapsedToolGroup({ group }: { group: CollapsedGroupPart }) {

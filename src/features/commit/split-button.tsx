@@ -9,6 +9,7 @@ import {
 	DropdownMenuContent,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 interface CommitSplitButtonProps {
@@ -24,10 +25,11 @@ export function CommitSplitButton({
 	disabled,
 	isOpen,
 	children,
-	mainLabel = "Commit",
+	mainLabel = "commitButtonCommit",
 	onMainAction = () => {},
 	onOpenChange,
 }: CommitSplitButtonProps) {
+	const { t } = useI18n();
 	const commitButtonClasses = cn(
 		"inline-flex h-full shrink-0 items-center gap-1 rounded-l-[4px] px-2 py-1 text-mini font-medium leading-none tracking-[0.01em] transition-colors",
 		disabled
@@ -63,7 +65,7 @@ export function CommitSplitButton({
 				<Button
 					type="button"
 					disabled={disabled}
-					aria-label="Commit current changes"
+					aria-label="commitCurrentChanges"
 					variant="ghost"
 					size="xs"
 					className={commitButtonClasses}
@@ -76,14 +78,14 @@ export function CommitSplitButton({
 						onMainAction();
 					}}
 				>
-					<span>{mainLabel}</span>
+					<span>{t(mainLabel)}</span>
 				</Button>
 				<ButtonGroupSeparator className={dividerClasses} />
 				<DropdownMenuTrigger asChild>
 					<Button
 						type="button"
 						disabled={disabled}
-						aria-label="Git section more actions"
+						aria-label="gitSectionMoreActions"
 						variant="ghost"
 						size="xs"
 						className={triggerClasses}

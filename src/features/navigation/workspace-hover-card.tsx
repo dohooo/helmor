@@ -110,7 +110,7 @@ function GitStats({ workspaceId }: { workspaceId: string }) {
 				key="uncommitted"
 				icon={FileDiff}
 				value={String(uncommitted)}
-				label={f("{count} uncommitted {changeLabel}", {
+				label={f("countUncommittedChangelabel", {
 					count: uncommitted,
 					changeLabel: uncommitted === 1 ? "change" : "changes",
 				})}
@@ -124,7 +124,7 @@ function GitStats({ workspaceId }: { workspaceId: string }) {
 				key="behind"
 				icon={ArrowDown}
 				value={String(behind)}
-				label={f("{count} {commitLabel} behind {target}", {
+				label={f("countCommitlabelBehindTarget", {
 					count: behind,
 					commitLabel: behind === 1 ? "commit" : "commits",
 					target: targetLabel,
@@ -139,7 +139,7 @@ function GitStats({ workspaceId }: { workspaceId: string }) {
 				key="ahead"
 				icon={ArrowUp}
 				value={String(ahead)}
-				label={f("{count} unpushed {commitLabel}", {
+				label={f("countUnpushedCommitlabel", {
 					count: ahead,
 					commitLabel: ahead === 1 ? "commit" : "commits",
 				})}
@@ -152,10 +152,10 @@ function GitStats({ workspaceId }: { workspaceId: string }) {
 		return (
 			<span
 				className="inline-flex shrink-0 items-center"
-				title={f("Branch up to date with {target} · no uncommitted changes", {
+				title={f("branchUpDateTargetNoUncommitted", {
 					target: targetLabel,
 				})}
-				aria-label={f("Branch up to date with {target}", {
+				aria-label={f("branchUpDateTarget", {
 					target: targetLabel,
 				})}
 			>
@@ -305,6 +305,7 @@ function StreamingElapsed({
 	workspaceId: string;
 	primarySessionId: string | null | undefined;
 }) {
+	const { f } = useI18n();
 	const queryClient = useQueryClient();
 	const busySessionIds = useBusySessionIds();
 	const { data: workspaceSessions } = useQuery(
@@ -359,8 +360,10 @@ function StreamingElapsed({
 	return (
 		<span
 			className="mt-0.5 shrink-0 font-mono text-micro tabular-nums text-muted-foreground/80"
-			title={`Running for ${formatElapsed(elapsed)}`}
-			aria-label={`Running for ${formatElapsed(elapsed)}`}
+			title={f("navRunningForElapsed", { elapsed: formatElapsed(elapsed) })}
+			aria-label={f("navRunningForElapsed", {
+				elapsed: formatElapsed(elapsed),
+			})}
 		>
 			{formatElapsed(elapsed)}
 		</span>
@@ -433,7 +436,7 @@ function LiveSessionPreview({
 	if (blocks.length === 0) {
 		return (
 			<span className="text-mini italic text-muted-foreground/70">
-				<I18nText source={"Thinking…"} />
+				<I18nText source="thinking3" />
 			</span>
 		);
 	}
@@ -516,7 +519,7 @@ export function WorkspaceHoverCard({
 	isSending?: boolean;
 	children: React.ReactNode;
 }) {
-	const { f } = useI18n();
+	const { t, f } = useI18n();
 	// Measured on open so the card's left edge snaps to the sidebar divider.
 	const [sideOffset, setSideOffset] = useState(HOVER_CARD_DEFAULT_SIDE_OFFSET);
 	const [open, setOpen] = useState(false);
@@ -633,10 +636,10 @@ export function WorkspaceHoverCard({
 		row.lastUserMessageAt ?? row.updatedAt ?? row.createdAt ?? null;
 	const lastActivity = relativeTime(lastActivityIso);
 	const lastActivityLabel = row.lastUserMessageAt
-		? "Last message"
+		? t("navLastMessage")
 		: row.updatedAt
-			? "Last changed"
-			: "Created";
+			? t("navLastChanged")
+			: t("created");
 	const createdAt = relativeTime(row.createdAt);
 	const sessionCount = row.sessionCount ?? 0;
 
@@ -730,7 +733,8 @@ export function WorkspaceHoverCard({
 						<div className="flex items-center gap-2.5">
 							{sessionCount > 0 ? (
 								<span className="tabular-nums">
-									{sessionCount} {sessionCount === 1 ? "session" : "sessions"}
+									{sessionCount}{" "}
+									{sessionCount === 1 ? t("session") : t("sessions")}
 								</span>
 							) : null}
 						</div>
@@ -738,7 +742,7 @@ export function WorkspaceHoverCard({
 							<span
 								title={
 									createdAt
-										? f("{activity} · created {createdAt}", {
+										? f("activityCreatedCreatedat", {
 												activity: lastActivityLabel,
 												createdAt,
 											})

@@ -7,7 +7,7 @@ import {
 	DialogDescription,
 	DialogTitle,
 } from "@/components/ui/dialog";
-import { useI18n, useLocalizedNode } from "@/lib/i18n";
+import { useI18n } from "@/lib/i18n";
 
 export function ConfirmDialog({
 	open,
@@ -29,7 +29,7 @@ export function ConfirmDialog({
 	loading?: boolean;
 }) {
 	const { t } = useI18n();
-	const localizedDescription = useLocalizedNode(description);
+
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent
@@ -38,7 +38,7 @@ export function ConfirmDialog({
 			>
 				<DialogTitle className="text-ui font-semibold">{t(title)}</DialogTitle>
 				<DialogDescription className="mt-1.5 text-small leading-relaxed text-muted-foreground">
-					{localizedDescription}
+					{typeof description === "string" ? t(description) : description}
 				</DialogDescription>
 				<div className="mt-3 flex justify-end gap-2">
 					<Button

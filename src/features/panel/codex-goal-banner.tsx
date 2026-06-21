@@ -21,18 +21,19 @@ import { Goal, Play, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { type CodexGoalState, mutateCodexGoal } from "@/lib/api";
-import { I18nText } from "@/lib/i18n";
+import { I18nText, useI18n } from "@/lib/i18n";
 import {
 	helmorQueryKeys,
 	sessionCodexGoalQueryOptions,
 } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
 
+// Values are i18n catalog KEYS, resolved at render via t().
 const STATUS_LABEL: Record<CodexGoalState["status"], string> = {
-	active: "active",
-	paused: "paused",
-	budgetLimited: "budget reached",
-	complete: "complete",
+	active: "panelGoalStatusActive",
+	paused: "panelGoalStatusPaused",
+	budgetLimited: "panelGoalStatusBudgetReached",
+	complete: "panelGoalStatusComplete",
 };
 
 const STATUS_TONE: Record<CodexGoalState["status"], string> = {
@@ -66,6 +67,7 @@ export function CodexGoalBanner({
 	 *  omitted, the Resume button hides entirely. */
 	onResume?: () => void;
 }) {
+	const { t } = useI18n();
 	const queryClient = useQueryClient();
 	const queryKey = helmorQueryKeys.sessionCodexGoal(sessionId);
 	const { data: goal } = useQuery(sessionCodexGoalQueryOptions(sessionId));
@@ -84,7 +86,9 @@ export function CodexGoalBanner({
 			if (context?.previous !== undefined) {
 				queryClient.setQueryData(queryKey, context.previous);
 			}
-			toast.error(err instanceof Error ? err.message : "Failed to clear goal");
+			toast.error(
+				err instanceof Error ? err.message : t("panelFailedClearGoal"),
+			);
 		},
 		onSettled: () => {
 			void queryClient.invalidateQueries({ queryKey });
@@ -123,10 +127,10 @@ export function CodexGoalBanner({
 					STATUS_TONE[goal.status],
 				)}
 			>
-				{STATUS_LABEL[goal.status]}
+				{t(STATUS_LABEL[goal.status])}
 			</span>
 			<span className="shrink-0 text-mini tabular-nums text-muted-foreground/70">
-				<I18nText source={"Used:"} /> {budget ? `${used} / ${budget}` : used}
+				<I18nText source="used" /> {budget ? `${used} / ${budget}` : used}
 			</span>
 			<div className="ml-auto flex shrink-0 items-center gap-1">
 				{isPaused && onResume ? (
@@ -134,26 +138,30 @@ export function CodexGoalBanner({
 						type="button"
 						variant="ghost"
 						size="sm"
-						aria-label="Resume goal"
+						aria-label="resumeGoal"
 						disabled={isPending}
 						onClick={onResume}
 						className="h-7 gap-1 rounded-md px-2 text-small font-medium text-muted-foreground hover:text-foreground"
 					>
 						<Play className="size-[13px] shrink-0" strokeWidth={1.8} />
-						<span>Resume</span>
+						<span>
+							<I18nText source="resume" />
+						</span>
 					</Button>
 				) : null}
 				<Button
 					type="button"
 					variant="ghost"
 					size="sm"
-					aria-label="Clear goal"
+					aria-label="clearGoal"
 					disabled={isPending}
 					onClick={() => clearMutation.mutate()}
 					className="h-7 gap-1 rounded-md px-2 text-small font-medium text-muted-foreground hover:text-foreground"
 				>
 					<X className="size-[13px] shrink-0" strokeWidth={1.8} />
-					<span>Clear</span>
+					<span>
+						<I18nText source="clear" />
+					</span>
 				</Button>
 			</div>
 		</div>

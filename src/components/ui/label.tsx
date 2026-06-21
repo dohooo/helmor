@@ -1,7 +1,6 @@
 import * as LabelPrimitive from "@radix-ui/react-label";
 import type * as React from "react";
 
-import { useLocalizedNode } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 function Label({
@@ -9,7 +8,6 @@ function Label({
 	children,
 	...props
 }: React.ComponentProps<typeof LabelPrimitive.Root>) {
-	const localizedChildren = useLocalizedNode(children);
 	return (
 		<LabelPrimitive.Root
 			data-slot="label"
@@ -19,7 +17,7 @@ function Label({
 			)}
 			{...props}
 		>
-			{localizedChildren}
+			{children}
 		</LabelPrimitive.Root>
 	);
 }

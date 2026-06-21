@@ -69,7 +69,7 @@ export function QuickShell({
 				visibleToasts={3}
 			/>
 			<main
-				aria-label={translateSource("Quick panel", s.appSettings.language)}
+				aria-label={translateSource("quickPanel")}
 				className="h-dvh w-dvw overflow-hidden bg-transparent font-sans text-foreground antialiased"
 			>
 				<div className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border/60 bg-background">

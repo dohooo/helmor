@@ -2,6 +2,21 @@
 	"_readme": "AUTO-GENERATED from .announcements during `bun run release:version`. Each item is one released version's in-app announcement. Do not edit released entries by hand.",
 	"items": [
 		{
+			"releaseVersion": "0.41.0",
+			"items": [
+				{
+					"text": "Helmor now supports English and Simplified Chinese, with language pickers in Settings and onboarding.",
+					"action": {
+						"label": "Open Appearance",
+						"value": {
+							"type": "openSettings",
+							"section": "appearance"
+						}
+					}
+				}
+			]
+		},
+		{
 			"releaseVersion": "0.40.0",
 			"items": [
 				{
