@@ -42,6 +42,34 @@ describe("settings", () => {
 		invokeMock.mockReset();
 	});
 
+	it("keeps onboardingCompleted from the localStorage mirror when the backend is unreachable", async () => {
+		// Already-onboarded user with a down team backend: invoke rejects and
+		// loadSettings falls back to DEFAULT_SETTINGS — the device-local mirror must
+		// keep onboardingCompleted true so they land on the shell, not onboarding.
+		localStorage.setItem("app.onboarding_completed", "true");
+		invokeMock.mockRejectedValue(new Error("team backend unreachable"));
+
+		const settings = await loadSettings();
+
+		expect(settings.onboardingCompleted).toBe(true);
+	});
+
+	it("treats a fresh user (no mirror) as not onboarded when the backend is unreachable", async () => {
+		invokeMock.mockRejectedValue(new Error("team backend unreachable"));
+
+		const settings = await loadSettings();
+
+		expect(settings.onboardingCompleted).toBe(false);
+	});
+
+	it("mirrors onboardingCompleted to localStorage on a successful load", async () => {
+		invokeMock.mockResolvedValue({ "app.onboarding_completed": "true" });
+
+		await loadSettings();
+
+		expect(localStorage.getItem("app.onboarding_completed")).toBe("true");
+	});
+
 	it("hydrates start-surface preferences from the current storage key", async () => {
 		invokeMock.mockResolvedValue({
 			"app.start_surface_preferences": JSON.stringify({

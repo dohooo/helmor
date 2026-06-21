@@ -602,6 +602,34 @@ export function getPreloadedSettings(): AppSettings {
 	};
 }
 
+// Onboarding is a one-time DEVICE-LOCAL milestone (see the gate in
+// app-providers.tsx). It is persisted to SQLite, but `loadSettings` falls back
+// to DEFAULT_SETTINGS when the backend is unreachable — and in team mode that
+// backend is the (possibly down) remote companion. Mirroring the flag to
+// localStorage lets an already-onboarded user keep landing on the shell (with
+// the Cloud indicator showing the connection problem) instead of being bounced
+// back into onboarding when the team backend can't be reached.
+const ONBOARDING_COMPLETED_STORAGE_KEY = "app.onboarding_completed";
+
+function readPreloadedOnboarding(): boolean {
+	if (typeof localStorage === "undefined") {
+		return DEFAULT_SETTINGS.onboardingCompleted;
+	}
+	return localStorage.getItem(ONBOARDING_COMPLETED_STORAGE_KEY) === "true";
+}
+
+function mirrorOnboardingCompleted(value: boolean): void {
+	if (typeof localStorage === "undefined") return;
+	try {
+		localStorage.setItem(
+			ONBOARDING_COMPLETED_STORAGE_KEY,
+			value ? "true" : "false",
+		);
+	} catch {
+		// Best-effort mirror; the backend value still applies when reachable.
+	}
+}
+
 // localStorage-backed fields (sync read for flash-free boot) live in
 // `LOCALSTORAGE_KEYS` above. Everything else goes through SQLite.
 const SETTINGS_KEY_MAP: Record<
@@ -1395,10 +1423,17 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.autoArchiveOnMerge] !== undefined
 					? raw[SETTINGS_KEY_MAP.autoArchiveOnMerge] === "true"
 					: DEFAULT_SETTINGS.autoArchiveOnMerge,
-			onboardingCompleted:
-				raw[SETTINGS_KEY_MAP.onboardingCompleted] !== undefined
-					? raw[SETTINGS_KEY_MAP.onboardingCompleted] === "true"
-					: DEFAULT_SETTINGS.onboardingCompleted,
+			onboardingCompleted: (() => {
+				// Source from the backend when present (and mirror to localStorage),
+				// else fall back to the device-local mirror — so a later
+				// unreachable-backend load keeps the right value.
+				const onboarded =
+					raw[SETTINGS_KEY_MAP.onboardingCompleted] !== undefined
+						? raw[SETTINGS_KEY_MAP.onboardingCompleted] === "true"
+						: readPreloadedOnboarding();
+				mirrorOnboardingCompleted(onboarded);
+				return onboarded;
+			})(),
 			shortcuts: parseShortcutOverrides(raw[SETTINGS_KEY_MAP.shortcuts]),
 			claudeEnabledModelIds: parseEnabledModelIdsSetting(
 				raw[SETTINGS_KEY_MAP.claudeEnabledModelIds],
@@ -1430,7 +1465,14 @@ export async function loadSettings(): Promise<AppSettings> {
 			),
 		};
 	} catch {
-		return { ...DEFAULT_SETTINGS };
+		// Backend unreachable (e.g. a down team companion). Fall back to defaults
+		// but KEEP the device-local onboarding milestone, so an already-onboarded
+		// user lands on the shell (Cloud indicator red) instead of being bounced
+		// into onboarding.
+		return {
+			...DEFAULT_SETTINGS,
+			onboardingCompleted: readPreloadedOnboarding(),
+		};
 	}
 }
 
@@ -1457,6 +1499,12 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 		} catch (error) {
 			console.error(`[helmor] localStorage save failed for "${lsKey}"`, error);
 		}
+	}
+
+	// Mirror the device-local onboarding milestone (see loadSettings) so it
+	// survives an unreachable backend on the next boot.
+	if (patch.onboardingCompleted !== undefined) {
+		mirrorOnboardingCompleted(patch.onboardingCompleted);
 	}
 
 	const settings: Record<string, string> = {};
