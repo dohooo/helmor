@@ -878,6 +878,13 @@ async function pumpNdjson(
 	if (tail) onEvent(safeJson(tail));
 }
 
+/** No SSE bytes for this long means the connection is dead even if the OS
+ *  hasn't surfaced a TCP error yet — the server pings every ~15s, so a longer
+ *  gap is a silent drop. pumpSse cancels + throws so runEventStream flips to
+ *  `reconnecting` promptly instead of waiting out a (possibly minutes-long)
+ *  TCP timeout. */
+const SSE_STALL_TIMEOUT_MS = 22_000;
+
 /**
  * Minimal SSE frame parser: accumulates `event:` / `data:` lines and emits on
  * the blank-line frame boundary.
@@ -899,7 +906,28 @@ async function pumpSse(
 	};
 
 	for (;;) {
-		const { done, value } = await reader.read();
+		// Heartbeat watchdog: no bytes for SSE_STALL_TIMEOUT_MS (> the ~15s server
+		// ping interval) means the stream is dead even without a TCP error. Cancel
+		// the reader (closes the connection) and throw so runEventStream reconnects.
+		let stallTimer: ReturnType<typeof setTimeout> | undefined;
+		let chunk: Awaited<ReturnType<typeof reader.read>>;
+		try {
+			chunk = await Promise.race([
+				reader.read(),
+				new Promise<never>((_, reject) => {
+					stallTimer = setTimeout(
+						() => reject(new Error("sse heartbeat stall")),
+						SSE_STALL_TIMEOUT_MS,
+					);
+				}),
+			]);
+		} catch (error) {
+			await reader.cancel().catch(() => {});
+			throw error;
+		} finally {
+			clearTimeout(stallTimer);
+		}
+		const { done, value } = chunk;
 		if (done) break;
 		buffer += decoder.decode(value, { stream: true });
 		let newline = buffer.indexOf("\n");
