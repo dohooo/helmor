@@ -11,7 +11,7 @@ import type { SettingsSection } from "@/features/settings";
 import type { WorkspaceRow } from "@/lib/api";
 import type { AppSettings, WorkspaceRightSidebarMode } from "@/lib/settings";
 import { resolveTheme } from "@/lib/settings";
-import { ReconnectingBanner } from "./reconnecting-banner";
+import { useActiveStreamsReattach } from "@/shell/hooks/use-active-streams-reattach";
 
 type Props = {
 	theme: AppSettings["theme"];
@@ -40,9 +40,13 @@ export function AppOverlays({
 	editorDiscardConfirmDialog,
 	mergeConfirmDialogNode,
 }: Props) {
+	// Headless: keep the active-stream re-attach side effect that used to live in
+	// the (now-removed) ReconnectingBanner. Must run shell-wide for every remote
+	// transport, not only where the team-mode switch renders.
+	useActiveStreamsReattach();
+
 	return (
 		<>
-			<ReconnectingBanner />
 			<Toaster
 				theme={resolveTheme(theme)}
 				position="bottom-right"
