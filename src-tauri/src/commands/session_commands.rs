@@ -7,6 +7,19 @@ use crate::{
 
 use super::common::{run_blocking, CmdResult};
 
+/// Broadcast a session-list mutation so teammates (and this client's other
+/// windows) re-sync the sidebar / session tabs. No-op when `workspace_id` is
+/// `None` (the session was already gone). In team mode this rides the shared
+/// `/v1/stream` ui-sync channel to every connected member.
+fn notify_session_list_changed(app: &tauri::AppHandle, workspace_id: Option<String>) {
+    if let Some(workspace_id) = workspace_id {
+        crate::ui_sync::publish(
+            app,
+            crate::ui_sync::UiMutationEvent::SessionListChanged { workspace_id },
+        );
+    }
+}
+
 #[tauri::command]
 pub async fn list_workspace_sessions(
     workspace_id: String,
@@ -42,6 +55,7 @@ pub async fn list_session_thread_messages(
 #[allow(clippy::too_many_arguments)] // Tauri IPC command — args mirror the frontend call.
 #[tauri::command]
 pub async fn create_session(
+    app: tauri::AppHandle,
     workspace_id: String,
     action_kind: Option<ActionKind>,
     permission_mode: Option<String>,
@@ -52,7 +66,8 @@ pub async fn create_session(
     session_kind: Option<String>,
     agent_type: Option<String>,
 ) -> CmdResult<sessions::CreateSessionResponse> {
-    run_blocking(move || {
+    let ws = workspace_id.clone();
+    let response = run_blocking(move || {
         sessions::create_session(
             &workspace_id,
             action_kind,
@@ -67,27 +82,60 @@ pub async fn create_session(
             },
         )
     })
-    .await
+    .await?;
+    notify_session_list_changed(&app, Some(ws));
+    Ok(response)
 }
 
 #[tauri::command]
-pub async fn rename_session(session_id: String, title: String) -> CmdResult<()> {
-    run_blocking(move || sessions::rename_session(&session_id, &title)).await
+pub async fn rename_session(
+    app: tauri::AppHandle,
+    session_id: String,
+    title: String,
+) -> CmdResult<()> {
+    let workspace_id = run_blocking(move || {
+        sessions::rename_session(&session_id, &title)?;
+        sessions::workspace_id_for_session(&session_id)
+    })
+    .await?;
+    notify_session_list_changed(&app, workspace_id);
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn hide_session(session_id: String) -> CmdResult<()> {
-    run_blocking(move || sessions::hide_session(&session_id)).await
+pub async fn hide_session(app: tauri::AppHandle, session_id: String) -> CmdResult<()> {
+    let workspace_id = run_blocking(move || {
+        sessions::hide_session(&session_id)?;
+        sessions::workspace_id_for_session(&session_id)
+    })
+    .await?;
+    notify_session_list_changed(&app, workspace_id);
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn unhide_session(session_id: String) -> CmdResult<()> {
-    run_blocking(move || sessions::unhide_session(&session_id)).await
+pub async fn unhide_session(app: tauri::AppHandle, session_id: String) -> CmdResult<()> {
+    let workspace_id = run_blocking(move || {
+        sessions::unhide_session(&session_id)?;
+        sessions::workspace_id_for_session(&session_id)
+    })
+    .await?;
+    notify_session_list_changed(&app, workspace_id);
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn delete_session(session_id: String) -> CmdResult<()> {
-    run_blocking(move || sessions::delete_session(&session_id)).await
+pub async fn delete_session(app: tauri::AppHandle, session_id: String) -> CmdResult<()> {
+    let workspace_id = run_blocking(move || {
+        // Resolve the workspace BEFORE the row is gone; afterwards the lookup
+        // returns None and the teammate broadcast would be lost.
+        let workspace_id = sessions::workspace_id_for_session(&session_id)?;
+        sessions::delete_session(&session_id)?;
+        Ok(workspace_id)
+    })
+    .await?;
+    notify_session_list_changed(&app, workspace_id);
+    Ok(())
 }
 
 #[tauri::command]

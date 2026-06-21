@@ -73,7 +73,7 @@ async fn dispatch(
             Ok(Value::Null)
         }
         "create_repo_run_action" => to_value(crate::commands::script_commands::create_repo_run_action(app.clone(), arg_string(&args, "repoId")?, arg_string(&args, "name")?, arg_string(&args, "command")?, arg_string(&args, "mode")?, arg_opt_string(&args, "stopCommand")).await?),
-        "create_session" => to_value(crate::commands::session_commands::create_session(arg_string(&args, "workspaceId")?, arg_opt_json(&args, "actionKind")?, arg_opt_string(&args, "permissionMode"), arg_opt_string(&args, "model"), arg_opt_string(&args, "effortLevel"), arg_opt_bool(&args, "fastMode"), arg_opt_string(&args, "seedSessionId"), arg_opt_string(&args, "sessionKind"), arg_opt_string(&args, "agentType")).await?),
+        "create_session" => to_value(crate::commands::session_commands::create_session(app.clone(), arg_string(&args, "workspaceId")?, arg_opt_json(&args, "actionKind")?, arg_opt_string(&args, "permissionMode"), arg_opt_string(&args, "model"), arg_opt_string(&args, "effortLevel"), arg_opt_bool(&args, "fastMode"), arg_opt_string(&args, "seedSessionId"), arg_opt_string(&args, "sessionKind"), arg_opt_string(&args, "agentType")).await?),
         "create_workspace_from_repo" => to_value(crate::commands::workspace_commands::create_workspace_from_repo(app.clone(), arg_string(&args, "repoId")?).await?),
         "delete_query_cache" => {
             crate::commands::system_commands::delete_query_cache(arg_string(&args, "key")?).await?;
@@ -88,7 +88,7 @@ async fn dispatch(
             Ok(Value::Null)
         }
         "delete_session" => {
-            crate::commands::session_commands::delete_session(arg_string(&args, "sessionId")?).await?;
+            crate::commands::session_commands::delete_session(app.clone(), arg_string(&args, "sessionId")?).await?;
             Ok(Value::Null)
         }
         "detect_installed_editors" => to_value(crate::commands::editors::detect_installed_editors().await?),
@@ -123,7 +123,7 @@ async fn dispatch(
         "get_workspace_forge_check_insert_text" => to_value(crate::commands::forge_commands::get_workspace_forge_check_insert_text(arg_string(&args, "workspaceId")?, arg_string(&args, "itemId")?).await?),
         "get_workspace_git_action_status" => to_value(crate::commands::editor_commands::get_workspace_git_action_status(arg_string(&args, "workspaceId")?).await?),
         "hide_session" => {
-            crate::commands::session_commands::hide_session(arg_string(&args, "sessionId")?).await?;
+            crate::commands::session_commands::hide_session(app.clone(), arg_string(&args, "sessionId")?).await?;
             Ok(Value::Null)
         }
         "install_downloaded_app_update" => to_value(crate::commands::updater_commands::install_downloaded_app_update(app.clone()).await?),
@@ -266,7 +266,7 @@ async fn dispatch(
         "recheck_helmor_components" => to_value(crate::commands::system_commands::recheck_helmor_components().await?),
         "refresh_workspace_change_request" => to_value(crate::commands::forge_commands::refresh_workspace_change_request(arg_string(&args, "workspaceId")?, app.clone()).await?),
         "rename_session" => {
-            crate::commands::session_commands::rename_session(arg_string(&args, "sessionId")?, arg_string(&args, "title")?).await?;
+            crate::commands::session_commands::rename_session(app.clone(), arg_string(&args, "sessionId")?, arg_string(&args, "title")?).await?;
             Ok(Value::Null)
         }
         "rename_workspace_branch" => {
@@ -348,7 +348,7 @@ async fn dispatch(
             Ok(Value::Null)
         }
         "unhide_session" => {
-            crate::commands::session_commands::unhide_session(arg_string(&args, "sessionId")?).await?;
+            crate::commands::session_commands::unhide_session(app.clone(), arg_string(&args, "sessionId")?).await?;
             Ok(Value::Null)
         }
         "unpin_workspace" => {
