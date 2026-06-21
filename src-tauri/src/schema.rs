@@ -891,17 +891,18 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             "session_kind",
             "TEXT NOT NULL DEFAULT 'gui'",
         )?;
-        // Per-session context-carry toggle (team collaboration room). Default
-        // ON (1) — folds room-chat messages since the last agent turn into the
-        // next @agent dispatch. NULL on old rows is treated as ON by the
-        // frontend (`?? true`). Only meaningful in team mode; single-user code
-        // never reads or writes it.
-        add_column_if_missing(
-            connection,
-            "sessions",
-            "carry_room_context",
-            "INTEGER DEFAULT 1",
-        )?;
+        // Drop the now-removed per-session room-context carry toggle. Guarded on
+        // presence so re-running (and fresh DBs without the column) is a no-op.
+        // Bundled SQLite is 3.45 — DROP COLUMN is supported (>=3.35).
+        let carry_exists: bool = connection
+            .prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = ?1")
+            .and_then(|mut stmt| stmt.exists(["carry_room_context"]))
+            .unwrap_or(false);
+        if carry_exists {
+            connection
+                .execute_batch("ALTER TABLE sessions DROP COLUMN carry_room_context")
+                .context("Failed to drop sessions.carry_room_context column")?;
+        }
     }
     if has_table(connection, "triage_candidate") {
         // Why an item surfaced for the user (review_requested / assigned /
@@ -1176,7 +1177,6 @@ CREATE TABLE IF NOT EXISTS sessions (
     title TEXT DEFAULT 'Untitled',
     effort_level TEXT DEFAULT 'high',
     fast_mode INTEGER DEFAULT 0,
-    carry_room_context INTEGER DEFAULT 1,
     action_kind TEXT,
     context_usage_meta TEXT,
     codex_goal_meta TEXT,
