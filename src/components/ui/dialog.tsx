@@ -2,6 +2,7 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { XIcon } from "lucide-react";
 import type * as React from "react";
 import { Button } from "@/components/ui/button";
+import { I18nText } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 function Dialog({
@@ -111,7 +112,9 @@ function DialogFooter({
 			{children}
 			{showCloseButton && (
 				<DialogPrimitive.Close asChild>
-					<Button variant="outline">Close</Button>
+					<Button variant="outline">
+						<I18nText source="close" />
+					</Button>
 				</DialogPrimitive.Close>
 			)}
 		</div>
@@ -120,6 +123,7 @@ function DialogFooter({
 
 function DialogTitle({
 	className,
+	children,
 	...props
 }: React.ComponentProps<typeof DialogPrimitive.Title>) {
 	return (
@@ -130,12 +134,15 @@ function DialogTitle({
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{children}
+		</DialogPrimitive.Title>
 	);
 }
 
 function DialogDescription({
 	className,
+	children,
 	...props
 }: React.ComponentProps<typeof DialogPrimitive.Description>) {
 	return (
@@ -146,7 +153,9 @@ function DialogDescription({
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{children}
+		</DialogPrimitive.Description>
 	);
 }
 

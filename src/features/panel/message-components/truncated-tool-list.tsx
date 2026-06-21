@@ -1,12 +1,17 @@
 import { ChevronDown } from "lucide-react";
 import { Fragment, type ReactNode, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
+/** `one` / `other` are i18n catalog KEYS, resolved at render via t(). */
 export type TruncatedNoun = { one: string; other: string };
 
 const DEFAULT_PREVIEW_COUNT = 3;
-const DEFAULT_NOUN: TruncatedNoun = { one: "step", other: "steps" };
+const DEFAULT_NOUN: TruncatedNoun = {
+	one: "panelNounStep",
+	other: "panelNounSteps",
+};
 
 const LIST_CLASS_NAME =
 	"ml-5 flex flex-col gap-0.5 border-l border-border/30 pl-3 pt-1";
@@ -38,6 +43,7 @@ export function TruncatedToolList<T>({
 	className,
 	noun = DEFAULT_NOUN,
 }: TruncatedToolListProps<T>) {
+	const { t, f } = useI18n();
 	const [expanded, setExpanded] = useState(defaultExpanded);
 
 	const previewItems = previewFilter ? items.filter(previewFilter) : items;
@@ -69,8 +75,11 @@ export function TruncatedToolList<T>({
 						strokeWidth={1.5}
 					/>
 					{expanded
-						? "Collapse"
-						: `Show ${hiddenCount} more ${hiddenCount > 1 ? noun.other : noun.one}`}
+						? t("panelCollapse")
+						: f("panelShowMoreCount", {
+								count: hiddenCount,
+								noun: t(hiddenCount > 1 ? noun.other : noun.one),
+							})}
 				</Button>
 			) : null}
 			{visible.map((item) => (

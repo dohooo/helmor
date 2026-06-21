@@ -8,6 +8,7 @@ import {
 	stopAgentLoginTerminal,
 	writeAgentLoginTerminalStdin,
 } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 
 export const providerLabels: Record<AgentLoginProvider, string> = {
 	claude: "Claude Code",
@@ -39,6 +40,7 @@ export function LoginTerminalPreview({
 		onResize: (cols: number, rows: number) => void;
 	}) => React.ReactNode;
 }) {
+	const { t } = useI18n();
 	const termRef = useRef<TerminalHandle | null>(null);
 	const resolvedProvider = provider ?? "codex";
 
@@ -91,7 +93,7 @@ export function LoginTerminalPreview({
 		}).catch((error) => {
 			if (cancelled) return;
 			const message =
-				error instanceof Error ? error.message : "Unable to start login.";
+				error instanceof Error ? error.message : t("miscUnableToStartLogin");
 			termRef.current?.write(`\r\n${message}\r\n`);
 			onErrorRef.current(message);
 		});
@@ -119,7 +121,7 @@ export function LoginTerminalPreview({
 	);
 
 	return render({
-		title: `${providerLabels[resolvedProvider]} login`,
+		title: `${providerLabels[resolvedProvider]} ${t("login")}`,
 		terminalRef: termRef,
 		onData: handleData,
 		onResize: handleResize,

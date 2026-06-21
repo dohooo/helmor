@@ -9,6 +9,7 @@ import {
 	installHelmorSkills,
 	recheckHelmorComponents,
 } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { SettingsRow } from "../components/settings-row";
 
@@ -26,6 +27,7 @@ import { SettingsRow } from "../components/settings-row";
  * this panel is purely a presentation layer over the IPC snapshot.
  */
 export function ComponentsPanel() {
+	const { t } = useI18n();
 	const [snapshot, setSnapshot] = useState<HelmorComponentsUpdateCheck | null>(
 		null,
 	);
@@ -41,11 +43,11 @@ export function ComponentsPanel() {
 			// Reading the snapshot is a pure DB read; a failure here means
 			// something is genuinely wrong with the install. Surface it
 			// instead of swallowing.
-			toast.error("Unable to read Helmor components status", {
+			toast.error(t("unableReadHelmorComponentsStatus"), {
 				description: error instanceof Error ? error.message : String(error),
 			});
 		}
-	}, []);
+	}, [t]);
 
 	useEffect(() => {
 		void refresh();
@@ -57,16 +59,16 @@ export function ComponentsPanel() {
 			const next = await recheckHelmorComponents();
 			setSnapshot(next);
 			if (!next.cliError && !next.skillsError) {
-				toast.success("Helmor components are up to date");
+				toast.success(t("helmorComponentsUpDate"));
 			}
 		} catch (error) {
-			toast.error("Re-check failed", {
+			toast.error(t("reCheckFailed"), {
 				description: error instanceof Error ? error.message : String(error),
 			});
 		} finally {
 			setRechecking(false);
 		}
-	}, []);
+	}, [t]);
 
 	const handleRetryCli = useCallback(async () => {
 		setRetryingCli(true);
@@ -74,7 +76,7 @@ export function ComponentsPanel() {
 			await installCli();
 			await refresh();
 		} catch (error) {
-			toast.error("CLI install failed", {
+			toast.error(t("cliInstallFailed"), {
 				description: error instanceof Error ? error.message : String(error),
 			});
 			// Refresh anyway so any partial state is reflected.
@@ -82,7 +84,7 @@ export function ComponentsPanel() {
 		} finally {
 			setRetryingCli(false);
 		}
-	}, [refresh]);
+	}, [refresh, t]);
 
 	const handleRetrySkills = useCallback(async () => {
 		setRetryingSkills(true);
@@ -90,14 +92,14 @@ export function ComponentsPanel() {
 			await installHelmorSkills();
 			await refresh();
 		} catch (error) {
-			toast.error("Skills install failed", {
+			toast.error(t("skillsInstallFailed"), {
 				description: error instanceof Error ? error.message : String(error),
 			});
 			await refresh();
 		} finally {
 			setRetryingSkills(false);
 		}
-	}, [refresh]);
+	}, [refresh, t]);
 
 	const cliOk = snapshot?.cli.installState === "managed" && !snapshot.cliError;
 	const skillsOk = !!snapshot?.skills.installed && !snapshot?.skillsError;
@@ -105,41 +107,44 @@ export function ComponentsPanel() {
 	const skillsBusy = rechecking || retryingSkills;
 
 	const summary = (() => {
-		if (!snapshot) return "Loading components status…";
+		if (!snapshot) return t("loadingComponentsStatus");
 		if (cliOk && skillsOk) {
 			const checked = snapshot.lastCheckedVersion;
 			if (checked === snapshot.currentVersion) {
-				return `Helmor CLI and skills are up to date with ${snapshot.currentVersion}.`;
+				return t("helmorCliSkillsUpDateVersion").replace(
+					"{version}",
+					snapshot.currentVersion,
+				);
 			}
-			return "Helmor CLI and skills look healthy.";
+			return t("helmorCliSkillsLookHealthy");
 		}
-		return "One or more components need attention.";
+		return t("oneMoreComponentsNeedAttention");
 	})();
 
 	return (
 		<SettingsRow
 			align="start"
-			title="Helmor Components"
+			title="helmorComponents"
 			description={
 				<>
 					<div>{summary}</div>
 					{snapshot ? (
 						<div className="mt-3 grid gap-2">
 							<ComponentLine
-								label="Helmor CLI"
+								label="helmorCli"
 								ok={cliOk}
 								busy={cliBusy}
 								onRetry={handleRetryCli}
 								error={snapshot.cliError}
-								state={describeCliState(snapshot)}
+								state={describeCliState(snapshot, t)}
 							/>
 							<ComponentLine
-								label="Helmor Skills"
+								label="helmorSkills"
 								ok={skillsOk}
 								busy={skillsBusy}
 								onRetry={handleRetrySkills}
 								error={snapshot.skillsError}
-								state={describeSkillsState(snapshot)}
+								state={describeSkillsState(snapshot, t)}
 							/>
 						</div>
 					) : null}
@@ -157,7 +162,7 @@ export function ComponentsPanel() {
 				) : (
 					<RefreshCw className="size-3.5" />
 				)}
-				{rechecking ? "Checking" : "Re-check now"}
+				{rechecking ? t("checking") : t("reCheckNow")}
 			</Button>
 		</SettingsRow>
 	);
@@ -178,6 +183,7 @@ function ComponentLine({
 	state: string;
 	onRetry: () => void;
 }) {
+	const { t } = useI18n();
 	const Icon = busy ? Loader2 : ok ? CheckCircle2 : XCircle;
 	const iconClass = busy
 		? "text-muted-foreground animate-spin"
@@ -189,7 +195,9 @@ function ComponentLine({
 			<div className="flex min-w-0 items-start gap-2">
 				<Icon className={cn("mt-0.5 size-3.5 shrink-0", iconClass)} />
 				<div className="min-w-0">
-					<div className="text-small font-medium text-foreground">{label}</div>
+					<div className="text-small font-medium text-foreground">
+						{t(label)}
+					</div>
 					<div className="text-mini leading-snug text-muted-foreground">
 						{error ?? state}
 					</div>
@@ -202,36 +210,45 @@ function ComponentLine({
 					onClick={onRetry}
 					className="h-7 shrink-0 px-2 text-mini"
 				>
-					Retry
+					{t("retry")}
 				</Button>
 			) : null}
 		</div>
 	);
 }
 
-function describeCliState(snapshot: HelmorComponentsUpdateCheck): string {
+function describeCliState(
+	snapshot: HelmorComponentsUpdateCheck,
+	t: (source: string) => string,
+): string {
 	switch (snapshot.cli.installState) {
 		case "managed":
 			return snapshot.cli.installPath
-				? `Installed at ${snapshot.cli.installPath}.`
-				: "Installed.";
+				? t("installedPath").replace("{path}", snapshot.cli.installPath)
+				: t("installed");
 		case "stale":
-			return "An older copy exists at the install path.";
+			return t("olderCopyExistsInstallPath");
 		case "missing":
-			return "Not installed on this machine.";
+			return t("notInstalledMachine");
 		default:
-			return "Status unavailable.";
+			return t("statusUnavailable");
 	}
 }
 
-function describeSkillsState(snapshot: HelmorComponentsUpdateCheck): string {
+function describeSkillsState(
+	snapshot: HelmorComponentsUpdateCheck,
+	t: (source: string) => string,
+): string {
 	if (snapshot.skills.installed) {
 		const parts: string[] = [];
 		if (snapshot.skills.claude) parts.push("Claude Code");
 		if (snapshot.skills.codex) parts.push("Codex");
 		return parts.length > 0
-			? `Installed for ${parts.join(" and ")}.`
-			: "Installed.";
+			? t("installedProviders").replace(
+					"{providers}",
+					parts.join(` ${t("and")} `),
+				)
+			: t("installed");
 	}
-	return "Sign in to Claude Code or Codex, then re-check.";
+	return t("signClaudeCodeCodexThenRe");
 }

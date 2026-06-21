@@ -22,6 +22,7 @@ import {
 	type TriageSourceHealth,
 	writeLarkCliAuthTerminalStdin,
 } from "@/lib/api";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const POST_CLOSE_POLL_TIMEOUT_MS = 8000;
@@ -59,6 +60,7 @@ export function LarkConnectDialog({
 	onOpenChange,
 	action,
 }: LarkConnectDialogProps) {
+	const { t } = useI18n();
 	const queryClient = useQueryClient();
 	const termRef = useRef<TerminalHandle | null>(null);
 	const instanceIdRef = useRef<string>("");
@@ -93,9 +95,9 @@ export function LarkConnectDialog({
 		const settled = await detectLarkOkAfterClose();
 		void queryClient.invalidateQueries({ queryKey: SOURCE_HEALTH_KEY });
 		if (settled?.state === "ok") {
-			toast.success("Lark connected");
+			toast.success(t("miscLarkConnected"));
 		}
-	}, [action, queryClient]);
+	}, [action, queryClient, t]);
 
 	useEffect(() => {
 		onOpenChangeRef.current = (next) => {
@@ -168,7 +170,8 @@ export function LarkConnectDialog({
 		[action],
 	);
 
-	const titleSuffix = action === "install" ? "Install lark-cli" : "Sign in";
+	const titleSuffix =
+		action === "install" ? t("miscInstallLarkCli") : t("miscSignIn");
 
 	return (
 		<Dialog open={open} onOpenChange={handleOpenChange}>
@@ -177,12 +180,14 @@ export function LarkConnectDialog({
 				className="w-[640px] max-w-[calc(100vw-4rem)] gap-0 overflow-hidden p-0 sm:max-w-[640px]"
 			>
 				<DialogTitle className="sr-only">
-					Connect Lark — {titleSuffix}
+					<I18nText source="connectLark2" /> {titleSuffix}
 				</DialogTitle>
 				<header className="flex h-10 items-center gap-2 border-b border-border/55 px-3">
 					<div className="flex items-center gap-1.5 text-small font-medium text-foreground">
 						<LarkBrandIcon size={12} />
-						<span>Connect Lark</span>
+						<span>
+							<I18nText source="connectLark" />
+						</span>
 						<span className="ml-1 text-muted-foreground/80">
 							· {titleSuffix}
 						</span>
@@ -193,7 +198,7 @@ export function LarkConnectDialog({
 							variant="ghost"
 							size="sm"
 							onClick={() => handleOpenChange(false)}
-							aria-label="Close"
+							aria-label="close"
 							className={cn(
 								"gap-1.5 px-2 text-muted-foreground hover:text-foreground",
 							)}

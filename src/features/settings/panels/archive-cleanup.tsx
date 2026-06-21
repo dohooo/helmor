@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { cleanupArchivedWorkspaces } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import { archivedWorkspacesQueryOptions } from "@/lib/query-client";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import { SettingsRow } from "../components/settings-row";
@@ -19,10 +20,13 @@ import { SettingsRow } from "../components/settings-row";
  * the outcome (including partial failures) lands as a toast.
  */
 export function ArchiveCleanupPanel() {
+	const { f, t } = useI18n();
 	const queryClient = useQueryClient();
 	const [confirmOpen, setConfirmOpen] = useState(false);
-	const archivedQuery = useQuery(archivedWorkspacesQueryOptions());
-	const archivedCount = archivedQuery.data?.length ?? 0;
+	const { data: archivedWorkspaces = [] } = useQuery(
+		archivedWorkspacesQueryOptions(),
+	);
+	const archivedCount = archivedWorkspaces.length;
 
 	const cleanup = useMutation({
 		mutationFn: cleanupArchivedWorkspaces,
@@ -30,17 +34,22 @@ export function ArchiveCleanupPanel() {
 			if (result.failures.length === 0) {
 				toast.success(
 					result.deletedCount === 0
-						? "No archived workspaces to clean up"
-						: `Cleaned up ${result.deletedCount} archived workspace${
-								result.deletedCount === 1 ? "" : "s"
-							}`,
+						? t("noArchivedWorkspacesCleanUp")
+						: f("cleanedUpCountArchivedWorkspacelabel", {
+								count: result.deletedCount,
+								workspaceLabel:
+									result.deletedCount === 1 ? "workspace" : "workspaces",
+							}),
 				);
 				return;
 			}
 			toast.error(
-				`Cleaned up ${result.deletedCount}, but ${result.failures.length} workspace${
-					result.failures.length === 1 ? "" : "s"
-				} could not be deleted`,
+				f("cleanedUpDeletedcountButFailurecountWorkspacelab", {
+					deletedCount: result.deletedCount,
+					failureCount: result.failures.length,
+					workspaceLabel:
+						result.failures.length === 1 ? "workspace" : "workspaces",
+				}),
 				{
 					description: result.failures
 						.map((failure) =>
@@ -53,7 +62,7 @@ export function ArchiveCleanupPanel() {
 			);
 		},
 		onError: (error) => {
-			toast.error("Archive cleanup failed", {
+			toast.error(t("archiveCleanupFailed"), {
 				description: error instanceof Error ? error.message : String(error),
 			});
 		},
@@ -65,13 +74,14 @@ export function ArchiveCleanupPanel() {
 
 	return (
 		<SettingsRow
-			title="Clean up archived workspaces"
+			title="cleanUpArchivedWorkspaces"
 			description={
 				archivedCount === 0
-					? "No archived workspaces."
-					: `Permanently delete all ${archivedCount} archived workspace${
-							archivedCount === 1 ? "" : "s"
-						}, including their sessions and chat history.`
+					? "noArchivedWorkspaces"
+					: f("permanentlyDeleteAllCountArchivedWorkspacelabel", {
+							count: archivedCount,
+							workspaceLabel: archivedCount === 1 ? "workspace" : "workspaces",
+						})
 			}
 		>
 			<Button
@@ -85,7 +95,7 @@ export function ArchiveCleanupPanel() {
 				) : (
 					<Trash2 className="size-3.5" />
 				)}
-				{cleanup.isPending ? "Cleaning up" : "Clean up"}
+				{cleanup.isPending ? t("settingsCleaningUp") : t("settingsCleanUp")}
 			</Button>
 			<ConfirmDialog
 				open={confirmOpen}
@@ -96,11 +106,12 @@ export function ArchiveCleanupPanel() {
 						setConfirmOpen(open);
 					}
 				}}
-				title="Clean up archived workspaces?"
-				description={`This will permanently delete all ${archivedCount} archived workspace${
-					archivedCount === 1 ? "" : "s"
-				}, including their sessions and chat history. This cannot be undone.`}
-				confirmLabel="Delete All"
+				title="cleanUpArchivedWorkspaces2"
+				description={f("willPermanentlyDeleteAllCountArchived", {
+					count: archivedCount,
+					workspaceLabel: archivedCount === 1 ? "workspace" : "workspaces",
+				})}
+				confirmLabel="deleteAll"
 				onConfirm={() => cleanup.mutate()}
 				loading={cleanup.isPending}
 			/>

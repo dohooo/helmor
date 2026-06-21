@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { hydrateDraftCache } from "@/features/composer/draft-storage";
 import type { ContextProviderTab, SettingsSection } from "@/features/settings";
 import { exitOnboardingWindowMode } from "@/lib/api";
+import { setCurrentLanguage } from "@/lib/i18n";
 import { createHelmorQueryClient } from "@/lib/query-client";
 import {
 	type AppSettings,
@@ -74,6 +75,9 @@ export function useAppBootstrap(): AppBootstrap {
 		}),
 		[appSettings, preloadSettings],
 	);
+	useEffect(() => {
+		setCurrentLanguage(settingsContextValue.settings.language);
+	}, [settingsContextValue.settings.language]);
 	useShellEvent("open-settings", (event) => {
 		setSettingsInitialSection(event.section);
 		setSettingsInitialInboxProvider(event.inboxProvider);

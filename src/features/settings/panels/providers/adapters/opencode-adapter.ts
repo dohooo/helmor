@@ -26,8 +26,7 @@ export const OPENCODE_CONFIG_ADAPTER: ProviderConfigAdapter = {
 	displayName: "OpenCode",
 	presets: OPENCODE_PROVIDER_PRESETS.map(toPreset),
 	caps: { baseUrlEditable: true, apiStyleSelectable: true },
-	customProvidersDescription:
-		"Add a registry provider by API key, or an OpenAI-compatible endpoint. Saved to ~/.config/opencode.",
+	customProvidersDescription: "addRegistryProviderByApiKey2",
 	useCustomProviders: () => useSlugBackedProviders("opencode"),
 	fetchModels: (provider) =>
 		fetchProviderModels("opencode", provider.baseUrl, provider.apiKey),
@@ -38,8 +37,7 @@ export const MIMO_CONFIG_ADAPTER: ProviderConfigAdapter = {
 	displayName: "MiMo Code",
 	presets: MIMO_PROVIDER_PRESETS.map(toPreset),
 	caps: { baseUrlEditable: true, apiStyleSelectable: true },
-	customProvidersDescription:
-		"Add a registry provider by API key, or an OpenAI-compatible endpoint. Saved to ~/.config/mimocode.",
+	customProvidersDescription: "addRegistryProviderByApiKey",
 	useCustomProviders: () => useSlugBackedProviders("mimo"),
 	fetchModels: (provider) =>
 		fetchProviderModels("mimo", provider.baseUrl, provider.apiKey),

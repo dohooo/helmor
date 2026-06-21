@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { pickDefaultCursorModelIds } from "@/features/settings/panels/cursor-models";
 import { type CursorModelEntry, listCursorModels } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
 import {
 	type CursorCachedModel,
@@ -99,7 +100,7 @@ export function CursorApiKeyAction({
 				value={draft}
 				onBlur={commit}
 				onChange={(event) => setDraft(event.target.value)}
-				placeholder="API key"
+				placeholder="apiKey"
 				disabled={isValidating}
 				className="h-8 w-[180px] border-border/50 bg-muted/20 text-small"
 			/>
@@ -108,21 +109,21 @@ export function CursorApiKeyAction({
 					type="button"
 					variant="outline"
 					size="sm"
-					aria-label="Validating API key"
+					aria-label="validatingApiKey"
 					disabled
 				>
 					<LoaderCircle className="size-3.5 animate-spin" />
-					Validating…
+					<I18nText source="validating" />
 				</Button>
 			) : !draft ? (
 				<Button
 					type="button"
 					variant="outline"
 					size="sm"
-					aria-label="Get Cursor API key"
+					aria-label="getCursorApiKey"
 					onClick={() => void openUrl(CURSOR_DASHBOARD_URL)}
 				>
-					Get your API key
+					<I18nText source="getApiKey2" />
 					<SquareArrowOutUpRight className="size-3.5" />
 				</Button>
 			) : null}

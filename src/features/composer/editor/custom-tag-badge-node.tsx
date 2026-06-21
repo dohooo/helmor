@@ -19,6 +19,7 @@ import {
 	type ComposerCustomTag,
 	type ComposerPreviewPayload,
 } from "@/lib/composer-insert";
+import { useI18n } from "@/lib/i18n";
 import type {
 	ContextCardSource,
 	ContextCardStateTone,
@@ -38,6 +39,7 @@ function ComposerCustomTagBadge({
 	nodeKey: NodeKey;
 }) {
 	const [editor] = useLexicalComposerContext();
+	const { t } = useI18n();
 	const icon = customTag.source ? (
 		<SourceIcon
 			source={customTag.source}
@@ -63,7 +65,7 @@ function ComposerCustomTagBadge({
 			icon={icon}
 			label={customTag.label}
 			preview={customTag.preview ?? null}
-			removeLabel="Remove tag"
+			removeLabel={t("composerRemoveTag")}
 			onRemove={() => {
 				editor.update(() => {
 					const node = $getNodeByKey(nodeKey);
@@ -184,7 +186,7 @@ export class CustomTagBadgeNode extends DecoratorNode<ReactNode> {
 	// In-place edit (text previews only): keep submitText / label / preview.text in sync.
 	setText(nextText: string): void {
 		const current = this.__preview;
-		if (!current || current.kind !== "text") return;
+		if (current?.kind !== "text") return;
 		if (nextText === this.__submitText) return;
 		const writable = this.getWritable();
 		const nextLabel = buildComposerPreviewLabel(nextText, "text");

@@ -51,15 +51,15 @@ export type ShortcutId =
 	| "inspector.focusTerminal";
 
 export type ShortcutGroup =
-	| "Navigation"
-	| "Session"
-	| "Workspace"
-	| "Actions"
-	| "System"
-	| "Composer"
-	| "Start surface"
-	| "Editor"
-	| "Terminal";
+	| "navigation"
+	| "session"
+	| "workspace"
+	| "actions"
+	| "system"
+	| "miscComposer"
+	| "miscStartSurface"
+	| "miscEditor"
+	| "terminal";
 
 // Scopes a shortcut can live in. "app" = always active regardless of focus.
 // All others gate on [data-focus-scope] DOM ancestors of the active element;

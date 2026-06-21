@@ -17,6 +17,7 @@ import type {
 	PromptSuggestionPart,
 	SystemNoticePart,
 } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { CopyMessageButton } from "./copy-message";
 import type { RenderedMessage } from "./shared";
@@ -111,7 +112,9 @@ function PromptSuggestion({ part }: { part: PromptSuggestionPart }) {
 				sideOffset={4}
 				className="flex h-[22px] items-center rounded-md px-1.5 text-mini leading-none"
 			>
-				<span>Use this prompt</span>
+				<span>
+					<I18nText source="usePrompt" />
+				</span>
 			</TooltipContent>
 		</Tooltip>
 	);

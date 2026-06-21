@@ -45,6 +45,7 @@ import {
 } from "@/features/inspector/script-store";
 import type { WorkspaceRow, WorkspaceStatus } from "@/lib/api";
 import { recordSidebarRowRender } from "@/lib/dev-render-debug";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { getWorkspaceBranchTone } from "@/lib/workspace-helpers";
 import { WorkspaceAvatar } from "./avatar";
@@ -170,6 +171,7 @@ export const WorkspaceRowItem = memo(
 		restoringWorkspaceId,
 		workspaceActionsDisabled,
 	}: WorkspaceRowItemProps) {
+		const { t } = useI18n();
 		useEffect(() => {
 			recordSidebarRowRender(row.id);
 		}, [row.id]);
@@ -218,10 +220,10 @@ export const WorkspaceRowItem = memo(
 		}, [cancelPendingPrefetch, resetArchiveConfirm]);
 		const actionLabel =
 			row.state === "archived"
-				? "Restore workspace"
+				? t("navRestoreWorkspace")
 				: archiveConfirming
-					? "Confirm archive workspace"
-					: "Archive workspace";
+					? t("navConfirmArchiveWorkspace")
+					: t("navArchiveWorkspace");
 		const isArchiving = archivingWorkspaceIds?.has(row.id) ?? false;
 		const isMarkingUnread = markingUnreadWorkspaceId === row.id;
 		const isRestoring = restoringWorkspaceId === row.id;
@@ -274,11 +276,11 @@ export const WorkspaceRowItem = memo(
 			status: row.status,
 		});
 		const statusDotLabel = isInteractionRequired
-			? "Interaction required"
+			? t("interactionRequired")
 			: row.triagePrimingUnconsumed
-				? "AI proposal — open to review"
+				? t("navAiProposalOpenReview")
 				: row.hasUnread
-					? "Unread"
+					? t("navUnread")
 					: null;
 		const statusDotClassName = isInteractionRequired
 			? "bg-yellow-500"
@@ -530,7 +532,7 @@ export const WorkspaceRowItem = memo(
 												: "cursor-interactive hover:text-foreground",
 									)}
 								>
-									{isArchiveConfirmVisible ? "Confirm" : actionIcon}
+									{isArchiveConfirmVisible ? t("confirm") : actionIcon}
 								</Button>
 							);
 							// Archived rows show restore + delete with no tooltips
@@ -555,7 +557,7 @@ export const WorkspaceRowItem = memo(
 						})()}
 						{isRestoreAction && onDeleteWorkspace ? (
 							<Button
-								aria-label="Delete permanently"
+								aria-label="deletePermanently"
 								disabled={Boolean(workspaceActionsDisabled || isBusy)}
 								onClick={(event) => {
 									event.stopPropagation();
@@ -604,13 +606,13 @@ export const WorkspaceRowItem = memo(
 							) : (
 								<Pin className="size-4 shrink-0" strokeWidth={1.6} />
 							)}
-							<span>{isPinned ? "Unpin" : "Pin"}</span>
+							<span>{isPinned ? t("navUnpin") : t("navPin")}</span>
 						</ContextMenuItem>
 
 						<ContextMenuSub>
 							<ContextMenuSubTrigger>
 								<Circle className="size-4 shrink-0" strokeWidth={1.6} />
-								<span>Set status</span>
+								<span>{t("setStatus")}</span>
 							</ContextMenuSubTrigger>
 							<ContextMenuSubContent>
 								{STATUS_OPTIONS.map((opt) => (
@@ -619,7 +621,7 @@ export const WorkspaceRowItem = memo(
 										onClick={() => onSetWorkspaceStatus?.(row.id, opt.value)}
 									>
 										<GroupIcon tone={opt.tone} />
-										<span className="flex-1">{opt.label}</span>
+										<span className="flex-1">{t(opt.label)}</span>
 										{effectiveStatus === opt.value ? (
 											<span className="ml-auto text-foreground">✓</span>
 										) : null}
@@ -636,7 +638,7 @@ export const WorkspaceRowItem = memo(
 								onClick={() => _onMarkWorkspaceUnread(row.id)}
 							>
 								<Circle className="size-4 shrink-0" strokeWidth={1.6} />
-								<span>Mark as unread</span>
+								<span>{t("markUnread")}</span>
 							</ContextMenuItem>
 						) : null}
 
@@ -646,7 +648,7 @@ export const WorkspaceRowItem = memo(
 								onClick={() => onOpenInFinder(row.id)}
 							>
 								<FolderOpen className="size-4 shrink-0" strokeWidth={1.6} />
-								<span>Open in Finder</span>
+								<span>{t("openFinder")}</span>
 							</ContextMenuItem>
 						) : null}
 
@@ -661,7 +663,7 @@ export const WorkspaceRowItem = memo(
 									className="size-4 shrink-0 rotate-90"
 									strokeWidth={1.6}
 								/>
-								<span>Move into a new worktree</span>
+								<span>{t("moveIntoNewWorktree")}</span>
 							</ContextMenuItem>
 						) : null}
 
@@ -673,7 +675,7 @@ export const WorkspaceRowItem = memo(
 								onClick={() => onRestoreWorkspace?.(row.id)}
 							>
 								<RotateCcw className="size-4 shrink-0" strokeWidth={1.6} />
-								<span>Restore</span>
+								<span>{t("restore")}</span>
 							</ContextMenuItem>
 						) : (
 							<ContextMenuItem
@@ -681,7 +683,7 @@ export const WorkspaceRowItem = memo(
 								onClick={() => onArchiveWorkspace?.(row.id)}
 							>
 								<Archive className="size-4 shrink-0" strokeWidth={1.6} />
-								<span>Archive</span>
+								<span>{t("archive")}</span>
 							</ContextMenuItem>
 						)}
 					</ContextMenuContent>

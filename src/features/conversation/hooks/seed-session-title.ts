@@ -3,6 +3,7 @@
 // list, the workspace detail's `activeSessionTitle`, and the matching row
 // in the navigation sidebar groups. Pure function — no React state.
 import type { QueryClient } from "@tanstack/react-query";
+import { translateSource } from "@/lib/i18n";
 import { helmorQueryKeys } from "@/lib/query-client";
 
 /** Provisional session title from a prompt: first line, whitespace-collapsed,
@@ -16,7 +17,7 @@ export function buildTitleSeed(prompt: string): string {
 		.replace(/\s+/g, " ");
 
 	if (!normalized) {
-		return "Untitled";
+		return translateSource("untitled");
 	}
 
 	if (normalized.length <= 36) {

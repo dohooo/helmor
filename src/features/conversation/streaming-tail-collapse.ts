@@ -4,6 +4,7 @@ import type {
 	ThreadMessageLike,
 	ToolCallPart,
 } from "@/lib/api";
+import { formatSource, translateSource } from "@/lib/i18n";
 
 type ToolCategory = "search" | "read" | "shell" | "other";
 type CollapseCategory = "search" | "read" | "shell" | "mixed";
@@ -413,17 +414,24 @@ function buildGroupSummary(tools: ToolCallPart[], active: boolean): string {
 		}
 
 		if (patterns.length === 1) {
-			const verb = active ? "Searching for" : "Searched for";
+			const verb = active
+				? translateSource("composerSearchingFor")
+				: translateSource("composerSearchedFor");
 			const suffix = searchTools.length > 1 ? ` (${searchTools.length}×)` : "";
 			parts.push(`${verb} '${patterns[0]}'${suffix}`);
 		} else if (patterns.length > 1) {
 			parts.push(
-				`${active ? "Searching" : "Searched"} ${searchTools.length} patterns`,
+				formatSource(
+					active ? "composerSearchingPatterns" : "composerSearchedPatterns",
+					{ count: searchTools.length },
+				),
 			);
 		} else {
-			const plural = searchTools.length > 1 ? "s" : "";
 			parts.push(
-				`${active ? "Searching" : "Searched"} ${searchTools.length} time${plural}`,
+				formatSource(
+					active ? "composerSearchingTimes" : "composerSearchedTimes",
+					{ count: searchTools.length },
+				),
 			);
 		}
 	}
@@ -435,33 +443,33 @@ function buildGroupSummary(tools: ToolCallPart[], active: boolean): string {
 			if (filePath) paths.add(filePath);
 		}
 		const count = paths.size > 0 ? paths.size : readTools.length;
-		const verb =
+		const key =
 			parts.length === 0
 				? active
-					? "Reading"
-					: "Read"
+					? "composerReadingFiles"
+					: "composerReadFiles"
 				: active
-					? "reading"
-					: "read";
-		const plural = count > 1 ? "s" : "";
-		parts.push(`${verb} ${count} file${plural}`);
+					? "composerReadingFilesLower"
+					: "composerReadFilesLower";
+		parts.push(formatSource(key, { count }));
 	}
 
 	if (shellTools.length > 0) {
-		const verb =
+		const key =
 			parts.length === 0
 				? active
-					? "Running"
-					: "Ran"
+					? "composerRunningCommands"
+					: "composerRanCommands"
 				: active
-					? "running"
-					: "ran";
-		const plural = shellTools.length > 1 ? "s" : "";
-		parts.push(`${verb} ${shellTools.length} read-only command${plural}`);
+					? "composerRunningCommandsLower"
+					: "composerRanCommandsLower";
+		parts.push(formatSource(key, { count: shellTools.length }));
 	}
 
 	if (parts.length === 0) {
-		return active ? "Working..." : "Done";
+		return active
+			? translateSource("composerWorking")
+			: translateSource("done");
 	}
 	return active ? `${parts.join(", ")}...` : parts.join(", ");
 }

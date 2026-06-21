@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useLocalizedNode } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
 	INSPECTOR_SECTION_HEADER_CLASS,
@@ -25,6 +26,7 @@ export function InspectorSectionUI({
 	containerClassName?: string;
 	headerClassName?: string;
 }) {
+	const localizedTitle = useLocalizedNode(title);
 	return (
 		<section
 			className={cn(
@@ -35,9 +37,11 @@ export function InspectorSectionUI({
 			<div className={cn(INSPECTOR_SECTION_HEADER_CLASS, headerClassName)}>
 				<div className="flex min-w-0 items-center gap-2">
 					{typeof title === "string" ? (
-						<span className={INSPECTOR_SECTION_TITLE_CLASS}>{title}</span>
+						<span className={INSPECTOR_SECTION_TITLE_CLASS}>
+							{localizedTitle}
+						</span>
 					) : (
-						title
+						localizedTitle
 					)}
 				</div>
 				{rightSlot}

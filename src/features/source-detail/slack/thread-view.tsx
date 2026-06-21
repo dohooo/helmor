@@ -13,6 +13,7 @@ import { buildCardContextPayload } from "@/features/inbox/source-card";
 import { SourceIcon } from "@/features/inbox/source-icon";
 import { useSlackEmojiMap } from "@/features/inbox/use-slack-emoji-map";
 import { slackGetThreadDetail } from "@/lib/api";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
 import { helmorQueryKeys } from "@/lib/query-client";
 import type { SourceDetailProps } from "../common";
@@ -31,6 +32,7 @@ export function SlackThreadView({
 	card,
 	appendContextTarget,
 }: SourceDetailProps) {
+	const { t } = useI18n();
 	const parsed = parseCardId(card.id);
 	const emoji = useSlackEmojiMap(parsed?.teamId ?? null);
 	const detailQuery = useQuery({
@@ -61,7 +63,7 @@ export function SlackThreadView({
 	if (!parsed) {
 		return (
 			<div className="flex h-full items-center justify-center px-6 text-ui text-muted-foreground">
-				Invalid Slack item reference.
+				<I18nText source="invalidSlackItemReference" />
 			</div>
 		);
 	}
@@ -87,7 +89,7 @@ export function SlackThreadView({
 						</span>
 						{detail?.isThread ? (
 							<Badge variant="secondary" className="h-[18px] px-1.5">
-								Thread
+								<I18nText source="thread" />
 							</Badge>
 						) : null}
 						<span className="text-muted-foreground/70">·</span>
@@ -107,7 +109,7 @@ export function SlackThreadView({
 									type="button"
 									variant="ghost"
 									size="icon-xs"
-									aria-label="Open in Slack"
+									aria-label="openSlack"
 									onClick={() =>
 										card.externalUrl && void openUrl(card.externalUrl)
 									}
@@ -117,23 +119,27 @@ export function SlackThreadView({
 									<ExternalLink className="size-[13px]" strokeWidth={1.8} />
 								</Button>
 							</TooltipTrigger>
-							<TooltipContent side="top">Open in Slack</TooltipContent>
+							<TooltipContent side="top">
+								<I18nText source="openSlack" />
+							</TooltipContent>
 						</Tooltip>
 						<Tooltip>
 							<TooltipTrigger asChild>
-								<span className="inline-flex" aria-label="Add to context">
+								<span className="inline-flex" aria-label={t("addContext2")}>
 									<AppendContextButton
 										subjectLabel={card.title}
-										ariaLabel="Add to context"
+										ariaLabel="addContext2"
 										getPayload={() =>
 											buildCardContextPayload(card, appendContextTarget)
 										}
-										errorTitle="Couldn't insert context card"
+										errorTitle={t("miscCouldnTInsertContextCard")}
 										className="size-7 cursor-interactive rounded-md text-muted-foreground hover:bg-foreground/10 hover:text-foreground [&_svg]:size-[13px]"
 									/>
 								</span>
 							</TooltipTrigger>
-							<TooltipContent side="top">Add to context</TooltipContent>
+							<TooltipContent side="top">
+								<I18nText source="addContext2" />
+							</TooltipContent>
 						</Tooltip>
 					</div>
 				</div>
@@ -146,15 +152,17 @@ export function SlackThreadView({
 					</div>
 				) : detailQuery.error ? (
 					<div className="flex h-full items-center justify-center text-ui text-muted-foreground">
-						{detailQuery.error instanceof Error
-							? detailQuery.error.message
-							: "Couldn't load Slack thread."}
+						{detailQuery.error instanceof Error ? (
+							detailQuery.error.message
+						) : (
+							<I18nText source="couldnTLoadSlackThread" />
+						)}
 					</div>
 				) : detail ? (
 					<div className="divide-y divide-border/40">
 						{detail.messages.length === 0 ? (
 							<div className="py-8 text-center text-ui text-muted-foreground">
-								No messages to show.
+								<I18nText source="noMessagesShow" />
 							</div>
 						) : (
 							detail.messages.map((m) => (

@@ -6,6 +6,7 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type { ExistingHelmorRepo } from "@/lib/api";
+import { I18nText, useI18n } from "@/lib/i18n";
 
 import { HELMOR_UPSTREAM_SLUG } from "./constants";
 
@@ -40,6 +41,7 @@ export function StepInput({
 	onQuickFix,
 	onOpenSettings,
 }: StepInputProps) {
+	const { t, f } = useI18n();
 	const hasInput = input.trim().length > 0;
 	const canCreateIssue = hasInput && githubConnected;
 	// Quick fix additionally waits for the existing-repo lookup so it
@@ -52,34 +54,39 @@ export function StepInput({
 				id="feedback-input"
 				value={input}
 				onChange={(event) => onInputChange(event.target.value)}
-				placeholder="Describe a bug, suggest an improvement, or ask a question."
-				aria-label="Feedback"
+				placeholder="describeBugSuggestImprovementAskQuestion"
+				aria-label="feedback"
 				disabled={sending}
 				className="field-sizing-fixed min-h-32"
 			/>
 			<div className="min-h-4 text-small text-muted-foreground">
 				{!githubConnected ? (
 					<>
-						Connect GitHub in{" "}
+						<I18nText source="connectGithub" />{" "}
 						<Button
 							variant="link"
 							size="xs"
 							className="h-auto p-0 text-small"
 							onClick={onOpenSettings}
 						>
-							Settings
+							<I18nText source="settings" />
 						</Button>{" "}
-						to send feedback.
+						<I18nText source="sendFeedback2" />
 					</>
 				) : existing && !confirming ? (
-					"Will reuse your local helmor repo."
+					<I18nText source="willReuseLocalHelmorRepo" />
 				) : null}
 			</div>
 			<div className="mt-1 flex items-center justify-between gap-3">
 				<p className="text-small text-muted-foreground">
-					{confirming
-						? `This will open an issue in ${HELMOR_UPSTREAM_SLUG}. Confirm?`
-						: null}
+					{confirming ? (
+						<>
+							{f("willOpenIssueSlug", {
+								slug: HELMOR_UPSTREAM_SLUG,
+							})}{" "}
+							<I18nText source="confirm2" />
+						</>
+					) : null}
 				</p>
 				<div className="flex shrink-0 items-center gap-2">
 					{confirming ? (
@@ -90,10 +97,10 @@ export function StepInput({
 								onClick={onCancelConfirm}
 								disabled={sending}
 							>
-								Cancel
+								<I18nText source="cancel" />
 							</Button>
 							<Button size="sm" onClick={onCreateIssue} disabled={sending}>
-								{sending ? "Sending…" : "Confirm send"}
+								{sending ? t("sending") : t("feedbackConfirmSend")}
 							</Button>
 						</>
 					) : (
@@ -104,7 +111,7 @@ export function StepInput({
 								onClick={onCreateIssue}
 								disabled={!canCreateIssue}
 							>
-								Create issue
+								<I18nText source="createIssue" />
 							</Button>
 							<Tooltip>
 								<TooltipTrigger asChild>
@@ -113,11 +120,11 @@ export function StepInput({
 										onClick={onQuickFix}
 										disabled={!canQuickFix}
 									>
-										Quick fix
+										<I18nText source="quickFix" />
 									</Button>
 								</TooltipTrigger>
 								<TooltipContent side="top" sideOffset={6}>
-									Contribute to Helmor — super easy
+									<I18nText source="contributeHelmorSuperEasy" />
 								</TooltipContent>
 							</Tooltip>
 						</>

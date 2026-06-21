@@ -1,5 +1,6 @@
 import { Check } from "lucide-react";
 import type { ReactNode } from "react";
+import { useLocalizedNode } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
 	SettingsReleaseBadge,
@@ -39,6 +40,8 @@ export function SettingsRow({
 	className?: string;
 	align?: "center" | "start";
 }) {
+	const localizedTitle = useLocalizedNode(title);
+	const localizedDescription = useLocalizedNode(description);
 	return (
 		<div
 			className={cn(
@@ -49,7 +52,7 @@ export function SettingsRow({
 		>
 			<div className="min-w-0 flex-1">
 				<div className="flex min-w-0 flex-wrap items-center gap-1.5 text-ui font-medium leading-snug text-foreground">
-					<span className="min-w-0">{title}</span>
+					<span className="min-w-0">{localizedTitle}</span>
 					<SettingsReleaseBadge
 						marker={releaseMarker}
 						className="self-center"
@@ -57,7 +60,7 @@ export function SettingsRow({
 				</div>
 				{description ? (
 					<div className="mt-1 text-small leading-snug text-muted-foreground">
-						{description}
+						{localizedDescription}
 					</div>
 				) : null}
 			</div>

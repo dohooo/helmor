@@ -57,6 +57,7 @@ import type {
 	ResolvedComposerInsertRequest,
 } from "@/lib/composer-insert";
 import { recordComposerRender } from "@/lib/dev-render-debug";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { clampEffort } from "@/lib/workspace-helpers";
 import { ComposerButton } from "./button";
@@ -359,6 +360,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	focusScope = "workspace-composer",
 	getInputHistory,
 }: WorkspaceComposerProps) {
+	const { t } = useI18n();
 	const instanceIdRef = useRef(
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
 	);
@@ -728,18 +730,25 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	);
 	const alternateStartSubmitMode: StartSubmitMode =
 		startSubmitMode === "saveForLater" ? "startNow" : "saveForLater";
-	const preferredStartSubmitLabel = !hasContent
-		? "New Workspace"
+	const preferredStartSubmitKey = !hasContent
+		? "newWorkspace"
 		: startSubmitMode === "saveForLater"
-			? "Save for later"
-			: "Start now";
+			? "composerSaveForLater"
+			: "composerStartNow";
+	const preferredStartSubmitLabel = t(preferredStartSubmitKey);
 	const alternateStartSubmitLabel =
 		alternateStartSubmitMode === "saveForLater"
-			? "Save for later"
-			: "Start now";
-	// Narrow surfaces show only the first word ("New" / "Save" / "Start");
-	// the dropdown items keep the full labels.
-	const compactStartSubmitLabel = preferredStartSubmitLabel.split(" ")[0];
+			? t("composerSaveForLater")
+			: t("composerStartNow");
+	// Narrow surfaces show a shortened label; the dropdown items keep the
+	// full labels.
+	const compactStartSubmitLabel = t(
+		!hasContent
+			? "composerNewWorkspaceShort"
+			: startSubmitMode === "saveForLater"
+				? "composerSaveForLaterShort"
+				: "composerStartNowShort",
+	);
 
 	const handleComposerKeyDownCapture = useCallback(
 		(event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -801,7 +810,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		<TooltipProvider delayDuration={0}>
 			<div
 				ref={composerRootRef}
-				aria-label="Workspace composer"
+				aria-label={t("workspaceComposer")}
 				data-focus-scope={focusScope}
 				onKeyDownCapture={handleComposerKeyDownCapture}
 				className={cn(
@@ -828,7 +837,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 					/>
 				) : null}
 				<label htmlFor="workspace-input" className="sr-only">
-					Workspace input
+					<I18nText source="workspaceInput" />
 				</label>
 
 				{hasPendingUserInput ? (
@@ -902,7 +911,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 									contentEditable={
 										<ContentEditable
 											id="workspace-input"
-											aria-label="Workspace input"
+											aria-label={t("workspaceInput")}
 											aria-multiline
 											className={cn(
 												"composer-editor min-h-[64px] max-h-[240px] resize-none overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-body leading-5 tracking-[-0.01em] text-foreground outline-none",
@@ -914,9 +923,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										showEditorPlaceholder ? (
 											<div className="pointer-events-none absolute left-0 top-0 text-body leading-5 tracking-[-0.01em] text-muted-foreground/70">
 												{hasPlanReview && permissionMode === "plan"
-													? "Describe what to change, then click Request Changes"
-													: (placeholder ??
-														"Ask to make changes, @mention files, run /commands")}
+													? t("describeWhatChangeThenClickRequest")
+													: t(placeholder ?? "askMakeChangesMentionFilesRun")}
 											</div>
 										) : null
 									}
@@ -924,13 +932,15 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								/>
 								{showTerminalDirectiveHint ? (
 									<div className="pointer-events-none absolute left-[88px] top-0 text-body leading-5 tracking-[-0.01em] text-muted-foreground/70">
-										Send to start in Terminal mode
+										<I18nText source="sendStartTerminalMode" />
 									</div>
 								) : null}
 								{showFocusHint && focusShortcut ? (
 									<div className="pointer-events-none absolute right-0 top-0 hidden h-5 items-center gap-1 text-ui leading-5 tracking-[-0.01em] text-muted-foreground/70 sm:flex">
 										<InlineShortcutDisplay hotkey={focusShortcut} />
-										<span>to focus</span>
+										<span>
+											<I18nText source="focus" />
+										</span>
 									</div>
 								) : null}
 							</div>
@@ -1017,7 +1027,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 							<div className="flex flex-wrap items-center gap-2">
 								{modelsLoading ? (
 									<ShimmerText className="px-1 py-0.5 text-ui text-muted-foreground">
-										Loading models…
+										<I18nText source="loadingModels" />
 									</ShimmerText>
 								) : (
 									<>
@@ -1041,7 +1051,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 												<span>
 													{selectedModel?.label ??
 														selectedModelId ??
-														"Select model"}
+														t("selectModel")}
 												</span>
 												<ChevronDown
 													className="size-3 opacity-40"
@@ -1100,7 +1110,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 																	<Plus className="size-4" strokeWidth={1.8} />
 																</span>
 																<span className="font-mono tabular-nums">
-																	Add custom model...
+																	<I18nText source="addCustomModel" />
 																</span>
 															</DropdownMenuItem>
 														) : null}
@@ -1116,7 +1126,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 																	<Plus className="size-4" strokeWidth={1.8} />
 																</span>
 																<span className="font-mono tabular-nums">
-																	Add custom model...
+																	<I18nText source="addCustomModel" />
 																</span>
 															</DropdownMenuItem>
 														) : null}
@@ -1129,7 +1139,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 											<Tooltip>
 												<TooltipTrigger asChild>
 													<ComposerButton
-														aria-label="Fast mode"
+														aria-label="fastMode"
 														disabled={toolbarDisabled}
 														className={cn(
 															"relative",
@@ -1158,7 +1168,10 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 													</ComposerButton>
 												</TooltipTrigger>
 												<TooltipContent side="top" sideOffset={4}>
-													<span>Fast mode{fastMode ? " (on)" : ""}</span>
+													<span>
+														{t("fastMode")}
+														{fastMode ? ` ${t("on")}` : ""}
+													</span>
 												</TooltipContent>
 											</Tooltip>
 										)}
@@ -1183,7 +1196,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 												>
 													<span className="capitalize">
 														{effectiveEffort === "xhigh"
-															? "Extra High"
+															? t("composerExtraHigh")
 															: effectiveEffort}
 													</span>
 													<ChevronDown
@@ -1198,7 +1211,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 													className="min-w-[11rem]"
 												>
 													<DropdownMenuGroup>
-														<DropdownMenuLabel>Effort</DropdownMenuLabel>
+														<DropdownMenuLabel>
+															<I18nText source="effort" />
+														</DropdownMenuLabel>
 														{availableEffortLevels.map((level) => (
 															<DropdownMenuItem
 																key={level}
@@ -1209,7 +1224,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 																<div className="flex items-center gap-2.5">
 																	<EffortBrainIcon level={level} />
 																	<span className="capitalize">
-																		{level === "xhigh" ? "Extra High" : level}
+																		{level === "xhigh"
+																			? t("composerExtraHigh")
+																			: level}
 																	</span>
 																</div>
 																{level === effectiveEffort ? (
@@ -1245,7 +1262,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 											<Tooltip>
 												<TooltipTrigger asChild>
 													<ComposerButton
-														aria-label="Terminal mode"
+														aria-label="terminalMode2"
 														disabled={toolbarDisabled}
 														className={cn(
 															`size-7 justify-center px-0 ${composerToolbarTriggerClassName}`,
@@ -1272,7 +1289,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 													sideOffset={4}
 													className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 												>
-													<span>Terminal mode</span>
+													<span>{t("terminalMode2")}</span>
 													{toggleTerminalShortcut ? (
 														<InlineShortcutDisplay
 															hotkey={toggleTerminalShortcut}
@@ -1286,7 +1303,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 											<Tooltip>
 												<TooltipTrigger asChild>
 													<ComposerButton
-														aria-label="Add context"
+														aria-label="addContext"
 														aria-pressed={contextPanelOpen}
 														disabled={toolbarDisabled}
 														className={cn(
@@ -1308,7 +1325,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 													sideOffset={4}
 													className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 												>
-													<span>Add context</span>
+													<span>{t("addContext")}</span>
 													{toggleContextPanelShortcut ? (
 														<InlineShortcutDisplay
 															hotkey={toggleContextPanelShortcut}
@@ -1347,7 +1364,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										<Button
 											variant="ghost"
 											size="sm"
-											aria-label="Request Changes"
+											aria-label="requestChanges"
 											onClick={handlePlanRequestChanges}
 											disabled={disabled || !hasContent}
 											className="my-0.5 h-7 cursor-interactive gap-1 rounded-lg px-2 text-small transition-none text-muted-foreground hover:text-foreground"
@@ -1356,18 +1373,18 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 												className="size-3.5"
 												strokeWidth={1.8}
 											/>
-											Request Changes
+											<I18nText source="requestChanges" />
 										</Button>
 										<Button
 											variant="default"
 											size="sm"
-											aria-label="Implement"
+											aria-label="implement"
 											onClick={handlePlanImplement}
 											disabled={disabled}
 											className="my-0.5 h-7 cursor-interactive gap-1 rounded-lg px-2 text-small transition-none"
 										>
 											<Check className="size-3.5" strokeWidth={2} />
-											Implement
+											<I18nText source="implement" />
 										</Button>
 									</div>
 								) : sending ? (
@@ -1375,7 +1392,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										<Button
 											variant="destructive"
 											size="icon"
-											aria-label="Stop"
+											aria-label="stop"
 											onClick={onStop}
 											disabled={disabled || submitDisabled}
 											className="rounded-[9px]"
@@ -1386,7 +1403,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 											<Button
 												variant="outline"
 												size="icon"
-												aria-label="Steer"
+												aria-label="steer"
 												onClick={handleSubmit}
 												disabled={steerDisabled}
 												className="rounded-[9px]"
@@ -1403,7 +1420,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 													<Button
 														variant="outline"
 														size="sm"
-														aria-label={preferredStartSubmitLabel}
+														aria-label={preferredStartSubmitKey}
 														onClick={() =>
 															handleStartSubmitMode(startSubmitMode)
 														}
@@ -1426,7 +1443,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 														<Button
 															variant="outline"
 															size="sm"
-															aria-label="Start options"
+															aria-label="startOptions"
 															disabled={sendDisabled}
 															className="px-2.5"
 														>
@@ -1465,7 +1482,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 											<Button
 												variant="outline"
 												size="icon"
-												aria-label="Send"
+												aria-label="send"
 												onClick={handleSubmit}
 												disabled={sendDisabled}
 												className="rounded-[9px]"
@@ -1499,9 +1516,10 @@ function PlanModeButton({
 	className: string;
 	onToggle: () => void;
 }) {
+	const { t } = useI18n();
 	const button = (
 		<ComposerButton
-			aria-label="Plan mode"
+			aria-label="planMode"
 			disabled={disabled}
 			className={className}
 			onClick={onToggle}
@@ -1517,7 +1535,7 @@ function PlanModeButton({
 				sideOffset={4}
 				className="flex h-[24px] items-center rounded-md px-2 text-small leading-none"
 			>
-				<span>Plan</span>
+				<span>{t("plan")}</span>
 			</TooltipContent>
 		</Tooltip>
 	);

@@ -44,7 +44,7 @@ export function useMergeConfirmation(): {
 			}}
 			title={pending?.title ?? ""}
 			description={pending?.description ?? ""}
-			confirmLabel={pending?.confirmLabel ?? "Merge anyway"}
+			confirmLabel={pending?.confirmLabel ?? "commitMergeAnyway"}
 			onConfirm={() => resolveConfirmation(true)}
 		/>
 	);

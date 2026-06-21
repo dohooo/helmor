@@ -21,14 +21,14 @@ export function ProviderConfigSection({
 		<>
 			{useSectionModels ? (
 				<ProviderConfigRow
-					label="Models"
-					description="Pick which models appear in the composer's picker."
+					label="models"
+					description="pickWhichModelsAppearComposerS"
 				>
 					<SectionModels useSectionModels={useSectionModels} />
 				</ProviderConfigRow>
 			) : null}
 			<ProviderConfigRow
-				label="Custom Providers"
+				label="customProviders"
 				description={adapter.customProvidersDescription}
 			>
 				<CustomProvidersList adapter={adapter} />
@@ -61,7 +61,7 @@ function SectionModels({
 					type="button"
 					variant="outline"
 					size="icon-sm"
-					aria-label="Refresh models"
+					aria-label="refreshModels"
 					disabled={ctrl.loading}
 					onClick={ctrl.refresh}
 				>
