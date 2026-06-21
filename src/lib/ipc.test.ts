@@ -90,6 +90,27 @@ describe("ipc transport switch", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
+	it("keeps pasted-image writes on local disk in desktop team mode", async () => {
+		configureTeamBackend();
+		activateTeamMode();
+		const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+		const ipc = await freshIpc();
+
+		await ipc.invoke("save_pasted_image", {
+			data: "x",
+			mediaType: "image/png",
+			sessionId: "s",
+		});
+
+		expect(tauriInvoke).toHaveBeenCalledWith("save_pasted_image", {
+			data: "x",
+			mediaType: "image/png",
+			sessionId: "s",
+		});
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
 	it("uses the local asset protocol for known-local files in desktop team mode", async () => {
 		configureTeamBackend();
 		activateTeamMode();

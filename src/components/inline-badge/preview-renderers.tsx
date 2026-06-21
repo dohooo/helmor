@@ -2,7 +2,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { CodeBlock } from "@/components/ai/code-block";
 import type { ComposerPreviewPayload } from "@/lib/composer-insert";
 import { I18nText } from "@/lib/i18n";
-import { convertFileSrc } from "@/lib/ipc";
+import { convertLocalFileSrc } from "@/lib/ipc";
 
 export type { ComposerPreviewPayload } from "@/lib/composer-insert";
 
@@ -21,7 +21,7 @@ const EDITOR_VIEWPORT_CLASS =
 
 function resolveLocalPreviewSrc(path: string) {
 	try {
-		return convertFileSrc(path);
+		return convertLocalFileSrc(path);
 	} catch {
 		return `asset://localhost${path}`;
 	}
@@ -106,6 +106,9 @@ export function renderInlineBadgePreview(
 						src={resolveLocalPreviewSrc(payload.path)}
 						alt={payload.title}
 						className="max-h-full max-w-full rounded-md object-contain shadow-sm"
+						onError={(e) => {
+							e.currentTarget.style.display = "none";
+						}}
 					/>
 				</PreviewFrame>
 			);

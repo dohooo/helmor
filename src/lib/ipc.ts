@@ -526,6 +526,11 @@ const LOCAL_ONLY_INVOKES = new Set<string>([
 	// and hand back a path this webview can't resolve, so every team-room
 	// avatar falls back to initials. Always keep it local.
 	"cache_forge_avatar",
+	// Pasted composer images are written to LOCAL disk and previewed via a
+	// local `asset://` URL. Routing the write to the cloud container (team
+	// mode) would store it there and hand back a path this desktop webview
+	// can't resolve, so the hover preview shows a broken image. Keep local.
+	"save_pasted_image",
 ]);
 
 export function invoke<T>(
