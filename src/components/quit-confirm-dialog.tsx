@@ -53,16 +53,13 @@ export function QuitConfirmDialog({
 		<ConfirmDialog
 			open={open}
 			onOpenChange={setOpen}
-			title="Quit Helmor?"
+			title="quitHelmor"
 			description={
 				count === 1
-					? "There is 1 task in progress. Quitting now will cancel it."
-					: f(
-							"There are {count} tasks in progress. Quitting now will cancel them.",
-							{ count },
-						)
+					? "there1TaskProgressQuittingNow"
+					: f("thereCountTasksProgressQuittingNow", { count })
 			}
-			confirmLabel="Quit anyway"
+			confirmLabel="quitAnyway"
 			onConfirm={() => void handleQuit(true)}
 		/>
 	);

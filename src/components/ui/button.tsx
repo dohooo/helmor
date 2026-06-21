@@ -2,7 +2,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { Slot } from "radix-ui";
 import type * as React from "react";
 
-import { useI18n, useLocalizedNode } from "@/lib/i18n";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
@@ -56,7 +56,6 @@ function Button({
 	}) {
 	const Comp = asChild ? Slot.Root : "button";
 	const { t } = useI18n();
-	const localizedChildren = useLocalizedNode(children);
 
 	return (
 		<Comp
@@ -68,7 +67,7 @@ function Button({
 			className={cn(buttonVariants({ variant, size, className }))}
 			{...props}
 		>
-			{localizedChildren}
+			{children}
 		</Comp>
 	);
 }

@@ -20,8 +20,7 @@ export const CLAUDE_ADAPTER: ProviderConfigAdapter = {
 	displayName: "Claude Code",
 	presets: CLAUDE_PRESETS,
 	caps: { baseUrlEditable: true, apiStyleSelectable: false },
-	customProvidersDescription:
-		"Add third-party Anthropic-compatible models. They run alongside Claude Code's official models.",
+	customProvidersDescription: "addThirdPartyAnthropicCompatibleModels",
 	useCustomProviders: () => useSettingsBackedProviders("claude"),
 	fetchModels: (provider) =>
 		fetchProviderModels("claude", provider.baseUrl, provider.apiKey),

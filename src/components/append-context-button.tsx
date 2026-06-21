@@ -111,7 +111,7 @@ export function AppendContextButton({
 	subjectLabel,
 	getPayload,
 	ariaLabel,
-	errorTitle = "Couldn't append context",
+	errorTitle = "miscCouldntAppendContext",
 	disabled = false,
 	className,
 	onInserted,
@@ -133,8 +133,8 @@ export function AppendContextButton({
 			onInserted?.();
 		} catch (error) {
 			pushToast(
-				error instanceof Error ? error.message : "Unable to append context.",
-				errorTitle,
+				error instanceof Error ? error.message : t("miscUnableToAppendContext"),
+				t(errorTitle),
 				"destructive",
 			);
 		} finally {
@@ -148,6 +148,7 @@ export function AppendContextButton({
 		isPending,
 		onInserted,
 		pushToast,
+		t,
 	]);
 
 	return (
@@ -158,7 +159,7 @@ export function AppendContextButton({
 			aria-label={
 				ariaLabel
 					? t(ariaLabel)
-					: t("Append {subject} to composer").replace("{subject}", subjectLabel)
+					: t("appendSubjectComposer").replace("{subject}", subjectLabel)
 			}
 			disabled={disabled || isPending}
 			onClick={(event) => {

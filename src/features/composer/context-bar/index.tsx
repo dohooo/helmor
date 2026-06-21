@@ -24,7 +24,7 @@ import {
 	useState,
 } from "react";
 import { WorkspaceAvatar } from "@/features/navigation/avatar";
-import { I18nText } from "@/lib/i18n";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 /** Shape of one ContextBar chip. */
@@ -230,7 +230,7 @@ export function ContextBar({
 					className="flex items-center border-b border-dashed border-border/55 px-4 pb-2 pt-0.5"
 				>
 					<span className="shrink-0 pr-2 font-mono text-micro uppercase tracking-[0.06em] text-muted-foreground">
-						<I18nText source={"context"} />
+						<I18nText source={"context2"} />
 					</span>
 					<div
 						ref={scrollRef}
@@ -302,6 +302,7 @@ function Chip({
 	disabled: boolean;
 	onRemove: () => void;
 }): ReactNode {
+	const { f } = useI18n();
 	const displayName = directory.name?.trim() || basename(directory.path);
 	return (
 		<>
@@ -365,7 +366,7 @@ function Chip({
 				    position-stable — the X just appears / disappears. */}
 				<button
 					type="button"
-					aria-label={`Remove ${displayName}`}
+					aria-label={f("removeLabel", { label: displayName })}
 					tabIndex={-1}
 					disabled={disabled}
 					className={cn(

@@ -21,7 +21,7 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { useI18n, useLocalizedNode } from "@/lib/i18n";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const SIDEBAR_COOKIE_NAME = "sidebar_state";
@@ -178,8 +178,12 @@ function Sidebar({
 					side={side}
 				>
 					<SheetHeader className="sr-only">
-						<SheetTitle>Sidebar</SheetTitle>
-						<SheetDescription>Displays the mobile sidebar.</SheetDescription>
+						<SheetTitle>
+							<I18nText source="sidebar" />
+						</SheetTitle>
+						<SheetDescription>
+							<I18nText source="displaysMobileSidebar" />
+						</SheetDescription>
 					</SheetHeader>
 					<div className="flex h-full w-full flex-col">{children}</div>
 				</SheetContent>
@@ -267,10 +271,10 @@ function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
 		<button
 			data-sidebar="rail"
 			data-slot="sidebar-rail"
-			aria-label={t("Toggle Sidebar")}
+			aria-label={t("toggleSidebar")}
 			tabIndex={-1}
 			onClick={toggleSidebar}
-			title={t("Toggle Sidebar")}
+			title={t("toggleSidebar")}
 			className={cn(
 				"absolute inset-y-0 z-20 hidden w-4 transition-all ease-linear group-data-[side=left]:-right-4 group-data-[side=right]:left-0 after:absolute after:inset-y-0 after:start-1/2 after:w-[2px] hover:after:bg-sidebar-border sm:flex ltr:-translate-x-1/2 rtl:-translate-x-1/2",
 				"in-data-[side=left]:cursor-w-resize in-data-[side=right]:cursor-e-resize",
@@ -380,7 +384,6 @@ function SidebarGroupLabel({
 	...props
 }: React.ComponentProps<"div"> & { asChild?: boolean }) {
 	const Comp = asChild ? Slot.Root : "div";
-	const localizedChildren = useLocalizedNode(children);
 
 	return (
 		<Comp
@@ -392,7 +395,7 @@ function SidebarGroupLabel({
 			)}
 			{...props}
 		>
-			{localizedChildren}
+			{children}
 		</Comp>
 	);
 }
@@ -407,7 +410,6 @@ function SidebarGroupAction({
 }: React.ComponentProps<"button"> & { asChild?: boolean }) {
 	const Comp = asChild ? Slot.Root : "button";
 	const { t } = useI18n();
-	const localizedChildren = useLocalizedNode(children);
 
 	return (
 		<Comp
@@ -421,7 +423,7 @@ function SidebarGroupAction({
 			)}
 			{...props}
 		>
-			{localizedChildren}
+			{children}
 		</Comp>
 	);
 }
@@ -503,7 +505,6 @@ function SidebarMenuButton({
 	const Comp = asChild ? Slot.Root : "button";
 	const { isMobile, state } = useSidebar();
 	const { t } = useI18n();
-	const localizedChildren = useLocalizedNode(children);
 
 	const button = (
 		<Comp
@@ -516,7 +517,7 @@ function SidebarMenuButton({
 			className={cn(sidebarMenuButtonVariants({ variant, size }), className)}
 			{...props}
 		>
-			{localizedChildren}
+			{children}
 		</Comp>
 	);
 
@@ -557,7 +558,6 @@ function SidebarMenuAction({
 }) {
 	const Comp = asChild ? Slot.Root : "button";
 	const { t } = useI18n();
-	const localizedChildren = useLocalizedNode(children);
 
 	return (
 		<Comp
@@ -573,7 +573,7 @@ function SidebarMenuAction({
 			)}
 			{...props}
 		>
-			{localizedChildren}
+			{children}
 		</Comp>
 	);
 }
@@ -583,7 +583,6 @@ function SidebarMenuBadge({
 	children,
 	...props
 }: React.ComponentProps<"div">) {
-	const localizedChildren = useLocalizedNode(children);
 	return (
 		<div
 			data-slot="sidebar-menu-badge"
@@ -594,7 +593,7 @@ function SidebarMenuBadge({
 			)}
 			{...props}
 		>
-			{localizedChildren}
+			{children}
 		</div>
 	);
 }
@@ -681,7 +680,6 @@ function SidebarMenuSubButton({
 }) {
 	const Comp = asChild ? Slot.Root : "a";
 	const { t } = useI18n();
-	const localizedChildren = useLocalizedNode(children);
 
 	return (
 		<Comp
@@ -697,7 +695,7 @@ function SidebarMenuSubButton({
 			)}
 			{...props}
 		>
-			{localizedChildren}
+			{children}
 		</Comp>
 	);
 }

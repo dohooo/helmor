@@ -30,30 +30,32 @@ export function TriageQuickActions({
 						aria-hidden="true"
 					/>
 					<span className="truncate text-small font-medium tracking-[0.01em] text-muted-foreground">
-						<I18nText
-							source={"AI proposed this task — start to engage or dismiss."}
-						/>
+						<I18nText source="aiProposedTaskStartEngageDismiss" />
 					</span>
 				</>
 			}
 			trailing={
 				<>
 					<ActionRowButton
-						aria-label="Dismiss this triage proposal"
+						aria-label="dismissTriageProposal"
 						disabled={disabled}
 						onClick={onDismiss}
 					>
 						<X className="size-[13px] shrink-0" strokeWidth={1.8} />
-						<span className="inline-flex items-center">Dismiss</span>
+						<span className="inline-flex items-center">
+							<I18nText source="dismiss" />
+						</span>
 					</ActionRowButton>
 					<ActionRowButton
 						active
-						aria-label="Start working on this triage proposal"
+						aria-label="startWorkingTriageProposal"
 						disabled={disabled}
 						onClick={onStart}
 					>
 						<Play className="size-[13px] shrink-0" strokeWidth={1.8} />
-						<span className="inline-flex items-center">Start</span>
+						<span className="inline-flex items-center">
+							<I18nText source="start" />
+						</span>
 					</ActionRowButton>
 				</>
 			}

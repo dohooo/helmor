@@ -12,6 +12,7 @@ import {
 
 export type { InboxKind };
 
+import { translateSource } from "@/lib/i18n";
 import {
 	DEFAULT_INBOX_ACCOUNT_TOGGLES,
 	DEFAULT_INBOX_REPO_CONFIG,
@@ -248,8 +249,12 @@ export function useInboxItems(
 		const message =
 			query.error instanceof Error
 				? query.error.message
-				: "Couldn't load context items.";
-		pushToast(message, "Context fetch failed", "destructive");
+				: translateSource("inboxCouldntLoadContextItems");
+		pushToast(
+			message,
+			translateSource("inboxContextFetchFailed"),
+			"destructive",
+		);
 	}, [query.error, pushToast]);
 
 	const items = useMemo<InboxItemWithDetailRef[]>(

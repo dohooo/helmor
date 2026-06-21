@@ -2,6 +2,7 @@ import { Info } from "lucide-react";
 import { useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import type { PendingUserInput } from "@/features/conversation/pending-user-input";
+import { I18nText } from "@/lib/i18n";
 import { InteractionFooter, InteractionHeader } from "../interaction";
 import type { UserInputResponseHandler } from "../user-input";
 import { normalizeAskUserQuestion } from "../user-input";
@@ -51,7 +52,7 @@ export function UserInputPanel({
 				<UserInputCard>
 					<InteractionHeader
 						icon={Info}
-						title="Unsupported request"
+						title="unsupportedRequest"
 						description={askUserQuestionViewModel.reason}
 					/>
 					<InteractionFooter>
@@ -61,7 +62,7 @@ export function UserInputPanel({
 							disabled={disabled}
 							onClick={() => onResponse(userInput, "cancel")}
 						>
-							Dismiss
+							<I18nText source="dismiss" />
 						</Button>
 					</InteractionFooter>
 				</UserInputCard>

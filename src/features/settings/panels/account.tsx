@@ -46,7 +46,7 @@ export function AccountPanel() {
 						<TooltipTrigger asChild>
 							<button
 								type="button"
-								aria-label={t("Account list error")}
+								aria-label={t("accountListError")}
 								className="inline-flex h-7 cursor-default items-center justify-center text-destructive"
 							>
 								<CircleAlert className="size-4" strokeWidth={2.2} />
@@ -65,11 +65,11 @@ export function AccountPanel() {
 				{accountsQuery.isPending ? (
 					<div className="flex items-center justify-center gap-2 py-5 text-small text-muted-foreground">
 						<Loader2 className="size-3.5 animate-spin" />
-						<I18nText source={"Loading accounts…"} />
+						<I18nText source="loadingAccounts" />
 					</div>
 				) : sortedAccounts.length === 0 ? (
 					<div className="py-5 text-center text-small text-muted-foreground">
-						<I18nText source={"No accounts connected yet."} />
+						<I18nText source="noAccountsConnectedYet" />
 					</div>
 				) : (
 					sortedAccounts.map((account) => (

@@ -15,6 +15,7 @@ import {
 	setWorkspaceActiveRunAction,
 } from "@/lib/api";
 import type { ActiveEditorTarget, DiffOpenOptions } from "@/lib/editor-session";
+import { useI18n } from "@/lib/i18n";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
@@ -148,6 +149,7 @@ export function WorkspaceInspectorSidebar({
 	forgeIsRefreshing = false,
 	onOpenSettings,
 }: WorkspaceInspectorSidebarProps) {
+	const { t } = useI18n();
 	const queryClient = useQueryClient();
 	const {
 		actionsOpen,
@@ -200,7 +202,7 @@ export function WorkspaceInspectorSidebar({
 	const runTabLabel =
 		runActions.length > 1 && activeAction?.name?.trim()
 			? activeAction.name.trim()
-			: "Run";
+			: t("run");
 
 	const handleSelectRunAction = useCallback(
 		(actionId: string) => {

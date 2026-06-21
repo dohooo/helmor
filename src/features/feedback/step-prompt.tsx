@@ -39,13 +39,11 @@ export function StepPrompt({
 	return (
 		<div className="flex flex-col gap-3">
 			<p className="text-small leading-snug text-muted-foreground">
-				<I18nText
-					source={"Tweak this if you want — it's what the agent starts with."}
-				/>
+				<I18nText source="tweakIfWantSWhatAgent" />
 				{existing ? (
 					<>
 						{" "}
-						<I18nText source={"Reusing your local Helmor repo."} />
+						<I18nText source="reusingLocalHelmorRepo" />
 					</>
 				) : null}
 			</p>
@@ -65,7 +63,7 @@ export function StepPrompt({
 					disabled={!canSubmit}
 				>
 					<Send data-icon="inline-start" />
-					Send to agent
+					<I18nText source="sendAgent" />
 				</Button>
 			</div>
 		</div>

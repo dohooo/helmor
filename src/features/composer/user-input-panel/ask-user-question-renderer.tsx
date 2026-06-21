@@ -11,6 +11,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
 	InteractionFooter,
@@ -142,6 +143,7 @@ export function AskUserQuestionRenderer({
 	onResponse,
 	viewModel,
 }: UserInputPanelProps & { viewModel: AskUserQuestionViewModel }) {
+	const { t, f } = useI18n();
 	const initialResponses = useMemo(
 		() => buildInitialAskResponses(viewModel),
 		[viewModel],
@@ -247,10 +249,10 @@ export function AskUserQuestionRenderer({
 				title={currentQuestion.question}
 				description={
 					currentQuestion.options.length === 0
-						? "Type your answer."
+						? "typeAnswer"
 						: currentQuestion.multiSelect
-							? "Choose one or more options."
-							: "Choose one option."
+							? "chooseOneMoreOptions"
+							: "chooseOneOption"
 				}
 				trailing={
 					<>
@@ -268,7 +270,7 @@ export function AskUserQuestionRenderer({
 									type="button"
 									variant="ghost"
 									size="icon-xs"
-									aria-label="Previous question"
+									aria-label="previousQuestion"
 									disabled={disabled || questionIndex === 0}
 									onClick={() =>
 										setQuestionIndex((current) => Math.max(0, current - 1))
@@ -280,7 +282,7 @@ export function AskUserQuestionRenderer({
 									type="button"
 									variant="ghost"
 									size="icon-xs"
-									aria-label="Next question"
+									aria-label="nextQuestion"
 									disabled={disabled || questionIndex === questions.length - 1}
 									onClick={() =>
 										setQuestionIndex((current) =>
@@ -379,9 +381,11 @@ export function AskUserQuestionRenderer({
 							</span>
 							<Input
 								ref={otherInputRef}
-								aria-label={`Other answer for ${currentQuestion.header}`}
+								aria-label={f("composerOtherAnswerFor", {
+									header: currentQuestion.header,
+								})}
 								disabled={disabled}
-								placeholder="Other"
+								placeholder="other"
 								value={currentResponse.otherText}
 								onFocus={() => {
 									if (!currentResponse.useOther) {
@@ -421,7 +425,7 @@ export function AskUserQuestionRenderer({
 
 			<InteractionOptionalInput
 				icon={ClipboardList}
-				placeholder="Optional note for the agent"
+				placeholder="optionalNoteAgent"
 				value={currentResponse.notes}
 				onChange={(value) => {
 					updateResponse(currentQuestion.key, (current) => ({
@@ -440,7 +444,7 @@ export function AskUserQuestionRenderer({
 					onClick={() => onResponse(userInput, "decline")}
 				>
 					<X className="size-3.5" strokeWidth={2} />
-					<span>Decline</span>
+					<span>{t("decline")}</span>
 				</Button>
 				<Button
 					variant="default"
@@ -449,7 +453,7 @@ export function AskUserQuestionRenderer({
 					onClick={handleSubmitAnswers}
 				>
 					<Check className="size-3.5" strokeWidth={2} />
-					<span>Send Answers</span>
+					<span>{t("sendAnswers")}</span>
 				</Button>
 			</InteractionFooter>
 		</UserInputCard>

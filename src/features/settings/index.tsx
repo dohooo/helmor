@@ -45,7 +45,7 @@ import {
 	isConductorAvailable,
 	type RepositoryCreateOption,
 } from "@/lib/api";
-import { useI18n } from "@/lib/i18n";
+import { I18nText, useI18n } from "@/lib/i18n";
 import {
 	NOTIFICATION_SOUND_LABELS,
 	playNotificationSound,
@@ -95,17 +95,17 @@ import type { ContextProviderTab, SettingsSection } from "./types";
 /// Most match the section key with a leading capital, but a few names
 /// don't pluralise nicely under that rule — keep the overrides explicit.
 const SECTION_LABEL_OVERRIDES: Partial<Record<SettingsSection, string>> = {
-	model: "Models",
-	account: "Accounts",
-	inbox: "Contexts",
+	model: "models",
+	account: "accounts",
+	inbox: "contexts",
 };
 
 /// Optional muted-caption next to the title in the dialog header.
 /// Lets a panel surface a one-liner without rendering its own header
 /// row (which otherwise duplicates the section name).
 const SECTION_TITLE_CAPTIONS: Partial<Record<SettingsSection, string>> = {
-	account: "Synced with your local gh / glab CLI.",
-	inbox: "Pick which items each connected account contributes to Contexts.",
+	account: "syncedLocalGhGlabCli",
+	inbox: "pickWhichItemsEachConnectedAccount",
 };
 
 function sidebarSectionLabel(
@@ -115,11 +115,11 @@ function sidebarSectionLabel(
 ): string {
 	if (section.startsWith("repo:")) {
 		const repoId = section.slice(5);
-		return repos.find((r) => r.id === repoId)?.name ?? t("Repository");
+		return repos.find((r) => r.id === repoId)?.name ?? t("repository");
 	}
 	const override = SECTION_LABEL_OVERRIDES[section];
 	if (override) return t(override);
-	return t(section.charAt(0).toUpperCase() + section.slice(1));
+	return t(section);
 }
 
 function titleSectionLabel(
@@ -238,7 +238,9 @@ export const SettingsDialog = memo(function SettingsDialog({
 							<>
 								<SidebarSeparator />
 								<SidebarGroup>
-									<SidebarGroupLabel>Repositories</SidebarGroupLabel>
+									<SidebarGroupLabel>
+										<I18nText source="repositories" />
+									</SidebarGroupLabel>
 									<SidebarGroupContent>
 										<SidebarMenu>
 											{repositories.map((repo) => {
@@ -296,8 +298,8 @@ export const SettingsDialog = memo(function SettingsDialog({
 							{activeSection === "general" && (
 								<SettingsGroup>
 									<SettingsRow
-										title="Desktop Notifications"
-										description="Show system notifications when sessions complete or need input"
+										title="desktopNotifications"
+										description="showSystemNotificationsWhenSessionsComplete"
 									>
 										<Switch
 											checked={settings.notifications}
@@ -307,8 +309,8 @@ export const SettingsDialog = memo(function SettingsDialog({
 										/>
 									</SettingsRow>
 									<SettingsRow
-										title="Notification sound"
-										description="Play a sound when a desktop notification fires"
+										title="notificationSound"
+										description="playSoundWhenDesktopNotificationFires"
 									>
 										<div className="flex items-center gap-1.5">
 											<SettingsSelect<NotificationSound>
@@ -318,13 +320,13 @@ export const SettingsDialog = memo(function SettingsDialog({
 													updateSettings({ notificationSound: next })
 												}
 												disabled={!settings.notifications}
-												ariaLabel="Notification sound"
+												ariaLabel="notificationSound"
 											/>
 											<Button
 												type="button"
 												variant="ghost"
 												size="icon"
-												aria-label="Test notification sound"
+												aria-label="testNotificationSound"
 												className="size-8"
 												disabled={
 													!settings.notifications ||
@@ -342,8 +344,8 @@ export const SettingsDialog = memo(function SettingsDialog({
 										</div>
 									</SettingsRow>
 									<SettingsRow
-										title="Expand terminals on hover"
-										description="Enlarge inspector terminals when the cursor rests over them."
+										title="expandTerminalsHover"
+										description="enlargeInspectorTerminalsWhenCursorRests"
 									>
 										<Switch
 											checked={settings.terminalHoverExpansion}
@@ -353,9 +355,9 @@ export const SettingsDialog = memo(function SettingsDialog({
 										/>
 									</SettingsRow>
 									<SettingsRow
-										title="Terminal Mode"
+										title="terminalMode"
 										releaseMarker={{ kind: "feature" }}
-										description="Adds a composer toggle that opens your prompt in the agent's terminal UI instead of a chat session. Claude and Codex only."
+										description="addsComposerToggleOpensPromptAgent"
 									>
 										<Switch
 											checked={settings.enableTerminalMode}
@@ -365,8 +367,8 @@ export const SettingsDialog = memo(function SettingsDialog({
 										/>
 									</SettingsRow>
 									<SettingsRow
-										title="Always show context usage"
-										description="By default, context usage is only shown when more than 70% is used."
+										title="alwaysShowContextUsage"
+										description="byDefaultContextUsageOnlyShown"
 									>
 										<Switch
 											checked={settings.alwaysShowContextUsage}
@@ -376,8 +378,8 @@ export const SettingsDialog = memo(function SettingsDialog({
 										/>
 									</SettingsRow>
 									<SettingsRow
-										title="Usage Stats"
-										description="Show account rate limits beside the composer."
+										title="usageStats"
+										description="showAccountRateLimitsBesideComposer"
 									>
 										<Switch
 											checked={settings.showUsageStats}
@@ -387,8 +389,8 @@ export const SettingsDialog = memo(function SettingsDialog({
 										/>
 									</SettingsRow>
 									<SettingsRow
-										title="Auto-archive on merge"
-										description="When a workspace's linked PR/MR is merged, archive the workspace automatically."
+										title="autoArchiveMerge"
+										description="whenWorkspaceSLinkedPrMr"
 									>
 										<Switch
 											checked={settings.autoArchiveOnMerge}
@@ -398,11 +400,10 @@ export const SettingsDialog = memo(function SettingsDialog({
 										/>
 									</SettingsRow>
 									<SettingsRow
-										title="Follow-up behavior"
+										title="followUpBehavior"
 										description={
 											<>
-												Queue follow-ups while the agent runs or steer the
-												current run.
+												<I18nText source="queueFollowUpsWhileAgentRuns" />
 												{(() => {
 													const toggleHotkey = getShortcut(
 														settings.shortcuts,
@@ -412,12 +413,12 @@ export const SettingsDialog = memo(function SettingsDialog({
 													return (
 														<>
 															{" "}
-															Press{" "}
+															<I18nText source="press" />{" "}
 															<InlineShortcutDisplay
 																hotkey={toggleHotkey}
 																className="align-baseline text-muted-foreground"
 															/>{" "}
-															to do the opposite for one message.
+															<I18nText source="doOppositeOneMessage" />
 														</>
 													);
 												})()}
@@ -436,24 +437,24 @@ export const SettingsDialog = memo(function SettingsDialog({
 										>
 											<ToggleGroupItem
 												value="queue"
-												aria-label="Queue"
+												aria-label="queue"
 												className="h-7 rounded-md px-2.5 text-small font-medium text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground"
 											>
-												Queue
+												<I18nText source="queue" />
 											</ToggleGroupItem>
 											<ToggleGroupItem
 												value="steer"
-												aria-label="Steer"
+												aria-label="steer"
 												className="h-7 rounded-md px-2.5 text-small font-medium text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground"
 											>
-												Steer
+												<I18nText source="steer" />
 											</ToggleGroupItem>
 										</ToggleGroup>
 									</SettingsRow>
 									<SettingsRow
 										title={
 											<span className="inline-flex items-center gap-1.5">
-												Claude Code Thinking Display
+												<I18nText source="claudeCodeThinkingDisplay" />
 												{/* SettingsDialog renders outside AppShell's
 												 *  TooltipProvider tree, so panels need their
 												 *  own — same pattern as repository-settings /
@@ -473,17 +474,17 @@ export const SettingsDialog = memo(function SettingsDialog({
 															<div className="space-y-1.5">
 																<div>
 																	<span className="font-medium">
-																		Summarized
+																		<I18nText source="summarized" />
 																	</span>
 																	{" — "}
-																	thinking blocks contain summarized text.
+																	<I18nText source="thinkingBlocksContainSummarizedText" />
 																</div>
 																<div>
-																	<span className="font-medium">Omitted</span>
+																	<span className="font-medium">
+																		<I18nText source="omitted" />
+																	</span>
 																	{" — "}
-																	thinking blocks are empty. The server skips
-																	streaming thinking tokens, so the final text
-																	streams sooner. Reduces latency, not cost.
+																	<I18nText source="thinkingBlocksEmptyServerSkipsStreaming" />
 																</div>
 															</div>
 														</TooltipContent>
@@ -491,7 +492,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 												</TooltipProvider>
 											</span>
 										}
-										description="Controls how Claude Code returns thinking content."
+										description="controlsHowClaudeCodeReturnsThinking"
 									>
 										<ToggleGroup
 											type="single"
@@ -508,17 +509,17 @@ export const SettingsDialog = memo(function SettingsDialog({
 										>
 											<ToggleGroupItem
 												value="summarized"
-												aria-label="Summarized"
+												aria-label="summarized"
 												className="h-7 rounded-md px-2.5 text-small font-medium text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground"
 											>
-												Summarized
+												<I18nText source="summarized" />
 											</ToggleGroupItem>
 											<ToggleGroupItem
 												value="omitted"
-												aria-label="Omitted"
+												aria-label="omitted"
 												className="h-7 rounded-md px-2.5 text-small font-medium text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground"
 											>
-												Omitted
+												<I18nText source="omitted" />
 											</ToggleGroupItem>
 										</ToggleGroup>
 									</SettingsRow>
@@ -545,8 +546,8 @@ export const SettingsDialog = memo(function SettingsDialog({
 							{activeSection === "model" && (
 								<SettingsGroup>
 									<ModelSettingRow
-										title="Default model"
-										description="Model for new chats"
+										title="defaultModel"
+										description="modelNewChats"
 										modelSections={modelSections}
 										isLoadingModels={modelSectionsQuery.isPending}
 										// Each row reads its own state directly. The `?? default*`
@@ -573,8 +574,8 @@ export const SettingsDialog = memo(function SettingsDialog({
 										}}
 									/>
 									<ModelSettingRow
-										title="Review model"
-										description="Model for code review"
+										title="reviewModel"
+										description="modelCodeReview"
 										modelSections={modelSections}
 										isLoadingModels={modelSectionsQuery.isPending}
 										modelId={
@@ -601,8 +602,8 @@ export const SettingsDialog = memo(function SettingsDialog({
 										}}
 									/>
 									<ModelSettingRow
-										title="Action model"
-										description="Model for PRs/MRs and commit-and-push"
+										title="actionModel"
+										description="modelPrsMrsCommitPush"
 										modelSections={modelSections}
 										isLoadingModels={modelSectionsQuery.isPending}
 										modelId={
@@ -745,7 +746,7 @@ function ModelSettingRow({
 		: FALLBACK_EFFORT_LEVELS;
 	const supportsFastMode = selected?.supportsFastMode === true;
 	const label =
-		selected?.label ?? (isLoadingModels ? t("Loading…") : t("Select model"));
+		selected?.label ?? (isLoadingModels ? t("loading2") : t("selectModel"));
 	const displayEffort = effort ?? "high";
 
 	// Auto-clamp effort when model changes — but only after model metadata
@@ -853,7 +854,7 @@ function ModelSettingRow({
 								: "text-ui text-muted-foreground"
 						}
 					>
-						Fast mode
+						<I18nText source="fastMode" />
 					</span>
 					<Switch
 						checked={supportsFastMode && fastMode}
@@ -891,7 +892,9 @@ export function SettingsButton({
 				sideOffset={4}
 				className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 			>
-				<span className="leading-none">Settings</span>
+				<span className="leading-none">
+					<I18nText source="settings" />
+				</span>
 				{shortcut ? (
 					<InlineShortcutDisplay
 						hotkey={shortcut}

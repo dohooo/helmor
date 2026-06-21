@@ -6,6 +6,7 @@ import {
 	HoverCardTrigger,
 } from "@/components/ui/hover-card";
 import { type AgentProvider, setSessionContextUsage } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import {
 	claudeRichContextUsageQueryOptions,
 	sessionContextUsageQueryOptions,
@@ -55,6 +56,7 @@ export function ContextUsageRing({
 	disabled,
 	className,
 }: Props) {
+	const { t, f } = useI18n();
 	const { data: metaJson = null } = useQuery(
 		sessionContextUsageQueryOptions(sessionId),
 	);
@@ -127,8 +129,10 @@ export function ContextUsageRing({
 
 	const ariaLabel =
 		display.kind === "full"
-			? `Context usage ${display.percentage.toFixed(0)}%`
-			: "Context usage";
+			? f("composerContextUsagePercent", {
+					percent: display.percentage.toFixed(0),
+				})
+			: t("composerContextUsage");
 
 	return (
 		<HoverCard

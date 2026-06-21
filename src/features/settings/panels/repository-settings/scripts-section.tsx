@@ -165,29 +165,25 @@ export function ScriptsSection({
 	return (
 		<div className="py-5">
 			<div className="text-ui font-medium leading-snug text-foreground">
-				<I18nText source={"Scripts"} />
+				<I18nText source="scripts" />
 			</div>
 			<div className="mt-1 text-small leading-snug text-muted-foreground">
-				<I18nText
-					source={
-						"Commands that run when workspaces are set up, run, or archived."
-					}
-				/>
+				<I18nText source="commandsRunWhenWorkspacesSetUp" />
 			</div>
 
 			<div className="mt-4 space-y-4">
 				<ScriptField
-					label="Setup script"
-					description="Available from the Setup tab in any workspace"
-					placeholder="e.g., npm install"
+					label="setupScript"
+					description="availableFromSetupTabAnyWorkspace"
+					placeholder="eGNpmInstall"
 					value={setupScript}
 					locked={setupLocked}
-					lockedMessage="Set by this workspace's helmor.json — edit it there"
+					lockedMessage="setByWorkspaceSHelmorJson"
 					onChange={handleSetupChange}
 					headerRight={
 						<div className="flex items-center gap-1.5">
 							<span className="text-mini font-medium text-muted-foreground">
-								<I18nText source={"Auto-run"} />
+								<I18nText source="autoRun" />
 							</span>
 							<TooltipProvider>
 								<Tooltip>
@@ -198,11 +194,7 @@ export function ScriptsSection({
 										/>
 									</TooltipTrigger>
 									<TooltipContent side="top" className="max-w-[240px]">
-										<I18nText
-											source={
-												"On by default — setup runs automatically as soon as a workspace is created. Turn off to run it manually from the Setup tab."
-											}
-										/>
+										<I18nText source="byDefaultSetupRunsAutomaticallySoon" />
 									</TooltipContent>
 								</Tooltip>
 							</TooltipProvider>
@@ -210,7 +202,7 @@ export function ScriptsSection({
 								checked={autoRunSetup}
 								onCheckedChange={handleAutoRunSetupChange}
 								disabled={!setupHasScript}
-								aria-label="Auto-run setup script on workspace creation"
+								aria-label="autoRunSetupScriptWorkspaceCreation"
 							/>
 						</div>
 					}
@@ -226,12 +218,12 @@ export function ScriptsSection({
 				/>
 
 				<ScriptField
-					label="Archive script"
-					description="Runs when a workspace is archived"
-					placeholder="e.g., docker compose down"
+					label="archiveScript"
+					description="runsWhenWorkspaceArchived"
+					placeholder="eGDockerComposeDown"
 					value={archiveScript}
 					locked={archiveLocked}
-					lockedMessage="Set by this workspace's helmor.json — edit it there"
+					lockedMessage="setByWorkspaceSHelmorJson"
 					onChange={handleArchiveChange}
 				/>
 			</div>
@@ -326,21 +318,17 @@ function RunScriptsSection({
 		<div>
 			<div className="min-w-0">
 				<div className="text-small font-medium text-app-foreground">
-					<I18nText source={"Run scripts"} />
+					<I18nText source="runScripts" />
 				</div>
 				<div className="mt-0.5 text-mini text-muted-foreground">
-					<I18nText
-						source={"Each entry appears in the Inspector's Run dropdown."}
-					/>
+					<I18nText source="eachEntryAppearsInspectorSRun" />
 				</div>
 			</div>
 
 			{actions.length === 0 ? (
 				locked ? (
 					<div className="mt-2 text-mini text-muted-foreground/70">
-						<I18nText
-							source={"Set by this workspace's helmor.json — edit it there."}
-						/>
+						<I18nText source="setByWorkspaceSHelmorJson" />
 					</div>
 				) : (
 					// Empty state: dashed placeholder explaining what run
@@ -349,14 +337,10 @@ function RunScriptsSection({
 					// sits below so the user always finds the entry point.
 					<div className="mt-3 rounded-lg border border-dashed border-border/60 bg-app-base/30 px-4 py-5 text-center">
 						<div className="text-small font-medium text-foreground">
-							<I18nText source={"No run scripts yet"} />
+							<I18nText source="noRunScriptsYet" />
 						</div>
 						<div className="mx-auto mt-1 max-w-[320px] text-mini leading-relaxed text-muted-foreground">
-							<I18nText
-								source={
-									"Add one to expose a command — like a dev server, test runner, or background task."
-								}
-							/>
+							<I18nText source="addOneExposeCommandLikeDev" />
 						</div>
 					</div>
 				)
@@ -388,7 +372,7 @@ function RunScriptsSection({
 						onClick={onCreate}
 					>
 						<Plus strokeWidth={2} />
-						Add script
+						<I18nText source="addScript" />
 					</Button>
 				</div>
 			)}
@@ -606,8 +590,8 @@ function RunScriptRow({
 					<button
 						type="button"
 						className="flex min-w-0 flex-1 cursor-interactive items-center gap-2 text-left"
-						aria-label={`${t(open ? "Collapse" : "Expand")} ${
-							action.name || t("script")
+						aria-label={`${t(open ? "settingsCollapse" : "settingsExpand")} ${
+							action.name || t("script2")
 						}`}
 					>
 						<ChevronDown
@@ -625,16 +609,16 @@ function RunScriptRow({
 									: "text-muted-foreground italic",
 							)}
 						>
-							{name.trim() || "(unnamed)"}
+							{name.trim() || t("unnamed")}
 						</span>
 						<span className="min-w-0 flex-1 truncate text-mini font-mono text-muted-foreground">
-							{firstCommandLine || "(no command)"}
+							{firstCommandLine || t("settingsNoCommand")}
 						</span>
 					</button>
 				</CollapsibleTrigger>
 				<div className="flex shrink-0 items-center gap-1.5">
 					<span className="text-mini font-medium text-muted-foreground">
-						<I18nText source={"Exclusive"} />
+						<I18nText source="exclusive" />
 					</span>
 					<TooltipProvider>
 						<Tooltip>
@@ -645,11 +629,7 @@ function RunScriptRow({
 								/>
 							</TooltipTrigger>
 							<TooltipContent side="top" className="max-w-[240px]">
-								<I18nText
-									source={
-										"Only let one workspace run this script at a time. Starting a new run stops any other run in this repository — useful when the script binds a fixed port."
-									}
-								/>
+								<I18nText source="onlyLetOneWorkspaceRunScript" />
 							</TooltipContent>
 						</Tooltip>
 					</TooltipProvider>
@@ -669,7 +649,7 @@ function RunScriptRow({
 								stopCommand,
 							});
 						}}
-						aria-label="Stop other runs in this repository when starting a new run"
+						aria-label="stopOtherRunsRepositoryWhenStarting"
 					/>
 				</div>
 			</div>
@@ -678,16 +658,16 @@ function RunScriptRow({
 				<div className="border-t border-app-border/30 px-3 pt-3 pb-1.5">
 					{/* Script name */}
 					<div className="text-mini font-medium text-muted-foreground">
-						<I18nText source={"Script name"} />
+						<I18nText source="scriptName" />
 					</div>
 					{editing ? (
 						<Input
 							ref={nameInputRef}
 							className="mt-1 h-7 text-small font-medium"
-							placeholder="Script name"
+							placeholder="scriptName"
 							value={name}
 							aria-invalid={nameInvalid}
-							aria-label="Script name"
+							aria-label="scriptName"
 							onChange={(e) => {
 								const value = e.target.value;
 								setName(value);
@@ -703,7 +683,7 @@ function RunScriptRow({
 						<div className="mt-1 text-small font-medium text-foreground">
 							{name.trim() || (
 								<span className="text-muted-foreground italic">
-									<I18nText source={"(unnamed)"} />
+									<I18nText source="unnamed" />
 								</span>
 							)}
 						</div>
@@ -711,14 +691,14 @@ function RunScriptRow({
 
 					{/* Command */}
 					<div className="mt-3 text-mini font-medium text-muted-foreground">
-						<I18nText source={"Command"} />
+						<I18nText source="command2" />
 					</div>
 					{editing ? (
 						<Textarea
 							className="mt-1 min-h-[56px] resize-y bg-app-base/30 font-mono text-small"
-							placeholder="e.g., npm run dev"
+							placeholder="eGNpmRunDev"
 							value={command}
-							aria-label={`${action.name || t("Script")} ${t("command")}`}
+							aria-label={`${action.name || t("script2")} ${t("command2")}`}
 							onChange={(e) => {
 								const value = e.target.value;
 								setCommand(value);
@@ -734,7 +714,7 @@ function RunScriptRow({
 						<pre className="mt-1 whitespace-pre-wrap break-all font-mono text-small text-foreground">
 							{command || (
 								<span className="text-muted-foreground italic">
-									<I18nText source={"(empty)"} />
+									<I18nText source="empty" />
 								</span>
 							)}
 						</pre>
@@ -746,7 +726,7 @@ function RunScriptRow({
 					{showStopRow ? (
 						<>
 							<div className="mt-3 flex items-center gap-1 text-mini font-medium text-muted-foreground">
-								<I18nText source={"Stop command"} />
+								<I18nText source="stopCommand" />
 								<TooltipProvider>
 									<Tooltip>
 										<TooltipTrigger asChild>
@@ -756,11 +736,7 @@ function RunScriptRow({
 											/>
 										</TooltipTrigger>
 										<TooltipContent side="top" className="max-w-[280px]">
-											<I18nText
-												source={
-													"Optional cleanup command run when you click Stop. Useful for scripts that manage external resources (docker compose down, supabase stop). Same env + cwd as the main command."
-												}
-											/>
+											<I18nText source="optionalCleanupCommandRunWhenClick" />
 										</TooltipContent>
 									</Tooltip>
 								</TooltipProvider>
@@ -768,9 +744,9 @@ function RunScriptRow({
 							{editing ? (
 								<Textarea
 									className="mt-1 min-h-[56px] resize-y bg-app-base/30 font-mono text-small"
-									placeholder="e.g., docker compose down"
+									placeholder="eGDockerComposeDown"
 									value={stopCommand}
-									aria-label={`${action.name || t("Script")} ${t("stop command")}`}
+									aria-label={`${action.name || t("script2")} ${t("stopCommand2")}`}
 									onChange={(e) => {
 										const value = e.target.value;
 										setStopCommand(value);
@@ -786,7 +762,7 @@ function RunScriptRow({
 								<pre className="mt-1 whitespace-pre-wrap break-all font-mono text-small text-foreground">
 									{stopCommand || (
 										<span className="text-muted-foreground italic">
-											<I18nText source={"(empty)"} />
+											<I18nText source="empty" />
 										</span>
 									)}
 								</pre>
@@ -817,7 +793,7 @@ function RunScriptRow({
 											)}
 											onClick={() => setEditing((prev) => !prev)}
 											aria-pressed={editing}
-											aria-label={editing ? "Stop editing" : "Edit"}
+											aria-label={editing ? "doneEditing" : "edit"}
 										>
 											{editing ? (
 												<Check className="size-3.5" strokeWidth={2} />
@@ -827,7 +803,7 @@ function RunScriptRow({
 										</Button>
 									</TooltipTrigger>
 									<TooltipContent side="top">
-										<I18nText source={editing ? "Done editing" : "Edit"} />
+										<I18nText source={editing ? "doneEditing" : "edit"} />
 									</TooltipContent>
 								</Tooltip>
 							</TooltipProvider>
@@ -846,11 +822,11 @@ function RunScriptRow({
 											disabled={deleting}
 											aria-label={
 												confirmingDelete
-													? `${t("Confirm delete")} ${
-															action.name || t("(unnamed)")
+													? `${t("confirmDelete")} ${
+															action.name || t("unnamed")
 														}`
-													: `${t("Delete script")} ${
-															action.name || t("(unnamed)")
+													: `${t("deleteScript")} ${
+															action.name || t("unnamed")
 														}`
 											}
 										>
@@ -865,8 +841,8 @@ function RunScriptRow({
 										<I18nText
 											source={
 												confirmingDelete
-													? "Click again to confirm"
-													: "Delete script"
+													? "settingsClickAgainToConfirm"
+													: "deleteScript"
 											}
 										/>
 									</TooltipContent>
@@ -875,11 +851,7 @@ function RunScriptRow({
 						</div>
 					) : (
 						<div className="mt-2 flex h-7 items-center justify-end text-mini text-muted-foreground/70">
-							<I18nText
-								source={
-									"Managed by helmor.json — edit the file to add or change"
-								}
-							/>
+							<I18nText source="managedByHelmorJsonEditFile" />
 						</div>
 					)}
 				</div>

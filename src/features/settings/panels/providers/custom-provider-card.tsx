@@ -39,13 +39,13 @@ type FetchState = { loading: boolean; error: string | null };
 const DEFAULT_STYLE_OPTIONS: StyleOption[] = [
 	{
 		value: "chat",
-		label: "Chat Completions",
-		hint: "/v1/chat/completions — widest compatibility.",
+		label: "chatCompletions",
+		hint: "v1ChatCompletionsWidestCompatibility",
 	},
 	{
 		value: "responses",
-		label: "Responses API",
-		hint: "/v1/responses — advanced reasoning & tools.",
+		label: "responsesApi",
+		hint: "v1ResponsesAdvancedReasoningTools",
 	},
 ];
 
@@ -90,9 +90,7 @@ export function CustomProviderCard({
 	// Claude endpoints are Anthropic-style (base must NOT end in /v1 — the SDK
 	// appends /v1/messages and fetch appends /v1/models). Others are /v1.
 	const baseUrlPlaceholder =
-		adapter.family === "claude"
-			? "Base URL (https://…/anthropic)"
-			: "Base URL (https://…/v1)";
+		adapter.family === "claude" ? "baseUrlHttpsAnthropic" : "baseUrlHttpsV1";
 
 	function patch(next: Partial<CustomProvider>) {
 		setDraft((current) => ({ ...current, ...next }));
@@ -113,7 +111,7 @@ export function CustomProviderCard({
 			const models = await adapter.fetchModels(draft);
 			setFetchState({
 				loading: false,
-				error: models.length ? null : t("No models returned by the endpoint."),
+				error: models.length ? null : t("noModelsReturnedByEndpoint"),
 			});
 			commit({ models });
 		} catch (error) {
@@ -147,7 +145,7 @@ export function CustomProviderCard({
 			type="button"
 			variant="outline"
 			size="icon-sm"
-			aria-label="Fetch models"
+			aria-label="fetchModels"
 			disabled={!canFetch || fetchState.loading}
 			onClick={refresh}
 		>
@@ -165,15 +163,15 @@ export function CustomProviderCard({
 		>
 			<span className={cn("truncate", !hasModels && "text-muted-foreground")}>
 				{fetchState.loading ? (
-					<I18nText source="Fetching models…" />
+					<I18nText source="fetchingModels" />
 				) : hasModels ? (
 					draft.models.length === 1 ? (
-						<I18nText source="1 model" />
+						<I18nText source="1Model" />
 					) : (
-						f("{count} models", { count: draft.models.length })
+						f("countModels", { count: draft.models.length })
 					)
 				) : (
-					<I18nText source="Add models manually" />
+					<I18nText source="addModelsManually" />
 				)}
 			</span>
 			{hasModels ? (
@@ -197,7 +195,7 @@ export function CustomProviderCard({
 						value={draft.name}
 						onChange={(e) => patch({ name: e.target.value })}
 						onBlur={commitText}
-						placeholder="Display name (e.g. My Provider)"
+						placeholder="displayNameEGMyProvider"
 						className="h-8 border-border/50 bg-background/40 text-[13px]"
 					/>
 				)}
@@ -205,7 +203,7 @@ export function CustomProviderCard({
 					type="button"
 					variant="ghost"
 					size="icon"
-					aria-label="Remove provider"
+					aria-label="removeProvider"
 					className="size-8 shrink-0 text-muted-foreground hover:text-destructive"
 					onClick={onRemove}
 				>
@@ -229,7 +227,7 @@ export function CustomProviderCard({
 					value={draft.apiKey}
 					onChange={(e) => patch({ apiKey: e.target.value })}
 					onBlur={commitText}
-					placeholder="API key"
+					placeholder="apiKey"
 					className="h-8 min-w-0 flex-1 border-border/50 bg-background/40 text-[13px]"
 				/>
 				{preset?.apiKeyUrl && !draft.apiKey ? (
@@ -237,10 +235,10 @@ export function CustomProviderCard({
 						type="button"
 						variant="outline"
 						size="sm"
-						aria-label="Get API key"
+						aria-label="getApiKey"
 						onClick={() => preset.apiKeyUrl && void openUrl(preset.apiKeyUrl)}
 					>
-						Get key
+						<I18nText source="getKey" />
 						<SquareArrowOutUpRight className="size-3.5" />
 					</Button>
 				) : null}
@@ -248,7 +246,7 @@ export function CustomProviderCard({
 
 			{adapter.caps.apiStyleSelectable && isManual ? (
 				<StyleSelect
-					label={adapter.styleLabel ?? "API style"}
+					label={adapter.styleLabel ?? "apiStyle"}
 					options={adapter.styleOptions ?? DEFAULT_STYLE_OPTIONS}
 					value={
 						draft.apiStyle ??
@@ -279,12 +277,9 @@ export function CustomProviderCard({
 
 					{fetchState.error ? (
 						<p className="text-[12px] text-amber-600 dark:text-amber-400">
-							{f(
-								"Couldn't fetch models ({error}). Add them manually instead.",
-								{
-									error: fetchState.error,
-								},
-							)}
+							{f("couldnTFetchModelsErrorAdd", {
+								error: fetchState.error,
+							})}
 						</p>
 					) : null}
 				</div>
@@ -312,7 +307,9 @@ function StyleSelect({
 					<span className="text-muted-foreground">
 						<I18nText source={label} />
 					</span>
-					<span className="truncate">{current?.label}</span>
+					<span className="truncate">
+						{current?.label ? <I18nText source={current.label} /> : null}
+					</span>
 				</span>
 				<ChevronDown className="size-3 shrink-0 opacity-40" />
 			</DropdownMenuTrigger>
@@ -323,7 +320,9 @@ function StyleSelect({
 						onClick={() => onChange(style.value)}
 						className="flex flex-col items-start gap-0.5"
 					>
-						<span className="text-[13px] text-foreground">{style.label}</span>
+						<span className="text-[13px] text-foreground">
+							<I18nText source={style.label} />
+						</span>
 						{style.hint ? (
 							<span className="text-[11px] text-muted-foreground">
 								<I18nText source={style.hint} />

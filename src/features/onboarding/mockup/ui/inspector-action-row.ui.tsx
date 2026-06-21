@@ -18,7 +18,7 @@ export function InspectorStatusIconUI({
 	if (status === "success") {
 		return (
 			<CheckIcon
-				aria-label={t("Passed")}
+				aria-label={t("passed")}
 				className="size-3 shrink-0 text-chart-2"
 				strokeWidth={2.2}
 			/>
@@ -26,10 +26,10 @@ export function InspectorStatusIconUI({
 	}
 	const label =
 		status === "running"
-			? t("Running")
+			? t("running")
 			: status === "failure"
-				? t("Failed")
-				: t("Pending");
+				? t("failed")
+				: t("pending");
 	const color =
 		status === "running"
 			? "rgb(245, 158, 11)"

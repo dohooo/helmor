@@ -16,7 +16,7 @@ import {
 	revokePairedDevice,
 	signInCloudflare,
 } from "@/lib/api";
-import { I18nText } from "@/lib/i18n";
+import { formatSource, I18nText, useI18n } from "@/lib/i18n";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { SettingsGroup, SettingsRow } from "../components/settings-row";
 
@@ -36,14 +36,18 @@ function deviceLabel(): string {
 		month: "short",
 		day: "numeric",
 	});
-	return `Phone · ${date}`;
+	return formatSource("settingsPhoneDeviceLabel", { date });
 }
 
-function formatLastSeen(ts: string | null): string {
-	if (!ts) return "Never connected";
+function formatLastSeen(
+	ts: string | null,
+	t: (key: string) => string,
+	f: (key: string, values: Record<string, string | number>) => string,
+): string {
+	if (!ts) return t("settingsNeverConnected");
 	const parsed = new Date(ts);
-	if (Number.isNaN(parsed.getTime())) return "Last seen recently";
-	return `Last seen ${parsed.toLocaleString()}`;
+	if (Number.isNaN(parsed.getTime())) return t("settingsLastSeenRecently");
+	return f("settingsLastSeenAt", { time: parsed.toLocaleString() });
 }
 
 function errorText(error: unknown): string {
@@ -55,6 +59,7 @@ function errorText(error: unknown): string {
 /// section upgrades the ephemeral quick tunnel to a stable
 /// remote-*.helmor.ai address; pairing mints a per-device token shown as a QR.
 export function MobileCompanionPanel() {
+	const { t, f } = useI18n();
 	const queryClient = useQueryClient();
 	const [pairing, setPairing] = useState<CompanionPairingPayload | null>(null);
 	const [copied, setCopied] = useState(false);
@@ -131,13 +136,13 @@ export function MobileCompanionPanel() {
 	return (
 		<SettingsGroup>
 			<SettingsRow
-				title="Mobile companion"
-				description="Drive Helmor from your phone's browser over a private link. Enabling starts a local server and a Cloudflare tunnel — no app to install."
+				title="mobileCompanion"
+				description="driveHelmorFromPhoneSBrowser"
 			>
 				<div className="flex items-center gap-2">
 					{enableMutation.isPending ? (
 						<span className="text-small text-muted-foreground">
-							<I18nText source={"Starting…"} />
+							<I18nText source="starting" />
 						</span>
 					) : null}
 					<Switch
@@ -147,7 +152,7 @@ export function MobileCompanionPanel() {
 							if (checked) enableMutation.mutate();
 							else disableMutation.mutate();
 						}}
-						aria-label="Enable mobile companion"
+						aria-label="enableMobileCompanion"
 					/>
 				</div>
 			</SettingsRow>
@@ -161,14 +166,14 @@ export function MobileCompanionPanel() {
 			{running ? (
 				<>
 					<SettingsRow
-						title="Permanent URL"
+						title="permanentUrl"
 						align="start"
 						description={
 							stableHost
-								? "Your phone connects at a fixed address that survives desktop restarts."
+								? "phoneConnectsFixedAddressSurvivesDesktop"
 								: signedIn
-									? "Allocate a permanent remote-*.helmor.ai address so you never have to re-scan."
-									: "The quick link changes when you restart. Sign in to Cloudflare for a permanent address."
+									? "allocatePermanentRemoteHelmorAiAddress"
+									: "quickLinkChangesWhenRestartSign"
 						}
 					>
 						{stableHost ? (
@@ -180,7 +185,11 @@ export function MobileCompanionPanel() {
 								disabled={forgetMutation.isPending}
 								onClick={() => forgetMutation.mutate()}
 							>
-								{forgetMutation.isPending ? "Forgetting…" : "Forget"}
+								<I18nText
+									source={
+										forgetMutation.isPending ? "forgetting" : "settingsForget"
+									}
+								/>
 							</Button>
 						) : signedIn ? (
 							<Button
@@ -191,9 +200,13 @@ export function MobileCompanionPanel() {
 								disabled={allocateMutation.isPending}
 								onClick={() => allocateMutation.mutate()}
 							>
-								{allocateMutation.isPending
-									? "Allocating…"
-									: "Allocate permanent URL"}
+								<I18nText
+									source={
+										allocateMutation.isPending
+											? "allocating"
+											: "settingsAllocatePermanentUrl"
+									}
+								/>
 							</Button>
 						) : (
 							<Button
@@ -204,16 +217,20 @@ export function MobileCompanionPanel() {
 								disabled={signInMutation.isPending}
 								onClick={() => signInMutation.mutate()}
 							>
-								{signInMutation.isPending
-									? "Waiting for browser…"
-									: "Sign in to Cloudflare"}
+								<I18nText
+									source={
+										signInMutation.isPending
+											? "waitingBrowser"
+											: "settingsSignInToCloudflare"
+									}
+								/>
 							</Button>
 						)}
 					</SettingsRow>
 
 					{stableHost ? (
 						<p className="text-small text-muted-foreground">
-							<I18nText source={"Permanent address:"} />{" "}
+							<I18nText source="permanentAddress" />{" "}
 							<span className="font-mono text-foreground">{stableHost}</span>
 						</p>
 					) : null}
@@ -229,12 +246,12 @@ export function MobileCompanionPanel() {
 					) : null}
 
 					<SettingsRow
-						title="Pair a phone"
+						title="pairPhone"
 						align="start"
 						description={
 							publicUrl
-								? "Generate a QR code, then scan it with your phone's camera."
-								: "Waiting for the public URL to come up…"
+								? "generateQrCodeThenScanPhone"
+								: "waitingPublicUrlComeUp"
 						}
 					>
 						<Button
@@ -245,7 +262,9 @@ export function MobileCompanionPanel() {
 							disabled={!publicUrl || pairMutation.isPending}
 							onClick={() => pairMutation.mutate()}
 						>
-							{pairMutation.isPending ? "Generating…" : "Pair phone"}
+							<I18nText
+								source={pairMutation.isPending ? "generating" : "pairPhone"}
+							/>
 						</Button>
 					</SettingsRow>
 
@@ -261,11 +280,7 @@ export function MobileCompanionPanel() {
 								<QRCodeSVG value={pairing.url} size={184} />
 							</div>
 							<p className="max-w-[340px] text-center text-small leading-snug text-muted-foreground">
-								<I18nText
-									source={
-										"Scan with your phone's camera. The code carries a one-time device token — pair once and the phone reconnects on its own."
-									}
-								/>
+								<I18nText source="scanPhoneSCameraCodeCarries" />
 							</p>
 							{/* Also expose the link as copyable text: phones that can't
 							    scan can paste it into the browser, and it's the address to
@@ -285,7 +300,7 @@ export function MobileCompanionPanel() {
 										window.setTimeout(() => setCopied(false), 1500);
 									}}
 								>
-									{copied ? "Copied" : "Copy"}
+									<I18nText source={copied ? "copied" : "settingsCopy"} />
 								</Button>
 							</div>
 						</div>
@@ -293,11 +308,11 @@ export function MobileCompanionPanel() {
 
 					<div className="flex flex-col gap-2 py-5">
 						<p className="text-ui font-medium text-foreground">
-							<I18nText source={"Paired devices"} />
+							<I18nText source="pairedDevices" />
 						</p>
 						{devices.length === 0 ? (
 							<p className="text-small text-muted-foreground">
-								<I18nText source={"No phones paired yet."} />
+								<I18nText source="noPhonesPairedYet" />
 							</p>
 						) : (
 							devices.map((device) => (
@@ -310,7 +325,7 @@ export function MobileCompanionPanel() {
 											{device.label}
 										</span>
 										<span className="text-nano text-muted-foreground">
-											{formatLastSeen(device.lastSeenAt)}
+											{formatLastSeen(device.lastSeenAt, t, f)}
 										</span>
 									</div>
 									<Button
@@ -321,7 +336,7 @@ export function MobileCompanionPanel() {
 										disabled={revokeMutation.isPending}
 										onClick={() => revokeMutation.mutate(device.id)}
 									>
-										Revoke
+										<I18nText source="revoke" />
 									</Button>
 								</div>
 							))

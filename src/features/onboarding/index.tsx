@@ -192,12 +192,12 @@ export function AppOnboarding({ onComplete }: AppOnboardingProps) {
 			});
 		} catch (error) {
 			setRepoImportError(
-				describeUnknownError(error, "Unable to add repository."),
+				describeUnknownError(error, t("miscUnableToAddRepository")),
 			);
 		} finally {
 			setIsAddingLocalRepository(false);
 		}
-	}, [isAddingLocalRepository, rememberImportedRepository]);
+	}, [isAddingLocalRepository, rememberImportedRepository, t]);
 
 	const openCloneDialog = useCallback(() => {
 		setCloneDialogOpen(true);
@@ -240,26 +240,29 @@ export function AppOnboarding({ onComplete }: AppOnboardingProps) {
 		[rememberImportedRepository],
 	);
 
-	const removeImportedRepository = useCallback(async (repoId: string) => {
-		setRepoImportError(null);
-		setRemovingRepositoryIds((current) => new Set(current).add(repoId));
-		try {
-			await deleteRepository(repoId);
-			setImportedRepositories((current) =>
-				current.filter((repo) => repo.id !== repoId),
-			);
-		} catch (error) {
-			setRepoImportError(
-				describeUnknownError(error, "Unable to remove repository."),
-			);
-		} finally {
-			setRemovingRepositoryIds((current) => {
-				const next = new Set(current);
-				next.delete(repoId);
-				return next;
-			});
-		}
-	}, []);
+	const removeImportedRepository = useCallback(
+		async (repoId: string) => {
+			setRepoImportError(null);
+			setRemovingRepositoryIds((current) => new Set(current).add(repoId));
+			try {
+				await deleteRepository(repoId);
+				setImportedRepositories((current) =>
+					current.filter((repo) => repo.id !== repoId),
+				);
+			} catch (error) {
+				setRepoImportError(
+					describeUnknownError(error, t("miscUnableToRemoveRepository")),
+				);
+			} finally {
+				setRemovingRepositoryIds((current) => {
+					const next = new Set(current);
+					next.delete(repoId);
+					return next;
+				});
+			}
+		},
+		[t],
+	);
 
 	const completeOnboarding = useCallback(() => {
 		setStep("completeTransition");
@@ -277,11 +280,11 @@ export function AppOnboarding({ onComplete }: AppOnboardingProps) {
 
 	return (
 		<main
-			aria-label={t("Helmor onboarding")}
+			aria-label={t("helmorOnboarding")}
 			className="relative h-dvh overflow-hidden bg-background font-sans text-foreground antialiased"
 		>
 			<div
-				aria-label={t("Helmor onboarding drag region")}
+				aria-label={t("helmorOnboardingDragRegion")}
 				className="absolute inset-x-0 top-0 z-20 flex h-11 items-center"
 			>
 				<TrafficLightSpacer side="left" width={94} />

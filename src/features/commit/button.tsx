@@ -15,7 +15,11 @@ import {
 	type MergeBlockedReason,
 	mergeBlockedShortLabel,
 } from "@/lib/commit-button-logic";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+
+type TFn = (key: string) => string;
+type FFn = (key: string, values: Record<string, string | number>) => string;
 
 export type CommitButtonState = "idle" | "busy" | "done" | "error" | "disabled";
 export type WorkspaceCommitButtonMode =
@@ -53,72 +57,74 @@ interface WorkspaceCommitButtonProps {
 	onStateChange?: (nextState: CommitButtonState) => void;
 }
 
+// Values are i18n catalog KEYS, resolved via translateSource in
+// getCommitButtonLabel.
 const STATIC_STATE_LABELS: Record<
 	Exclude<WorkspaceCommitButtonMode, "create-pr" | "open-pr">,
 	Record<CommitButtonState, string>
 > = {
 	"commit-and-push": {
-		idle: "Commit and Push",
-		busy: "Committing...",
-		done: "Pushed",
-		error: "Retry",
-		disabled: "Commit and Push",
+		idle: "commitButtonCommitAndPush",
+		busy: "commitButtonCommitting",
+		done: "commitButtonPushed",
+		error: "retry",
+		disabled: "commitButtonCommitAndPush",
 	},
 	push: {
-		idle: "Push",
-		busy: "Pushing...",
-		done: "Pushed",
-		error: "Retry",
-		disabled: "Push",
+		idle: "push",
+		busy: "commitButtonPushing",
+		done: "commitButtonPushed",
+		error: "retry",
+		disabled: "push",
 	},
 	fix: {
-		idle: "Fix CI",
-		busy: "Fixing CI...",
-		done: "CI Fixed",
-		error: "Retry",
-		disabled: "Fix CI",
+		idle: "commitButtonFixCi",
+		busy: "commitButtonFixingCi",
+		done: "commitButtonCiFixed",
+		error: "retry",
+		disabled: "commitButtonFixCi",
 	},
 	"resolve-conflicts": {
-		idle: "Resolve Conflicts",
-		busy: "Resolving...",
-		done: "Resolved",
-		error: "Retry",
-		disabled: "Resolve Conflicts",
+		idle: "commitButtonResolveConflicts",
+		busy: "commitButtonResolving",
+		done: "commitButtonResolved",
+		error: "retry",
+		disabled: "commitButtonResolveConflicts",
 	},
 	"checks-running": {
-		idle: "Checks Running",
-		busy: "Merging...",
-		done: "Merged",
-		error: "Retry",
-		disabled: "Checks Running",
+		idle: "commitButtonChecksRunning",
+		busy: "commitButtonMerging",
+		done: "merged",
+		error: "retry",
+		disabled: "commitButtonChecksRunning",
 	},
 	"merge-blocked": {
-		idle: "Merge Blocked",
-		busy: "Merging...",
-		done: "Merged",
-		error: "Retry",
-		disabled: "Merge Blocked",
+		idle: "commitButtonMergeBlocked",
+		busy: "commitButtonMerging",
+		done: "merged",
+		error: "retry",
+		disabled: "commitButtonMergeBlocked",
 	},
 	merge: {
-		idle: "Merge",
-		busy: "Merging...",
-		done: "Merged",
-		error: "Retry",
-		disabled: "Merge",
+		idle: "commitButtonMerge",
+		busy: "commitButtonMerging",
+		done: "merged",
+		error: "retry",
+		disabled: "commitButtonMerge",
 	},
 	merged: {
-		idle: "Merged",
-		busy: "Merged",
-		done: "Merged",
-		error: "Merged",
-		disabled: "Merged",
+		idle: "merged",
+		busy: "merged",
+		done: "merged",
+		error: "merged",
+		disabled: "merged",
 	},
 	closed: {
-		idle: "Closed",
-		busy: "Closed",
-		done: "Closed",
-		error: "Closed",
-		disabled: "Closed",
+		idle: "closed",
+		busy: "closed",
+		done: "closed",
+		error: "closed",
+		disabled: "closed",
 	},
 };
 
@@ -126,32 +132,44 @@ export function getCommitButtonLabel(
 	mode: WorkspaceCommitButtonMode,
 	state: CommitButtonState,
 	changeRequestName: string,
+	t: TFn,
+	f: FFn,
 	mergeBlockedReason?: MergeBlockedReason | null,
 ): string {
 	if (mode === "create-pr") {
 		switch (state) {
 			case "busy":
-				return `Creating ${changeRequestName}...`;
+				return f("commitButtonCreatingName", {
+					name: changeRequestName,
+				});
 			case "done":
-				return `${changeRequestName} Created`;
+				return f("commitButtonNameCreated", {
+					name: changeRequestName,
+				});
 			case "error":
-				return "Retry";
+				return t("retry");
 			case "idle":
 			case "disabled":
-				return `Create ${changeRequestName}`;
+				return f("commitButtonCreateName", {
+					name: changeRequestName,
+				});
 		}
 	}
 	if (mode === "open-pr") {
 		switch (state) {
 			case "busy":
-				return `Opening ${changeRequestName}...`;
+				return f("commitButtonOpeningName", {
+					name: changeRequestName,
+				});
 			case "done":
-				return "Opened";
+				return t("opened");
 			case "error":
-				return "Retry";
+				return t("retry");
 			case "idle":
 			case "disabled":
-				return `Open ${changeRequestName}`;
+				return f("commitButtonOpenName", {
+					name: changeRequestName,
+				});
 		}
 	}
 	// Busy/done/error keep the generic "Merging…" / "Merged" / "Retry".
@@ -162,18 +180,20 @@ export function getCommitButtonLabel(
 	) {
 		return mergeBlockedShortLabel(mergeBlockedReason);
 	}
-	return STATIC_STATE_LABELS[mode][state];
+	return t(STATIC_STATE_LABELS[mode][state]);
 }
 
 function getDefaultMenuItems(
 	mode: WorkspaceCommitButtonMode,
 	changeRequestName: string,
+	t: TFn,
+	f: FFn,
 ): WorkspaceCommitAction[] {
 	if (mode === "commit-and-push") {
 		return [
 			{
 				id: "commit-and-push-manually",
-				label: "Commit and push manually",
+				label: t("commitPushManually"),
 			},
 		];
 	}
@@ -182,7 +202,7 @@ function getDefaultMenuItems(
 		return [
 			{
 				id: "push-manually",
-				label: "Push manually",
+				label: t("pushManually"),
 			},
 		];
 	}
@@ -191,7 +211,7 @@ function getDefaultMenuItems(
 		return [
 			{
 				id: "fix-manually",
-				label: "Fix CI manually",
+				label: t("fixCiManually"),
 			},
 		];
 	}
@@ -199,11 +219,15 @@ function getDefaultMenuItems(
 	return [
 		{
 			id: "create-draft-pr",
-			label: `Create draft ${changeRequestName}`,
+			label: f("commitButtonCreateDraftName", {
+				name: changeRequestName,
+			}),
 		},
 		{
 			id: "create-pr-manually",
-			label: `Create ${changeRequestName} manually`,
+			label: f("commitButtonCreateNameManually", {
+				name: changeRequestName,
+			}),
 		},
 	];
 }
@@ -316,6 +340,7 @@ export function WorkspaceCommitButton({
 	onCommit,
 	onStateChange,
 }: WorkspaceCommitButtonProps) {
+	const { t, f } = useI18n();
 	const isControlled = state !== undefined;
 	const [internalState, setInternalState] = useState<CommitButtonState>(
 		disabled ? "disabled" : "idle",
@@ -378,7 +403,7 @@ export function WorkspaceCommitButton({
 	};
 
 	const resolvedMenuItems =
-		menuItems ?? getDefaultMenuItems(mode, changeRequestName);
+		menuItems ?? getDefaultMenuItems(mode, changeRequestName, t, f);
 	const hasMenuItems =
 		mode !== "fix" &&
 		mode !== "resolve-conflicts" &&
@@ -395,31 +420,37 @@ export function WorkspaceCommitButton({
 			mode,
 			currentState,
 			changeRequestName,
+			t,
+			f,
 			mergeBlockedReason,
 		);
 	const mainIcon = getModeIcon(mode);
 	const optionsAriaLabel =
 		mode === "commit-and-push"
-			? "Commit and push options"
+			? t("commitButtonCommitAndPushOptions")
 			: mode === "push"
-				? "Push options"
+				? t("commitButtonPushOptions")
 				: mode === "fix"
-					? "Fix CI options"
+					? t("commitButtonFixCiOptions")
 					: mode === "resolve-conflicts"
-						? "Resolve conflicts options"
+						? t("commitButtonResolveConflictsOptions")
 						: mode === "checks-running"
-							? "Checks running options"
+							? t("commitButtonChecksRunningOptions")
 							: mode === "merge-blocked"
-								? "Merge blocked options"
+								? t("commitButtonMergeBlockedOptions")
 								: mode === "merge"
-									? "Merge options"
+									? t("commitButtonMergeOptions")
 									: mode === "open-pr"
-										? `Open ${changeRequestName} options`
+										? f("commitButtonOpenNameOptions", {
+												name: changeRequestName,
+											})
 										: mode === "merged"
-											? "Merged options"
+											? t("commitButtonMergedOptions")
 											: mode === "closed"
-												? "Closed options"
-												: `Create ${changeRequestName} options`;
+												? t("commitButtonClosedOptions")
+												: f("commitButtonCreateNameOptions", {
+														name: changeRequestName,
+													});
 
 	const mainButton = (
 		<Button

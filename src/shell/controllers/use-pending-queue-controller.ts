@@ -12,6 +12,7 @@ import {
 	type ResolvedComposerInsertRequest,
 	resolveComposerInsertTarget,
 } from "@/lib/composer-insert";
+import { translateSource } from "@/lib/i18n";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
@@ -77,8 +78,8 @@ export function usePendingQueueController(
 		const targetWorkspaceId = resolvedTarget.workspaceId;
 		if (!targetContextKey && !targetWorkspaceId) {
 			pushToastRef.current(
-				"Open a workspace before inserting content into the composer.",
-				"Can't insert content",
+				translateSource("miscOpenWorkspaceBeforeInserting"),
+				translateSource("miscCantInsertContent"),
 			);
 			return;
 		}

@@ -45,7 +45,7 @@ function ActionButton({
 
 export function QuickPanelCloseButton() {
 	return (
-		<ActionButton label="Close" onClick={() => void hideQuickPanel()}>
+		<ActionButton label="close" onClick={() => void hideQuickPanel()}>
 			<X className="size-3.5" strokeWidth={1.8} />
 		</ActionButton>
 	);
@@ -66,12 +66,12 @@ export function QuickPanelActions({
 }) {
 	return (
 		<>
-			<ActionButton label="New Workspace" onClick={onNewTask}>
+			<ActionButton label="newWorkspace" onClick={onNewTask}>
 				<Plus className="size-3.5" strokeWidth={1.8} />
 			</ActionButton>
 			{selectedWorkspaceId ? (
 				<ActionButton
-					label="Open in Helmor"
+					label="openHelmor"
 					onClick={() =>
 						void revealWorkspaceInMainWindow(
 							selectedWorkspaceId,

@@ -32,14 +32,10 @@ export function IntroPreview({
 					className="size-14 rounded-[10px] opacity-95"
 				/>
 				<h1 className="mt-7 text-[2.625rem] font-semibold leading-[1.1] tracking-normal text-foreground max-lg:text-3xl">
-					<I18nText source={"Hi, Helmor!"} />
+					<I18nText source="hiHelmor" />
 				</h1>
 				<p className="mt-6 max-w-md text-base font-medium leading-7 text-muted-foreground">
-					<I18nText
-						source={
-							"AI generates the code. Helmor is where you orchestrate, review, and ship it."
-						}
-					/>
+					<I18nText source="aiGeneratesCodeHelmorWhereOrchestrate" />
 				</p>
 
 				<Button
@@ -48,13 +44,13 @@ export function IntroPreview({
 					onClick={onNext}
 					className="mt-7 h-10 gap-2 px-3.5 text-body"
 				>
-					Explore
+					<I18nText source="explore" />
 					<ArrowRight data-icon="inline-end" className="size-4" />
 				</Button>
 			</section>
 
 			<section
-				aria-label={t("Helmor preview")}
+				aria-label={t("helmorPreview")}
 				className={`relative flex min-h-[560px] min-w-0 items-center justify-center transition-transform duration-1000 ease-[cubic-bezier(.22,.82,.2,1)] max-lg:hidden ${
 					step === "skills"
 						? "translate-x-[28vw] translate-y-0"

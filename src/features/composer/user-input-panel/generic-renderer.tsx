@@ -2,6 +2,7 @@ import { Check, Settings2, X } from "lucide-react";
 import { useMemo } from "react";
 import { CodeBlock } from "@/components/ai/code-block";
 import { Button } from "@/components/ui/button";
+import { useI18n } from "@/lib/i18n";
 import { InteractionFooter, InteractionHeader } from "../interaction";
 import { UserInputCard } from "./shared";
 
@@ -68,6 +69,7 @@ export function ToolApprovalCard({
 	disabled,
 	onResponse,
 }: ToolApprovalCardProps) {
+	const { t } = useI18n();
 	const preview = useMemo(
 		() => getCodePreview(toolName, toolInput, description),
 		[toolName, toolInput, description],
@@ -78,7 +80,7 @@ export function ToolApprovalCard({
 			<InteractionHeader
 				icon={Settings2}
 				title={toolName}
-				description="This tool needs your approval before it can run."
+				description="toolNeedsApprovalBeforeCanRun"
 				truncateTitle
 			/>
 			<div className="mx-1 max-h-56 overflow-y-auto rounded-xl bg-muted/20">
@@ -98,7 +100,7 @@ export function ToolApprovalCard({
 					onClick={() => onResponse("deny")}
 				>
 					<X className="size-3.5" strokeWidth={2} />
-					<span>Deny</span>
+					<span>{t("deny")}</span>
 				</Button>
 				<Button
 					variant="default"
@@ -107,7 +109,7 @@ export function ToolApprovalCard({
 					onClick={() => onResponse("allow")}
 				>
 					<Check className="size-3.5" strokeWidth={2} />
-					<span>Allow</span>
+					<span>{t("allow")}</span>
 				</Button>
 			</InteractionFooter>
 		</UserInputCard>

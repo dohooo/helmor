@@ -6,6 +6,7 @@ import {
 	type SlackSearchSort,
 	slackSearchMessages,
 } from "@/lib/api";
+import { translateSource } from "@/lib/i18n";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 import type { UseSlackInboxItemsResult } from "./use-slack-inbox-items";
@@ -68,8 +69,12 @@ export function useSlackSearch(
 		const message =
 			result.error instanceof Error
 				? result.error.message
-				: "Couldn't search Slack messages.";
-		pushToast(message, "Slack search failed", "destructive");
+				: translateSource("inboxCouldntSearchSlackMessages");
+		pushToast(
+			message,
+			translateSource("inboxSlackSearchFailed"),
+			"destructive",
+		);
 	}, [result.error, pushToast]);
 
 	const items = useMemo<SlackInboxItem[]>(

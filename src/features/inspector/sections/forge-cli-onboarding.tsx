@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/tooltip";
 import type { ForgeDetection } from "@/lib/api";
 import { FORGE_AUTH_TOOLTIP_LINES } from "@/lib/forge-auth-copy";
-import { I18nText } from "@/lib/i18n";
+import { I18nText, useI18n } from "@/lib/i18n";
 
 const DEFAULT_GITHUB_HOST = "github.com";
 const DEFAULT_GITLAB_HOST = "gitlab.com";
@@ -27,6 +27,7 @@ export function ForgeCliTrigger({
 	connecting?: boolean;
 	onConnectingChange?: (connecting: boolean) => void;
 }) {
+	const { t } = useI18n();
 	const [open, setOpen] = useState(false);
 
 	const host =
@@ -63,7 +64,7 @@ export function ForgeCliTrigger({
 								) : (
 									<GithubBrandIcon size={12} className="self-center" />
 								)}
-								{connecting ? "Connecting" : detection.labels.connectAction}
+								{connecting ? t("connecting") : detection.labels.connectAction}
 							</Button>
 						</TooltipTrigger>
 						<TooltipContent
@@ -97,13 +98,14 @@ function ForgeDetectionTooltipBody({
 }: {
 	detection: ForgeDetection;
 }) {
+	const { t } = useI18n();
 	const providerName = detection.labels.providerName;
-	const host = detection.host ?? "this host";
+	const host = detection.host ?? t("inspectorThisHost");
 	return (
 		<div className="space-y-1.5">
 			<div className="text-mini font-medium leading-snug">
-				<I18nText source={"Detected"} /> {providerName}{" "}
-				<I18nText source={"at"} /> {host}
+				<I18nText source="detected" /> {providerName} <I18nText source={"at"} />{" "}
+				{host}
 			</div>
 			<div className="space-y-0.5 text-micro leading-snug opacity-90">
 				{FORGE_AUTH_TOOLTIP_LINES.map((line) => (
@@ -113,7 +115,7 @@ function ForgeDetectionTooltipBody({
 			{detection.detectionSignals.length > 0 && (
 				<div className="space-y-0.5 border-t border-background/20 pt-1.5 text-micro leading-snug opacity-90">
 					<div className="font-medium">
-						<I18nText source={"Why we think so:"} />
+						<I18nText source="whyWeThinkSo" />
 					</div>
 					<ul className="list-disc space-y-0.5 pl-3.5">
 						{detection.detectionSignals.map((signal) => (

@@ -28,6 +28,7 @@ import {
 	PopoverTrigger,
 } from "@/components/ui/popover";
 import type { ForgeLabelOption, RepositoryCreateOption } from "@/lib/api";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { initialsFor } from "@/lib/initials";
 import { cn } from "@/lib/utils";
 
@@ -45,6 +46,7 @@ export function ScopeMultiSelect<T extends string>({
 	options: Option<T>[];
 	onChange: (value: T[]) => void;
 }) {
+	const { t, f } = useI18n();
 	const allValue = options.find((option) => option.value === "all")?.value;
 	const fallbackValue = allValue ?? options[0]?.value;
 	const normalizeValues = (values: T[]) => {
@@ -93,10 +95,10 @@ export function ScopeMultiSelect<T extends string>({
 								className="h-6 gap-1 rounded-md pr-1 text-mini"
 								onClick={(event) => event.stopPropagation()}
 							>
-								{option.label}
+								{t(option.label)}
 								<button
 									type="button"
-									aria-label={`Remove ${option.label}`}
+									aria-label={f("removeLabel", { label: t(option.label) })}
 									onClick={(event) => {
 										event.preventDefault();
 										event.stopPropagation();
@@ -117,20 +119,22 @@ export function ScopeMultiSelect<T extends string>({
 			</PopoverTrigger>
 			<PopoverContent align="end" className="w-[280px] p-1.5">
 				<Command>
-					<CommandInput placeholder="Search scopes" />
+					<CommandInput placeholder="searchScopes" />
 					<CommandList>
-						<CommandEmpty>No scopes found.</CommandEmpty>
+						<CommandEmpty>
+							<I18nText source="noScopesFound" />
+						</CommandEmpty>
 						<CommandGroup>
 							{options.map((option) => {
 								const checked = selectedValues.includes(option.value);
 								return (
 									<CommandItem
 										key={option.value}
-										value={option.label}
+										value={t(option.label)}
 										data-checked={checked}
 										onSelect={() => toggleValue(option.value)}
 									>
-										{option.label}
+										{t(option.label)}
 									</CommandItem>
 								);
 							})}
@@ -153,6 +157,7 @@ export function LabelMultiSelect({
 	loading: boolean;
 	onChange: (value: string[]) => void;
 }) {
+	const { t, f } = useI18n();
 	const optionMap = useMemo(
 		() => new Map(options.map((option) => [option.name, option])),
 		[options],
@@ -194,7 +199,7 @@ export function LabelMultiSelect({
 									{label}
 									<button
 										type="button"
-										aria-label={`Remove ${label}`}
+										aria-label={f("removeLabel", { label })}
 										onClick={(event) => {
 											event.preventDefault();
 											event.stopPropagation();
@@ -208,7 +213,7 @@ export function LabelMultiSelect({
 							))
 						) : (
 							<span className="px-1 text-small text-muted-foreground">
-								{loading ? "Loading labels" : "Select labels"}
+								{loading ? t("loadingLabels") : t("settingsSelectLabels")}
 							</span>
 						)}
 					</span>
@@ -220,10 +225,10 @@ export function LabelMultiSelect({
 			</PopoverTrigger>
 			<PopoverContent align="end" className="w-[280px] p-1.5">
 				<Command>
-					<CommandInput placeholder="Search labels" />
+					<CommandInput placeholder="searchLabels" />
 					<CommandList>
 						<CommandEmpty>
-							{loading ? "Loading labels..." : "No labels found."}
+							{loading ? t("loadingLabels") : t("noLabelsFound")}
 						</CommandEmpty>
 						<CommandGroup>
 							{mergedOptions.map((option) => {
@@ -267,6 +272,7 @@ export function SettingsSelect<T extends string>({
 	options: Option<T>[];
 	onChange: (value: T) => void;
 }) {
+	const { t } = useI18n();
 	const selected =
 		options.find((option) => option.value === value) ?? options[0];
 	return (
@@ -277,7 +283,7 @@ export function SettingsSelect<T extends string>({
 					variant="outline"
 					className="h-9 w-[180px] cursor-interactive justify-between gap-2 px-3 text-ui"
 				>
-					<span className="truncate">{selected.label}</span>
+					<span className="truncate">{t(selected.label)}</span>
 					<ChevronDown
 						className="size-4 shrink-0 text-muted-foreground"
 						strokeWidth={1.8}
@@ -294,7 +300,7 @@ export function SettingsSelect<T extends string>({
 						onSelect={() => onChange(option.value)}
 						className="cursor-interactive text-ui"
 					>
-						{option.label}
+						{t(option.label)}
 					</DropdownMenuItem>
 				))}
 			</DropdownMenuContent>
@@ -314,6 +320,7 @@ export function RepoPicker({
 	selected: RepositoryCreateOption | null;
 	onSelect: (repoFilter: string) => void;
 }) {
+	const { t } = useI18n();
 	const selectedEntry =
 		repositories.find((entry) => entry.repository.id === selected?.id) ?? null;
 	return (
@@ -332,7 +339,7 @@ export function RepoPicker({
 							<GithubBrandIcon size={16} />
 						)}
 						<span className="min-w-0 truncate font-medium">
-							{selected ? selected.name : "Select repo"}
+							{selected ? selected.name : t("settingsSelectRepo")}
 						</span>
 					</span>
 					<ChevronDown

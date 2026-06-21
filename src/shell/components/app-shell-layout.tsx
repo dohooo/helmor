@@ -93,7 +93,7 @@ export function AppShellLayout({
 				/>
 			) : null}
 			<main
-				aria-label={t("Application shell")}
+				aria-label={t("applicationShell")}
 				className="relative h-dvh overflow-hidden bg-background font-sans text-foreground antialiased"
 			>
 				<div className="relative flex h-full min-h-0 bg-background">

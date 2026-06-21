@@ -11,6 +11,7 @@ import {
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import { AppUpdateButton } from "@/features/updater/app-update-button";
 import type { AppUpdateStatus } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -26,6 +27,7 @@ export function WorkspaceHeaderLeading({
 	showOnDesktop,
 	onExpandSidebar,
 }: Props) {
+	const { t } = useI18n();
 	return (
 		<div
 			className={cn(
@@ -40,7 +42,7 @@ export function WorkspaceHeaderLeading({
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<Button
-							aria-label="Expand left sidebar"
+							aria-label="expandLeftSidebar"
 							onClick={onExpandSidebar}
 							variant="ghost"
 							size="icon-xs"
@@ -53,7 +55,7 @@ export function WorkspaceHeaderLeading({
 						side="bottom"
 						className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 					>
-						<span>Expand left sidebar</span>
+						<span>{t("expandLeftSidebar")}</span>
 						{leftSidebarToggleShortcut ? (
 							<InlineShortcutDisplay
 								hotkey={leftSidebarToggleShortcut}

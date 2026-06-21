@@ -6,7 +6,7 @@ import {
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { useI18n } from "@/lib/i18n";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { isMac } from "@/lib/platform";
 import type { AgentProxySettings } from "@/lib/settings";
 import { useSettings } from "@/lib/settings";
@@ -17,9 +17,9 @@ const AGENT_PROXY_MODES: Array<{
 	value: AgentProxySettings["mode"];
 	label: string;
 }> = [
-	{ value: "none", label: "Not set" },
-	{ value: "system", label: "System proxy" },
-	{ value: "custom", label: "Custom proxy" },
+	{ value: "none", label: "notSet" },
+	{ value: "system", label: "systemProxy" },
+	{ value: "custom", label: "customProxy" },
 ];
 
 export function AgentProxyPanel() {
@@ -42,8 +42,8 @@ export function AgentProxyPanel() {
 
 	return (
 		<SettingsRow
-			title="Proxy"
-			description="Routes all provider traffic — Claude Code, Codex, OpenCode, MiMo Code, and Cursor."
+			title="proxy"
+			description="routesAllProviderTrafficClaudeCode"
 			align="start"
 			className="gap-8"
 		>
@@ -64,7 +64,9 @@ export function AgentProxyPanel() {
 								onClick={() => updateProxy({ mode: option.value })}
 								className="justify-between gap-2"
 							>
-								<span>{option.label}</span>
+								<span>
+									<I18nText source={option.label} />
+								</span>
 								<CheckCircle2
 									className={cn(
 										"size-3.5 shrink-0 text-emerald-500",

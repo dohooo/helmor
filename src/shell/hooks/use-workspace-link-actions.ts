@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { toast } from "sonner";
+import { translateSource } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
 
@@ -24,7 +25,7 @@ export function useWorkspaceLinkActions({
 	const handleCopyWorkspacePath = useCallback(() => {
 		if (!workspaceRootPath) return;
 		void navigator.clipboard.writeText(workspaceRootPath).then(() => {
-			toast.success("Path copied", {
+			toast.success(translateSource("miscPathCopied"), {
 				description: workspaceRootPath,
 				duration: 2000,
 			});
@@ -36,7 +37,7 @@ export function useWorkspaceLinkActions({
 		void openUrl(pullRequestUrl).catch((error) => {
 			pushWorkspaceToast(
 				error instanceof Error ? error.message : String(error),
-				"Unable to open pull request",
+				translateSource("miscUnableToOpenPullRequest"),
 				"destructive",
 			);
 		});

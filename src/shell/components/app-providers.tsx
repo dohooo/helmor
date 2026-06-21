@@ -90,9 +90,7 @@ export function AppProviders({
 						// The onboarding flow belongs to the main window; the panel
 						// summoned mid-onboarding just points the user there.
 						<div className="flex h-dvh items-center justify-center bg-background p-6 text-center text-ui text-muted-foreground">
-							<I18nText
-								source={"Finish setting up Helmor in the main window first."}
-							/>
+							<I18nText source="finishSettingUpHelmorMainWindow" />
 						</div>
 					) : (
 						<>

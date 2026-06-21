@@ -128,9 +128,9 @@ export function ModelMultiSelect({
 						{enabled.length === 0 ? (
 							<span className="px-1 text-small text-muted-foreground">
 								{loading ? (
-									<I18nText source={"Loading…"} />
+									<I18nText source="loading2" />
 								) : (
-									<I18nText source={"No models picked"} />
+									<I18nText source="noModelsPicked" />
 								)}
 							</span>
 						) : (
@@ -145,7 +145,7 @@ export function ModelMultiSelect({
 										<span className="truncate">{model.label}</span>
 										<button
 											type="button"
-											aria-label={f("Remove {label}", { label: model.label })}
+											aria-label={f("removeLabel", { label: model.label })}
 											onClick={(event) => {
 												event.preventDefault();
 												event.stopPropagation();
@@ -159,7 +159,7 @@ export function ModelMultiSelect({
 								))}
 								{overflow > 0 ? (
 									<span className="px-1 text-mini text-muted-foreground">
-										{f("+{count} more", { count: overflow })}
+										{f("countMore", { count: overflow })}
 									</span>
 								) : null}
 							</>
@@ -173,14 +173,14 @@ export function ModelMultiSelect({
 			</PopoverTrigger>
 			<PopoverContent align="end" className="w-[440px] max-w-[90vw] p-1.5">
 				<Command filter={scoreModel}>
-					<CommandInput placeholder="Search models" />
+					<CommandInput placeholder="searchModels" />
 					{enabledIds.length > 0 ? (
 						<div className="flex items-center justify-between gap-2 px-2 pt-0.5 pb-1">
 							<span className="text-mini text-muted-foreground">
-								{f("{count} selected", { count: enabledIds.length })}
+								{f("countSelected", { count: enabledIds.length })}
 							</span>
 							<Button type="button" variant="ghost" size="xs" onClick={onClear}>
-								Unselect all
+								<I18nText source="unselectAll" />
 							</Button>
 						</div>
 					) : null}
@@ -188,12 +188,12 @@ export function ModelMultiSelect({
 						<CommandEmpty>
 							{available.length === 0 ? (
 								loading ? (
-									<I18nText source={"Loading models…"} />
+									<I18nText source="loadingModels" />
 								) : (
-									<I18nText source={"No cached models yet — click Refresh."} />
+									<I18nText source="noCachedModelsYetClickRefresh" />
 								)
 							) : (
-								<I18nText source={"No models found."} />
+								<I18nText source="noModelsFound" />
 							)}
 						</CommandEmpty>
 						{groups ? (

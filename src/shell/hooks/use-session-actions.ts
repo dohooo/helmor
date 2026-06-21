@@ -19,6 +19,7 @@ import {
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
+import { translateSource } from "@/lib/i18n";
 import { listen } from "@/lib/ipc";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
@@ -195,7 +196,7 @@ export function useSessionActions({
 			} catch (error) {
 				pushWorkspaceToast(
 					error instanceof Error ? error.message : String(error),
-					"Unable to create session",
+					translateSource("miscUnableToCreateSession"),
 				);
 				return null;
 			}

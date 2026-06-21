@@ -13,7 +13,7 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { useI18n } from "@/lib/i18n";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { normalizeShortcutEvent } from "./format";
 import {
@@ -31,15 +31,15 @@ import { InlineShortcutDisplay } from "./shortcut-display";
 import type { ShortcutDefinition, ShortcutGroup, ShortcutId } from "./types";
 
 const GROUPS: ShortcutGroup[] = [
-	"Navigation",
-	"Session",
-	"Workspace",
-	"Actions",
-	"System",
-	"Composer",
-	"Start surface",
-	"Editor",
-	"Terminal",
+	"navigation",
+	"session",
+	"workspace",
+	"actions",
+	"system",
+	"miscComposer",
+	"miscStartSurface",
+	"miscEditor",
+	"terminal",
 ];
 const PINNED_SHORTCUT_IDS: ShortcutId[] = [
 	"global.hotkey",
@@ -146,7 +146,7 @@ export function ShortcutsSettingsPanel({
 					<Input
 						value={query}
 						onChange={(event) => setQuery(event.target.value)}
-						placeholder="Search shortcuts"
+						placeholder="searchShortcuts"
 						className="h-9 rounded-lg border-border/50 bg-muted/20 pl-8 text-ui"
 					/>
 				</div>
@@ -154,7 +154,7 @@ export function ShortcutsSettingsPanel({
 
 			<section className="pb-1">
 				<div className="pb-1 text-small font-medium tracking-normal text-muted-foreground">
-					{t("Global")}
+					{t("global")}
 				</div>
 				{pinnedDefinitions.map((definition, index) =>
 					renderShortcutRow(definition, index === pinnedDefinitions.length - 1),
@@ -327,7 +327,7 @@ function ShortcutRow({
 									<TooltipTrigger asChild>
 										<button
 											type="button"
-											aria-label={t("Shortcut conflict")}
+											aria-label={t("shortcutConflict")}
 											className="cursor-default text-destructive"
 										>
 											<CircleAlert className="size-4" strokeWidth={2.2} />
@@ -337,7 +337,7 @@ function ShortcutRow({
 										side="top"
 										className="max-w-xs whitespace-normal text-mini leading-snug"
 									>
-										{t("Already used by")}{" "}
+										{t("alreadyUsedBy")}{" "}
 										{conflicts
 											.map((conflict) => `"${t(conflict.title)}"`)
 											.join(", ")}
@@ -349,7 +349,7 @@ function ShortcutRow({
 									<TooltipTrigger asChild>
 										<button
 											type="button"
-											aria-label={t("Reset to default")}
+											aria-label={t("resetDefault")}
 											className="inline-flex size-[18px] cursor-interactive items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-border"
 											onClick={handleReset}
 										>
@@ -357,7 +357,7 @@ function ShortcutRow({
 										</button>
 									</TooltipTrigger>
 									<TooltipContent side="top" className="text-mini leading-snug">
-										Reset to default
+										<I18nText source="resetDefault" />
 									</TooltipContent>
 								</Tooltip>
 							) : null}
@@ -395,10 +395,10 @@ function ShortcutRow({
 							onChange(updateShortcutOverride(overrides, definition.id, null))
 						}
 					>
-						Remove Shortcut
+						<I18nText source="removeShortcut" />
 					</ContextMenuItem>
 					<ContextMenuItem className="px-2" onSelect={handleReset}>
-						Reset Shortcut to Default
+						<I18nText source="resetShortcutDefault" />
 					</ContextMenuItem>
 				</ContextMenuContent>
 			</ContextMenu>

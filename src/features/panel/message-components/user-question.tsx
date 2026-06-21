@@ -7,17 +7,18 @@ import {
 	X,
 } from "lucide-react";
 import type { UserQuestionItem, UserQuestionPart } from "@/lib/api";
-import { I18nText } from "@/lib/i18n";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
+// `label` values are i18n catalog KEYS, resolved at render via t().
 const STATUS_META: Record<
 	UserQuestionPart["status"],
 	{ label: string; tone: string }
 > = {
-	pending: { label: "Awaiting answer", tone: "bg-muted text-muted-foreground" },
-	answered: { label: "Answered", tone: "bg-chart-2/10 text-chart-2" },
-	declined: { label: "Declined", tone: "bg-destructive/10 text-destructive" },
-	cancelled: { label: "Cancelled", tone: "bg-muted text-muted-foreground" },
+	pending: { label: "awaitingAnswer", tone: "bg-muted text-muted-foreground" },
+	answered: { label: "answered", tone: "bg-chart-2/10 text-chart-2" },
+	declined: { label: "declined", tone: "bg-destructive/10 text-destructive" },
+	cancelled: { label: "cancelled", tone: "bg-muted text-muted-foreground" },
 };
 
 type QuestionAnswer = {
@@ -130,6 +131,7 @@ function QuestionBlock({
  * OpenCode question, with the chosen answers highlighted (#796).
  */
 export function UserQuestionCard({ part }: { part: UserQuestionPart }) {
+	const { t } = useI18n();
 	const status = STATUS_META[part.status] ?? STATUS_META.answered;
 
 	return (
@@ -137,7 +139,7 @@ export function UserQuestionCard({ part }: { part: UserQuestionPart }) {
 			<div className="flex items-center gap-1.5 text-mini font-medium uppercase tracking-[0.06em] text-muted-foreground">
 				<MessageSquareMore className="size-3.5" strokeWidth={1.8} />
 				<span>
-					<I18nText source={"Question"} />
+					<I18nText source="question" />
 				</span>
 				{part.source ? (
 					<span className="rounded-full bg-muted px-1.5 py-px font-medium normal-case tracking-normal text-muted-foreground">
@@ -155,7 +157,7 @@ export function UserQuestionCard({ part }: { part: UserQuestionPart }) {
 					) : part.status === "declined" ? (
 						<X className="size-3" strokeWidth={2.2} />
 					) : null}
-					{status.label}
+					{t(status.label)}
 				</span>
 			</div>
 			{part.questions.map((question) => (

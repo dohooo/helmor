@@ -24,7 +24,7 @@ export function UsageHeader({
 	return (
 		<div className="flex items-center justify-between">
 			<div className="text-body font-semibold text-foreground">
-				<I18nText source={"Context"} />
+				<I18nText source="context" />
 			</div>
 			<div className="text-small tabular-nums text-muted-foreground">
 				{hasUsed && hasMax ? (
@@ -83,7 +83,7 @@ export function SpentRow({ cost }: { cost: number }) {
 	return (
 		<div className="flex items-center justify-between text-small">
 			<span className="text-muted-foreground">
-				<I18nText source={"Spent"} />
+				<I18nText source="spent" />
 			</span>
 			<span className="tabular-nums text-foreground">{formatUsd(cost)}</span>
 		</div>
@@ -114,7 +114,7 @@ export function LimitRow({ window }: { window: RateLimitWindowDisplay }) {
 				<span className="text-foreground">{window.label ?? "Limit"}</span>
 				<span className="font-medium tabular-nums text-foreground">
 					{Math.round(window.leftPercent)}
-					<I18nText source={"% left"} />
+					<I18nText source="left" />
 				</span>
 			</div>
 			<div className="h-1 w-full overflow-hidden rounded-full bg-muted">
@@ -126,9 +126,9 @@ export function LimitRow({ window }: { window: RateLimitWindowDisplay }) {
 			{window.resetsAt !== null ? (
 				<div className="text-mini text-muted-foreground">
 					{window.expired ? (
-						<I18nText source={"Pending refresh —"} />
+						<I18nText source="pendingRefresh" />
 					) : (
-						<I18nText source={"Resets"} />
+						<I18nText source="resets" />
 					)}{" "}
 					{formatResetsAt(window.resetsAt)}
 				</div>
@@ -175,7 +175,7 @@ function formatCategoryValue(tokens: number, maxTokens: number): string {
 export function AutoCompactNote() {
 	return (
 		<div className="text-mini text-muted-foreground">
-			<I18nText source={"Auto-compacts older turns when the window fills."} />
+			<I18nText source="autoCompactsOlderTurnsWhenWindow" />
 		</div>
 	);
 }

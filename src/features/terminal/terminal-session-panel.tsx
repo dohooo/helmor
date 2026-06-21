@@ -13,8 +13,8 @@ import {
 	detach,
 	ensureTerminal,
 	resize,
-	TRUNCATION_NOTICE,
 	takePendingBoot,
+	truncationNotice,
 	writeStdin,
 } from "./terminal-session-store";
 
@@ -53,7 +53,7 @@ export function TerminalSessionPanel({
 	workspaceReady = true,
 }: TerminalSessionPanelProps) {
 	const queryClient = useQueryClient();
-	const { f } = useI18n();
+	const { t, f } = useI18n();
 	const termRef = useRef<TerminalHandle | null>(null);
 	// Spawn-to-first-byte takes a moment (worktree finalize + CLI cold start
 	// + the boot-echo gate); show an overlay instead of a blank screen.
@@ -109,7 +109,7 @@ export function TerminalSessionPanel({
 				setBooting(false);
 				const snapshot = existing.chunks.slice();
 				t.clear();
-				if (existing.truncated) t.write(TRUNCATION_NOTICE);
+				if (existing.truncated) t.write(truncationNotice());
 				for (const chunk of snapshot) t.write(chunk);
 			}
 		};
@@ -176,7 +176,7 @@ export function TerminalSessionPanel({
 		[sessionId],
 	);
 
-	const agentLabel = (agentKind && AGENT_LABELS[agentKind]) || "terminal";
+	const agentLabel = (agentKind && AGENT_LABELS[agentKind]) || t("terminal");
 
 	return (
 		<div className="relative flex min-h-0 flex-1 flex-col">
@@ -194,9 +194,9 @@ export function TerminalSessionPanel({
 						<Loader2 className="size-4 animate-spin" strokeWidth={1.8} />
 						<span>
 							{workspaceReady ? (
-								f("Starting {agentLabel}…", { agentLabel })
+								f("startingAgentlabel", { agentLabel })
 							) : (
-								<I18nText source={"Preparing workspace…"} />
+								<I18nText source="preparingWorkspace" />
 							)}
 						</span>
 					</div>

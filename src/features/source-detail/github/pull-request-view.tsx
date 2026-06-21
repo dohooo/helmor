@@ -22,7 +22,7 @@ export function GitHubPullRequestView({
 			description={detail?.body ?? undefined}
 			error={detailQuery.error}
 			isLoading={detailQuery.isLoading}
-			kindLabel="pull request"
+			kindLabel="miscPullRequest"
 			refresh={detailRef ? toRefreshControl(detailQuery) : undefined}
 		/>
 	);

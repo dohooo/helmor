@@ -24,7 +24,7 @@ export function GitHubDiscussionView({
 			description={detail?.body ?? undefined}
 			error={detailQuery.error}
 			isLoading={detailQuery.isLoading}
-			kindLabel="discussion"
+			kindLabel="miscDiscussion"
 			refresh={detailRef ? toRefreshControl(detailQuery) : undefined}
 		/>
 	);

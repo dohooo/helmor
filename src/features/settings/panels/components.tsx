@@ -43,7 +43,7 @@ export function ComponentsPanel() {
 			// Reading the snapshot is a pure DB read; a failure here means
 			// something is genuinely wrong with the install. Surface it
 			// instead of swallowing.
-			toast.error(t("Unable to read Helmor components status"), {
+			toast.error(t("unableReadHelmorComponentsStatus"), {
 				description: error instanceof Error ? error.message : String(error),
 			});
 		}
@@ -59,10 +59,10 @@ export function ComponentsPanel() {
 			const next = await recheckHelmorComponents();
 			setSnapshot(next);
 			if (!next.cliError && !next.skillsError) {
-				toast.success(t("Helmor components are up to date"));
+				toast.success(t("helmorComponentsUpDate"));
 			}
 		} catch (error) {
-			toast.error(t("Re-check failed"), {
+			toast.error(t("reCheckFailed"), {
 				description: error instanceof Error ? error.message : String(error),
 			});
 		} finally {
@@ -76,7 +76,7 @@ export function ComponentsPanel() {
 			await installCli();
 			await refresh();
 		} catch (error) {
-			toast.error(t("CLI install failed"), {
+			toast.error(t("cliInstallFailed"), {
 				description: error instanceof Error ? error.message : String(error),
 			});
 			// Refresh anyway so any partial state is reflected.
@@ -92,7 +92,7 @@ export function ComponentsPanel() {
 			await installHelmorSkills();
 			await refresh();
 		} catch (error) {
-			toast.error(t("Skills install failed"), {
+			toast.error(t("skillsInstallFailed"), {
 				description: error instanceof Error ? error.message : String(error),
 			});
 			await refresh();
@@ -107,30 +107,31 @@ export function ComponentsPanel() {
 	const skillsBusy = rechecking || retryingSkills;
 
 	const summary = (() => {
-		if (!snapshot) return t("Loading components status…");
+		if (!snapshot) return t("loadingComponentsStatus");
 		if (cliOk && skillsOk) {
 			const checked = snapshot.lastCheckedVersion;
 			if (checked === snapshot.currentVersion) {
-				return t(
-					"Helmor CLI and skills are up to date with {version}.",
-				).replace("{version}", snapshot.currentVersion);
+				return t("helmorCliSkillsUpDateVersion").replace(
+					"{version}",
+					snapshot.currentVersion,
+				);
 			}
-			return t("Helmor CLI and skills look healthy.");
+			return t("helmorCliSkillsLookHealthy");
 		}
-		return t("One or more components need attention.");
+		return t("oneMoreComponentsNeedAttention");
 	})();
 
 	return (
 		<SettingsRow
 			align="start"
-			title="Helmor Components"
+			title="helmorComponents"
 			description={
 				<>
 					<div>{summary}</div>
 					{snapshot ? (
 						<div className="mt-3 grid gap-2">
 							<ComponentLine
-								label="Helmor CLI"
+								label="helmorCli"
 								ok={cliOk}
 								busy={cliBusy}
 								onRetry={handleRetryCli}
@@ -138,7 +139,7 @@ export function ComponentsPanel() {
 								state={describeCliState(snapshot, t)}
 							/>
 							<ComponentLine
-								label="Helmor Skills"
+								label="helmorSkills"
 								ok={skillsOk}
 								busy={skillsBusy}
 								onRetry={handleRetrySkills}
@@ -161,7 +162,7 @@ export function ComponentsPanel() {
 				) : (
 					<RefreshCw className="size-3.5" />
 				)}
-				{rechecking ? t("Checking") : t("Re-check now")}
+				{rechecking ? t("checking") : t("reCheckNow")}
 			</Button>
 		</SettingsRow>
 	);
@@ -209,7 +210,7 @@ function ComponentLine({
 					onClick={onRetry}
 					className="h-7 shrink-0 px-2 text-mini"
 				>
-					{t("Retry")}
+					{t("retry")}
 				</Button>
 			) : null}
 		</div>
@@ -223,14 +224,14 @@ function describeCliState(
 	switch (snapshot.cli.installState) {
 		case "managed":
 			return snapshot.cli.installPath
-				? t("Installed at {path}.").replace("{path}", snapshot.cli.installPath)
-				: t("Installed.");
+				? t("installedPath").replace("{path}", snapshot.cli.installPath)
+				: t("installed");
 		case "stale":
-			return t("An older copy exists at the install path.");
+			return t("olderCopyExistsInstallPath");
 		case "missing":
-			return t("Not installed on this machine.");
+			return t("notInstalledMachine");
 		default:
-			return t("Status unavailable.");
+			return t("statusUnavailable");
 	}
 }
 
@@ -243,11 +244,11 @@ function describeSkillsState(
 		if (snapshot.skills.claude) parts.push("Claude Code");
 		if (snapshot.skills.codex) parts.push("Codex");
 		return parts.length > 0
-			? t("Installed for {providers}.").replace(
+			? t("installedProviders").replace(
 					"{providers}",
 					parts.join(` ${t("and")} `),
 				)
-			: t("Installed.");
+			: t("installed");
 	}
-	return t("Sign in to Claude Code or Codex, then re-check.");
+	return t("signClaudeCodeCodexThenRe");
 }

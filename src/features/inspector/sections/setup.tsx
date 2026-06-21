@@ -207,14 +207,10 @@ export function SetupTab({
 			) : !hasScript ? (
 				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
 					<p className="text-ui font-medium text-muted-foreground">
-						<I18nText source={"No setup script configured"} />
+						<I18nText source="noSetupScriptConfigured" />
 					</p>
 					<p className="text-small text-muted-foreground/70">
-						<I18nText
-							source={
-								"Add a setup script in repository settings to run it here."
-							}
-						/>
+						<I18nText source="addSetupScriptRepositorySettingsRun" />
 					</p>
 					<Button
 						variant="outline"
@@ -223,18 +219,18 @@ export function SetupTab({
 						onClick={onOpenSettings}
 					>
 						<Settings2 className="size-3.5" strokeWidth={1.8} />
-						Open settings
+						<I18nText source="openSettings" />
 					</Button>
 				</div>
 			) : setupCompletedAt ? (
 				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
 					<CircleCheck
-						aria-label={t("Setup completed")}
+						aria-label={t("setupCompleted")}
 						className="size-8 text-[var(--workspace-pr-open-accent)]"
 						strokeWidth={1.75}
 					/>
 					<p className="text-ui font-medium text-muted-foreground">
-						<I18nText source={"Setup completed"} />
+						<I18nText source="setupCompleted" />
 					</p>
 					<Button
 						variant="outline"
@@ -243,20 +239,16 @@ export function SetupTab({
 						onClick={handleRun}
 					>
 						<RotateCcw className="size-3" strokeWidth={2} />
-						Rerun setup
+						<I18nText source="rerunSetup" />
 					</Button>
 				</div>
 			) : (
 				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
 					<p className="text-ui text-muted-foreground">
-						<I18nText source={"No setup script output"} />
+						<I18nText source="noSetupScriptOutput" />
 					</p>
 					<p className="text-small text-muted-foreground/70">
-						<I18nText
-							source={
-								"Setup script output will appear here after running setup."
-							}
-						/>
+						<I18nText source="setupScriptOutputWillAppearHere" />
 					</p>
 					<Button
 						variant="outline"
@@ -265,7 +257,7 @@ export function SetupTab({
 						onClick={handleRun}
 					>
 						<Play className="size-3" strokeWidth={2} />
-						Run setup
+						<I18nText source="runSetup" />
 					</Button>
 				</div>
 			)}

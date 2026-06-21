@@ -22,6 +22,7 @@ import {
 	createFilePreviewLoader,
 	InlineBadge,
 } from "@/components/inline-badge";
+import { useI18n } from "@/lib/i18n";
 import { basename } from "@/lib/path-util";
 
 type SerializedFileBadgeNode = Spread<
@@ -37,6 +38,7 @@ function ComposerFileBadge({
 	nodeKey: NodeKey;
 }) {
 	const [editor] = useLexicalComposerContext();
+	const { t } = useI18n();
 	const fileName = basename(filePath);
 	const previewLoader = useMemo(
 		() => createFilePreviewLoader(filePath),
@@ -52,7 +54,7 @@ function ComposerFileBadge({
 				/>
 			}
 			label={fileName}
-			removeLabel="Remove file"
+			removeLabel={t("composerRemoveFile")}
 			previewLoader={previewLoader}
 			onRemove={() => {
 				editor.update(() => {

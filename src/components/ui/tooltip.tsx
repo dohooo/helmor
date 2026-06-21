@@ -3,7 +3,6 @@
 import { Tooltip as TooltipPrimitive } from "radix-ui";
 import type * as React from "react";
 
-import { useLocalizedNode } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 function TooltipProvider({
@@ -37,7 +36,6 @@ function TooltipContent({
 	children,
 	...props
 }: React.ComponentProps<typeof TooltipPrimitive.Content>) {
-	const localizedChildren = useLocalizedNode(children);
 	return (
 		<TooltipPrimitive.Portal>
 			<TooltipPrimitive.Content
@@ -49,7 +47,7 @@ function TooltipContent({
 				)}
 				{...props}
 			>
-				{localizedChildren}
+				{children}
 			</TooltipPrimitive.Content>
 		</TooltipPrimitive.Portal>
 	);

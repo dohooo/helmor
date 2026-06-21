@@ -63,7 +63,7 @@ export function OnboardingTerminalPreview({
 						<button
 							type="button"
 							onClick={onClose}
-							aria-label={t("Close login terminal")}
+							aria-label={t("closeLoginTerminal")}
 							className="group/close grid size-2.5 cursor-interactive place-items-center rounded-full bg-muted-foreground/35 leading-none transition-colors hover:bg-status-danger"
 						>
 							<X

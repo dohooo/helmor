@@ -44,7 +44,7 @@ export function EdgeSwipeLayer({
 		return createPortal(
 			<button
 				type="button"
-				aria-label={`${t("Close")} ${t(label)}`}
+				aria-label={`${t("close")} ${t(label)}`}
 				onClick={onClose}
 				className="fixed inset-0 z-40 hidden cursor-pointer bg-black/40 max-[960px]:block motion-safe:animate-in motion-safe:fade-in"
 				style={{ touchAction: "none" }}

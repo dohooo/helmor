@@ -6,6 +6,7 @@ import {
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
+import { translateSource } from "@/lib/i18n";
 import { providerCapabilitiesQueryOptions } from "@/lib/query-client";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
 import { shouldConfirmRunningSessionClose } from "./close-guard";
@@ -95,7 +96,7 @@ export function useConfirmSessionClose({
 		} catch (error) {
 			pushToast(
 				error instanceof Error ? error.message : String(error),
-				"Unable to stop chat",
+				translateSource("panelUnableStopChat"),
 				"destructive",
 			);
 			setLoading(false);

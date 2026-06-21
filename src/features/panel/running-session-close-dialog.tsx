@@ -21,12 +21,9 @@ export function RunningSessionCloseDialog({
 		<ConfirmDialog
 			open={open}
 			onOpenChange={onOpenChange}
-			title="Close running chat?"
-			description={f(
-				"This chat is currently running. Closing it will cancel {agentLabel}.",
-				{ agentLabel },
-			)}
-			confirmLabel="Close anyway"
+			title="closeRunningChat"
+			description={f("chatCurrentlyRunningClosingWillCancel", { agentLabel })}
+			confirmLabel="closeAnyway"
 			onConfirm={onConfirm}
 			loading={loading}
 		/>

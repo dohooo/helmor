@@ -11,6 +11,7 @@ import {
 	type ExistingHelmorRepo,
 	findExistingHelmorRepo,
 } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
 import { useForgeAccountsAll } from "@/lib/use-forge-accounts";
 import { describeUnknownError } from "@/lib/workspace-helpers";
@@ -37,6 +38,7 @@ export function FeedbackDialog({
 	onOpenSettings,
 	onSubmitPrompt,
 }: FeedbackDialogProps) {
+	const { t, f } = useI18n();
 	const [state, dispatch] = useFeedbackState();
 	// Existing-repo hint: local-only (SQLite + package.json), so a fresh
 	// re-fetch on every open is fine. GitHub connection state comes from
@@ -84,18 +86,18 @@ export function FeedbackDialog({
 			const result = await createHelmorIssue(title, body);
 			dispatch({ type: "reset" });
 			setConfirming(false);
-			toast.success(`Issue #${result.number} created`, {
+			toast.success(f("feedbackIssueCreated", { number: result.number }), {
 				description: result.url,
 				action: {
-					label: "View",
+					label: t("view"),
 					onClick: () => {
 						void openUrl(result.url);
 					},
 				},
 			});
 		} catch (error) {
-			toast.error("Failed to create issue", {
-				description: describeUnknownError(error, "Please try again."),
+			toast.error(t("feedbackFailedCreateIssue"), {
+				description: describeUnknownError(error, t("feedbackPleaseTryAgain")),
 			});
 		} finally {
 			setSending(false);
@@ -136,8 +138,8 @@ export function FeedbackDialog({
 				<DialogHeader>
 					<DialogTitle className="text-ui font-medium tracking-[-0.01em]">
 						{state.step.kind === "input"
-							? "Send feedback"
-							: "Contribute to Helmor"}
+							? t("sendFeedback")
+							: t("feedbackContributeHelmor")}
 					</DialogTitle>
 				</DialogHeader>
 

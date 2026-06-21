@@ -15,7 +15,7 @@ import { SourceIcon } from "@/features/inbox/source-icon";
 import { STATE_TONE_CLASS } from "@/features/inbox/state-tone";
 import { getInboxItemDetail } from "@/lib/api";
 import type { ComposerInsertTarget } from "@/lib/composer-insert";
-import { I18nText, useI18n } from "@/lib/i18n";
+import { formatSource, I18nText, useI18n } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
 import { helmorQueryKeys } from "@/lib/query-client";
 import type {
@@ -96,8 +96,9 @@ export function GitHubDetailPage({
 	kindLabel: string;
 	refresh?: DetailRefreshControl;
 }) {
+	const { t } = useI18n();
 	const reference = parseExternalReference(card.externalId);
-	const markdownBody = description?.trim() || "No description provided.";
+	const markdownBody = description?.trim() || t("miscNoDescriptionProvided");
 
 	return (
 		<article className="mx-auto flex h-full w-full max-w-5xl flex-col overflow-y-auto px-4 [contain:content] [scrollbar-gutter:stable]">
@@ -110,11 +111,11 @@ export function GitHubDetailPage({
 						</span>
 						<span className="inline-flex items-center gap-1 font-normal text-muted-foreground/70">
 							<SourceIcon source={card.source} size={13} className="shrink-0" />
-							{kindLabel}
+							{t(kindLabel)}
 						</span>
 						<span className="inline-flex items-center gap-1 font-normal text-muted-foreground/70">
 							<Clock3 className="size-[13px]" strokeWidth={1.8} />
-							<I18nText source={"Updated"} />{" "}
+							<I18nText source="updated" />{" "}
 							{formatRelativeTime(card.lastActivityAt)}
 						</span>
 					</div>
@@ -178,30 +179,34 @@ function SourceDetailActions({
 						type="button"
 						variant="ghost"
 						size="icon-xs"
-						aria-label="Open externally"
+						aria-label="openExternally"
 						onClick={() => void openUrl(card.externalUrl)}
 						className="size-7 cursor-interactive rounded-md text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
 					>
 						<ExternalLink className="size-[13px]" strokeWidth={1.8} />
 					</Button>
 				</TooltipTrigger>
-				<TooltipContent side="top">Open externally</TooltipContent>
+				<TooltipContent side="top">
+					<I18nText source="openExternally" />
+				</TooltipContent>
 			</Tooltip>
 			<Tooltip>
 				<TooltipTrigger asChild>
-					<span className="inline-flex" aria-label={t("Add to context")}>
+					<span className="inline-flex" aria-label={t("addContext2")}>
 						<AppendContextButton
 							subjectLabel={card.title}
-							ariaLabel="Add to context"
+							ariaLabel="addContext2"
 							getPayload={() =>
 								buildCardContextPayload(card, appendContextTarget)
 							}
-							errorTitle="Couldn't insert context card"
+							errorTitle={t("miscCouldnTInsertContextCard")}
 							className="size-7 cursor-interactive rounded-md text-muted-foreground hover:bg-foreground/10 hover:text-foreground [&_svg]:size-[13px]"
 						/>
 					</span>
 				</TooltipTrigger>
-				<TooltipContent side="top">Add to context</TooltipContent>
+				<TooltipContent side="top">
+					<I18nText source="addContext2" />
+				</TooltipContent>
 			</Tooltip>
 			<Tooltip>
 				<TooltipTrigger asChild>
@@ -209,7 +214,7 @@ function SourceDetailActions({
 						type="button"
 						variant="ghost"
 						size="icon-xs"
-						aria-label="Copy markdown"
+						aria-label="copyMarkdown"
 						disabled={copyDisabled}
 						onClick={handleCopy}
 						className="size-7 cursor-interactive rounded-md text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
@@ -222,7 +227,7 @@ function SourceDetailActions({
 					</Button>
 				</TooltipTrigger>
 				<TooltipContent side="top">
-					{copied ? "Copied" : "Copy markdown"}
+					{copied ? t("copied") : t("copyMarkdown")}
 				</TooltipContent>
 			</Tooltip>
 		</div>
@@ -236,6 +241,7 @@ function SourceDetailActions({
  *  views — both wire a React Query `refetch` + `isFetching` pair into
  *  the `refresh` prop. */
 export function RefreshButton({ refresh }: { refresh: DetailRefreshControl }) {
+	const { t } = useI18n();
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>
@@ -243,7 +249,7 @@ export function RefreshButton({ refresh }: { refresh: DetailRefreshControl }) {
 					type="button"
 					variant="ghost"
 					size="icon-xs"
-					aria-label="Refresh"
+					aria-label="refresh"
 					disabled={refresh.isFetching}
 					onClick={() => refresh.refetch()}
 					className="size-7 cursor-interactive rounded-md text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
@@ -255,7 +261,7 @@ export function RefreshButton({ refresh }: { refresh: DetailRefreshControl }) {
 				</Button>
 			</TooltipTrigger>
 			<TooltipContent side="top">
-				{refresh.isFetching ? "Refreshing…" : "Refresh"}
+				{refresh.isFetching ? t("refreshing") : t("refresh")}
 			</TooltipContent>
 		</Tooltip>
 	);
@@ -328,11 +334,11 @@ export function parseExternalReference(externalId: string) {
 export function formatRelativeTime(timestamp: number) {
 	const deltaMs = Date.now() - timestamp;
 	const minutes = Math.max(1, Math.round(deltaMs / 60_000));
-	if (minutes < 60) return `${minutes}m ago`;
+	if (minutes < 60) return formatSource("countMAgo", { count: minutes });
 
 	const hours = Math.round(minutes / 60);
-	if (hours < 24) return `${hours}h ago`;
+	if (hours < 24) return formatSource("countHAgo", { count: hours });
 
 	const days = Math.round(hours / 24);
-	return `${days}d ago`;
+	return formatSource("countDAgo", { count: days });
 }

@@ -17,8 +17,7 @@ import { I18nText, useI18n } from "@/lib/i18n";
 import { SetupItem } from "../components/setup-item";
 import type { OnboardingStep } from "../types";
 
-const SETUP_FAILED_MESSAGE =
-	"Something went wrong — don't worry, Helmor will work fine without it.";
+const SETUP_FAILED_MESSAGE = "miscSetupFailedWorkFineWithoutIt";
 
 /**
  * The CLI binary name to show in the "Power up Helmor" mockup
@@ -127,7 +126,7 @@ export function SkillsStep({
 
 	return (
 		<section
-			aria-label={t("MCP and skills setup")}
+			aria-label={t("mcpSkillsSetup")}
 			aria-hidden={step !== "skills"}
 			className={`absolute left-[calc(30vw-260px)] top-20 z-30 w-[520px] transition-all duration-1000 ease-[cubic-bezier(.22,.82,.2,1)] ${
 				step === "skills"
@@ -212,23 +211,19 @@ Options:
 
 				<div className="w-full text-center">
 					<h2 className="text-3xl font-semibold tracking-normal text-foreground">
-						<I18nText source={"Power up Helmor"} />
+						<I18nText source="powerUpHelmor" />
 					</h2>
 					<p className="mx-auto mt-3 max-w-md text-body leading-6 text-muted-foreground">
-						<I18nText
-							source={
-								"Helmor is installing the CLI and skills in the background so it can split work, run agents, call tools, and carry context across your workspaces."
-							}
-						/>
+						<I18nText source="helmorInstallingCliSkillsBackgroundSo" />
 					</p>
 				</div>
 
 				<div className="mt-7 grid w-full gap-3">
 					<SetupItem
 						icon={<Terminal className="size-5" />}
-						label="Helmor CLI"
-						description="Control Helmor from your terminal: create workspaces, send prompts, inspect files, and script repeatable flows."
-						actionLabel={isInstallingCli ? "Installing" : "Retry"}
+						label="helmorCli"
+						description="controlHelmorFromTerminalCreateWorkspaces"
+						actionLabel={isInstallingCli ? "installing" : "retry"}
 						onAction={runInstallCli}
 						busy={isInstallingCli}
 						ready={cliInstalled}
@@ -236,9 +231,9 @@ Options:
 					/>
 					<SetupItem
 						icon={<PackageCheck className="size-5" />}
-						label="Helmor Skills (Beta)"
-						description="Install skills so Helmor can help with more workflows across every workspace."
-						actionLabel={isInstallingSkills ? "Installing" : "Retry"}
+						label="helmorSkillsBeta"
+						description="installSkillsSoHelmorCanHelp"
+						actionLabel={isInstallingSkills ? "installing" : "retry"}
 						onAction={runInstallSkills}
 						busy={isInstallingSkills}
 						ready={skillsInstalled}
@@ -255,7 +250,7 @@ Options:
 						className="h-11 gap-2 px-4 text-title"
 					>
 						<ArrowLeft data-icon="inline-start" className="size-4" />
-						Back
+						<I18nText source="back" />
 					</Button>
 					<Button
 						type="button"
@@ -264,7 +259,7 @@ Options:
 						disabled={isRoutingImport}
 						className="h-11 gap-2 px-4 text-title"
 					>
-						Next
+						<I18nText source="next" />
 						<ArrowRight data-icon="inline-end" className="size-4" />
 					</Button>
 				</div>

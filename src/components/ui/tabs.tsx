@@ -2,7 +2,7 @@ import * as TabsPrimitive from "@radix-ui/react-tabs";
 import { cva, type VariantProps } from "class-variance-authority";
 import type * as React from "react";
 
-import { useI18n, useLocalizedNode } from "@/lib/i18n";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 function Tabs({
@@ -64,7 +64,7 @@ function TabsTrigger({
 	...props
 }: React.ComponentProps<typeof TabsPrimitive.Trigger>) {
 	const { t } = useI18n();
-	const localizedChildren = useLocalizedNode(children);
+
 	return (
 		<TabsPrimitive.Trigger
 			data-slot="tabs-trigger"
@@ -79,7 +79,7 @@ function TabsTrigger({
 			)}
 			{...props}
 		>
-			{localizedChildren}
+			{children}
 		</TabsPrimitive.Trigger>
 	);
 }

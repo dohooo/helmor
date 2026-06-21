@@ -56,7 +56,7 @@ export function HelmorOnboardingMockup({
 	return (
 		<div
 			ref={containerRef}
-			aria-label={t("Helmor workspace preview")}
+			aria-label={t("helmorWorkspacePreview")}
 			className={`aspect-[1300/900] w-full overflow-hidden text-foreground transition-colors duration-1000 ${
 				spotlightActive ? "bg-black/42" : "bg-background"
 			}`}

@@ -23,7 +23,7 @@ export function AgentLoginStep({
 	onNext: () => void;
 	onRefreshLoginItems: () => void;
 }) {
-	const { t } = useI18n();
+	const { t, f } = useI18n();
 	const [primedLoginProvider, setPrimedLoginProvider] =
 		useState<AgentLoginProvider | null>(null);
 	const [activeLoginProvider, setActiveLoginProvider] =
@@ -71,7 +71,7 @@ export function AgentLoginStep({
 
 	return (
 		<section
-			aria-label={t("Agent login")}
+			aria-label={t("agentLogin")}
 			aria-hidden={step !== "agents"}
 			className={`absolute inset-x-0 top-[calc(50vh-64px)] z-20 flex origin-top flex-col items-center px-8 pb-10 pt-6 transition-transform duration-1000 ease-[cubic-bezier(.22,.82,.2,1)] ${
 				step === "corner"
@@ -90,14 +90,10 @@ export function AgentLoginStep({
 					}`}
 				>
 					<h2 className="text-2xl font-semibold tracking-normal text-foreground">
-						<I18nText source={"Log in to your agents"} />
+						<I18nText source="logAgents" />
 					</h2>
 					<p className="mt-2 max-w-xl text-body leading-6 text-muted-foreground">
-						<I18nText
-							source={
-								"Helmor uses your local login sessions. You can log in now, or continue and log in later."
-							}
-						/>
+						<I18nText source="helmorUsesLocalLoginSessionsCan" />
 					</p>
 
 					{/* Compact rows (h-12) so all four tiles + Back/Next stay inside
@@ -107,7 +103,7 @@ export function AgentLoginStep({
 							({ icon: Icon, provider, label, description, status }) => {
 								const subLabel =
 									provider === "cursor" && cursorKeyError
-										? `Couldn't validate key: ${cursorKeyError}`
+										? f("miscCouldnTValidateKey", { error: cursorKeyError })
 										: description;
 								const subLabelTone =
 									provider === "cursor" && cursorKeyError
@@ -166,7 +162,7 @@ export function AgentLoginStep({
 							className="h-10 gap-2 px-4 text-title"
 						>
 							<ArrowLeft data-icon="inline-start" className="size-4" />
-							Back
+							<I18nText source="back" />
 						</Button>
 						<Button
 							type="button"
@@ -174,7 +170,7 @@ export function AgentLoginStep({
 							onClick={onNext}
 							className="h-10 gap-2 px-4 text-title"
 						>
-							Next
+							<I18nText source="next" />
 							<ArrowRight data-icon="inline-end" className="size-4" />
 						</Button>
 					</div>

@@ -134,7 +134,7 @@ export function WorkspacePaneSurface({
 	const { t } = useI18n();
 	return (
 		<section
-			aria-label={t("Workspace panel")}
+			aria-label={t("workspacePanel")}
 			className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background"
 			// Mirror the inspector's containment: keep style/layout invalidation
 			// from sidebar/inspector resize out of the workspace subtree (which
@@ -143,14 +143,14 @@ export function WorkspacePaneSurface({
 		>
 			{workspaceViewMode !== "editor" && (
 				<div
-					aria-label={t("Workspace panel drag region")}
+					aria-label={t("workspacePanelDragRegion")}
 					className="absolute inset-x-0 top-0 z-10 h-9 bg-transparent"
 					data-tauri-drag-region
 				/>
 			)}
 
 			<div
-				aria-label={t("Workspace viewport")}
+				aria-label={t("workspaceViewport")}
 				className="flex min-h-0 flex-1 flex-col bg-background"
 			>
 				{workspaceViewMode === "editor" && editorSession && (

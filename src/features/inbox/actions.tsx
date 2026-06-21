@@ -8,7 +8,7 @@ export function InboxSearchField({
 	onChange,
 	onClear,
 	ariaLabel,
-	placeholder = "Search",
+	placeholder = "inboxSearch",
 }: {
 	value: string;
 	onChange: (event: ChangeEvent<HTMLInputElement>) => void;
@@ -31,7 +31,7 @@ export function InboxSearchField({
 			{value ? (
 				<button
 					type="button"
-					aria-label={t("Clear search")}
+					aria-label={t("clearSearch")}
 					onClick={onClear}
 					className="flex size-4 cursor-interactive items-center justify-center rounded-sm text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 				>

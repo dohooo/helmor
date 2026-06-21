@@ -2,7 +2,7 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { XIcon } from "lucide-react";
 import type * as React from "react";
 import { Button } from "@/components/ui/button";
-import { useLocalizedNode } from "@/lib/i18n";
+import { I18nText } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 function Dialog({
@@ -112,7 +112,9 @@ function DialogFooter({
 			{children}
 			{showCloseButton && (
 				<DialogPrimitive.Close asChild>
-					<Button variant="outline">Close</Button>
+					<Button variant="outline">
+						<I18nText source="close" />
+					</Button>
 				</DialogPrimitive.Close>
 			)}
 		</div>
@@ -124,7 +126,6 @@ function DialogTitle({
 	children,
 	...props
 }: React.ComponentProps<typeof DialogPrimitive.Title>) {
-	const localizedChildren = useLocalizedNode(children);
 	return (
 		<DialogPrimitive.Title
 			data-slot="dialog-title"
@@ -134,7 +135,7 @@ function DialogTitle({
 			)}
 			{...props}
 		>
-			{localizedChildren}
+			{children}
 		</DialogPrimitive.Title>
 	);
 }
@@ -144,7 +145,6 @@ function DialogDescription({
 	children,
 	...props
 }: React.ComponentProps<typeof DialogPrimitive.Description>) {
-	const localizedChildren = useLocalizedNode(children);
 	return (
 		<DialogPrimitive.Description
 			data-slot="dialog-description"
@@ -154,7 +154,7 @@ function DialogDescription({
 			)}
 			{...props}
 		>
-			{localizedChildren}
+			{children}
 		</DialogPrimitive.Description>
 	);
 }

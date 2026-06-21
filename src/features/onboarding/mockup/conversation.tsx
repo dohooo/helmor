@@ -66,7 +66,7 @@ function MockTodoList({
 			<div className="mb-0.5 flex items-center gap-1.5 text-mini text-muted-foreground">
 				<ClipboardList className="size-3" strokeWidth={1.8} />
 				<span>
-					<I18nText source={"Plan -"} /> {completed}/{items.length}{" "}
+					<I18nText source="plan2" /> {completed}/{items.length}{" "}
 					<I18nText source={"done"} />
 				</span>
 			</div>

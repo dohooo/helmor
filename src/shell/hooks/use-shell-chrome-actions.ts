@@ -2,6 +2,7 @@ import type { Dispatch, SetStateAction } from "react";
 import { useCallback } from "react";
 import { toast } from "sonner";
 import { GITHUB_RELEASES_URL } from "@/features/announcements";
+import { translateSource } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
 import { type AppSettings, resolveTheme, type ThemeMode } from "@/lib/settings";
 import { publishShellEvent } from "@/shell/event-bus";
@@ -46,7 +47,7 @@ export function useShellChromeActions({
 	}, []);
 	const handleOpenReleaseChangelog = useCallback(() => {
 		void openUrl(GITHUB_RELEASES_URL).catch((error) => {
-			toast.error("Unable to open GitHub changelog", {
+			toast.error(translateSource("miscUnableToOpenGithubChangelog"), {
 				description: String(error),
 			});
 		});

@@ -96,7 +96,7 @@ export function BranchPickerPopover({
 			>
 				<style>{scrollbarStyle}</style>
 				<div className="branch-picker">
-					<CommandInput placeholder="Search branches..." />
+					<CommandInput placeholder="searchBranches" />
 					<CommandList className="max-h-52 px-1" style={{ marginRight: -3 }}>
 						{loading && names.length === 0 ? (
 							<div className="flex items-center justify-center gap-2 py-5 text-small text-muted-foreground">
@@ -104,10 +104,12 @@ export function BranchPickerPopover({
 									className="size-3.5 animate-spin"
 									strokeWidth={2}
 								/>
-								<I18nText source={"Loading branches..."} />
+								<I18nText source="loadingBranches" />
 							</div>
 						) : null}
-						<CommandEmpty>No branches found</CommandEmpty>
+						<CommandEmpty>
+							<I18nText source="noBranchesFound" />
+						</CommandEmpty>
 						{names.map((name) => (
 							<CommandItem
 								key={name}

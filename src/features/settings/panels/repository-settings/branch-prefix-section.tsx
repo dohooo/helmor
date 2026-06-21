@@ -124,14 +124,10 @@ export function BranchPrefixSection({
 			<div className="flex items-start justify-between gap-4">
 				<div className="min-w-0 flex-1">
 					<div className="text-ui font-medium leading-snug text-foreground">
-						<I18nText source={"Branch prefix"} />
+						<I18nText source="branchPrefix" />
 					</div>
 					<div className="mt-1 text-small leading-snug text-muted-foreground">
-						<I18nText
-							source={
-								"Prefix added to branch names when creating new workspaces in this repo."
-							}
-						/>
+						<I18nText source="prefixAddedBranchNamesWhenCreating" />
 					</div>
 				</div>
 				<BranchPrefixPreview
@@ -145,7 +141,7 @@ export function BranchPrefixSection({
 				onValueChange={handleTypeChange}
 				className="mt-3 gap-0"
 			>
-				<PrefixRadioOption repoId={repo.id} value="username" label="Username" />
+				<PrefixRadioOption repoId={repo.id} value="username" label="username" />
 				{/* Custom row inlines its own input so the panel height stays fixed
 				 * across all three options. When Custom isn't selected the input
 				 * is hidden via `invisible` (NOT unmounted) — that keeps it
@@ -156,15 +152,15 @@ export function BranchPrefixSection({
 				>
 					<RadioGroupItem value="custom" id={customId} />
 					<FieldLabel htmlFor={customId} className="shrink-0 text-foreground">
-						<I18nText source={"Custom"} />
+						<I18nText source="custom" />
 					</FieldLabel>
 					<Input
 						type="text"
 						value={customPrefix}
 						onChange={(event) => handleCustomChange(event.target.value)}
 						onFocus={() => activateCustom()}
-						placeholder="e.g. feat/"
-						aria-label="Custom branch prefix"
+						placeholder="eGFeat"
+						aria-label="customBranchPrefix"
 						aria-hidden={!customActive}
 						tabIndex={customActive ? 0 : -1}
 						className={cn(
@@ -173,7 +169,7 @@ export function BranchPrefixSection({
 						)}
 					/>
 				</Field>
-				<PrefixRadioOption repoId={repo.id} value="none" label="None" />
+				<PrefixRadioOption repoId={repo.id} value="none" label="none" />
 			</RadioGroup>
 		</div>
 	);
@@ -201,14 +197,14 @@ function BranchPrefixPreview({
 			)}
 			aria-hidden={hidden}
 		>
-			<I18nText source={"Preview:"} />{" "}
+			<I18nText source="preview2" />{" "}
 			<span className="font-mono text-foreground/80">
 				{previewPrefix}
 				{previewBase}
 			</span>
 			{prefixType === "username" && !previewPrefix ? (
 				<span className="ml-1 text-muted-foreground/70">
-					<I18nText source={"(connect an account)"} />
+					<I18nText source="connectAccount" />
 				</span>
 			) : null}
 		</div>

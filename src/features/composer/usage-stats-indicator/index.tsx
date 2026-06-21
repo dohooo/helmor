@@ -97,7 +97,7 @@ export function UsageStatsIndicator({ agentType, disabled, className }: Props) {
 				<button
 					type="button"
 					disabled={disabled}
-					aria-label={t("Usage Stats")}
+					aria-label={t("usageStats")}
 					className={cn(
 						"flex size-7 cursor-interactive items-center justify-center rounded-md disabled:cursor-not-allowed disabled:opacity-50",
 						className,
@@ -113,7 +113,7 @@ export function UsageStatsIndicator({ agentType, disabled, className }: Props) {
 				<div className="flex flex-col gap-3 px-1 py-1">
 					<div className="flex items-center justify-between">
 						<div className="text-body font-semibold text-foreground">
-							<I18nText source={"Usage Stats"} />
+							<I18nText source="usageStats" />
 						</div>
 						<span
 							className="text-muted-foreground"

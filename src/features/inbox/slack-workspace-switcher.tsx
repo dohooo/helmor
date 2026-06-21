@@ -9,7 +9,7 @@ import {
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { type SlackWorkspace, slackDisconnectWorkspace } from "@/lib/api";
-import { I18nText } from "@/lib/i18n";
+import { I18nText, translateSource, useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 import { InboxActionMenuButton } from "./actions";
@@ -29,6 +29,7 @@ export function SlackWorkspaceSwitcher({
 	activeTeamId: string | null;
 	onSelect: (teamId: string) => void;
 }) {
+	const { t, f } = useI18n();
 	const [open, setOpen] = useState(false);
 	const pushToast = useWorkspaceToast();
 	const active = workspaces.find((w) => w.teamId === activeTeamId);
@@ -46,8 +47,12 @@ export function SlackWorkspaceSwitcher({
 			const message =
 				error instanceof Error
 					? error.message
-					: "Couldn't disconnect Slack workspace.";
-			pushToast(message, "Disconnect failed", "destructive");
+					: translateSource("inboxCouldntDisconnectSlackWorkspace");
+			pushToast(
+				message,
+				translateSource("inboxDisconnectFailed"),
+				"destructive",
+			);
 		},
 	});
 
@@ -55,11 +60,11 @@ export function SlackWorkspaceSwitcher({
 		<DropdownMenu open={open} onOpenChange={setOpen}>
 			<DropdownMenuTrigger asChild>
 				<InboxActionMenuButton
-					aria-label="Switch Slack workspace"
+					aria-label="switchSlackWorkspace"
 					className="max-w-[150px]"
 				>
 					<span className="min-w-0 truncate">
-						{active?.teamName ?? "Workspace"}
+						{active?.teamName ?? t("workspace")}
 					</span>
 					<ChevronDown className="size-3" strokeWidth={2} />
 				</InboxActionMenuButton>
@@ -67,7 +72,7 @@ export function SlackWorkspaceSwitcher({
 			<DropdownMenuContent align="end" className="min-w-[220px]">
 				{workspaces.length === 0 ? (
 					<div className="px-2 py-1.5 text-mini text-muted-foreground">
-						<I18nText source={"No connected workspaces"} />
+						<I18nText source="noConnectedWorkspaces" />
 					</div>
 				) : (
 					workspaces.map((ws) => (
@@ -92,7 +97,9 @@ export function SlackWorkspaceSwitcher({
 							</div>
 							<button
 								type="button"
-								aria-label={`Disconnect ${ws.teamName}`}
+								aria-label={f("inboxDisconnectWorkspace", {
+									name: ws.teamName,
+								})}
 								className="ml-1 inline-flex size-5 cursor-interactive items-center justify-center rounded-md text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
 								onClick={(event) => {
 									event.stopPropagation();
@@ -124,8 +131,8 @@ export function SlackWorkspaceSwitcher({
 						<Download className="size-3" strokeWidth={2} />
 					)}
 					{importMutation.isPending
-						? "Reading session…"
-						: "Connect another workspace"}
+						? t("readingSession")
+						: t("inboxConnectAnotherWorkspace")}
 				</DropdownMenuItem>
 			</DropdownMenuContent>
 		</DropdownMenu>

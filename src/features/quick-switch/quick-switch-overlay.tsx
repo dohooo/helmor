@@ -61,7 +61,7 @@ export function QuickSwitchOverlay({
 			<div
 				role="dialog"
 				aria-modal="true"
-				aria-label={t("Quick switch workspace")}
+				aria-label={t("quickSwitchWorkspace")}
 				className="rounded-2xl bg-popover/95 p-3 text-popover-foreground shadow-2xl ring-1 ring-foreground/10"
 			>
 				<div className="flex max-w-[80vw] gap-2 overflow-x-auto scroll-smooth py-1">
@@ -213,7 +213,7 @@ function QuickSwitchCard({
 					: isStreaming
 						? [
 								<div key="thinking" className="italic text-muted-foreground/70">
-									<I18nText source={"Thinking…"} />
+									<I18nText source="thinking3" />
 								</div>,
 							]
 						: null}

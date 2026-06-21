@@ -304,7 +304,7 @@ export function AddDirTypeaheadPlugin({
 							className="rounded-xl border border-border/60 bg-background text-foreground shadow-2xl ring-1 ring-black/5"
 						>
 							<CommandList className="max-h-72">
-								<CommandGroup heading="Add working directory">
+								<CommandGroup heading="addWorkingDirectory">
 									{options.map((opt, index) => (
 										<PickerRow
 											key={opt.key}
@@ -319,7 +319,7 @@ export function AddDirTypeaheadPlugin({
 							</CommandList>
 							<div className="border-t border-border/40 px-3 py-1.5 font-mono text-mini text-muted-foreground">
 								<span>
-									<I18nText source={"↑↓ navigate · ↵ select · esc cancel"} />
+									<I18nText source="navigateSelectEscCancel" />
 								</span>
 							</div>
 						</Command>

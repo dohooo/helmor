@@ -118,7 +118,7 @@ export function CursorCardBody() {
 					value={keyDraft}
 					onBlur={commitKey}
 					onChange={(event) => setKeyDraft(event.target.value)}
-					placeholder="Cursor API key"
+					placeholder="cursorApiKey"
 					className="h-8 min-w-0 flex-1 border-border/50 bg-muted/20 text-ui"
 				/>
 				{!keyDraft && (
@@ -126,10 +126,10 @@ export function CursorCardBody() {
 						type="button"
 						variant="outline"
 						size="sm"
-						aria-label="Get Cursor API key"
+						aria-label="getCursorApiKey"
 						onClick={() => void openUrl(CURSOR_DASHBOARD_URL)}
 					>
-						Get your API key
+						<I18nText source="getApiKey2" />
 						<SquareArrowOutUpRight className="size-3.5" />
 					</Button>
 				)}
@@ -154,7 +154,7 @@ export function CursorCardBody() {
 									type="button"
 									variant="outline"
 									size="icon-sm"
-									aria-label="Refresh model list"
+									aria-label="refreshModelList"
 									disabled={fetchMutation.isPending}
 									onClick={() => fetchMutation.mutate()}
 								>
@@ -166,13 +166,15 @@ export function CursorCardBody() {
 									/>
 								</Button>
 							</TooltipTrigger>
-							<TooltipContent>Refresh models</TooltipContent>
+							<TooltipContent>
+								<I18nText source="refreshModels" />
+							</TooltipContent>
 						</Tooltip>
 					</div>
 					{fetchError ? (
 						<p className="text-small leading-snug text-destructive">
-							<I18nText source={"Could not fetch models —"} /> {fetchError}
-							<I18nText source={". The composer will fall back to Auto."} />
+							<I18nText source="couldNotFetchModels" /> {fetchError}
+							<I18nText source="composerWillFallBackAuto" />
 						</p>
 					) : null}
 				</>

@@ -6,6 +6,7 @@ import {
 	DialogDescription,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { I18nText, useI18n } from "@/lib/i18n";
 
 type TerminalResumeDialogProps = {
 	open: boolean;
@@ -29,6 +30,7 @@ export function TerminalResumeDialog({
 	onOpenChange,
 	onConfirm,
 }: TerminalResumeDialogProps) {
+	const { f } = useI18n();
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent
@@ -36,13 +38,17 @@ export function TerminalResumeDialog({
 				showCloseButton={false}
 			>
 				<DialogTitle className="text-ui font-semibold">
-					Open in terminal?
+					<I18nText source="openTerminal" />
 				</DialogTitle>
 				<DialogDescription asChild>
 					<ul className="mt-2 list-disc space-y-1 pl-4 text-small leading-relaxed text-muted-foreground">
-						<li>Opens a new Terminal session.</li>
-						<li>Resumes this conversation in {providerLabel}.</li>
-						<li>New terminal messages won't sync back here.</li>
+						<li>
+							<I18nText source="miscOpensNewTerminalSession" />
+						</li>
+						<li>{f("miscResumesConversationInProvider", { providerLabel })}</li>
+						<li>
+							<I18nText source="miscNewTerminalMessagesWontSyncBack" />
+						</li>
 					</ul>
 				</DialogDescription>
 				<div className="mt-3 flex w-fit items-center gap-2">
@@ -55,7 +61,7 @@ export function TerminalResumeDialog({
 						htmlFor="terminal-resume-dont-remind"
 						className="cursor-pointer text-small text-muted-foreground"
 					>
-						Don't remind me again
+						<I18nText source="miscDontRemindMeAgain" />
 					</label>
 				</div>
 				<div className="mt-3 flex justify-end gap-2">
@@ -64,10 +70,10 @@ export function TerminalResumeDialog({
 						size="sm"
 						onClick={() => onOpenChange(false)}
 					>
-						Cancel
+						<I18nText source="cancel" />
 					</Button>
 					<Button size="sm" onClick={onConfirm}>
-						Open terminal
+						<I18nText source="openTerminal2" />
 					</Button>
 				</div>
 			</DialogContent>

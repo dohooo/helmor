@@ -8,7 +8,7 @@ export function SetupItem({
 	icon,
 	label,
 	description,
-	actionLabel = "Set up",
+	actionLabel = "miscSetUp",
 	onAction,
 	disabled = false,
 	busy = false,

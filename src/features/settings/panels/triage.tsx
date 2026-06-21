@@ -88,16 +88,16 @@ function formatTimeAgo(iso: string, now: number): string {
 	if (Number.isNaN(t)) return "";
 	const sec = Math.max(0, Math.floor((now - t) / 1000));
 	// Don't tick second-by-second under a minute.
-	if (sec < 60) return translateSource("just now");
+	if (sec < 60) return translateSource("justNow");
 	const min = Math.floor(sec / 60);
 	if (min < 60) {
-		return translateSource("{count}m ago").replace("{count}", String(min));
+		return translateSource("countMAgo").replace("{count}", String(min));
 	}
 	const hr = Math.floor(min / 60);
 	if (hr < 24) {
-		return translateSource("{count}h ago").replace("{count}", String(hr));
+		return translateSource("countHAgo").replace("{count}", String(hr));
 	}
-	return translateSource("{count}d ago").replace(
+	return translateSource("countDAgo").replace(
 		"{count}",
 		String(Math.floor(hr / 24)),
 	);
@@ -214,8 +214,8 @@ export function TriagePanel() {
 			{triageOn ? (
 				<div className="flex w-full flex-col gap-3">
 					<Field
-						label="Custom instructions"
-						hint="Tell the triage agent what to focus on, in plain language."
+						label="customInstructions"
+						hint="tellTriageAgentWhatFocusPlain"
 					>
 						<Textarea
 							value={draft.systemPrompt}
@@ -223,24 +223,18 @@ export function TriagePanel() {
 								setDraft({ ...draft, systemPrompt: e.target.value })
 							}
 							onBlur={() => save.mutate(draft)}
-							placeholder={`e.g.
-• Watch Slack #incidents and DMs from my team lead
-• Surface every Slack message that @-mentions me
-• Skip bot notifications and weekly digests`}
+							placeholder="eGWatchSlackIncidentsDms"
 							className="min-h-[96px] placeholder:text-ui"
 						/>
 					</Field>
 
-					<Field
-						label="Sources"
-						hint="Where Helmor pulls triage candidates from. Incremental fetch every 5 minutes."
-					>
+					<Field label="sources" hint="whereHelmorPullsTriageCandidatesFrom">
 						<div className="flex flex-col divide-y divide-border/40 rounded-md border border-border/60 bg-background/30">
 							{sourceHealth.data?.map((row) => (
 								<SourceRow key={row.source} row={row} />
 							)) ?? (
 								<div className="px-3 py-2.5 text-mini text-muted-foreground">
-									<I18nText source={"Checking source health…"} />
+									<I18nText source="checkingSourceHealth" />
 								</div>
 							)}
 						</div>
@@ -248,16 +242,16 @@ export function TriagePanel() {
 
 					<div className="text-mini text-muted-foreground">
 						{pendingCount.isLoading ? (
-							<I18nText source={"Loading candidate queue…"} />
+							<I18nText source="loadingCandidateQueue" />
 						) : (
 							<span>
 								<span className="font-medium text-foreground">
 									{pendingCount.data ?? 0}
 								</span>{" "}
 								{pendingCount.data === 1 ? (
-									<I18nText source={"candidate waiting to be judged."} />
+									<I18nText source="candidateWaitingJudged" />
 								) : (
-									<I18nText source={"candidates waiting to be judged."} />
+									<I18nText source="candidatesWaitingJudged" />
 								)}
 							</span>
 						)}
@@ -271,12 +265,12 @@ export function TriagePanel() {
 									<TooltipTrigger asChild>
 										<div className="flex items-center gap-1.5 text-mini text-muted-foreground">
 											<span>
-												<I18nText source={"Auto-run"} />
+												<I18nText source="autoRun" />
 											</span>
 											<Switch
 												checked={draft.autoRun}
 												onCheckedChange={(v) => commit({ autoRun: v })}
-												aria-label="Auto-run heartbeat"
+												aria-label="autoRunHeartbeat"
 											/>
 										</div>
 									</TooltipTrigger>
@@ -286,21 +280,15 @@ export function TriagePanel() {
 									>
 										<p>
 											<span className="font-semibold">
-												<I18nText source={"On"} />
+												<I18nText source="on2" />
 											</span>{" "}
-											<I18nText
-												source={
-													"— a tick fires right after each fetch (every 5 minutes). Overlapping ticks are skipped."
-												}
-											/>
+											<I18nText source="tickFiresRightAfterEachFetch" />
 										</p>
 										<p>
 											<span className="font-semibold">
-												<I18nText source={"Off"} />
+												<I18nText source="off" />
 											</span>{" "}
-											<I18nText
-												source={"— ticks only run when you press Run now."}
-											/>
+											<I18nText source="ticksOnlyRunWhenPressRun" />
 										</p>
 									</TooltipContent>
 								</Tooltip>
@@ -313,7 +301,7 @@ export function TriagePanel() {
 									onClick={() => stop.mutate()}
 								>
 									<Square className="size-3.5 fill-current" />
-									{stop.isPending ? "Stopping…" : "Stop"}
+									<I18nText source={stop.isPending ? "stopping" : "stop"} />
 								</Button>
 							) : (
 								<Button
@@ -323,7 +311,7 @@ export function TriagePanel() {
 									onClick={() => trigger.mutate()}
 								>
 									<Play className="size-3.5" />
-									Run now
+									<I18nText source="runNow" />
 								</Button>
 							)}
 						</div>
@@ -352,16 +340,12 @@ function HeaderBar({
 			<div className="min-w-0 flex-1">
 				<div className="flex flex-wrap items-center gap-1.5 text-[13px] font-medium leading-snug text-foreground">
 					<span className="min-w-0">
-						<I18nText source={"Smart triage"} />
+						<I18nText source="smartTriage" />
 					</span>
 					<SettingsReleaseBadge marker={{ kind: "feature" }} />
 				</div>
 				<p className="mt-1 text-[12px] leading-snug text-muted-foreground">
-					<I18nText
-						source={
-							"The local LLM scans your enabled sources and creates AI-prepared workspaces for actionable items."
-						}
-					/>
+					<I18nText source="localLlmScansEnabledSourcesCreates" />
 				</p>
 			</div>
 			<Switch
@@ -402,7 +386,7 @@ function SummaryPopover({ text }: { text: string }) {
 			<HoverCardTrigger asChild>
 				<button
 					type="button"
-					aria-label={t("Show agent reasoning")}
+					aria-label={t("showAgentReasoning")}
 					className="inline-flex shrink-0 cursor-pointer text-muted-foreground/60 hover:text-foreground"
 				>
 					<MessageSquareQuote className="size-3" />
@@ -440,7 +424,7 @@ function OutcomeLine({
 	if (!last) {
 		return (
 			<div className="min-w-0 flex-1 truncate text-mini text-muted-foreground">
-				<I18nText source={"No tick run yet."} />
+				<I18nText source="noTickRunYet" />
 			</div>
 		);
 	}
@@ -452,9 +436,8 @@ function OutcomeLine({
 			<div className="flex min-w-0 flex-1 items-center gap-1.5 text-mini text-foreground">
 				<CheckCircle2 className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
 				<span className="truncate">
-					<I18nText source={"Last tick ·"} /> {when}{" "}
-					<I18nText source={"· created"} /> {o.count}{" "}
-					<I18nText source={"workspace"} />
+					<I18nText source="lastTick" /> {when} <I18nText source="created2" />{" "}
+					{o.count} <I18nText source={"workspace2"} />
 					{o.count === 1 ? "" : "s"}
 				</span>
 				{summary ? <SummaryPopover text={summary} /> : null}
@@ -466,8 +449,8 @@ function OutcomeLine({
 			<div className="flex min-w-0 flex-1 items-center gap-1.5 text-mini text-muted-foreground">
 				<MinusCircle className="size-3.5 shrink-0" />
 				<span className="truncate">
-					<I18nText source={"Last tick ·"} /> {when}{" "}
-					<I18nText source={"· nothing actionable"} />
+					<I18nText source="lastTick" /> {when}{" "}
+					<I18nText source="nothingActionable" />
 				</span>
 				{summary ? <SummaryPopover text={summary} /> : null}
 			</div>
@@ -479,8 +462,7 @@ function OutcomeLine({
 			<div className="flex min-w-0 flex-1 items-center gap-1.5 text-mini text-muted-foreground">
 				<CircleStop className="size-3.5 shrink-0" />
 				<span className="truncate">
-					<I18nText source={"Last tick ·"} /> {when}{" "}
-					<I18nText source={"· stopped"} />
+					<I18nText source="lastTick" /> {when} <I18nText source="stopped" />
 				</span>
 				{summary ? <SummaryPopover text={summary} /> : null}
 			</div>
@@ -491,10 +473,11 @@ function OutcomeLine({
 		<div className="flex min-w-0 flex-1 items-center gap-1.5 text-mini text-destructive">
 			<XCircle className="size-3.5 shrink-0" />
 			<span className="truncate">
-				<I18nText source={"Last tick ·"} /> {when}{" "}
-				<I18nText source={"· failed"} />
+				<I18nText source="lastTick" /> {when} <I18nText source="failed2" />
 			</span>
-			<SummaryPopover text={summary || o.message || "(no message)"} />
+			<SummaryPopover
+				text={summary || o.message || translateSource("settingsNoMessage")}
+			/>
 		</div>
 	);
 }
@@ -516,7 +499,7 @@ function ActiveStatusCard({
 
 	const batchLabel =
 		status.batchIndex > 0 && status.batchTotal > 0
-			? t("Batch {index} of {total}")
+			? t("batchIndexTotal")
 					.replace("{index}", String(status.batchIndex))
 					.replace("{total}", String(status.batchTotal))
 			: null;
@@ -525,7 +508,7 @@ function ActiveStatusCard({
 			<div className="flex items-center gap-2">
 				<span className="inline-block size-2 animate-pulse rounded-full bg-chart-2" />
 				<span className="text-ui font-medium">
-					<I18nText source={"Tick running"} />
+					<I18nText source="tickRunning" />
 				</span>
 				{batchLabel ? (
 					<span className="rounded-md bg-accent/40 px-1.5 py-0.5 text-mini font-medium text-foreground">
@@ -533,17 +516,17 @@ function ActiveStatusCard({
 					</span>
 				) : null}
 				<span className="text-mini text-muted-foreground">
-					{formatElapsed(status.startedAt, now)} <I18nText source={"· turn"} />{" "}
+					{formatElapsed(status.startedAt, now)} <I18nText source="turn2" />{" "}
 					{status.turnCount} · {status.toolCount}{" "}
-					<I18nText source={"tool calls"} />
+					<I18nText source="toolCalls" />
 				</span>
 			</div>
 			<div className="mt-1 text-mini text-muted-foreground">
-				<I18nText source={"Started"} /> {formatTime(status.startedAt)}
+				<I18nText source="started" /> {formatTime(status.startedAt)}
 				{status.lastToolName ? (
 					<>
 						{" · "}
-						<I18nText source={"last:"} /> {status.lastToolName}
+						<I18nText source="last" /> {status.lastToolName}
 					</>
 				) : null}
 			</div>
@@ -557,13 +540,14 @@ function ActiveStatusCard({
 				) : (
 					<ChevronRight className="size-3.5" />
 				)}
-				{t(expanded ? "Hide" : "Show")} <I18nText source={"tool call list"} />
+				{t(expanded ? "settingsHide" : "settingsShow")}{" "}
+				<I18nText source="toolCallList" />
 			</button>
 			{expanded ? (
 				<ol className="mt-2 max-h-[280px] space-y-0.5 overflow-y-auto rounded border border-border/40 bg-background/40 p-2">
 					{calls.length === 0 ? (
 						<li className="text-mini text-muted-foreground">
-							<I18nText source={"No tool calls yet."} />
+							<I18nText source="noToolCallsYet" />
 						</li>
 					) : (
 						calls.map((c, idx) => (
@@ -599,37 +583,37 @@ function stateBadge(state: TriageSourceHealthState): {
 	switch (state) {
 		case "ok":
 			return {
-				label: "Connected",
+				label: "connected",
 				tone: "text-emerald-600 dark:text-emerald-400",
 				Icon: CheckCircle2,
 			};
 		case "notInstalled":
 			return {
-				label: "Install required",
+				label: "installRequired",
 				tone: "text-amber-600 dark:text-amber-400",
 				Icon: Download,
 			};
 		case "notAuthed":
 			return {
-				label: "Sign-in required",
+				label: "signRequired",
 				tone: "text-amber-600 dark:text-amber-400",
 				Icon: KeyRound,
 			};
 		case "notConfigured":
 			return {
-				label: "Not configured",
+				label: "notConfigured",
 				tone: "text-muted-foreground",
 				Icon: SettingsIcon,
 			};
 		case "degraded":
 			return {
-				label: "Attention",
+				label: "attention",
 				tone: "text-amber-600 dark:text-amber-400",
 				Icon: AlertTriangle,
 			};
 		default:
 			return {
-				label: "Unknown",
+				label: "unknown",
 				tone: "text-muted-foreground",
 				Icon: AlertTriangle,
 			};
@@ -661,7 +645,7 @@ function SourceRow({ row }: { row: TriageSourceHealth }) {
 						size="sm"
 						onClick={() => setDialogOpen(true)}
 					>
-						Connect
+						<I18nText source="connect" />
 					</Button>
 				) : null}
 				{slackNeedsConnect ? (
@@ -677,7 +661,7 @@ function SourceRow({ row }: { row: TriageSourceHealth }) {
 							})
 						}
 					>
-						Connect
+						<I18nText source="connect" />
 					</Button>
 				) : null}
 				{showBadge ? (

@@ -26,7 +26,7 @@ import type {
 import type { ComposerInsertTarget } from "@/lib/composer-insert";
 import { forgeLabelsFor } from "@/lib/forge-labels";
 import { parseForgeRepoHost } from "@/lib/forge-repo-filter";
-import { I18nText } from "@/lib/i18n";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { inboxKindLabelsQueryOptions } from "@/lib/query-client";
 import {
 	DEFAULT_INBOX_ACCOUNT_TOGGLES,
@@ -119,21 +119,22 @@ function forgeUrlToInboxKind(query: string): InboxKind | null {
 	return null;
 }
 
+// Values are i18n catalog KEYS, resolved at render via t().
 const COMING_SOON_COPY: Record<ExternalFilterId, string[]> = {
 	linear: [
-		"Pull in issues, specs, labels, and priorities.",
-		"Start workspaces directly from planned tasks.",
-		"Keep implementation context tied to product intent.",
+		"inboxComingSoonLinear1",
+		"inboxComingSoonLinear2",
+		"inboxComingSoonLinear3",
 	],
 	slack: [
-		"Capture threads, decisions, and follow-up requests.",
-		"Convert discussions into actionable workspace prompts.",
-		"Preserve source context without copying long chat history.",
+		"inboxComingSoonSlack1",
+		"inboxComingSoonSlack2",
+		"inboxComingSoonSlack3",
 	],
 	mobile: [
-		"Send tasks, links, and screenshots from your phone.",
-		"Keep lightweight review and triage flows in sync.",
-		"Hand off mobile-captured context to desktop agents.",
+		"inboxComingSoonMobile1",
+		"inboxComingSoonMobile2",
+		"inboxComingSoonMobile3",
 	],
 };
 
@@ -142,22 +143,23 @@ const COMING_SOON_COPY: Record<ExternalFilterId, string[]> = {
  *  on both forges. Provider-specific COPY (e.g. "Merge requests" vs
  *  "Pull requests" for the kind label itself) comes from the backend
  *  via `inboxKindLabelsQueryOptions`. */
+// `label` values are i18n catalog KEYS, resolved at render via t().
 const FORGE_STATE_FILTERS: Record<InboxKind, ForgeStateFilter[]> = {
 	issues: [
-		{ id: "all", label: "All" },
-		{ id: "open", label: "Open" },
-		{ id: "closed", label: "Closed" },
+		{ id: "all", label: "all" },
+		{ id: "open", label: "open" },
+		{ id: "closed", label: "closed" },
 	],
 	prs: [
-		{ id: "all", label: "All" },
-		{ id: "open", label: "Open" },
-		{ id: "closed", label: "Closed" },
-		{ id: "merged", label: "Merged" },
+		{ id: "all", label: "all" },
+		{ id: "open", label: "open" },
+		{ id: "closed", label: "closed" },
+		{ id: "merged", label: "merged" },
 	],
 	discussions: [
-		{ id: "all", label: "All" },
-		{ id: "answered", label: "Answered" },
-		{ id: "unanswered", label: "Unanswered" },
+		{ id: "all", label: "all" },
+		{ id: "answered", label: "answered" },
+		{ id: "unanswered", label: "unanswered" },
 	],
 };
 
@@ -242,6 +244,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 	stateFilterBySource?: Record<string, string>;
 	onStateFilterBySourceChange?: (filters: Record<string, string>) => void;
 }) {
+	const { t, f } = useI18n();
 	const projectForgeId = forgeFilterIdForRepo(repository ?? null);
 	const visibleSourceFilters = useMemo<SourceFilterId[]>(
 		() => [projectForgeId, ...EXTERNAL_FILTER_IDS],
@@ -445,14 +448,18 @@ export const InboxSidebar = memo(function InboxSidebar({
 				value={searchQuery}
 				onChange={handleSearchChange}
 				onClear={() => setSearchQuery("")}
-				ariaLabel={`Search ${activeForgeLabels.providerName} contexts`}
+				ariaLabel={f("inboxSearchProviderContexts", {
+					provider: activeForgeLabels.providerName,
+				})}
 			/>
 
 			{showForgeTypeSelect && activeKindLabels ? (
 				<DropdownMenu>
 					<DropdownMenuTrigger asChild>
 						<InboxActionIconButton
-							aria-label={`Filter by ${activeKindLabels.short}`}
+							aria-label={f("inboxFilterByKind", {
+								kind: activeKindLabels.short,
+							})}
 							title={activeKindLabels.short}
 						>
 							{(() => {
@@ -499,7 +506,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 			<DropdownMenu>
 				<DropdownMenuTrigger asChild>
 					<InboxActionMenuButton>
-						<span>{activeStateFilter.label}</span>
+						<span>{t(activeStateFilter.label)}</span>
 						<ChevronDown className="size-3" strokeWidth={2} />
 					</InboxActionMenuButton>
 				</DropdownMenuTrigger>
@@ -516,7 +523,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 								value={filter.id}
 								className="text-mini"
 							>
-								{filter.label}
+								{t(filter.label)}
 							</DropdownMenuRadioItem>
 						))}
 					</DropdownMenuRadioGroup>
@@ -565,7 +572,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 									? "Linear"
 									: filterId === "slack"
 										? "Slack"
-										: "Mobile";
+										: t("mobile");
 						return (
 							<button
 								key={filterId}
@@ -632,7 +639,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 										strokeWidth={2}
 									/>
 									<span className="text-ui font-medium">
-										<I18nText source={"Coming Soon"} />
+										<I18nText source="comingSoon" />
 									</span>
 								</div>
 								<div className="my-7 flex items-center gap-2 px-2">
@@ -643,7 +650,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 								<ul className="list-disc space-y-3 pl-4 text-left text-pretty text-mini leading-4 marker:text-muted-foreground/35">
 									{COMING_SOON_COPY[selectedSource as ExternalFilterId].map(
 										(line) => (
-											<li key={line}>{line}</li>
+											<li key={line}>{t(line)}</li>
 										),
 									)}
 								</ul>
@@ -724,7 +731,7 @@ function InboxLoadingState() {
 		<div className="mt-8 flex flex-col items-center gap-2 px-6 text-muted-foreground/70">
 			<Loader2 className="size-4 animate-spin" strokeWidth={2} />
 			<div className="text-small leading-5">
-				<I18nText source={"Loading items…"} />
+				<I18nText source="loadingItems" />
 			</div>
 		</div>
 	);
@@ -737,12 +744,13 @@ function InboxErrorState({
 	error: unknown;
 	onRetry: () => void;
 }) {
+	const { t } = useI18n();
 	const message =
-		error instanceof Error ? error.message : "Couldn't load context items.";
+		error instanceof Error ? error.message : t("inboxCouldntLoadContextItems");
 	return (
 		<div className="mt-8 flex flex-col items-center gap-2 px-6 text-center">
 			<div className="text-ui font-medium text-foreground">
-				<I18nText source={"Couldn't load"} />
+				<I18nText source="couldnTLoad" />
 			</div>
 			<div className="text-small leading-5 text-muted-foreground">
 				{message}
@@ -754,7 +762,7 @@ function InboxErrorState({
 				onClick={onRetry}
 				className="mt-1 cursor-interactive text-small"
 			>
-				Try again
+				<I18nText source="tryAgain" />
 			</Button>
 		</div>
 	);
@@ -867,7 +875,7 @@ function ConfigureInboxLink({ onClick }: { onClick: () => void }) {
 			)}
 		>
 			<SlidersHorizontal className="size-3" strokeWidth={2} />
-			<I18nText source={"Configure"} />
+			<I18nText source="configure" />
 		</button>
 	);
 }
@@ -903,7 +911,7 @@ function ConnectForgeState({
 				className="mt-1 cursor-interactive gap-1.5"
 			>
 				<SlidersHorizontal className="size-3.5" strokeWidth={2} />
-				Configure
+				<I18nText source="configure" />
 			</Button>
 		</div>
 	);
@@ -921,7 +929,8 @@ function KindDisabledState({
 	labels: InboxKindLabels | null;
 	onConfigure: () => void;
 }) {
-	const plural = labels?.plural ?? "Items";
+	const { t } = useI18n();
+	const plural = labels?.plural ?? t("inboxItems");
 	const lower = plural.toLowerCase();
 	return (
 		<div className="mt-8 flex flex-col items-center gap-2 px-6 text-center">
@@ -929,11 +938,11 @@ function KindDisabledState({
 				<SlidersHorizontal className="size-4" strokeWidth={2} />
 			</div>
 			<div className="text-ui font-medium text-foreground">
-				{plural} <I18nText source={"are off"} />
+				{plural} <I18nText source="off2" />
 			</div>
 			<div className="text-small leading-5 text-muted-foreground">
-				<I18nText source={"Turn"} /> {lower}{" "}
-				<I18nText source={"back on in Contexts settings."} />
+				<I18nText source="turn" /> {lower}{" "}
+				<I18nText source="backContextsSettings" />
 			</div>
 			<Button
 				type="button"
@@ -943,7 +952,7 @@ function KindDisabledState({
 				className="mt-1 cursor-interactive gap-1.5 text-small"
 			>
 				<SlidersHorizontal className="size-3.5" strokeWidth={2} />
-				Configure
+				<I18nText source="configure" />
 			</Button>
 		</div>
 	);
@@ -959,8 +968,11 @@ function NoItemsState({
 	labels: InboxKindLabels | null;
 	repoFilter: string | null;
 }) {
-	const lower = (labels?.plural ?? "Items").toLowerCase();
-	const title = repoFilter ? `No ${lower} in ${repoFilter}` : `No ${lower} yet`;
+	const { t, f } = useI18n();
+	const lower = (labels?.plural ?? t("inboxItems")).toLowerCase();
+	const title = repoFilter
+		? f("inboxNoItemsInRepo", { items: lower, repo: repoFilter })
+		: f("inboxNoItemsYet", { items: lower });
 	return (
 		<div className="mt-8 flex flex-col items-center gap-1 px-6 text-center">
 			<div className="text-small leading-5 text-muted-foreground/80">
