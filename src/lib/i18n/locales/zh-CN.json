@@ -1004,7 +1004,7 @@
 	"newSession2": "新会话位于",
 	"newTerminal": "新终端",
 	"newTerminalModeRunPromptAgent": "新增：终端模式，可在 agent 自己的终端 UI 中运行提示（⌘⇧T）。",
-	"newV": "v 版本新增",
+	"newVersionAnnouncementTitle": "v{version}版本新增",
 	"newWorkspace": "新工作区",
 	"newWorkspace2": "新工作区",
 	"newWorkspace3": "新工作区位于",

@@ -1004,7 +1004,7 @@
 	"newSession2": "New session in",
 	"newTerminal": "New terminal",
 	"newTerminalModeRunPromptAgent": "New: Terminal Mode — run your prompt in the agent's own terminal UI (⌘⇧T).",
-	"newV": "New in v",
+	"newVersionAnnouncementTitle": "New in v{version}",
 	"newWorkspace": "New Workspace",
 	"newWorkspace2": "New workspace",
 	"newWorkspace3": "New workspace in",
