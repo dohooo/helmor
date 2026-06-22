@@ -28,8 +28,19 @@ pub fn build_dispatcher(app: tauri::AppHandle) -> Dispatcher {
             let app = app.clone();
             // `author_id` is the trusted member id from `X-Helmor-Member-Id`.
             // Threaded into `dispatch` so the few member-aware commands (e.g.
-            // `report_presence`) attribute server-side; the rest ignore it.
-            async move { dispatch(&app, &command, args, author_id).await }.boxed()
+            // `report_presence`) attribute server-side, AND bound as the ambient
+            // acting member so the forge layer (deep in `spawn_blocking`) runs
+            // gh/glab as this member (true per-member); `run_blocking` carries it
+            // across the async→blocking boundary.
+            let member = author_id.clone();
+            async move {
+                crate::forge::acting_member::scope_async(
+                    member,
+                    dispatch(&app, &command, args, author_id),
+                )
+                .await
+            }
+            .boxed()
         },
     )
 }

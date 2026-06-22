@@ -1,3 +1,8 @@
+import {
+	type ForgeIdentityInput,
+	type ForgeIdentityStatus,
+	forgeStatusFromInput,
+} from "../forge-config";
 import { TEAM_ID } from "../team-gateway/core";
 
 export const LOCAL_TEAM_ID = TEAM_ID;
@@ -55,6 +60,12 @@ export interface LocalTeamSnapshot {
 	 *  launcher can inject it into the container as CLAUDE_CODE_OAUTH_TOKEN.
 	 *  NEVER returned over HTTP — `getClaudeIdentity` exposes only `{ hasToken }`. */
 	claudeTokens: Record<string, string>;
+	/** Per-member forge status (non-secret: `{ hasGithub, glabHosts }`). */
+	forgeIdentities: Record<string, ForgeIdentityStatus>;
+	/** Local-dev only: each member's raw forge creds (gh token / glab config),
+	 *  kept so the launcher can inject them per-member into the container. NEVER
+	 *  returned over HTTP — `getForgeIdentity` exposes only the status. */
+	forgeCredentials: Record<string, ForgeIdentityInput>;
 }
 
 export interface AcceptInviteInput {
@@ -104,6 +115,11 @@ export interface LocalTeamRegistry {
 		input: { oauthToken: string },
 	): Promise<{ changed: boolean }>;
 	getClaudeIdentity(): Promise<CloudClaudeIdentityStatus>;
+	putForgeIdentity(
+		memberId: string,
+		input: ForgeIdentityInput,
+	): Promise<{ changed: boolean }>;
+	getForgeIdentity(memberId: string): Promise<ForgeIdentityStatus>;
 	snapshot(): LocalTeamSnapshot;
 }
 
@@ -307,6 +323,41 @@ export class InMemoryLocalTeamRegistry implements LocalTeamRegistry {
 			: null;
 	}
 
+	async putForgeIdentity(
+		memberId: string,
+		input: ForgeIdentityInput,
+	): Promise<{ changed: boolean }> {
+		if (!input.githubToken && !input.glabConfigYml) {
+			throw new Error("githubToken or glabConfigYml required");
+		}
+		const prev = this.snapshotState.forgeCredentials[memberId];
+		// Merge so a gh-only re-auth keeps an existing glab config, and vice-versa
+		// (mirrors the DO's merge behaviour).
+		const merged: ForgeIdentityInput = {
+			githubToken: input.githubToken ?? prev?.githubToken,
+			glabConfigYml: input.glabConfigYml ?? prev?.glabConfigYml,
+		};
+		this.snapshotState.forgeCredentials[memberId] = merged;
+		this.snapshotState.forgeIdentities[memberId] = forgeStatusFromInput(merged);
+		this.changed();
+		return { changed: Boolean(prev) };
+	}
+
+	async getForgeIdentity(memberId: string): Promise<ForgeIdentityStatus> {
+		return (
+			this.snapshotState.forgeIdentities[memberId] ?? {
+				hasGithub: false,
+				glabHosts: [],
+			}
+		);
+	}
+
+	/** Local-dev only: a member's raw forge creds, for per-member container
+	 *  injection. Never exposed over HTTP (no gateway route returns it). */
+	getForgeCredentials(memberId: string): ForgeIdentityInput | null {
+		return this.snapshotState.forgeCredentials[memberId] ?? null;
+	}
+
 	snapshot(): LocalTeamSnapshot {
 		return cloneSnapshot(this.snapshotState);
 	}
@@ -342,6 +393,8 @@ function normalizeSnapshot(
 		codexIdentities: initial?.codexIdentities ?? {},
 		claudeIdentities: initial?.claudeIdentities ?? {},
 		claudeTokens: initial?.claudeTokens ?? {},
+		forgeIdentities: initial?.forgeIdentities ?? {},
+		forgeCredentials: initial?.forgeCredentials ?? {},
 	};
 }
 

@@ -53,6 +53,9 @@ const BROWSER_UNSUPPORTED: &[&str] = &[
 const LOCAL_ONLY: &[&str] = &[
     "authorize_cloud_codex_identity",
     "authorize_cloud_claude_identity",
+    // Forge creds are captured from THIS Mac's keychain / config files; the
+    // cloud container cannot read them, so the command runs on the desktop host.
+    "authorize_cloud_forge_identity",
     // Dev-only desktop inspection helpers read buffers owned by the Tauri host.
     "debug_list_terminal_buffers",
     "debug_read_terminal_buffer",

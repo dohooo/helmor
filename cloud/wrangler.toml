@@ -44,6 +44,14 @@ name = "CODEX_IDENTITY"
 class_name = "ClaudeIdentity"
 name = "CLAUDE_IDENTITY"
 
+# Per-member forge (gh/glab) credential broker. Holds each member's gh token /
+# glab config encrypted at rest (REUSES BROKER_ENC_KEY); injected per-member at
+# cold start so git/gh/glab authenticate AS the acting member. Keyed by the
+# member's GitHub numeric id (idFromName(memberId)).
+[[durable_objects.bindings]]
+class_name = "ForgeIdentity"
+name = "FORGE_IDENTITY"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Sandbox"]
@@ -55,6 +63,10 @@ new_sqlite_classes = ["CodexIdentity"]
 [[migrations]]
 tag = "v3"
 new_sqlite_classes = ["ClaudeIdentity"]
+
+[[migrations]]
+tag = "v4"
+new_sqlite_classes = ["ForgeIdentity"]
 
 # D1 control-plane registry (Phase 3 / action item ①): members / workspaces /
 # invites / teams. Additive — the Phase 0 stateless proxy is untouched. Schema

@@ -110,6 +110,9 @@ export function createWorkerTeamGatewayStore(
 		putClaudeIdentity: (memberId, input) =>
 			putClaudeIdentity(env, memberId, input),
 		getClaudeIdentity: () => getClaudeIdentity(env),
+		putForgeIdentity: (memberId, input) =>
+			putForgeIdentity(env, memberId, input),
+		getForgeIdentity: (memberId) => getForgeIdentity(env, memberId),
 	};
 }
 
@@ -368,6 +371,38 @@ async function getClaudeIdentity(env: Env): Promise<unknown> {
 	const stub = env.CLAUDE_IDENTITY.get(
 		env.CLAUDE_IDENTITY.idFromName(memberId),
 	);
+	return stub.status();
+}
+
+/**
+ * PUT /team/forge-identity (AUTHENTICATED MEMBER) — store the member's forge
+ * credentials (gh token / glab config) in their OWN `ForgeIdentity` DO.
+ *
+ * TRUE per-member (unlike Claude/Codex's "one team -> one identity"): every
+ * member's DO is independent, keyed by their own member id. There is NO
+ * `teams.cloud_identity_member_id` binding — at cold start the container injects
+ * ALL members' creds and the forge layer selects by the acting member.
+ *
+ * SECURITY: same trust boundary as the Claude route — member id comes SOLELY
+ * from the bearer->`invites.member_id` mapping (never client-supplied). Tokens
+ * are handed to the DO (encrypted at rest there), NEVER logged or echoed.
+ */
+async function putForgeIdentity(
+	env: Env,
+	memberId: string,
+	input: { githubToken?: string; glabConfigYml?: string },
+): Promise<{ changed: boolean }> {
+	const stub = env.FORGE_IDENTITY.get(env.FORGE_IDENTITY.idFromName(memberId));
+	return stub.store(input);
+}
+
+/**
+ * GET /team/forge-identity (AUTHENTICATED MEMBER) — the calling member's forge
+ * status from their own DO. Metadata only (`{ hasGithub, glabHosts }`) — NEVER
+ * a token.
+ */
+async function getForgeIdentity(env: Env, memberId: string): Promise<unknown> {
+	const stub = env.FORGE_IDENTITY.get(env.FORGE_IDENTITY.idFromName(memberId));
 	return stub.status();
 }
 

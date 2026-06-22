@@ -67,11 +67,23 @@ chmodSync(stateDir, 0o700);
 
 const secrets = loadSecrets(join(stateDir, "secrets.json"));
 const registryPath = join(stateDir, "registry.json");
+// Per-member forge creds for the container's `member_creds` loader. A DIR mount
+// (not a single file) so the launcher can rewrite members.json live on each
+// `PUT /team/forge-identity` and the container hot-reloads it via mtime — no
+// restart, so the desktop's auto-sync-on-connect never disrupts running agents.
+const forgeMembersDir = join(stateDir, "forge-members");
+const forgeMembersFile = join(forgeMembersDir, "members.json");
 const registry = new InMemoryLocalTeamRegistry(
 	loadSnapshot(registryPath),
-	(s) => writeJsonFile(registryPath, s),
+	(s) => {
+		writeJsonFile(registryPath, s);
+		writeForgeMembersFile(s);
+	},
 );
 const memberToken = await ensureDefaultMemberToken();
+// Ensure the file exists before the container mounts it (first run has no creds
+// yet; the desktop auto-sync fills it in live afterwards).
+writeForgeMembersFile(registry.snapshot());
 
 if (!process.env.HELMOR_LOCAL_TEAM_COMPANION_BASE) {
 	// Build by DEFAULT so a backend (src-tauri / sidecar / Dockerfile.local)
@@ -84,6 +96,7 @@ if (!process.env.HELMOR_LOCAL_TEAM_COMPANION_BASE) {
 		buildLocalImage();
 	}
 	prepareCodexHome();
+	prepareForgeAuth();
 	// ensureDockerContainer recreates only if the image actually changed, so a
 	// no-op build never pointlessly restarts a healthy container.
 	ensureDockerContainer();
@@ -229,6 +242,38 @@ function ensureDockerContainer() {
 	if (existsSync(codexHome)) {
 		args.push("-v", `${codexHome}:/root/.codex`);
 	}
+	// Forge auth (gh/glab) snapshotted from the host by prepareForgeAuth(). The
+	// dirs are disposable copies under stateDir, so a plain (rw) bind is safe —
+	// gh/glab never touch the real host config.
+	const ghAuthDir = join(stateDir, "forge-auth", "gh");
+	if (existsSync(join(ghAuthDir, "hosts.yml"))) {
+		args.push("-v", `${ghAuthDir}:/root/.config/gh`);
+	}
+	// Per-member forge creds for the in-container `member_creds` loader (true
+	// per-member: the forge layer selects by the acting member). DIR mount so live
+	// rewrites hot-reload without a restart.
+	if (existsSync(forgeMembersFile)) {
+		args.push(
+			"-v",
+			`${forgeMembersDir}:/run/helmor-forge:ro`,
+			"-e",
+			"HELMOR_FORGE_MEMBERS_PATH=/run/helmor-forge/members.json",
+		);
+	}
+	const glabAuthDir = join(stateDir, "forge-auth", "glab-cli");
+	const glabConfig = join(glabAuthDir, "config.yml");
+	if (existsSync(glabConfig)) {
+		args.push(
+			"-v",
+			`${glabAuthDir}:/root/.config/glab-cli`,
+			"-e",
+			"GLAB_CONFIG_DIR=/root/.config/glab-cli",
+		);
+		const glabHosts = readGlabHosts(glabConfig);
+		if (glabHosts.length) {
+			args.push("-e", `HELMOR_GLAB_HOSTS=${glabHosts.join(",")}`);
+		}
+	}
 	if (process.env.GITHUB_TOKEN) {
 		args.push("-e", `GITHUB_TOKEN=${process.env.GITHUB_TOKEN}`);
 	}
@@ -296,6 +341,139 @@ function prepareCodexHome() {
 	chmodSync(target, 0o700);
 	if (existsSync(auth)) copyFileSync(auth, join(target, "auth.json"));
 	if (existsSync(config)) copyFileSync(config, join(target, "config.toml"));
+}
+
+/** Snapshot the host's gh + glab auth into stateDir so the container can use
+ *  the same forge credentials. gh's token lives in the macOS keychain (not in
+ *  hosts.yml), so it's pulled via `gh auth token` and written into a synthetic
+ *  hosts.yml the Linux gh reads directly; glab keeps its token in plaintext
+ *  config.yml, so that's copied as-is. Best-effort — a missing CLI / logged-out
+ *  host just skips that provider. */
+/** Mirror the registry's per-member forge creds to the file the container's
+ *  `member_creds` loader reads (`{ memberId: { githubToken?, glabConfigYml? } }`).
+ *  Rewritten on every registry change so a live `PUT /team/forge-identity` is
+ *  picked up by the running container via mtime reload. */
+function writeForgeMembersFile(snapshot: LocalTeamSnapshot) {
+	mkdirSync(forgeMembersDir, { recursive: true, mode: 0o700 });
+	chmodSync(forgeMembersDir, 0o700);
+	// Merge each member's login (for per-member commit authorship) alongside their
+	// creds into the shape the in-container loader reads.
+	const members: Record<
+		string,
+		{ githubToken?: string; glabConfigYml?: string; login?: string }
+	> = {};
+	for (const [memberId, creds] of Object.entries(
+		snapshot.forgeCredentials ?? {},
+	)) {
+		members[memberId] = {
+			...creds,
+			login: snapshot.members[memberId]?.github_login,
+		};
+	}
+	writeFileSync(forgeMembersFile, `${JSON.stringify(members, null, 2)}\n`, {
+		mode: 0o600,
+	});
+}
+
+function prepareForgeAuth() {
+	const synced: string[] = [];
+	if (prepareGhAuth(join(stateDir, "forge-auth", "gh"))) synced.push("gh");
+	if (prepareGlabAuth(join(stateDir, "forge-auth", "glab-cli")))
+		synced.push("glab");
+	if (synced.length) {
+		console.log(`Forge auth synced into the container: ${synced.join(" + ")}`);
+	}
+}
+
+function prepareGhAuth(targetDir: string): boolean {
+	const ghBin = process.env.HELMOR_LOCAL_TEAM_GH_BIN ?? "gh";
+	const status = captureCommand(ghBin, ["auth", "status"]);
+	if (status.status !== 0) return false;
+	let yaml = "";
+	for (const { host, login } of parseGhHosts(status.stdout)) {
+		const token = captureCommand(ghBin, [
+			"auth",
+			"token",
+			"--hostname",
+			host,
+		]).stdout.trim();
+		if (!token) continue;
+		// Write both the legacy top-level token and the `users` map so any gh
+		// version in the container reads it.
+		yaml += `${host}:\n    git_protocol: https\n    oauth_token: ${token}\n`;
+		if (login) {
+			yaml += `    user: ${login}\n    users:\n        ${login}:\n            oauth_token: ${token}\n`;
+		}
+	}
+	if (!yaml) return false;
+	mkdirSync(targetDir, { recursive: true, mode: 0o700 });
+	chmodSync(targetDir, 0o700);
+	writeFileSync(join(targetDir, "hosts.yml"), yaml, { mode: 0o600 });
+	return true;
+}
+
+/** Hosts + active login from `gh auth status` (one block per host). */
+function parseGhHosts(out: string): Array<{ host: string; login: string }> {
+	const hosts: Array<{ host: string; login: string }> = [];
+	let current: { host: string; login: string } | null = null;
+	for (const line of out.split("\n")) {
+		const host = line.match(/^([A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,})\s*$/);
+		if (host) {
+			current = { host: host[1], login: "" };
+			hosts.push(current);
+			continue;
+		}
+		if (current && !current.login) {
+			const m = line.match(/(?:account|as)\s+([A-Za-z0-9-]+)/);
+			if (m) current.login = m[1];
+		}
+	}
+	return hosts;
+}
+
+function prepareGlabAuth(targetDir: string): boolean {
+	const source = [
+		process.env.HELMOR_LOCAL_TEAM_GLAB_CONFIG,
+		join(homedir(), ".config", "glab-cli", "config.yml"),
+		join(homedir(), "Library", "Application Support", "glab-cli", "config.yml"),
+	].find((p): p is string => Boolean(p) && existsSync(p as string));
+	if (!source) return false;
+	mkdirSync(targetDir, { recursive: true, mode: 0o700 });
+	chmodSync(targetDir, 0o700);
+	const dest = join(targetDir, "config.yml");
+	copyFileSync(source, dest);
+	chmodSync(dest, 0o600);
+	return true;
+}
+
+/** Host keys under glab's `hosts:` block — used to register git credential
+ *  helpers per host in the container. */
+function readGlabHosts(configPath: string): string[] {
+	const hosts: string[] = [];
+	let inHosts = false;
+	for (const line of readFileSync(configPath, "utf8").split("\n")) {
+		if (/^hosts:\s*$/.test(line)) {
+			inHosts = true;
+			continue;
+		}
+		if (!inHosts) continue;
+		if (/^\S/.test(line)) break;
+		const m = line.match(/^ {4}([A-Za-z0-9.-]+):\s*$/);
+		if (m) hosts.push(m[1]);
+	}
+	return hosts;
+}
+
+function captureCommand(
+	cmd: string,
+	args: string[],
+): { status: number; stdout: string; stderr: string } {
+	const result = spawnSync(cmd, args, { encoding: "utf8", stdio: "pipe" });
+	return {
+		status: result.status ?? (result.error ? 1 : 0),
+		stdout: result.stdout ?? "",
+		stderr: result.stderr ?? "",
+	};
 }
 
 function loadSecrets(path: string): LocalSecrets {

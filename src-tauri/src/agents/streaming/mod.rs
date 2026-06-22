@@ -771,6 +771,7 @@ pub(super) fn stream_via_sidecar(
                                         // ephemeral sandbox never loses code.
                                         cloud_autopush::maybe_autopush_after_turn(
                                             &turn_session.ctx.working_directory,
+                                            author_id_copy.as_deref(),
                                         );
                                         // Cloud serve mode only (env-gated):
                                         // fold the WAL into helmor.db NOW

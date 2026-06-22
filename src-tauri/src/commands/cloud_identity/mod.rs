@@ -28,6 +28,7 @@ use std::time::Duration;
 mod claude;
 mod claude_oauth;
 mod codex;
+mod forge;
 
 // Re-export the Tauri commands so the existing registration paths
 // (`commands::cloud_identity::authorize_cloud_codex_identity`) keep resolving
@@ -39,6 +40,7 @@ mod codex;
 // `claude_oauth`.
 pub use claude_oauth::*;
 pub use codex::*;
+pub use forge::*;
 
 /// Worker route the **Codex** broker PUTs the cloud identity through, appended to
 /// the (trailing-slash-stripped) team base URL. The Worker's `putCloudIdentity`
@@ -51,6 +53,11 @@ const CLOUD_IDENTITY_PATH: &str = "/team/cloud-identity";
 /// the `ClaudeIdentity` DO. Using the Codex path would hit `putCloudIdentity`,
 /// which reads `refreshToken`/`idToken` and 400s on a Claude body.
 const CLAUDE_IDENTITY_PATH: &str = "/team/claude-identity";
+
+/// Worker route the **forge** broker PUTs per-member gh/glab creds through. The
+/// Worker's `putForgeIdentity` handler reads `{ githubToken?, glabConfigYml? }`
+/// and stores them in the member's `ForgeIdentity` DO.
+const FORGE_IDENTITY_PATH: &str = "/team/forge-identity";
 
 /// Short timeout for the control-plane round-trips — these are tiny JSON
 /// requests against the Worker, mirroring `rate_limits::codex`.
@@ -75,6 +82,11 @@ fn cloud_identity_url(worker_base: &str) -> anyhow::Result<String> {
 /// Build the Claude broker's `PUT /team/claude-identity` URL from the team base.
 fn claude_identity_url(worker_base: &str) -> anyhow::Result<String> {
     identity_url(worker_base, CLAUDE_IDENTITY_PATH)
+}
+
+/// Build the forge broker's `PUT /team/forge-identity` URL from the team base.
+fn forge_identity_url(worker_base: &str) -> anyhow::Result<String> {
+    identity_url(worker_base, FORGE_IDENTITY_PATH)
 }
 
 /// Tighten a freshly created directory to `0700` on Unix. No-op on Windows,

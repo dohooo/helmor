@@ -1056,6 +1056,28 @@ export async function authorizeCloudClaudeIdentity(
 // (`team-api.getCloudClaudeIdentityStatus`, a plain fetch) — there is no Rust
 // status command / invoke wrapper.
 
+/** Metadata echoed after a forge-identity sync — what got uploaded, no tokens. */
+export type CloudForgeAuthResult = {
+	hasGithub: boolean;
+	glabHosts: string[];
+};
+
+/**
+ * Capture THIS Mac's forge credentials (gh token from the keychain + glab
+ * config.yml) and upload them to the member's `ForgeIdentity` broker on the team
+ * Worker, so the remote sandbox can authenticate git/gh/glab AS this member.
+ * LOCAL_ONLY — always runs on the desktop host (see `LOCAL_ONLY_INVOKES`).
+ */
+export async function authorizeCloudForgeIdentity(
+	workerUrl: string,
+	teamToken: string,
+): Promise<CloudForgeAuthResult> {
+	return await invoke<CloudForgeAuthResult>("authorize_cloud_forge_identity", {
+		workerUrl,
+		teamToken,
+	});
+}
+
 // Cursor is an SDK (no versioned CLI), so it has no entry.
 export type AgentVersionsResult = {
 	claude: string | null;

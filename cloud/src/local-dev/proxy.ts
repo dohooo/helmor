@@ -49,6 +49,9 @@ export function createLocalTeamGatewayStore(
 		putClaudeIdentity: (memberId, input) =>
 			options.registry.putClaudeIdentity(memberId, input),
 		getClaudeIdentity: () => options.registry.getClaudeIdentity(),
+		putForgeIdentity: (memberId, input) =>
+			options.registry.putForgeIdentity(memberId, input),
+		getForgeIdentity: (memberId) => options.registry.getForgeIdentity(memberId),
 	};
 }
 

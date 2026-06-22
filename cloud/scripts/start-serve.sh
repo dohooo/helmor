@@ -19,7 +19,7 @@ export DISPLAY=":${DISPLAY_NUM}"
 
 # Vendored gh + the helmor binaries on PATH (PR6 boot shells out to `gh` /
 # `helmor-cli`).
-export PATH="${HELMOR_HOME}/vendor/gh:${HELMOR_HOME}:${PATH}"
+export PATH="${HELMOR_HOME}/vendor/gh:${HELMOR_HOME}/vendor/glab:${HELMOR_HOME}:${PATH}"
 export HELMOR_SIDECAR_PATH="${HELMOR_SIDECAR_PATH:-${HELMOR_HOME}/helmor-sidecar}"
 
 # Phase 2b: the data dir must live under an allowed backup root (/home, /workspace,
@@ -83,8 +83,30 @@ if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
 	[ -f "$claude_cfg" ] || printf '%s' '{"hasCompletedOnboarding":true}' >"$claude_cfg"
 fi
 
+# Forge git push/clone: wire the synced gh/glab credentials into git so HTTPS
+# remotes authenticate. gh writes its own per-host helper; glab needs one per
+# host (the local dev launcher passes the configured hosts via HELMOR_GLAB_HOSTS).
+# Best-effort — never block serve startup.
+if command -v gh >/dev/null 2>&1 && [ -f "${HOME:-/root}/.config/gh/hosts.yml" ]; then
+	gh auth setup-git >/dev/null 2>&1 || true
+fi
+if command -v glab >/dev/null 2>&1 && [ -n "${HELMOR_GLAB_HOSTS:-}" ]; then
+	IFS=',' read -ra _glab_hosts <<<"$HELMOR_GLAB_HOSTS"
+	for _h in "${_glab_hosts[@]}"; do
+		[ -n "$_h" ] || continue
+		git config --global "credential.https://${_h}.helper" "" || true
+		git config --global --add "credential.https://${_h}.helper" \
+			"!glab auth git-credential" || true
+	done
+fi
+
 # 1. Independent Xvfb daemon (idempotent — skip if one is already running).
 if ! pgrep -x Xvfb >/dev/null 2>&1; then
+	# The container fs persists across restart (docker start / CF sandbox wake),
+	# so a dead Xvfb's socket + lock survive: the stale socket fools the readiness
+	# check below (→ helmor serve GTK-init panics) and the lock blocks a new Xvfb
+	# from claiming the display. None is running here, so any leftover is stale.
+	rm -f "/tmp/.X${DISPLAY_NUM}-lock" "/tmp/.X11-unix/X${DISPLAY_NUM}"
 	Xvfb "$DISPLAY" -screen 0 1280x800x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &
 fi
 

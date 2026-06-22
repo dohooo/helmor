@@ -23,6 +23,7 @@ import { useRouterSelection } from "@/router/use-router-selection";
 import { publishShellEvent } from "@/shell/event-bus";
 import { useCompanionIdleSuspend } from "@/shell/hooks/use-companion-idle-suspend";
 import { useEnsureDefaultModel } from "@/shell/hooks/use-ensure-default-model";
+import { useForgeIdentityAutoSync } from "@/shell/hooks/use-forge-identity-auto-sync";
 import { useGlobalShortcutHandlers } from "@/shell/hooks/use-global-shortcut-handlers";
 import { useNavigationSidebar } from "@/shell/hooks/use-navigation-sidebar";
 import { useShellPanels } from "@/shell/hooks/use-panels";
@@ -250,6 +251,10 @@ export function useAppShellState({
 	// Team mode: drop the companion SSE while the window is hidden so the remote
 	// sandbox can idle-sleep; re-focusing wakes it. Inert outside team mode.
 	useCompanionIdleSuspend();
+	// Team mode (desktop): auto-push THIS member's gh/glab creds on (re)connect so
+	// the shared cloud sandbox can act as them — per-member, no button. Inert
+	// outside team mode / off-Tauri.
+	useForgeIdentityAutoSync();
 	// Event-fresh threads (`staleTime: Infinity`) get a focus-time backstop
 	// so a missed `sessionTurnPersisted` can't leave the on-screen thread
 	// stale forever.

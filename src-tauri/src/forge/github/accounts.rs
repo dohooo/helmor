@@ -100,7 +100,13 @@ pub(crate) fn token_for_user_on_host(host: &str, login: &str) -> Result<String> 
 /// is still responsible for adding `--hostname <host>` to `args` when the
 /// command consults gh's host config (most `gh api ...` calls do).
 pub(crate) fn run_cli_with_login(host: &str, login: &str, args: &[&str]) -> Result<CommandOutput> {
-    let token = token_for_user_on_host(host, login)?;
+    // Team mode (true per-member): when an acting member is bound, run gh as
+    // THEM (their injected github.com token) instead of the repo-bound `login`.
+    // No acting member (desktop) → repo-bound token, unchanged.
+    let token = match crate::forge::member_creds::acting_github_token(host) {
+        Some(member_token) => member_token,
+        None => token_for_user_on_host(host, login)?,
+    };
     run_command_with_env("gh", args.iter().copied(), &[("GH_TOKEN", token.as_str())])
         .with_context(|| format!("Failed to spawn `gh {}`", args.join(" ")))
 }

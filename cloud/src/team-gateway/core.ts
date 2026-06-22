@@ -30,6 +30,11 @@ export interface TeamGatewayStore {
 		input: { oauthToken: string },
 	): Promise<unknown>;
 	getClaudeIdentity(): Promise<unknown>;
+	putForgeIdentity(
+		memberId: string,
+		input: { githubToken?: string; glabConfigYml?: string },
+	): Promise<unknown>;
+	getForgeIdentity(memberId: string): Promise<unknown>;
 }
 
 export interface TeamGatewayAcceptInviteInput {
@@ -160,6 +165,37 @@ export async function handleTeamGatewayRoute(
 				return json({ code: "Unauthorized" }, 401);
 			}
 			return json(await store.getClaudeIdentity());
+		}
+		case "PUT /team/forge-identity": {
+			const caller = await auth();
+			if (!caller.memberId) return json({ code: "Unauthorized" }, 401);
+			const body = await readGatewayJsonBody(request);
+			const githubToken =
+				typeof body.githubToken === "string" ? body.githubToken : undefined;
+			const glabConfigYml =
+				typeof body.glabConfigYml === "string" ? body.glabConfigYml : undefined;
+			if (!githubToken && !glabConfigYml) {
+				return json(
+					{
+						code: "BadRequest",
+						message: "githubToken or glabConfigYml required",
+					},
+					400,
+				);
+			}
+			return json(
+				await store.putForgeIdentity(caller.memberId, {
+					githubToken,
+					glabConfigYml,
+				}),
+			);
+		}
+		case "GET /team/forge-identity": {
+			// Per-member: a member reads only THEIR OWN forge status (the admin
+			// token carries no member identity, so it gets 401 here).
+			const caller = await auth();
+			if (!caller.memberId) return json({ code: "Unauthorized" }, 401);
+			return json(await store.getForgeIdentity(caller.memberId));
 		}
 		default:
 			return json({ code: "NotFound", message: `no route ${route}` }, 404);

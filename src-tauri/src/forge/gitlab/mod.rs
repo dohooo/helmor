@@ -28,6 +28,9 @@ use super::types::{
 
 pub(super) mod accounts;
 mod api;
+/// Re-exported for the cloud forge-identity broker: locate the host's glab
+/// config dir (XDG-preferred) so the desktop can read `config.yml` for upload.
+pub(crate) use api::resolved_glab_config_dir;
 mod context;
 pub mod inbox;
 mod merge_request;

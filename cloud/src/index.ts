@@ -12,6 +12,7 @@ import {
 	getSandbox,
 	proxyToSandbox,
 } from "@cloudflare/sandbox";
+import { parseGlabTokens } from "./forge-config";
 import {
 	createWorkerTeamGatewayStore,
 	handleTeamRoute,
@@ -156,6 +157,7 @@ export { ClaudeIdentity } from "./claude-identity";
 // Re-export so workerd registers the Durable Object class named in
 // wrangler.toml's `CODEX_IDENTITY` binding (Phase 1 Codex token broker).
 export { CodexIdentity } from "./codex-identity";
+export { ForgeIdentity } from "./forge-identity";
 
 export interface Env {
 	Sandbox: DurableObjectNamespace<CloudflareSandbox>;
@@ -189,6 +191,13 @@ export interface Env {
 	 *  inject-and-forget, no in-DO refresh. */
 	CLAUDE_IDENTITY: DurableObjectNamespace<
 		import("./claude-identity").ClaudeIdentity
+	>;
+	/** Per-member forge credential broker: each member's `ForgeIdentity` DO holds
+	 *  their gh token / glab config encrypted at rest. TRUE per-member — the
+	 *  container injects ALL members' creds at cold start and the forge layer
+	 *  selects by the acting member (no single team-bound identity). */
+	FORGE_IDENTITY: DurableObjectNamespace<
+		import("./forge-identity").ForgeIdentity
 	>;
 	/** Base64-encoded 32-byte AES-256-GCM key the `CodexIdentity` AND
 	 *  `ClaudeIdentity` DOs derive their at-rest encryption key from (Worker
@@ -459,8 +468,27 @@ export async function handleTeamClone(
 	//    catch it — an uncaught throw escapes as a bare CORS-less 500 and the
 	//    webview only sees an opaque "network error". The likely cases are a
 	//    private/unreachable URL and a re-add where targetDir already exists.
+	// True per-member clone: rewrite the URL with the acting member's forge token
+	// so a private repo clones AS them (the SDK gitCheckout has no auth option).
+	// The member id was stamped by the gateway (trusted, never client-set); no
+	// member / token → plain URL (public repos still clone).
+	let cloneUrl = gitUrl;
+	const cloneMemberId = forwarded.headers.get("X-Helmor-Member-Id");
+	if (cloneMemberId) {
+		try {
+			const stub = env.FORGE_IDENTITY.get(
+				env.FORGE_IDENTITY.idFromName(cloneMemberId),
+			);
+			const minted = await stub.mint();
+			if (minted && !("error" in minted)) {
+				cloneUrl = authenticatedGitUrl(gitUrl, minted);
+			}
+		} catch {
+			// DO read failed → plain URL.
+		}
+	}
 	try {
-		const checkout = await sandbox.gitCheckout(gitUrl, {
+		const checkout = await sandbox.gitCheckout(cloneUrl, {
 			targetDir,
 			cloneTimeoutMs: 120_000,
 		});
@@ -611,6 +639,97 @@ async function deriveForwardedRequest(
 	return new Request(request, { headers });
 }
 
+/** Where the per-member forge creds file is written in the container. OUTSIDE
+ *  the backed-up `/home` tree so plaintext tokens never enter an R2 backup and a
+ *  restore can't shadow a fresh injection. Matches the in-container loader's
+ *  `HELMOR_FORGE_MEMBERS_PATH`. */
+const FORGE_MEMBERS_PATH = "/tmp/helmor-forge-members.json";
+
+/** Collect every member's forge creds from their `ForgeIdentity` DOs, keyed by
+ *  member id. Members with nothing stored are omitted. */
+async function collectMemberForgeCreds(
+	env: Env,
+): Promise<
+	Record<
+		string,
+		{ githubToken?: string; glabConfigYml?: string; login?: string }
+	>
+> {
+	const { results } = await env.DB.prepare(
+		"SELECT id, github_login FROM members",
+	).all<{ id: string; github_login: string | null }>();
+	const out: Record<
+		string,
+		{ githubToken?: string; glabConfigYml?: string; login?: string }
+	> = {};
+	for (const row of results ?? []) {
+		try {
+			const stub = env.FORGE_IDENTITY.get(
+				env.FORGE_IDENTITY.idFromName(row.id),
+			);
+			const minted = await stub.mint();
+			if (
+				minted &&
+				!("error" in minted) &&
+				(minted.githubToken || minted.glabConfigYml)
+			) {
+				out[row.id] = {
+					githubToken: minted.githubToken,
+					glabConfigYml: minted.glabConfigYml,
+					login: row.github_login ?? undefined,
+				};
+			}
+		} catch {
+			// Skip a member whose DO read failed; the rest still inject.
+		}
+	}
+	return out;
+}
+
+/** Write the collected per-member forge creds into the running container at
+ *  {@link FORGE_MEMBERS_PATH}. The in-container `member_creds` loader hot-reloads
+ *  it via mtime, so this doubles as the live re-inject on re-authorize. */
+async function injectForgeMembers(
+	sandbox: CloudflareSandbox,
+	env: Env,
+): Promise<void> {
+	const creds = await collectMemberForgeCreds(env);
+	await sandbox.writeFile(FORGE_MEMBERS_PATH, JSON.stringify(creds));
+}
+
+/** Rewrite an https clone URL to embed the acting member's forge token so the
+ *  SDK `gitCheckout` (which has no auth option) can clone private repos AS that
+ *  member. Returns the URL unchanged for non-https, already-credentialed, or
+ *  unknown-host URLs (public clones still work). */
+function authenticatedGitUrl(
+	gitUrl: string,
+	creds: { githubToken?: string; glabConfigYml?: string },
+): string {
+	let parsed: URL;
+	try {
+		parsed = new URL(gitUrl);
+	} catch {
+		return gitUrl;
+	}
+	if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
+		return gitUrl;
+	}
+	if (parsed.hostname === "github.com" && creds.githubToken) {
+		parsed.username = "x-access-token";
+		parsed.password = creds.githubToken;
+		return parsed.toString();
+	}
+	if (creds.glabConfigYml) {
+		const token = parseGlabTokens(creds.glabConfigYml)[parsed.hostname];
+		if (token) {
+			parsed.username = "oauth2";
+			parsed.password = token;
+			return parsed.toString();
+		}
+	}
+	return gitUrl;
+}
+
 /** Ensure the companion server is up. Fast-path on a health hit; otherwise
  *  launch the boot script and poll until it answers (Xvfb + serve cold start). */
 export interface EnsureServeOptions {
@@ -722,11 +841,26 @@ export async function ensureServe(
 				...(env.GITHUB_TOKEN ? { GITHUB_TOKEN: env.GITHUB_TOKEN } : {}),
 				...(codexAuthJson ? { CODEX_AUTH_JSON: codexAuthJson } : {}),
 				...(claudeToken ? { CLAUDE_CODE_OAUTH_TOKEN: claudeToken } : {}),
+				// Per-member forge creds file (written just below, after the
+				// container is up). The in-container loader reads it lazily on the
+				// first forge op, so writing it right after startProcess is in time.
+				HELMOR_FORGE_MEMBERS_PATH: FORGE_MEMBERS_PATH,
 			},
 		}),
 		startProcessTimeoutMs,
 		"startProcess",
 	);
+
+	// True per-member forge: snapshot every member's gh/glab creds from their
+	// ForgeIdentity DOs and write them into the container (OUTSIDE the backed-up
+	// /home tree, so plaintext tokens never land in an R2 backup). Best-effort —
+	// a failure just leaves the forge layer on its repo-bound fallback.
+	await injectForgeMembers(sandbox, env).catch((error) => {
+		console.error(
+			"forge members inject failed",
+			error instanceof Error ? error.message : "unknown",
+		);
+	});
 
 	// Cold start: Xvfb + GTK/WebKit init + companion bind. Poll up to ~120s
 	// (WebKitGTK init is heavy on a fresh container's first boot).

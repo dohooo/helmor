@@ -32,15 +32,19 @@ fn enabled() -> bool {
 /// Commit + push the workspace's uncommitted work after a finalized turn.
 /// No-op (returns immediately) on the desktop. Runs on a detached thread so it
 /// never blocks the streaming loop.
-pub(super) fn maybe_autopush_after_turn(working_directory: &str) {
+pub(super) fn maybe_autopush_after_turn(working_directory: &str, acting_member: Option<&str>) {
     if !enabled() {
         return;
     }
     let dir = working_directory.to_string();
+    // Team mode: author the commit as the member who ran the turn. The detached
+    // thread can't read the ambient acting-member (thread-local), so capture it
+    // here. `None` (desktop / no member) → the global git identity, unchanged.
+    let member = acting_member.map(str::to_string);
     std::thread::Builder::new()
         .name("cloud-autopush".into())
         .spawn(move || {
-            if let Err(error) = autopush(Path::new(&dir)) {
+            if let Err(error) = autopush(Path::new(&dir), member.as_deref()) {
                 tracing::warn!(
                     error = %format!("{error:#}"),
                     dir = %dir,
@@ -89,7 +93,7 @@ fn checkpoint_db() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn autopush(workspace_dir: &Path) -> anyhow::Result<()> {
+fn autopush(workspace_dir: &Path, acting_member: Option<&str>) -> anyhow::Result<()> {
     // Nothing changed → nothing to do (the common case mid-conversation when a
     // turn only read files / answered a question).
     if git_ops::working_tree_clean(workspace_dir)? {
@@ -111,20 +115,35 @@ fn autopush(workspace_dir: &Path) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    git_ops::run_git(
-        [
-            "-C",
-            dir.as_str(),
-            "commit",
-            "-m",
-            "helmor: auto-commit after agent turn",
-        ],
-        None,
-    )?;
+    // Author the commit as the acting member when we know them (team mode), via
+    // per-invocation `-c user.name/email` so the global identity is untouched.
+    // The GitHub noreply email attributes the commit to that user. Falls back to
+    // the container's global identity when there's no member / no synced login.
+    let mut commit_args: Vec<String> = vec!["-C".into(), dir.clone()];
+    if let Some((name, email)) = acting_member.and_then(forge_author) {
+        commit_args.push("-c".into());
+        commit_args.push(format!("user.name={name}"));
+        commit_args.push("-c".into());
+        commit_args.push(format!("user.email={email}"));
+    }
+    commit_args.push("commit".into());
+    commit_args.push("-m".into());
+    commit_args.push("helmor: auto-commit after agent turn".into());
+    git_ops::run_git(commit_args, None)?;
 
     git_ops::push_current_branch(workspace_dir, DEFAULT_REMOTE)?;
     tracing::info!(dir = %dir, "cloud auto-push: committed + pushed turn changes");
     Ok(())
+}
+
+/// Per-member git author (login + GitHub noreply email) for the auto-commit, or
+/// `None` when the member has no synced forge identity / login (→ global git
+/// identity). The email `<id>+<login>@users.noreply.github.com` is GitHub's
+/// canonical form, so the commit attributes to that user.
+fn forge_author(member_id: &str) -> Option<(String, String)> {
+    let login = crate::forge::member_creds::member_for(member_id)?.login?;
+    let email = format!("{member_id}+{login}@users.noreply.github.com");
+    Some((login, email))
 }
 
 #[cfg(test)]
