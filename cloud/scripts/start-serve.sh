@@ -22,6 +22,17 @@ export DISPLAY=":${DISPLAY_NUM}"
 export PATH="${HELMOR_HOME}/vendor/gh:${HELMOR_HOME}/vendor/glab:${HELMOR_HOME}:${PATH}"
 export HELMOR_SIDECAR_PATH="${HELMOR_SIDECAR_PATH:-${HELMOR_HOME}/helmor-sidecar}"
 
+# Point the COMPILED sidecar at the vendored claude-code binary. The sidecar is
+# `bun build --compile` output with no node_modules, so its only way to resolve
+# claude-code in the container is this env var — without it Claude turns silently
+# hang (the SDK can't spawn the binary). codex has a relative-path fallback so it
+# doesn't need this. Guarded so it's inert if the binary isn't staged.
+_claude_bin="${HELMOR_HOME}/vendor/claude-code/claude"
+if [ -f "$_claude_bin" ]; then
+	chmod +x "$_claude_bin" 2>/dev/null || true
+	export HELMOR_CLAUDE_CODE_BIN_PATH="${HELMOR_CLAUDE_CODE_BIN_PATH:-$_claude_bin}"
+fi
+
 # Phase 2b: the data dir must live under an allowed backup root (/home, /workspace,
 # /tmp, /var/tmp, /app) so the Sandbox backup API can snapshot it. Default to
 # /home/helmor; the Worker may override via startProcess env. `helmor serve` AND
