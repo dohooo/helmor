@@ -70,7 +70,7 @@ import {
 } from "./shared";
 import { repoIdFromGroupId } from "./sidebar-projection";
 import { SidebarViewPopover } from "./sidebar-view-popover";
-import { PRESENCE_TTL_MS, usePresenceStore } from "./state/presence-store";
+import { isPresenceLive, usePresenceStore } from "./state/presence-store";
 import { TeamModeSwitch } from "./team-mode-switch";
 
 // ---------------------------------------------------------------------------
@@ -845,9 +845,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		(workspaceId: string) => {
 			if (!teamModeOn) return null;
 			const entry = presenceByWorkspace[workspaceId];
-			if (!entry) return null;
-			// Read-time TTL — a stale entry resolves to nothing (no timers).
-			if (Date.now() - entry.ts > PRESENCE_TTL_MS) return null;
+			if (!entry || !isPresenceLive(entry, Date.now())) return null;
 			const member = teamMembers?.find((m) => m.id === entry.memberId);
 			return {
 				memberId: entry.memberId,

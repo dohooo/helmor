@@ -16,10 +16,9 @@ import { useTeamIdentity } from "@/features/team/use-team-identity";
 import { subscribeUiMutations, type UiMutationEvent } from "@/lib/api";
 
 /**
- * How long a presence entry stays "live" without a refresh. Read-time only —
- * the selector treats an entry older than this as absent. No timers: a stale
- * entry simply stops being reported once the reporter goes quiet (the typing
- * debounce re-stamps `ts` well inside this window while editing continues).
+ * How long a presence entry stays "live" without a refresh. The backend
+ * re-stamps an active peer (typing throttle) well inside this window; a peer
+ * that goes quiet ages out via {@link isPresenceLive} + the prune timer.
  */
 export const PRESENCE_TTL_MS = 10_000;
 
@@ -28,6 +27,16 @@ export type PresenceEntry = {
 	activity: "typing" | "working";
 	ts: number;
 };
+
+/**
+ * A presence entry is live for the first {@link PRESENCE_TTL_MS} after its last
+ * refresh. Pure, so the read path (the sidebar) and the prune timer below share
+ * exactly one definition of "live" — strict `<` so an entry is already stale at
+ * the instant the timer is scheduled to fire (no delay-0 reschedule loop).
+ */
+export function isPresenceLive(entry: PresenceEntry, nowMs: number): boolean {
+	return nowMs - entry.ts < PRESENCE_TTL_MS;
+}
 
 type PresenceState = {
 	byWorkspace: Record<string, PresenceEntry>;
@@ -51,10 +60,46 @@ type RoomPresenceEvent = Extract<
 	{ type: "roomPresenceChanged" }
 >;
 
-export const usePresenceStore = create<PresenceStore>((set) => ({
+/**
+ * A single timer drops the soonest-expiring entry the moment it ages past the
+ * TTL and re-renders the sidebar — so an idle peer's indicator clears even when
+ * nothing else would re-render the row. It re-arms against the remaining
+ * entries and stops once presence is empty (no polling, no `setInterval`).
+ * Read-time {@link isPresenceLive} stays the value authority and covers the
+ * instant before the timer fires (e.g. a throttled background timer).
+ */
+let pruneTimer: ReturnType<typeof setTimeout> | null = null;
+
+function schedulePrune(byWorkspace: Record<string, PresenceEntry>): void {
+	if (pruneTimer !== null) {
+		clearTimeout(pruneTimer);
+		pruneTimer = null;
+	}
+	const entries = Object.values(byWorkspace);
+	if (entries.length === 0) return;
+	const soonest = Math.min(...entries.map((e) => e.ts)) + PRESENCE_TTL_MS;
+	pruneTimer = setTimeout(
+		() => {
+			pruneTimer = null;
+			const now = Date.now();
+			const current = usePresenceStore.getState().byWorkspace;
+			const live: Record<string, PresenceEntry> = {};
+			for (const [id, entry] of Object.entries(current)) {
+				if (isPresenceLive(entry, now)) live[id] = entry;
+			}
+			if (Object.keys(live).length !== Object.keys(current).length) {
+				usePresenceStore.setState({ byWorkspace: live });
+			}
+			schedulePrune(live);
+		},
+		Math.max(0, soonest - Date.now()),
+	);
+}
+
+export const usePresenceStore = create<PresenceStore>((set, get) => ({
 	byWorkspace: {},
 
-	applyPresence: (event) =>
+	applyPresence: (event) => {
 		set((state) => {
 			const current = state.byWorkspace[event.workspaceId];
 			if (event.activity === "idle") {
@@ -75,22 +120,11 @@ export const usePresenceStore = create<PresenceStore>((set) => ({
 					},
 				},
 			};
-		}),
+		});
+		// Re-arm the expiry sweep against the new state.
+		schedulePrune(get().byWorkspace);
+	},
 }));
-
-/**
- * Selector-subscribe to a single workspace's live presence. Applies the
- * read-time TTL so an expired entry resolves to `null` without any timer.
- * Returns `null` when absent or expired.
- */
-export function usePresenceForWorkspace(
-	workspaceId: string,
-): { memberId: string; activity: "typing" | "working" } | null {
-	const entry = usePresenceStore((state) => state.byWorkspace[workspaceId]);
-	if (!entry) return null;
-	if (Date.now() - entry.ts > PRESENCE_TTL_MS) return null;
-	return { memberId: entry.memberId, activity: entry.activity };
-}
 
 /**
  * Headless subscription: opens ONE `roomPresenceChanged` listener and folds
@@ -125,7 +159,11 @@ export function usePresenceSubscription(): void {
 	}, [ownMemberId]);
 }
 
-/** Reset all state. Test-only. */
+/** Reset all state + cancel the prune timer. Test-only. */
 export function _resetForTesting() {
+	if (pruneTimer !== null) {
+		clearTimeout(pruneTimer);
+		pruneTimer = null;
+	}
 	usePresenceStore.setState({ byWorkspace: {} });
 }

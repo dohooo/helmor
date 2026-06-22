@@ -1,10 +1,9 @@
-import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UiMutationEvent } from "@/lib/api";
 import {
 	_resetForTesting,
+	isPresenceLive,
 	PRESENCE_TTL_MS,
-	usePresenceForWorkspace,
 	usePresenceStore,
 } from "./presence-store";
 
@@ -23,11 +22,13 @@ function event(partial: Partial<PresenceEvent>): PresenceEvent {
 }
 
 beforeEach(() => {
+	vi.useFakeTimers();
+	vi.setSystemTime(1000);
 	_resetForTesting();
 });
 
 afterEach(() => {
-	vi.restoreAllMocks();
+	vi.useRealTimers();
 });
 
 describe("presence-store", () => {
@@ -56,20 +57,33 @@ describe("presence-store", () => {
 		});
 	});
 
-	it("treats an entry past PRESENCE_TTL_MS as absent (read-time TTL)", () => {
-		vi.spyOn(Date, "now").mockReturnValue(10_000);
-		usePresenceStore
-			.getState()
-			.applyPresence(event({ activity: "typing", ts: 10_000 }));
+	it("isPresenceLive is live within the TTL and stale at the boundary", () => {
+		const entry = { memberId: "1", activity: "typing", ts: 1000 } as const;
+		expect(isPresenceLive(entry, 1000 + PRESENCE_TTL_MS - 1)).toBe(true);
+		expect(isPresenceLive(entry, 1000 + PRESENCE_TTL_MS)).toBe(false);
+	});
 
-		const { result, rerender } = renderHook(() =>
-			usePresenceForWorkspace("ws1"),
-		);
-		expect(result.current).toEqual({ memberId: "1", activity: "typing" });
+	it("prunes an aged-out entry on its own timer, with no other re-render", () => {
+		const { applyPresence } = usePresenceStore.getState();
+		applyPresence(event({ activity: "typing", ts: 1000 }));
+		expect(usePresenceStore.getState().byWorkspace.ws1).toBeDefined();
 
-		// Advance the clock past the TTL — the same entry now reads as expired.
-		vi.spyOn(Date, "now").mockReturnValue(10_000 + PRESENCE_TTL_MS + 1);
-		rerender();
-		expect(result.current).toBeNull();
+		// Nothing else touches the store; the entry must disappear on its own once
+		// it ages past the TTL (the fix for a stuck indicator in a quiet sidebar).
+		vi.advanceTimersByTime(PRESENCE_TTL_MS);
+		expect(usePresenceStore.getState().byWorkspace.ws1).toBeUndefined();
+	});
+
+	it("keeps a still-live entry while pruning an expired one", () => {
+		const { applyPresence } = usePresenceStore.getState();
+		applyPresence(event({ workspaceId: "ws1", ts: 1000 }));
+		// A second workspace's typer refreshes 4s later.
+		vi.advanceTimersByTime(4000);
+		applyPresence(event({ workspaceId: "ws2", memberId: "2", ts: 5000 }));
+
+		// At t=10000 ws1 has aged out (>= TTL) but ws2 (ts 5000) is still live.
+		vi.advanceTimersByTime(PRESENCE_TTL_MS - 4000);
+		expect(usePresenceStore.getState().byWorkspace.ws1).toBeUndefined();
+		expect(usePresenceStore.getState().byWorkspace.ws2).toBeDefined();
 	});
 });
