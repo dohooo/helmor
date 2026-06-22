@@ -9,8 +9,9 @@ import { describe, expect, it } from "vitest";
  * event with no matching case is silently dropped and the frontend never reacts.
  */
 const HANDLED_OUTSIDE_BRIDGE: ReadonlySet<string> = new Set([
-	// Consumed by `useRoomPresence` (presence store + ts/TTL self-expiry), not
-	// the central invalidation bridge. See backend-contract-presence-unread.md.
+	// Consumed by `usePresenceSubscription` (features/navigation/state/
+	// presence-store.ts): a transient presence store with read-time TTL, not a
+	// React Query invalidation — so it lives off the central bridge.
 	"roomPresenceChanged",
 	// Consumed by a dedicated `subscribeUiMutations` listener in
 	// `features/conversation/index.tsx` that flips the composer's fast-mode

@@ -21,6 +21,7 @@ import {
 	useState,
 } from "react";
 import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
 	ContextMenu,
@@ -87,6 +88,16 @@ export type WorkspaceRowItemProps = {
 	 *  the run-script ShineBorder, so those affordances aren't lost when
 	 *  the avatar is hidden. */
 	hideRepoAvatar?: boolean;
+	/** Pre-resolved presence for this workspace's shared team room (who's
+	 *  currently typing). Resolution + TTL happen upstream so the row stays a
+	 *  pure function of props; `null`/absent → no indicator. */
+	presence?: {
+		memberId: string;
+		login: string;
+		avatarUrl: string | null;
+		displayName: string | null;
+		activity: "typing" | "working";
+	} | null;
 	rowRef?: (element: HTMLDivElement | null) => void;
 	onSelect?: (workspaceId: string) => void;
 	onPreviewSelect?: (workspaceId: string) => void;
@@ -143,6 +154,25 @@ function useIsRunScriptRunning(workspaceId: string): boolean {
 	return running;
 }
 
+/**
+ * Value-compare two presence props. The sidebar builds a fresh presence object
+ * each render, so a reference compare would re-render every row on every tick;
+ * comparing by field keeps the memo effective.
+ */
+function samePresence(
+	a: WorkspaceRowItemProps["presence"],
+	b: WorkspaceRowItemProps["presence"],
+): boolean {
+	if (a == null || b == null) return a == null && b == null;
+	return (
+		a.memberId === b.memberId &&
+		a.activity === b.activity &&
+		a.avatarUrl === b.avatarUrl &&
+		a.login === b.login &&
+		a.displayName === b.displayName
+	);
+}
+
 export const WorkspaceRowItem = memo(
 	function WorkspaceRowItem({
 		row,
@@ -150,6 +180,7 @@ export const WorkspaceRowItem = memo(
 		isSending,
 		isInteractionRequired,
 		hideRepoAvatar = false,
+		presence = null,
 		rowRef,
 		onSelect,
 		onPreviewSelect,
@@ -452,6 +483,38 @@ export const WorkspaceRowItem = memo(
 							<HyperText text={displayTitle} className="inline" />
 						</span>
 					);
+					// Trailing presence indicator: a teammate's avatar shown when
+					// they're typing in this shared team room. Pre-resolved by the
+					// sidebar (incl. TTL), so the row stays pure — `null` → nothing.
+					const presenceSlot = presence ? (
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Avatar
+									size="sm"
+									className="ml-auto size-4 shrink-0 animate-pulse ring-2 ring-sidebar"
+								>
+									{presence.avatarUrl ? (
+										<AvatarImage
+											src={presence.avatarUrl}
+											alt={presence.displayName ?? presence.login}
+										/>
+									) : null}
+									<AvatarFallback className="bg-chart-2 text-[8px] text-white">
+										{(presence.displayName ?? presence.login)
+											.charAt(0)
+											.toUpperCase()}
+									</AvatarFallback>
+								</Avatar>
+							</TooltipTrigger>
+							<TooltipContent
+								side="top"
+								sideOffset={4}
+								className="flex h-[22px] items-center rounded-md px-1.5 text-mini leading-none"
+							>
+								<span>{`${presence.displayName ?? presence.login} · typing`}</span>
+							</TooltipContent>
+						</Tooltip>
+					) : null;
 					// Chat workspaces have no real repo, so skip the avatar
 					// slot entirely — the branch icon (MessageCircle in
 					// chat mode) carries the leading visual identity. Falls
@@ -464,6 +527,7 @@ export const WorkspaceRowItem = memo(
 								<div className="row-content-fade flex min-w-0 flex-1 items-center gap-2">
 									{titleSlot}
 								</div>
+								{presenceSlot}
 							</div>
 						);
 					}
@@ -488,6 +552,7 @@ export const WorkspaceRowItem = memo(
 								{branchSlot}
 								{titleSlot}
 							</div>
+							{presenceSlot}
 						</div>
 					);
 				})()}
@@ -709,6 +774,7 @@ export const WorkspaceRowItem = memo(
 			previous.isSending === next.isSending &&
 			previous.isInteractionRequired === next.isInteractionRequired &&
 			previous.hideRepoAvatar === next.hideRepoAvatar &&
+			samePresence(previous.presence, next.presence) &&
 			previous.archivingWorkspaceIds === next.archivingWorkspaceIds &&
 			previous.markingUnreadWorkspaceId === next.markingUnreadWorkspaceId &&
 			previous.restoringWorkspaceId === next.restoringWorkspaceId &&

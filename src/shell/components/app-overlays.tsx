@@ -5,6 +5,7 @@
 import type { ReactNode } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { ReleaseAnnouncementToastHost } from "@/features/announcements";
+import { usePresenceSubscription } from "@/features/navigation/state/presence-store";
 import type { QuickSwitchControls } from "@/features/quick-switch";
 import { QuickSwitchOverlay } from "@/features/quick-switch";
 import type { SettingsSection } from "@/features/settings";
@@ -44,6 +45,9 @@ export function AppOverlays({
 	// the (now-removed) ReconnectingBanner. Must run shell-wide for every remote
 	// transport, not only where the team-mode switch renders.
 	useActiveStreamsReattach();
+	// Headless: fold `roomPresenceChanged` events into the presence store so
+	// sidebar rows can show who's typing in a shared team workspace.
+	usePresenceSubscription();
 
 	return (
 		<>

@@ -44,8 +44,12 @@ function $hasContent(): boolean {
 
 export function HasContentPlugin({
 	onChange,
+	onEditing,
 }: {
 	onChange: (hasContent: boolean) => void;
+	/** Fires once per content-dirtying edit (after the selection-only guard),
+	 *  so callers can report typing presence without their own listener. */
+	onEditing?: () => void;
 }) {
 	const [editor] = useLexicalComposerContext();
 
@@ -58,12 +62,13 @@ export function HasContentPlugin({
 				// work. Same guard AutoResizePlugin uses. The emitted boolean is
 				// unchanged — content edits always dirty an element or leaf.
 				if (dirtyElements.size === 0 && dirtyLeaves.size === 0) return;
+				onEditing?.();
 				editorState.read(() => {
 					onChange($hasContent());
 				});
 			},
 		);
-	}, [editor, onChange]);
+	}, [editor, onChange, onEditing]);
 
 	return null;
 }

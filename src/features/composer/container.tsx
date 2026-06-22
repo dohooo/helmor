@@ -24,6 +24,7 @@ import {
 	isCodexProvider,
 	listCustomProviders,
 	mutateCodexGoal,
+	reportPresence,
 	type SlashCommandEntry,
 	saveAutoCloseActionKinds,
 	setWorkspaceLinkedDirectories,
@@ -49,6 +50,7 @@ import {
 } from "@/lib/query-client";
 import { readSessionThread } from "@/lib/session-thread-cache";
 import { type ModelRef, useSettings } from "@/lib/settings";
+import { isTeamModeActive } from "@/lib/team-mode";
 import type { QueuedSubmit } from "@/lib/use-submit-queue";
 import { cn } from "@/lib/utils";
 import {
@@ -1213,6 +1215,28 @@ export const WorkspaceComposerContainer = memo(
 			});
 		}, [displayedWorkspaceId, triageDismissing]);
 
+		// Typing-presence reporter (team mode only). Debounced so a burst of
+		// keystrokes coalesces into ~one `report_presence` call per 1.5s; the
+		// backend re-broadcasts on its own ~2s throttle, re-stamping `ts` so the
+		// peer's 10s TTL stays alive while editing continues. Local / non-team
+		// sessions no-op the IPC.
+		const editingDebounceRef = useRef<number | null>(null);
+		const handleEditing = useCallback(() => {
+			if (!isTeamModeActive() || !displayedWorkspaceId) return;
+			if (editingDebounceRef.current !== null) return;
+			editingDebounceRef.current = window.setTimeout(() => {
+				editingDebounceRef.current = null;
+				void reportPresence(displayedWorkspaceId, displayedSessionId, "typing");
+			}, 1500);
+		}, [displayedWorkspaceId, displayedSessionId]);
+		useEffect(() => {
+			return () => {
+				if (editingDebounceRef.current !== null) {
+					window.clearTimeout(editingDebounceRef.current);
+				}
+			};
+		}, []);
+
 		return (
 			// `z-20` lifts the entire composer stacking context above the thread
 			// viewport's `z-10` root (`thread-viewport.tsx:99`). Without this the
@@ -1417,6 +1441,7 @@ export const WorkspaceComposerContainer = memo(
 						onStartSubmitModeChange={handleStartSubmitModeChange}
 						focusScope={focusScope}
 						getInputHistory={getInputHistory}
+						onEditing={handleEditing}
 					/>
 				</div>
 			</div>

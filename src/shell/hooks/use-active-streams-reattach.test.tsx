@@ -89,7 +89,7 @@ describe("useActiveStreamsReattach", () => {
 		);
 		expect(predicateCall).toBeDefined();
 		const predicate = (
-			predicateCall?.[0] as {
+			predicateCall?.[0] as unknown as {
 				predicate: (q: { queryKey: unknown[] }) => boolean;
 			}
 		).predicate;

@@ -242,6 +242,9 @@ type WorkspaceComposerProps = {
 	 *  first. Called by `HistoryRecallPlugin` on each ArrowUp/Down so the
 	 *  composer doesn't have to re-render when the thread cache changes. */
 	getInputHistory?: () => readonly InputHistoryEntry[];
+	/** Fires on each content-dirtying edit (not selection-only). Used to
+	 *  report typing presence in shared team workspaces. */
+	onEditing?: () => void;
 };
 
 /**
@@ -362,6 +365,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	onStartSubmitModeChange,
 	focusScope = "workspace-composer",
 	getInputHistory,
+	onEditing,
 }: WorkspaceComposerProps) {
 	const { t } = useI18n();
 	const instanceIdRef = useRef(
@@ -1027,7 +1031,10 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								/>
 							) : null}
 							<EditablePlugin disabled={inputDisabled} />
-							<HasContentPlugin onChange={setHasContent} />
+							<HasContentPlugin
+								onChange={setHasContent}
+								onEditing={onEditing}
+							/>
 							<ShimmerKeywordPlugin keywords={SHIMMER_KEYWORDS} />
 							<TerminalDirectivePlugin
 								enabled={Boolean(onChangeTerminalMode) && !inputDisabled}
