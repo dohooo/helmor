@@ -67,6 +67,34 @@ export function resolveConversationRowHeight({
 	return measuredHeight ?? estimatedHeight;
 }
 
+// A row whose measured height changed only shifts the VISIBLE content when its
+// top sits above the reading position (the viewport top), so only those rows
+// need a scrollTop compensation. The streaming tail is never compensated — its
+// growth is a pure bottom-extension that useStickToBottom already follows.
+// Returns the pixels to add to the pending scroll adjustment (0 when none is
+// due). The single source of truth shared by the inline (handleHeightChange) and
+// batched (flush) commit paths, so the rule can never drift between them.
+function aboveViewportCompensationDelta({
+	rowTop,
+	headerHeight,
+	isStreaming,
+	previousHeight,
+	nextHeight,
+	scrollTop,
+}: {
+	rowTop: number;
+	headerHeight: number;
+	isStreaming: boolean;
+	previousHeight: number;
+	nextHeight: number;
+	scrollTop: number;
+}): number {
+	if (isStreaming || rowTop + headerHeight >= scrollTop) {
+		return 0;
+	}
+	return nextHeight - previousHeight;
+}
+
 // Floor for the Tauri stable-bottom tail window. Kept small on purpose: near the
 // bottom, visibleRows mounts this tail UNIONED with the regular scroll window, so
 // a giant row sitting above the window stays unmounted and the switch commit only
@@ -692,10 +720,10 @@ function ProgressiveConversationViewport({
 		deferredAnchoredKeysRef.current = new Set();
 		// Deferred corrections include rows ABOVE the reading position. Committing
 		// their estimate→measured delta shifts every row below, so queue a scroll
-		// compensation that holds the visible content when the flush lands —
-		// without it the position drifts the instant a scroll-up settles. Mirrors
-		// the inline path in handleHeightChange (skip the streaming tail, whose
-		// growth useStickToBottom owns, and anchored toggles, already compensated).
+		// compensation (via the shared aboveViewportCompensationDelta rule) that
+		// holds the visible content when the flush lands — without it the position
+		// drifts the instant a scroll-up settles. Anchored toggles are skipped:
+		// their click anchor already moved the scroller.
 		if (scrollParent) {
 			const localHeaderHeight = Header ? PROGRESSIVE_VIEWPORT_HEADER_HEIGHT : 0;
 			let delta = 0;
@@ -704,13 +732,18 @@ function ProgressiveConversationViewport({
 					continue;
 				}
 				const row = rowsRef.current.find((entry) => entry.key === rowKey);
-				if (row?.kind !== "message" || row.message.streaming === true) {
+				if (row?.kind !== "message") {
 					continue;
 				}
 				const previousHeight = measuredHeightsRef.current[rowKey] ?? row.height;
-				if (row.top + localHeaderHeight < scrollParent.scrollTop) {
-					delta += nextHeight - previousHeight;
-				}
+				delta += aboveViewportCompensationDelta({
+					rowTop: row.top,
+					headerHeight: localHeaderHeight,
+					isStreaming: row.message.streaming === true,
+					previousHeight,
+					nextHeight,
+					scrollTop: scrollParent.scrollTop,
+				});
 			}
 			if (delta !== 0) {
 				pendingScrollAdjustmentRef.current += delta;
@@ -1106,13 +1139,15 @@ function ProgressiveConversationViewport({
 			// scrollTop. Skip the adjust for the streaming row; keep it for
 			// historical rows (image loads, code highlighting, late font
 			// swaps) where it is genuinely needed.
-			if (
-				!isStreamingRow &&
-				!anchoredToggle &&
-				scrollParent &&
-				row.top + headerHeight < scrollParent.scrollTop
-			) {
-				pendingScrollAdjustmentRef.current += roundedHeight - previousHeight;
+			if (!anchoredToggle && scrollParent) {
+				pendingScrollAdjustmentRef.current += aboveViewportCompensationDelta({
+					rowTop: row.top,
+					headerHeight,
+					isStreaming: isStreamingRow,
+					previousHeight,
+					nextHeight: roundedHeight,
+					scrollTop: scrollParent.scrollTop,
+				});
 			}
 
 			const commit = () =>
