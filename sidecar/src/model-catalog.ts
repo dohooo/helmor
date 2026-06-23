@@ -115,33 +115,6 @@ const MODEL_CATALOG: Record<Provider, readonly ProviderModelInfo[]> = {
 			cliModel: "openai/gpt-5-codex",
 		},
 	],
-	// Static seed; live set comes from the shared opencode-protocol
-	// `listModels` (provider.list against `mimo serve`). MUST stay in sync
-	// with Rust `mimo_section()` in agents/catalog.rs. Ids are the fork's
-	// `provider/model` slug; `xiaomi` is the official MiMo platform provider,
-	// `mimo` is the bundled MiMo Auto meta-provider.
-	mimo: [
-		{
-			id: "xiaomi/mimo-v2.5-pro",
-			label: "MiMo V2.5 Pro",
-			cliModel: "xiaomi/mimo-v2.5-pro",
-		},
-		{
-			id: "xiaomi/mimo-v2.5",
-			label: "MiMo V2.5",
-			cliModel: "xiaomi/mimo-v2.5",
-		},
-		{
-			id: "xiaomi/mimo-v2-flash",
-			label: "MiMo V2 Flash",
-			cliModel: "xiaomi/mimo-v2-flash",
-		},
-		{
-			id: "mimo/mimo-auto",
-			label: "MiMo Auto",
-			cliModel: "mimo/mimo-auto",
-		},
-	],
 	// Static fallback only — `CursorSessionManager.listModels` hits the live
 	// `Cursor.models.list` API for the full set with up-to-date capability
 	// metadata. This list is what shows when the API key isn't configured

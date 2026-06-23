@@ -669,7 +669,7 @@ export class KimiSessionManager implements SessionManager {
 		const timeout = timeoutMs ?? TITLE_GENERATION_TIMEOUT_MS;
 
 		// Run a throwaway ACP turn so the title comes from the same model the
-		// user configured — consistent with claude/codex/opencode/mimo.
+		// user configured — consistent with claude/codex/opencode.
 		let text = "";
 		let acpSessionId: string | null = null;
 		try {

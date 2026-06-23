@@ -55,9 +55,10 @@ mod tests {
     #[test]
     fn parses_json_form_with_provider() {
         let parsed =
-            parse_stored_model(r#"{"provider":"mimo","modelId":"xiaomi/mimo-v2.5-pro"}"#).unwrap();
-        assert_eq!(parsed.provider.as_deref(), Some("mimo"));
-        assert_eq!(parsed.model_id, "xiaomi/mimo-v2.5-pro");
+            parse_stored_model(r#"{"provider":"opencode","modelId":"opencode/grok-code"}"#)
+                .unwrap();
+        assert_eq!(parsed.provider.as_deref(), Some("opencode"));
+        assert_eq!(parsed.model_id, "opencode/grok-code");
     }
 
     #[test]

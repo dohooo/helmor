@@ -1,8 +1,8 @@
-//! OpenCode / MiMo Code custom-provider backend. File-backed; list/upsert/remove
+//! OpenCode custom-provider backend. File-backed; list/upsert/remove
 //! delegate to `opencode_config`. Written models always carry `reasoning: true`.
 
 use super::opencode_config::{self, OpencodeCustomModel, OpencodeCustomProvider};
-use super::types::{CustomProvider, CustomProviderModel, ProviderFamily};
+use super::types::{CustomProvider, CustomProviderModel};
 use super::CustomProviderBackend;
 
 const NPM_CHAT: &str = "@ai-sdk/openai-compatible";
@@ -68,42 +68,25 @@ fn to_opencode(p: CustomProvider) -> OpencodeCustomProvider {
     }
 }
 
-pub struct OpencodeBackend {
-    pub family: ProviderFamily,
-}
-
-impl OpencodeBackend {
-    fn is_mimo(&self) -> bool {
-        matches!(self.family, ProviderFamily::Mimo)
-    }
-}
+pub struct OpencodeBackend;
 
 impl CustomProviderBackend for OpencodeBackend {
     fn list(&self) -> Vec<CustomProvider> {
-        let raw = if self.is_mimo() {
-            opencode_config::read_mimo_custom_providers()
-        } else {
-            opencode_config::read_custom_providers()
-        };
-        raw.unwrap_or_default().into_iter().map(to_custom).collect()
+        opencode_config::read_custom_providers()
+            .unwrap_or_default()
+            .into_iter()
+            .map(to_custom)
+            .collect()
     }
 
     fn upsert(&self, provider: CustomProvider) -> anyhow::Result<()> {
         let preset = provider.preset_key.is_some();
         let mapped = to_opencode(provider);
-        if self.is_mimo() {
-            opencode_config::upsert_mimo_custom_provider(&mapped, preset)
-        } else {
-            opencode_config::upsert_custom_provider(&mapped, preset)
-        }
+        opencode_config::upsert_custom_provider(&mapped, preset)
     }
 
     fn remove(&self, id: &str) -> anyhow::Result<()> {
-        if self.is_mimo() {
-            opencode_config::delete_mimo_custom_provider(id)
-        } else {
-            opencode_config::delete_custom_provider(id)
-        }
+        opencode_config::delete_custom_provider(id)
     }
 }
 
