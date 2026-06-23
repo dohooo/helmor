@@ -1499,6 +1499,56 @@ describe("useWorkspacesSidebarController × sidebar-mutation-gate", () => {
 		});
 	});
 
+	it("restore clears a pending archived projection when archived query has not caught up", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		apiMocks.loadArchivedWorkspaces.mockResolvedValue([]);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: "ws-1",
+					onSelectWorkspace: vi.fn(),
+					pushWorkspaceToast: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+		await waitFor(() => expect(result.current.groups[0]?.rows).toHaveLength(2));
+
+		act(() => {
+			result.current.handleArchiveWorkspace("ws-1");
+		});
+
+		await waitFor(() =>
+			expect(result.current.archivedRows.map((row) => row.id)).toContain(
+				"ws-1",
+			),
+		);
+
+		act(() => {
+			apiMocks.emitArchiveSucceeded({ workspaceId: "ws-1", origin: "manual" });
+		});
+		await waitFor(() => expect(isSidebarMutationInFlight()).toBe(false));
+		expect(result.current.archivedRows.map((row) => row.id)).toContain("ws-1");
+
+		act(() => {
+			result.current.handleRestoreWorkspace("ws-1");
+		});
+
+		await waitFor(() =>
+			expect(apiMocks.restoreWorkspace).toHaveBeenCalledWith("ws-1", undefined),
+		);
+		await waitFor(() =>
+			expect(result.current.archivedRows.map((row) => row.id)).not.toContain(
+				"ws-1",
+			),
+		);
+		expect(
+			result.current.groups.flatMap((group) => group.rows.map((row) => row.id)),
+		).toContain("ws-1");
+	});
+
 	it("pin in flight: requestSidebarReconcile is dropped", async () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { queries: { retry: false } },

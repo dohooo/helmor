@@ -1632,6 +1632,30 @@ export function useWorkspacesSidebarController({
 						(summary) => summary.id === workspaceId,
 					)
 				: undefined;
+			const pendingArchiveSnapshot = pendingArchives.get(workspaceId) ?? null;
+			const restorePendingArchiveSnapshot = () => {
+				if (!pendingArchiveSnapshot) {
+					return;
+				}
+				setPendingArchives((current) => {
+					if (current.has(workspaceId)) {
+						return current;
+					}
+					const next = new Map(current);
+					next.set(workspaceId, pendingArchiveSnapshot);
+					return next;
+				});
+			};
+			if (pendingArchiveSnapshot) {
+				setPendingArchives((current) => {
+					if (!current.has(workspaceId)) {
+						return current;
+					}
+					const next = new Map(current);
+					next.delete(workspaceId);
+					return next;
+				});
+			}
 
 			if (!archivedSummary) {
 				void restoreWorkspace(workspaceId, targetBranchOverride)
@@ -1650,6 +1674,7 @@ export function useWorkspacesSidebarController({
 							error,
 							translateSource("navUnableRestoreWorkspace"),
 						);
+						restorePendingArchiveSnapshot();
 					})
 					.finally(releaseSidebar);
 				return;
@@ -1728,6 +1753,7 @@ export function useWorkspacesSidebarController({
 						helmorQueryKeys.archivedWorkspaces,
 						previousArchived,
 					);
+					restorePendingArchiveSnapshot();
 					pushPermanentDeleteRecoveryToast(
 						workspaceId,
 						translateSource("navRestoreFailed"),
@@ -1742,6 +1768,7 @@ export function useWorkspacesSidebarController({
 			notifyTargetBranchRestore,
 			onSelectWorkspace,
 			pendingCreations,
+			pendingArchives,
 			prefetchWorkspace,
 			pushPermanentDeleteRecoveryToast,
 			queryClient,
