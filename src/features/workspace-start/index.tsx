@@ -188,6 +188,9 @@ function RepositoryPicker({
 			<PopoverContent
 				align="center"
 				className="w-fit min-w-[15rem] max-w-[20rem] p-0"
+				// Closing must not refocus the trigger — that flashes its
+				// tooltip. handleSelect moves focus into the composer instead.
+				onCloseAutoFocus={(event) => event.preventDefault()}
 			>
 				<Command filter={filterRepositories} onKeyDown={handleKeyDown}>
 					<CommandInput placeholder={t("searchRepositories")} className="h-9" />
