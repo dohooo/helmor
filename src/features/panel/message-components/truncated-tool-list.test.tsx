@@ -123,7 +123,7 @@ describe("TruncatedToolList", () => {
 				items={["a", "b", "c", "d", "e"]}
 				getKey={getKey}
 				renderItem={renderItem}
-				noun={{ one: "command", other: "commands" }}
+				noun={{ one: "panelNounCommand", other: "panelNounCommands" }}
 			/>,
 		);
 		expect(screen.getByRole("button")).toHaveTextContent(
@@ -137,7 +137,7 @@ describe("TruncatedToolList", () => {
 				items={["a", "b", "c", "d"]}
 				getKey={getKey}
 				renderItem={renderItem}
-				noun={{ one: "command", other: "commands" }}
+				noun={{ one: "panelNounCommand", other: "panelNounCommands" }}
 			/>,
 		);
 		expect(screen.getByRole("button")).toHaveTextContent(

@@ -10,6 +10,11 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import readline from "node:readline";
+import {
+	applyWindowsPathFromRegistry,
+	prependPathSegment,
+	type WindowsPathEnvOptions,
+} from "../agent-path-env.js";
 import { type AgentProxySettings, buildAgentProxyEnv } from "../agent-proxy.js";
 import { logger } from "../logger.js";
 
@@ -83,6 +88,11 @@ const CODEX_APP_SERVER_ARGS = [
 	"notify=[]",
 ] as const;
 
+interface BuildCodexEnvOptions extends WindowsPathEnvOptions {
+	baseEnv?: NodeJS.ProcessEnv;
+	pathExists?: (path: string) => boolean;
+}
+
 export function buildCodexAppServerArgs(opts?: {
 	disableMcp?: boolean;
 }): string[] {
@@ -106,18 +116,21 @@ export function buildCodexAppServerArgs(opts?: {
 export function buildCodexEnv(
 	binaryPath: string,
 	agentProxy?: AgentProxySettings,
+	options: BuildCodexEnvOptions = {},
 ): NodeJS.ProcessEnv {
-	const env = { ...process.env };
+	const env = { ...(options.baseEnv ?? process.env) };
+	const platform = options.platform ?? process.platform;
+	applyWindowsPathFromRegistry(env, options);
 	const candidates = [
 		join(dirname(binaryPath), "..", "codex-path"),
 		join(dirname(binaryPath), "codex-path"),
 		join(dirname(binaryPath), "..", "path"),
 		join(dirname(binaryPath), "path"),
 	];
-	const pathDir = candidates.find((p) => existsSync(p));
+	const pathExists = options.pathExists ?? existsSync;
+	const pathDir = candidates.find((p) => pathExists(p));
 	if (pathDir) {
-		const sep = process.platform === "win32" ? ";" : ":";
-		env.PATH = `${pathDir}${sep}${env.PATH ?? ""}`;
+		prependPathSegment(env, pathDir, platform);
 	}
 	const proxyEnv = buildAgentProxyEnv(agentProxy);
 	if (proxyEnv) Object.assign(env, proxyEnv);

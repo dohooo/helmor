@@ -6,6 +6,7 @@ import {
 	GitBranch,
 	Laptop,
 	LoaderCircle,
+	Pencil,
 	Pin,
 	PinOff,
 	RotateCcw,
@@ -45,17 +46,18 @@ import {
 } from "@/features/inspector/script-store";
 import type { WorkspaceRow, WorkspaceStatus } from "@/lib/api";
 import { recordSidebarRowRender } from "@/lib/dev-render-debug";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { getWorkspaceBranchTone } from "@/lib/workspace-helpers";
 import { WorkspaceAvatar } from "./avatar";
 import { MoveToWorktreeDialog } from "./move-to-worktree-dialog";
+import { RenameWorkspaceDialog } from "./rename-workspace-dialog";
 import {
 	branchToneClasses,
 	GroupIcon,
 	humanizeBranch,
 	STATUS_OPTIONS,
 } from "./shared";
-import { TriageSourceBadge, triageSourceMeta } from "./triage-source-badge";
 import { WorkspaceHoverCard } from "./workspace-hover-card";
 
 const rowVariants = cva(
@@ -98,6 +100,10 @@ export type WorkspaceRowItemProps = {
 	onDeleteWorkspace?: (workspaceId: string) => void;
 	onTogglePin?: (workspaceId: string, currentlyPinned: boolean) => void;
 	onSetWorkspaceStatus?: (workspaceId: string, status: WorkspaceStatus) => void;
+	onRenameWorkspace?: (
+		workspaceId: string,
+		name: string,
+	) => void | Promise<void>;
 	/** Live group id — flows through props so no stale closure on grouping flip. */
 	groupId?: string;
 	onDragPointerDown?: (args: {
@@ -161,6 +167,7 @@ export const WorkspaceRowItem = memo(
 		onDeleteWorkspace,
 		onTogglePin,
 		onSetWorkspaceStatus,
+		onRenameWorkspace,
 		groupId,
 		onDragPointerDown,
 		disableHoverCard,
@@ -170,6 +177,7 @@ export const WorkspaceRowItem = memo(
 		restoringWorkspaceId,
 		workspaceActionsDisabled,
 	}: WorkspaceRowItemProps) {
+		const { t } = useI18n();
 		useEffect(() => {
 			recordSidebarRowRender(row.id);
 		}, [row.id]);
@@ -205,6 +213,7 @@ export const WorkspaceRowItem = memo(
 		]);
 		useEffect(() => cancelPendingPrefetch, [cancelPendingPrefetch]);
 		const [moveDialogOpen, setMoveDialogOpen] = useState(false);
+		const [renameDialogOpen, setRenameDialogOpen] = useState(false);
 		const [archiveConfirming, setArchiveConfirming] = useState(false);
 		const resetArchiveConfirm = useCallback(() => {
 			setArchiveConfirming(false);
@@ -218,10 +227,10 @@ export const WorkspaceRowItem = memo(
 		}, [cancelPendingPrefetch, resetArchiveConfirm]);
 		const actionLabel =
 			row.state === "archived"
-				? "Restore workspace"
+				? t("navRestoreWorkspace")
 				: archiveConfirming
-					? "Confirm archive workspace"
-					: "Archive workspace";
+					? t("navConfirmArchiveWorkspace")
+					: t("navArchiveWorkspace");
 		const isArchiving = archivingWorkspaceIds?.has(row.id) ?? false;
 		const isMarkingUnread = markingUnreadWorkspaceId === row.id;
 		const isRestoring = restoringWorkspaceId === row.id;
@@ -274,31 +283,23 @@ export const WorkspaceRowItem = memo(
 			status: row.status,
 		});
 		const statusDotLabel = isInteractionRequired
-			? "Interaction required"
-			: row.triagePrimingUnconsumed
-				? "AI proposal — open to review"
-				: row.hasUnread
-					? "Unread"
-					: null;
+			? t("interactionRequired")
+			: row.hasUnread
+				? t("navUnread")
+				: null;
 		const statusDotClassName = isInteractionRequired
 			? "bg-yellow-500"
-			: row.triagePrimingUnconsumed
-				? "bg-destructive"
-				: "bg-chart-2";
-		// AI-proposed (triage) rows swap their red proposal dot for the
-		// originating platform's logo — pinned bottom-right and a touch
-		// larger. Falls back to the red dot when the source is unknown.
-		const triageSourceType =
-			row.triagePrimingUnconsumed && !isInteractionRequired
-				? (row.triageSourceType ?? null)
-				: null;
-		const hasSourceBadge = triageSourceMeta(triageSourceType) !== null;
-		const showStatusDot = statusDotLabel !== null && !hasSourceBadge;
+			: "bg-chart-2";
+		const showStatusDot = statusDotLabel !== null;
 		// Local & Chat workspaces don't carry a meaningful per-row branch
 		// label (locals share the repo's HEAD; chats have no branch at
 		// all), so always fall back to the auto-titled session title.
-		const displayTitle =
-			row.mode === "local" || row.mode === "chat"
+		// A user-set name wins over the branch-humanized fallback that
+		// worktree rows would otherwise show.
+		const customName = row.customName?.trim();
+		const displayTitle = customName
+			? customName
+			: row.mode === "local" || row.mode === "chat"
 				? row.title
 				: row.branch
 					? humanizeBranch(row.branch)
@@ -474,11 +475,6 @@ export const WorkspaceRowItem = memo(
 								title={displayTitle}
 								badgeClassName={showStatusDot ? statusDotClassName : null}
 								badgeAriaLabel={statusDotLabel ?? undefined}
-								sourceBadge={
-									hasSourceBadge ? (
-										<TriageSourceBadge sourceType={triageSourceType} />
-									) : null
-								}
 								isRunning={isRunScriptRunning}
 							/>
 							{/* Fade is on an inner wrapper so the avatar's overflowing badge isn't clipped by mask-image. */}
@@ -530,7 +526,7 @@ export const WorkspaceRowItem = memo(
 												: "cursor-interactive hover:text-foreground",
 									)}
 								>
-									{isArchiveConfirmVisible ? "Confirm" : actionIcon}
+									{isArchiveConfirmVisible ? t("confirm") : actionIcon}
 								</Button>
 							);
 							// Archived rows show restore + delete with no tooltips
@@ -555,7 +551,7 @@ export const WorkspaceRowItem = memo(
 						})()}
 						{isRestoreAction && onDeleteWorkspace ? (
 							<Button
-								aria-label="Delete permanently"
+								aria-label="deletePermanently"
 								disabled={Boolean(workspaceActionsDisabled || isBusy)}
 								onClick={(event) => {
 									event.stopPropagation();
@@ -604,13 +600,13 @@ export const WorkspaceRowItem = memo(
 							) : (
 								<Pin className="size-4 shrink-0" strokeWidth={1.6} />
 							)}
-							<span>{isPinned ? "Unpin" : "Pin"}</span>
+							<span>{isPinned ? t("navUnpin") : t("navPin")}</span>
 						</ContextMenuItem>
 
 						<ContextMenuSub>
 							<ContextMenuSubTrigger>
 								<Circle className="size-4 shrink-0" strokeWidth={1.6} />
-								<span>Set status</span>
+								<span>{t("setStatus")}</span>
 							</ContextMenuSubTrigger>
 							<ContextMenuSubContent>
 								{STATUS_OPTIONS.map((opt) => (
@@ -619,7 +615,7 @@ export const WorkspaceRowItem = memo(
 										onClick={() => onSetWorkspaceStatus?.(row.id, opt.value)}
 									>
 										<GroupIcon tone={opt.tone} />
-										<span className="flex-1">{opt.label}</span>
+										<span className="flex-1">{t(opt.label)}</span>
 										{effectiveStatus === opt.value ? (
 											<span className="ml-auto text-foreground">✓</span>
 										) : null}
@@ -627,6 +623,16 @@ export const WorkspaceRowItem = memo(
 								))}
 							</ContextMenuSubContent>
 						</ContextMenuSub>
+
+						{onRenameWorkspace && !isRestoreAction ? (
+							<ContextMenuItem
+								disabled={isBusy || Boolean(workspaceActionsDisabled)}
+								onClick={() => setRenameDialogOpen(true)}
+							>
+								<Pencil className="size-4 shrink-0" strokeWidth={1.6} />
+								<span>{t("navRenameWorkspace")}</span>
+							</ContextMenuItem>
+						) : null}
 
 						{_onMarkWorkspaceUnread ? (
 							<ContextMenuItem
@@ -636,7 +642,7 @@ export const WorkspaceRowItem = memo(
 								onClick={() => _onMarkWorkspaceUnread(row.id)}
 							>
 								<Circle className="size-4 shrink-0" strokeWidth={1.6} />
-								<span>Mark as unread</span>
+								<span>{t("markUnread")}</span>
 							</ContextMenuItem>
 						) : null}
 
@@ -646,7 +652,7 @@ export const WorkspaceRowItem = memo(
 								onClick={() => onOpenInFinder(row.id)}
 							>
 								<FolderOpen className="size-4 shrink-0" strokeWidth={1.6} />
-								<span>Open in Finder</span>
+								<span>{t("openFinder")}</span>
 							</ContextMenuItem>
 						) : null}
 
@@ -661,7 +667,7 @@ export const WorkspaceRowItem = memo(
 									className="size-4 shrink-0 rotate-90"
 									strokeWidth={1.6}
 								/>
-								<span>Move into a new worktree</span>
+								<span>{t("moveIntoNewWorktree")}</span>
 							</ContextMenuItem>
 						) : null}
 
@@ -673,7 +679,7 @@ export const WorkspaceRowItem = memo(
 								onClick={() => onRestoreWorkspace?.(row.id)}
 							>
 								<RotateCcw className="size-4 shrink-0" strokeWidth={1.6} />
-								<span>Restore</span>
+								<span>{t("restore")}</span>
 							</ContextMenuItem>
 						) : (
 							<ContextMenuItem
@@ -681,7 +687,7 @@ export const WorkspaceRowItem = memo(
 								onClick={() => onArchiveWorkspace?.(row.id)}
 							>
 								<Archive className="size-4 shrink-0" strokeWidth={1.6} />
-								<span>Archive</span>
+								<span>{t("archive")}</span>
 							</ContextMenuItem>
 						)}
 					</ContextMenuContent>
@@ -692,6 +698,14 @@ export const WorkspaceRowItem = memo(
 						onOpenChange={setMoveDialogOpen}
 						workspaceTitle={displayTitle}
 						onConfirm={() => onMoveLocalToWorktree(row.id)}
+					/>
+				) : null}
+				{onRenameWorkspace ? (
+					<RenameWorkspaceDialog
+						open={renameDialogOpen}
+						onOpenChange={setRenameDialogOpen}
+						currentTitle={displayTitle}
+						onConfirm={(name) => onRenameWorkspace(row.id, name)}
 					/>
 				) : null}
 			</>

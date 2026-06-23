@@ -1,6 +1,5 @@
 import { useEffect, useRef } from "react";
 import {
-	MIMO_ADAPTER,
 	OPENCODE_ADAPTER,
 	type SlugProviderAdapter,
 } from "@/features/settings/panels/providers/slug-provider-adapter";
@@ -28,9 +27,8 @@ function useStartupSync(adapter: SlugProviderAdapter) {
 	}, [isLoaded, used, sync]);
 }
 
-/** Startup model sync for both opencode-protocol providers, each gated on its
- *  own cached catalog. */
+/** Startup model sync for the opencode-protocol provider, gated on its
+ *  cached catalog. */
 export function useSlugProviderStartupSync() {
 	useStartupSync(OPENCODE_ADAPTER);
-	useStartupSync(MIMO_ADAPTER);
 }

@@ -13,6 +13,7 @@ import {
 	partKey,
 	type ToolCallPart,
 } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import {
@@ -106,25 +107,25 @@ function statusBadgeMeta(
 	switch (reason) {
 		case "max_tokens":
 			return {
-				label: "Output truncated",
+				label: "outputTruncated",
 				tone: warmTone,
 				icon: <AlertTriangle className="size-3" strokeWidth={1.8} />,
 			};
 		case "context_window_exceeded":
 			return {
-				label: "Context window exceeded",
+				label: "contextWindowExceeded",
 				tone: negativeTone,
 				icon: <AlertCircle className="size-3" strokeWidth={1.8} />,
 			};
 		case "refusal":
 			return {
-				label: "Model declined",
+				label: "modelDeclined",
 				tone: warmTone,
 				icon: <Info className="size-3" strokeWidth={1.8} />,
 			};
 		case "pause_turn":
 			return {
-				label: "Paused",
+				label: "paused",
 				tone: warmTone,
 				icon: <Clock3 className="size-3" strokeWidth={1.8} />,
 			};
@@ -138,6 +139,7 @@ function statusBadgeMeta(
 }
 
 function MessageStatusBadge({ reason }: { reason?: string }) {
+	const { t } = useI18n();
 	if (!reason) {
 		return null;
 	}
@@ -153,7 +155,7 @@ function MessageStatusBadge({ reason }: { reason?: string }) {
 			)}
 		>
 			{meta.icon}
-			<span>{meta.label}</span>
+			<span>{t(meta.label)}</span>
 		</div>
 	);
 }

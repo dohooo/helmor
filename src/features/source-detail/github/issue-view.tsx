@@ -22,7 +22,7 @@ export function GitHubIssueView({
 			description={detail?.body ?? undefined}
 			error={detailQuery.error}
 			isLoading={detailQuery.isLoading}
-			kindLabel="issue"
+			kindLabel="miscIssue"
 			refresh={detailRef ? toRefreshControl(detailQuery) : undefined}
 		/>
 	);

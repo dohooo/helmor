@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from "react";
 import {
 	ClaudeColorIcon,
 	KimiIcon,
-	MiMoCodeIcon,
 	OpenAIIcon,
 	OpenCodeIcon,
 } from "@/components/icons";
@@ -13,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { ShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import type { AgentLoginProvider } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import {
 	LoginTerminalPreview as LoginTerminalCore,
 	providerLabels,
@@ -25,8 +25,6 @@ function providerIcon(provider: AgentLoginProvider) {
 		return <OpenCodeIcon className={`${className} text-foreground`} />;
 	if (provider === "kimi")
 		return <KimiIcon className={`${className} text-foreground`} />;
-	if (provider === "mimo")
-		return <MiMoCodeIcon className={`${className} text-foreground`} />;
 	return <OpenAIIcon className={`${className} text-foreground`} />;
 }
 
@@ -67,7 +65,7 @@ export function AgentLoginDialog({
 				className="w-[640px] max-w-[calc(100vw-4rem)] gap-0 overflow-hidden p-0 sm:max-w-[640px]"
 			>
 				<DialogTitle className="sr-only">
-					{providerLabels[provider]} login
+					{providerLabels[provider]} <I18nText source="login" />
 				</DialogTitle>
 				{open && instanceId ? (
 					<LoginTerminalCore
@@ -89,7 +87,7 @@ export function AgentLoginDialog({
 											variant="ghost"
 											size="sm"
 											onClick={() => onOpenChange(false)}
-											aria-label="Close"
+											aria-label="close"
 											className="gap-1.5 px-2 text-muted-foreground hover:text-foreground"
 										>
 											<ShortcutDisplay hotkey="Escape" />

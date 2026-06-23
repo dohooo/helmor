@@ -1,5 +1,6 @@
 import { ListTree } from "lucide-react";
 import type { ComponentType } from "react";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 export type ComposerQuickAction = {
@@ -16,7 +17,8 @@ export type ComposerQuickAction = {
 const DEFAULT_QUICK_ACTIONS: ComposerQuickAction[] = [
 	{
 		id: "restack",
-		label: "Restack",
+		// Catalog key; translated at render.
+		label: "restack",
 		prompt: "/helmor-cli restack",
 		icon: ListTree,
 	},
@@ -39,6 +41,7 @@ export function ComposerQuickActions({
 	onAction,
 	disabled,
 }: ComposerQuickActionsProps) {
+	const { t } = useI18n();
 	if (actions.length === 0) return null;
 	return (
 		<div className="pointer-events-auto mb-1.5 flex w-full flex-wrap items-center justify-start gap-1.5 self-stretch pl-1">
@@ -59,7 +62,7 @@ export function ComposerQuickActions({
 						{Icon ? (
 							<Icon className="size-3 shrink-0" strokeWidth={1.8} />
 						) : null}
-						<span>{action.label}</span>
+						<span>{t(action.label)}</span>
 					</button>
 				);
 			})}

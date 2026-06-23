@@ -81,7 +81,6 @@ pub struct AgentLoginStatus {
     pub codex: bool,
     pub cursor: bool,
     pub opencode: bool,
-    pub mimo: bool,
     pub kimi: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codex_provider: Option<String>,
@@ -96,7 +95,6 @@ pub struct AgentVersions {
     pub claude: Option<String>,
     pub codex: Option<String>,
     pub opencode: Option<String>,
-    pub mimo: Option<String>,
     pub kimi: Option<String>,
 }
 
@@ -497,9 +495,8 @@ fn helmor_skills_status() -> anyhow::Result<HelmorSkillsStatus> {
             claude: claude_login_ready(),
             codex: codex_auth_status().ready,
             cursor: cursor_login_ready(),
-            // opencode/mimo readiness comes from the login-status path, not here.
+            // opencode readiness comes from the login-status path, not here.
             opencode: false,
-            mimo: false,
             // kimi has no Helmor-skills install path; irrelevant here.
             kimi: false,
             codex_provider: None,
@@ -641,9 +638,8 @@ pub async fn install_helmor_skills() -> CmdResult<HelmorSkillsStatus> {
             claude: claude_login_ready(),
             codex: codex_auth_status().ready,
             cursor: cursor_login_ready(),
-            // opencode/mimo readiness comes from the login-status path, not here.
+            // opencode readiness comes from the login-status path, not here.
             opencode: false,
-            mimo: false,
             kimi: false,
             codex_provider: None,
             codex_auth_method: None,
@@ -851,7 +847,6 @@ fn run_components_check_inner(force: bool) -> ComponentsUpdateCheck {
         codex: codex_auth_status().ready,
         cursor: cursor_login_ready(),
         opencode: false,
-        mimo: false,
         kimi: false,
         codex_provider: None,
         codex_auth_method: None,
@@ -1211,7 +1206,6 @@ pub async fn get_agent_login_status() -> CmdResult<AgentLoginStatus> {
             codex: codex.ready,
             cursor: cursor_login_ready(),
             opencode: opencode_login_ready(),
-            mimo: mimo_login_ready(),
             kimi: kimi_login_ready(),
             codex_provider: codex.provider,
             codex_auth_method: codex.auth_method.map(str::to_string),
@@ -1227,7 +1221,6 @@ pub async fn get_agent_versions() -> CmdResult<AgentVersions> {
             claude: agent_cli_version("claude"),
             codex: agent_cli_version("codex"),
             opencode: agent_cli_version("opencode"),
-            mimo: agent_cli_version("mimo"),
             kimi: agent_cli_version("kimi"),
         })
     })
@@ -1312,7 +1305,6 @@ fn resolve_agent_binary(provider: &str) -> PathBuf {
         "claude" => bundled.claude_bin,
         "codex" => bundled.codex_bin,
         "opencode" => bundled.opencode_bin,
-        "mimo" => bundled.mimo_bin,
         "kimi" => bundled.kimi_bin,
         _ => None,
     };
@@ -1326,10 +1318,6 @@ fn resolve_agent_binary(provider: &str) -> PathBuf {
 // until the user signs in, so it can't be hidden behind a "Ready" badge.
 fn opencode_login_ready() -> bool {
     auth_list_has_credentials("opencode")
-}
-
-fn mimo_login_ready() -> bool {
-    auth_list_has_credentials("mimo")
 }
 
 fn auth_list_has_credentials(provider: &str) -> bool {
@@ -1506,7 +1494,6 @@ fn agent_login_command(provider: &str) -> anyhow::Result<String> {
         "claude" => "auth login",
         "codex" => "login",
         "opencode" => "auth login",
-        "mimo" => "auth login",
         // `kimi login` runs the device-code OAuth flow in the PTY.
         "kimi" => "login",
         _ => anyhow::bail!("Unknown agent provider: {provider}"),

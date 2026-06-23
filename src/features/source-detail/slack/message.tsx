@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { LazyStreamdown } from "@/components/streamdown-loader";
 import type { SlackMessage } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import {
 	inlineEmojiForMarkdown,
 	inlineMentionsForMarkdown,
@@ -32,12 +33,14 @@ export function SlackMessageBubble({
 	 *  same visual fallback Slack uses pre-load. */
 	emoji: Record<string, SlackEmoji>;
 }) {
+	const { t } = useI18n();
 	const trimmedText = message.text.trim();
 	// Only fall back to the "(empty message)" placeholder when the
 	// message has neither a textual body nor any file attachments.
 	// File-only messages render their attachments inline instead.
 	const placeholderNeeded = !trimmedText && message.files.length === 0;
-	const rawBody = trimmedText || (placeholderNeeded ? "_(empty message)_" : "");
+	const rawBody =
+		trimmedText || (placeholderNeeded ? `_${t("miscEmptyMessage")}_` : "");
 	// Run mention rewriting before emoji inlining so the markdown
 	// pass sees `@name` text, not the raw `<@U…|name>` escape — both
 	// are pure-string transforms and order is independent, but reading

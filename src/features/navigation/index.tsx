@@ -40,6 +40,7 @@ import type {
 	WorkspaceRow,
 	WorkspaceStatus,
 } from "@/lib/api";
+import { I18nText, useI18n } from "@/lib/i18n";
 import type { SidebarGrouping, SidebarSort } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { workspaceStatusFromGroupId } from "@/lib/workspace-helpers";
@@ -160,6 +161,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onMoveWorkspaceInSidebar,
 	onMoveRepositoryInSidebar,
 	onSetWorkspaceStatus,
+	onRenameWorkspace,
 	archivingWorkspaceIds,
 	markingUnreadWorkspaceId,
 	restoringWorkspaceId,
@@ -213,10 +215,15 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		beforeRepoId: string | null,
 	) => void;
 	onSetWorkspaceStatus?: (workspaceId: string, status: WorkspaceStatus) => void;
+	onRenameWorkspace?: (
+		workspaceId: string,
+		name: string,
+	) => void | Promise<void>;
 	archivingWorkspaceIds?: Set<string>;
 	markingUnreadWorkspaceId?: string | null;
 	restoringWorkspaceId?: string | null;
 }) {
+	const { t, f } = useI18n();
 	const [isAddRepositoryMenuOpen, setIsAddRepositoryMenuOpen] = useState(false);
 	const [isSidebarViewPopoverOpen, setIsSidebarViewPopoverOpen] =
 		useState(false);
@@ -326,7 +333,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		if (!activeDragWorkspaceId) return null;
 		for (const group of groups) {
 			const meta = group.stackMeta?.get(activeDragWorkspaceId);
-			if (!meta || meta.role !== "tip") continue;
+			if (meta?.role !== "tip") continue;
 			const members = group.rows
 				.filter((row) => group.stackMeta?.get(row.id)?.tipId === meta.tipId)
 				.sort(
@@ -501,11 +508,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				continue;
 			}
 
-			// Chats + Triage have no drop-target role — hide when empty.
-			if (
-				(group.id === "chats" || group.id === "ai-tasks") &&
-				group.rows.length === 0
-			) {
+			// Chats have no drop-target role — hide when empty.
+			if (group.id === "chats" && group.rows.length === 0) {
 				continue;
 			}
 
@@ -882,7 +886,21 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						) : (
 							<GroupIcon tone={item.group.tone} />
 						)}
-						<span>{item.group.label}</span>
+						<span>
+							{isRepoGroup ? (
+								item.group.label
+							) : (
+								<I18nText
+									source={
+										isArchived
+											? "archived"
+											: isChatGroup
+												? "chats"
+												: item.group.tone
+									}
+								/>
+							)}
+						</span>
 					</span>
 				);
 
@@ -935,7 +953,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 									<TooltipTrigger asChild>
 										<Button
 											type="button"
-											aria-label={`New workspace in ${item.group.label}`}
+											aria-label={f("navNewWorkspaceInLabel", {
+												label: item.group.label,
+											})}
 											variant="ghost"
 											size="icon-xs"
 											className="size-5 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover/trigger:opacity-100 focus-visible:opacity-100"
@@ -952,7 +972,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 										sideOffset={4}
 										className="flex h-[24px] items-center rounded-md px-2 text-small leading-none"
 									>
-										New workspace in {item.group.label}
+										<I18nText source="newWorkspace3" /> {item.group.label}
 									</TooltipContent>
 								</Tooltip>
 							) : null}
@@ -1043,11 +1063,14 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 								<TooltipContent side="left" sideOffset={6}>
 									{`${
 										item.stackMeta.role === "tip"
-											? "Stack tip"
+											? t("navStackTip")
 											: item.stackMeta.role === "root"
-												? "Stack base"
-												: "Stack"
-									} · ${item.stackMeta.depth + 1} of ${item.stackMeta.stackSize}`}
+												? t("navStackBase")
+												: t("navStack")
+									} · ${f("navStackDepthOfSize", {
+										depth: item.stackMeta.depth + 1,
+										size: item.stackMeta.stackSize,
+									})}`}
 								</TooltipContent>
 							</Tooltip>
 						</>
@@ -1071,6 +1094,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						onOpenInFinder={onOpenInFinder}
 						onTogglePin={onTogglePin}
 						onSetWorkspaceStatus={onSetWorkspaceStatus}
+						onRenameWorkspace={onRenameWorkspace}
 						groupId={item.groupId}
 						onDragPointerDown={
 							// Stacked PRs move as a unit: only the tip (top row)
@@ -1100,6 +1124,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			);
 		},
 		[
+			t,
+			f,
 			sectionOpenState,
 			sidebarGrouping,
 			toggleSection,
@@ -1119,6 +1145,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			onMoveWorkspaceInSidebar,
 			onMoveRepositoryInSidebar,
 			onSetWorkspaceStatus,
+			onRenameWorkspace,
 			startDragGesture,
 			startRepoDragGesture,
 			isAnyDragging,
@@ -1152,7 +1179,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 
 			<div className="mt-1 flex items-center justify-between px-3">
 				<h2 className="text-title font-medium text-muted-foreground">
-					Workspaces
+					<I18nText source="workspaces" />
 				</h2>
 
 				<div className="flex items-center gap-1 text-muted-foreground">
@@ -1178,7 +1205,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 								<DropdownMenuTrigger asChild>
 									<Button
 										type="button"
-										aria-label="Add repository"
+										aria-label="addRepository2"
 										variant="ghost"
 										size="icon-xs"
 										disabled={
@@ -1207,7 +1234,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 								sideOffset={4}
 								className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 							>
-								<span>Add repository</span>
+								<span>
+									<I18nText source="addRepository2" />
+								</span>
 								{addRepositoryShortcut ? (
 									<InlineShortcutDisplay
 										hotkey={addRepositoryShortcut}
@@ -1223,7 +1252,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 								}}
 							>
 								<Folder strokeWidth={2} />
-								<span>Open project</span>
+								<span>
+									<I18nText source="openProject" />
+								</span>
 							</DropdownMenuItem>
 							<DropdownMenuItem
 								onSelect={() => {
@@ -1231,7 +1262,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 								}}
 							>
 								<Globe strokeWidth={2} />
-								<span>Clone from URL</span>
+								<span>
+									<I18nText source="cloneFromUrl" />
+								</span>
 							</DropdownMenuItem>
 						</DropdownMenuContent>
 					</DropdownMenu>
@@ -1240,7 +1273,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						<TooltipTrigger asChild>
 							<Button
 								type="button"
-								aria-label="New workspace"
+								aria-label="newWorkspace2"
 								variant="ghost"
 								size="icon-xs"
 								disabled={
@@ -1269,7 +1302,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							sideOffset={4}
 							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 						>
-							<span>Create new workspace</span>
+							<span>
+								<I18nText source="createNewWorkspace" />
+							</span>
 							{newWorkspaceShortcut ? (
 								<InlineShortcutDisplay
 									hotkey={newWorkspaceShortcut}

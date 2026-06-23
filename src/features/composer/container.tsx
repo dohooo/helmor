@@ -33,6 +33,7 @@ import type {
 	ComposerCustomTag,
 	ResolvedComposerInsertRequest,
 } from "@/lib/composer-insert";
+import { I18nText, useI18n } from "@/lib/i18n";
 import {
 	agentModelSectionsQueryOptions,
 	autoCloseActionKindsQueryOptions,
@@ -74,7 +75,6 @@ import type { PermissionPanelProps } from "./permission-panel";
 import { SessionContextInjector } from "./session-context-injector";
 import type { StartSubmitMode } from "./start-submit-mode";
 import { SubmitQueueList } from "./submit-queue-list";
-import { TriageQuickActions } from "./triage-quick-actions";
 import type { UserInputResponseHandler } from "./user-input";
 import { WorkflowProgressPanel } from "./workflow-progress-panel";
 
@@ -90,31 +90,31 @@ const EMPTY_SELECTED_CONTEXT_SESSION_IDS: readonly string[] = [];
  * Host-app slash commands. Prepended to the agent-supplied list so they
  * always appear at the top of the popup.
  */
+// Built-in command descriptions carry catalog keys; they get translated when
+// the slash-command list is assembled (agent-supplied descriptions stay raw).
 const ADD_DIR_COMMAND: SlashCommandEntry = {
 	name: "add-dir",
-	description: "Link extra directories to this workspace",
+	description: "linkExtraDirectoriesWorkspace",
 	source: "client-action",
 };
 
 const CODEX_COMPACT_COMMAND: SlashCommandEntry = {
 	name: "compact",
-	description: "Compact this Codex thread's context",
+	description: "compactCodexThreadSContext",
 	source: "builtin",
 	providers: ["codex"],
 };
 
 const OPENCODE_COMPACT_COMMAND: SlashCommandEntry = {
 	name: "compact",
-	description: "Compact this conversation's context",
+	description: "compactConversationSContext",
 	source: "builtin",
-	// MiMo Code is an opencode-protocol fork; same /compact wire path.
-	providers: ["opencode", "mimo"],
+	providers: ["opencode"],
 };
 
 const CODEX_GOAL_COMMAND: SlashCommandEntry = {
 	name: "goal",
-	description:
-		"Set a persistent goal Codex pursues turn-after-turn until done or paused",
+	description: "setPersistentGoalCodexPursuesTurn",
 	argumentHint: "<objective>",
 	source: "builtin",
 	providers: ["codex"],
@@ -122,7 +122,7 @@ const CODEX_GOAL_COMMAND: SlashCommandEntry = {
 
 const CLAUDE_GOAL_COMMAND: SlashCommandEntry = {
 	name: "goal",
-	description: "Set a completion condition for Claude to work toward",
+	description: "setCompletionConditionClaudeWorkToward",
 	argumentHint: "<condition>",
 	source: "builtin",
 	providers: ["claude"],
@@ -130,7 +130,7 @@ const CLAUDE_GOAL_COMMAND: SlashCommandEntry = {
 
 const CLAUDE_WORKFLOWS_COMMAND: SlashCommandEntry = {
 	name: "workflows",
-	description: "View this conversation's workflow runs",
+	description: "viewConversationSWorkflowRuns",
 	source: "client-action",
 	providers: ["claude"],
 };
@@ -327,6 +327,7 @@ export const WorkspaceComposerContainer = memo(
 		terminalModeAvailable = true,
 	}: WorkspaceComposerContainerProps) {
 		const queryClient = useQueryClient();
+		const { t } = useI18n();
 		const { settings, updateSettings } = useSettings();
 		// Per-session input recall list. Resolved lazily from the live
 		// thread cache on every ArrowUp/Down — the plugin doesn't subscribe,
@@ -531,15 +532,6 @@ export const WorkspaceComposerContainer = memo(
 		});
 		const hasOpencodeCustomProviders =
 			(opencodeCustomProvidersQuery.data?.length ?? 0) > 0;
-		// Same jump for the MiMo Code section.
-		const mimoSectionPresent = modelSections.some((s) => s.id === "mimo");
-		const mimoCustomProvidersQuery = useQuery({
-			queryKey: helmorQueryKeys.customProviders("mimo"),
-			queryFn: () => listCustomProviders("mimo"),
-			enabled: mimoSectionPresent,
-		});
-		const hasMimoCustomProviders =
-			(mimoCustomProvidersQuery.data?.length ?? 0) > 0;
 		const currentSession =
 			(sessionsQuery.data ?? []).find(
 				(session) => session.id === displayedSessionId,
@@ -694,9 +686,9 @@ export const WorkspaceComposerContainer = memo(
 		const handleModelSelect = useCallback(
 			async (modelId: string, pickedProvider: string | null) => {
 				const currentProvider = provider;
-				// Provider comes straight from the picked option — opencode and
-				// mimo share a slug namespace, so re-deriving it from the id alone
-				// would resolve to the wrong section.
+				// Provider comes straight from the picked option — opencode
+				// sub-providers share a slug namespace, so re-deriving it from the
+				// id alone would resolve to the wrong section.
 				const newProvider =
 					pickedProvider ??
 					findModelOption(modelSections, modelId)?.provider ??
@@ -774,10 +766,7 @@ export const WorkspaceComposerContainer = memo(
 		// Custom Codex providers (`codex:<id>`) collapse to "codex".
 		const slashProvider: AgentProvider = isCodexProvider(provider)
 			? "codex"
-			: provider === "cursor" ||
-					provider === "opencode" ||
-					provider === "mimo" ||
-					provider === "kimi"
+			: provider === "cursor" || provider === "opencode" || provider === "kimi"
 				? provider
 				: "claude";
 		// Prefer the repoId from a real workspace; on the start page there's no
@@ -806,7 +795,12 @@ export const WorkspaceComposerContainer = memo(
 			const builtinCommands = BUILTIN_CLIENT_COMMANDS.filter(
 				(command) =>
 					!command.providers || command.providers.includes(slashProvider),
-			);
+			).map((command) => ({
+				...command,
+				// Built-in descriptions are catalog keys; agent-supplied ones below
+				// are raw strings and stay untranslated.
+				description: t(command.description),
+			}));
 			const builtinNames = new Set(
 				builtinCommands.map((command) => command.name),
 			);
@@ -816,7 +810,7 @@ export const WorkspaceComposerContainer = memo(
 					(command) => !builtinNames.has(command.name),
 				),
 			];
-		}, [agentSlashCommands, slashProvider]);
+		}, [agentSlashCommands, slashProvider, t]);
 		// Pending only (`isPending`) covers the very first fetch with no data
 		// yet; once we have data, `isFetching` covers background refetches but
 		// users don't need a spinner for those — the cached list is fine.
@@ -1173,38 +1167,9 @@ export const WorkspaceComposerContainer = memo(
 			[onChangeFastMode, composerContextKey],
 		);
 
-		const autoCloseHelpText =
-			"When enabled, action sessions will close automatically when finished.";
+		const autoCloseHelpText = t("composerAutoCloseHelp");
 
-		// Start/Dismiss quick actions for un-engaged triage workspaces. Dismiss reuses the sidebar controller's archive path.
-		const [triageGraduating, setTriageGraduating] = useState(false);
-		const [triageDismissing, setTriageDismissing] = useState(false);
 		const [workflowsPanelOpen, setWorkflowsPanelOpen] = useState(false);
-		useEffect(() => {
-			setTriageGraduating(false);
-			setTriageDismissing(false);
-		}, [displayedWorkspaceId]);
-
-		const isTriagePriming =
-			workspaceDetailQuery.data?.triagePrimingUnconsumed === true &&
-			!triageGraduating &&
-			!triageDismissing;
-
-		const handleTriageStart = useCallback(() => {
-			setTriageGraduating(true);
-			handleComposerSubmitInner("Go ahead.", [], [], []);
-		}, [handleComposerSubmitInner]);
-
-		const handleTriageDismiss = useCallback(() => {
-			if (!displayedWorkspaceId || triageDismissing) return;
-			setTriageDismissing(true);
-			// Delegates archive to the sidebar controller (one optimistic path).
-			publishShellEvent({
-				type: "request-archive-workspace",
-				workspaceId: displayedWorkspaceId,
-			});
-		}, [displayedWorkspaceId, triageDismissing]);
-
 		return (
 			// `z-20` lifts the entire composer stacking context above the thread
 			// viewport's `z-10` root (`thread-viewport.tsx:99`). Without this the
@@ -1213,13 +1178,7 @@ export const WorkspaceComposerContainer = memo(
 			// top edge, because the composer's `isolate` traps popup z-index
 			// inside a stacking context whose outer z defaults to `auto`.
 			<div className="relative isolate z-20 flex flex-col">
-				{isTriagePriming ? (
-					<TriageQuickActions
-						onStart={handleTriageStart}
-						onDismiss={handleTriageDismiss}
-						disabled={composerUnavailable || sending || triageDismissing}
-					/>
-				) : isActionSession ? (
+				{isActionSession ? (
 					<ActionRow
 						className={cn(
 							"relative z-0 mx-auto -mb-px w-[90%] rounded-t-2xl border-b-0",
@@ -1243,7 +1202,7 @@ export const WorkspaceComposerContainer = memo(
 									durationMs={1900}
 									className="truncate text-small font-medium tracking-[0.02em] text-muted-foreground"
 								>
-									Working...
+									<I18nText source="working" />
 								</ShimmerText>
 							) : (
 								<>
@@ -1262,7 +1221,9 @@ export const WorkspaceComposerContainer = memo(
 							<ActionRowButton
 								active={autoCloseEnabled}
 								aria-label={
-									autoCloseEnabled ? "Disable Auto Close" : "Enable Auto Close"
+									autoCloseEnabled
+										? "composerDisableAutoClose"
+										: "composerEnableAutoClose"
 								}
 								disabled={composerUnavailable}
 								onClick={() => {
@@ -1274,7 +1235,9 @@ export const WorkspaceComposerContainer = memo(
 									strokeWidth={1.8}
 								/>
 								<span className="inline-flex items-center">
-									{autoCloseEnabled ? "Auto Close On" : "Enable Auto Close"}
+									{autoCloseEnabled
+										? t("composerAutoCloseOn")
+										: t("composerEnableAutoClose")}
 								</span>
 							</ActionRowButton>
 						}
@@ -1340,7 +1303,6 @@ export const WorkspaceComposerContainer = memo(
 						selectedModelProvider={effectiveModel?.provider ?? null}
 						modelSections={modelSections}
 						hasOpencodeCustomProviders={hasOpencodeCustomProviders}
-						hasMimoCustomProviders={hasMimoCustomProviders}
 						modelsLoading={modelsLoading}
 						onSelectModel={handleSelectModelInner}
 						provider={provider}

@@ -18,12 +18,24 @@ import {
 import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
 import { Button } from "@/components/ui/button";
 import {
+	Command,
+	CommandEmpty,
+	CommandInput,
+	CommandItem,
+	CommandList,
+} from "@/components/ui/command";
+import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "@/components/ui/popover";
 import {
 	Tooltip,
 	TooltipContent,
@@ -44,6 +56,7 @@ import type {
 	WorkspaceMode,
 } from "@/lib/api";
 import type { ComposerInsertTarget } from "@/lib/composer-insert";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { useSettings } from "@/lib/settings";
 import type { ContextCard } from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
@@ -65,6 +78,171 @@ function defaultBranchPrefix(repo: RepositoryCreateOption | null): string {
 		default:
 			return repo.forgeLogin ? `${repo.forgeLogin}/` : "";
 	}
+}
+
+/** Helper to extract "owner/repo" from remote URL */
+function extractRepoName(remoteUrl?: string | null): string | null {
+	if (!remoteUrl) return null;
+
+	// Match github.com/owner/repo or gitlab.com/owner/repo patterns
+	const match = remoteUrl.match(/[:/]([^/]+\/[^/.]+)(?:\.git)?$/);
+	return match ? match[1] : null;
+}
+
+function RepositoryPicker({
+	repositories,
+	selectedRepository,
+	onSelect,
+	disabled,
+	showFullRepoName = true,
+	open: openProp,
+	onOpenChange,
+}: {
+	repositories: RepositoryCreateOption[];
+	selectedRepository: RepositoryCreateOption | null;
+	onSelect: (repo: RepositoryCreateOption) => void;
+	disabled?: boolean;
+	showFullRepoName?: boolean;
+	open?: boolean;
+	onOpenChange?: (open: boolean) => void;
+}) {
+	const { t } = useI18n();
+	const [openUncontrolled, setOpenUncontrolled] = useState(false);
+	const open = openProp ?? openUncontrolled;
+	const setOpen = onOpenChange ?? setOpenUncontrolled;
+
+	const handleSelect = useCallback(
+		(repoId: string) => {
+			const repo = repositories.find((r) => r.id === repoId);
+			if (repo) {
+				onSelect(repo);
+				setOpen(false);
+				// After selecting, move focus into the composer once the popover
+				// closes — don't leave it on the picker trigger.
+				requestAnimationFrame(() => {
+					publishShellEvent({ type: "focus-composer" });
+				});
+			}
+		},
+		[repositories, onSelect, setOpen],
+	);
+
+	// Keyboard handler for number keys 1-9
+	const handleKeyDown = useCallback(
+		(event: React.KeyboardEvent) => {
+			const key = event.key;
+			if (/^[1-9]$/.test(key) && !event.metaKey && !event.ctrlKey) {
+				event.preventDefault();
+				const index = Number.parseInt(key, 10) - 1;
+				if (index < repositories.length) {
+					handleSelect(repositories[index].id);
+				}
+			}
+		},
+		[repositories, handleSelect],
+	);
+
+	// Plain case-insensitive substring match — cmdk defaults to fuzzy scoring.
+	// `value` carries both the short name and owner/repo, so every name shown
+	// in the row stays searchable.
+	const filterRepositories = useCallback(
+		(value: string, search: string) =>
+			value.toLowerCase().includes(search.trim().toLowerCase()) ? 1 : 0,
+		[],
+	);
+
+	return (
+		<Popover open={open} onOpenChange={setOpen}>
+			<PopoverTrigger asChild>
+				<Button
+					type="button"
+					variant="ghost"
+					disabled={disabled}
+					className="h-9 max-w-[18rem] gap-1.5 px-2 text-[24px] font-semibold leading-none tracking-normal transition-[height,max-width,padding,font-size,gap] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
+				>
+					{selectedRepository ? (
+						<>
+							<WorkspaceAvatar
+								repoIconSrc={selectedRepository.repoIconSrc}
+								repoInitials={selectedRepository.repoInitials}
+								repoName={selectedRepository.name}
+								title={selectedRepository.name}
+								className="size-6 rounded-md transition-[width,height] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
+								fallbackClassName="text-nano"
+							/>
+							<span className="min-w-0 truncate">
+								{selectedRepository.name}
+							</span>
+							<ChevronDown
+								className="size-4 shrink-0 text-muted-foreground transition-[width,height] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
+								strokeWidth={2}
+							/>
+						</>
+					) : (
+						<span className="text-muted-foreground">
+							<I18nText source="repository2" />
+						</span>
+					)}
+				</Button>
+			</PopoverTrigger>
+			<PopoverContent
+				align="center"
+				className="w-fit min-w-[15rem] max-w-[20rem] p-0"
+				// Closing must not refocus the trigger — that flashes its
+				// tooltip. handleSelect moves focus into the composer instead.
+				onCloseAutoFocus={(event) => event.preventDefault()}
+			>
+				<Command filter={filterRepositories} onKeyDown={handleKeyDown}>
+					<CommandInput placeholder={t("searchRepositories")} className="h-9" />
+					<CommandList className="max-h-80">
+						<CommandEmpty>
+							<I18nText source="noRepositoriesFound" />
+						</CommandEmpty>
+						{repositories.slice(0, 9).map((repository, index) => {
+							const repoName = extractRepoName(repository.remoteUrl);
+							return (
+								<CommandItem
+									key={repository.id}
+									value={`${repository.name} ${repoName || ""}`}
+									onSelect={() => handleSelect(repository.id)}
+									className="gap-2"
+								>
+									{/* Number badge for first 9 repos */}
+									<kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground opacity-100">
+										{index + 1}
+									</kbd>
+									<WorkspaceAvatar
+										repoIconSrc={repository.repoIconSrc}
+										repoInitials={repository.repoInitials}
+										repoName={repository.name}
+										title={repository.name}
+										className="size-5 rounded-md"
+										fallbackClassName="text-nano"
+									/>
+									<div className="flex min-w-0 flex-1 flex-col">
+										{showFullRepoName && repoName ? (
+											<>
+												<span className="truncate text-[13px] font-medium">
+													{repoName}
+												</span>
+												<span className="truncate text-[11px] text-muted-foreground">
+													{repository.name}
+												</span>
+											</>
+										) : (
+											<span className="truncate text-[13px]">
+												{repository.name}
+											</span>
+										)}
+									</div>
+								</CommandItem>
+							);
+						})}
+					</CommandList>
+				</Command>
+			</PopoverContent>
+		</Popover>
+	);
 }
 
 type WorkspaceStartPageProps = {
@@ -118,7 +296,19 @@ export function WorkspaceStartPage({
 	composerAtBottom = false,
 	children,
 }: WorkspaceStartPageProps) {
+	const { t } = useI18n();
 	const [createBranchOpen, setCreateBranchOpen] = useState(false);
+	const selectedRepositoryIsPlainDirectory = Boolean(
+		selectedRepository && !selectedRepository.defaultBranch,
+	);
+	const [repoPickerOpen, setRepoPickerOpen] = useState(false);
+	const [repoTooltipOpen, setRepoTooltipOpen] = useState(false);
+	// Split the localized heading on the {repo} token so the repo picker keeps
+	// its place while word order follows each language (en: text→repo→"?",
+	// zh: "在 "→repo→" 里构建什么？").
+	const [buildHeadingBefore, buildHeadingAfter] = t("whatShouldWeBuildRepo")
+		.split("{repo}")
+		.map((part) => part.trim());
 
 	// Local mode mirrors git DWIM (local-first) for icon resolution; UseBranch
 	// has the same shape. Worktree mode follows the user-picked intent.
@@ -135,6 +325,10 @@ export function WorkspaceStartPage({
 	const cycleRepositoryShortcut = getShortcut(
 		settings.shortcuts,
 		"startSurface.cycleRepository",
+	);
+	const openRepositoryPickerShortcut = getShortcut(
+		settings.shortcuts,
+		"startSurface.openRepositoryPicker",
 	);
 	const justChatShortcut = getShortcut(
 		settings.shortcuts,
@@ -167,6 +361,11 @@ export function WorkspaceStartPage({
 				id: "startSurface.cycleRepository",
 				callback: selectNextRepository,
 				enabled: repositories.length > 1,
+			},
+			{
+				id: "startSurface.openRepositoryPicker",
+				callback: () => setRepoPickerOpen(true),
+				enabled: repositories.length > 0,
 			},
 		],
 	});
@@ -244,7 +443,7 @@ export function WorkspaceStartPage({
 									variant="ghost"
 									size="sm"
 									onClick={onClosePreview}
-									aria-label="Close source preview"
+									aria-label="closeSourcePreview"
 									className="gap-1.5 px-2 text-muted-foreground hover:text-foreground"
 								>
 									<ShortcutDisplay hotkey="Escape" />
@@ -304,7 +503,7 @@ export function WorkspaceStartPage({
 											: "max-w-[32rem] translate-y-0 opacity-100",
 									)}
 								>
-									What should we work on?
+									<I18nText source="whatShouldWeWork" />
 								</span>
 							) : (
 								<>
@@ -313,114 +512,58 @@ export function WorkspaceStartPage({
 											"inline-block overflow-hidden transition-[max-width,opacity,transform] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
 											previewCard
 												? "max-w-0 -translate-y-1 opacity-0"
-												: "max-w-[22rem] translate-y-0 opacity-100",
+												: "max-w-[24rem] translate-y-0 opacity-100",
 										)}
 									>
-										What should we build
+										{buildHeadingBefore}
 									</span>
-									<span
-										className={cn(
-											"inline-block overflow-hidden transition-[max-width,opacity,transform] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-											previewCard
-												? "max-w-0 -translate-y-1 opacity-0"
-												: "max-w-[2rem] translate-y-0 opacity-100",
-										)}
+									<Tooltip
+										open={repoTooltipOpen && !repoPickerOpen}
+										onOpenChange={setRepoTooltipOpen}
 									>
-										in
-									</span>
-									<DropdownMenu>
-										<Tooltip>
-											<TooltipTrigger asChild>
-												<DropdownMenuTrigger asChild>
-													<Button
-														type="button"
-														variant="ghost"
-														disabled={repositories.length === 0}
-														className={cn(
-															"font-semibold leading-none tracking-normal transition-[height,max-width,padding,font-size,gap] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-															"h-9 max-w-[18rem] gap-1.5 px-2 text-[24px]",
-														)}
-													>
-														{selectedRepository ? (
-															<>
-																<WorkspaceAvatar
-																	repoIconSrc={selectedRepository.repoIconSrc}
-																	repoInitials={selectedRepository.repoInitials}
-																	repoName={selectedRepository.name}
-																	title={selectedRepository.name}
-																	className={cn(
-																		"rounded-md transition-[width,height] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-																		"size-6",
-																	)}
-																	fallbackClassName="text-nano"
-																/>
-																<span className="min-w-0 truncate">
-																	{selectedRepository.name}
-																</span>
-																<ChevronDown
-																	className={cn(
-																		"shrink-0 text-muted-foreground transition-[width,height] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-																		"size-4",
-																	)}
-																	strokeWidth={2}
-																/>
-															</>
-														) : (
-															<span className="text-muted-foreground">
-																a repository
-															</span>
-														)}
-													</Button>
-												</DropdownMenuTrigger>
-											</TooltipTrigger>
-											<TooltipContent
-												side="top"
-												sideOffset={4}
-												className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
-											>
-												<span>Switch repository</span>
+										<TooltipTrigger asChild>
+											<div>
+												<RepositoryPicker
+													repositories={repositories}
+													selectedRepository={selectedRepository}
+													onSelect={onSelectRepository}
+													disabled={repositories.length === 0}
+													showFullRepoName={true}
+													open={repoPickerOpen}
+													onOpenChange={setRepoPickerOpen}
+												/>
+											</div>
+										</TooltipTrigger>
+										<TooltipContent
+											side="top"
+											sideOffset={4}
+											className="flex flex-col gap-1.5 rounded-md px-2 py-1.5 text-small leading-none"
+										>
+											<span className="flex items-center gap-2">
+												<I18nText source="openRepositoryPicker" />
+												<InlineShortcutDisplay
+													hotkey={openRepositoryPickerShortcut}
+													className="text-background/60"
+												/>
+											</span>
+											<span className="flex items-center gap-2">
+												<I18nText source="switchRepository" />
 												<InlineShortcutDisplay
 													hotkey={cycleRepositoryShortcut}
 													className="text-background/60"
 												/>
-											</TooltipContent>
-										</Tooltip>
-										{/* Skip focus return so the wrapping Tooltip doesn't re-open via onFocus after selection. */}
-										<DropdownMenuContent
-											align="center"
-											className="min-w-56"
-											onCloseAutoFocus={(event) => event.preventDefault()}
-										>
-											{repositories.map((repository) => (
-												<DropdownMenuItem
-													key={repository.id}
-													onClick={() => onSelectRepository(repository)}
-													className="gap-2"
-												>
-													<WorkspaceAvatar
-														repoIconSrc={repository.repoIconSrc}
-														repoInitials={repository.repoInitials}
-														repoName={repository.name}
-														title={repository.name}
-														className="size-5 rounded-md"
-														fallbackClassName="text-nano"
-													/>
-													<span className="min-w-0 flex-1 truncate">
-														{repository.name}
-													</span>
-												</DropdownMenuItem>
-											))}
-										</DropdownMenuContent>
-									</DropdownMenu>
+											</span>
+										</TooltipContent>
+									</Tooltip>
 									<span
 										className={cn(
 											"inline-block overflow-hidden transition-[max-width,opacity,transform] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
 											previewCard
 												? "max-w-0 -translate-y-1 opacity-0"
-												: "max-w-[2rem] translate-y-0 opacity-100",
+												: "max-w-[12rem] translate-y-0 opacity-100",
 										)}
 									>
-										?
+										{buildHeadingAfter}
 									</span>
 								</>
 							)}
@@ -437,8 +580,8 @@ export function WorkspaceStartPage({
 					>
 						{/* Preview-mode repo selector: hidden in chat mode (no repo). */}
 						{previewCard && mode !== "chat" ? (
-							<DropdownMenu>
-								<DropdownMenuTrigger asChild>
+							<Popover>
+								<PopoverTrigger asChild>
 									<button
 										type="button"
 										disabled={repositories.length === 0}
@@ -463,32 +606,80 @@ export function WorkspaceStartPage({
 												/>
 											</>
 										) : (
-											<span className="truncate">Repository</span>
+											<span className="truncate">
+												<I18nText source="repository" />
+											</span>
 										)}
 									</button>
-								</DropdownMenuTrigger>
-								<DropdownMenuContent align="start" className="min-w-56">
-									{repositories.map((repository) => (
-										<DropdownMenuItem
-											key={repository.id}
-											onClick={() => onSelectRepository(repository)}
-											className="gap-2"
-										>
-											<WorkspaceAvatar
-												repoIconSrc={repository.repoIconSrc}
-												repoInitials={repository.repoInitials}
-												repoName={repository.name}
-												title={repository.name}
-												className="size-5 rounded-md"
-												fallbackClassName="text-nano"
-											/>
-											<span className="min-w-0 flex-1 truncate">
-												{repository.name}
-											</span>
-										</DropdownMenuItem>
-									))}
-								</DropdownMenuContent>
-							</DropdownMenu>
+								</PopoverTrigger>
+								<PopoverContent align="start" className="w-96 p-0">
+									<Command
+										onKeyDown={(event: React.KeyboardEvent) => {
+											const key = event.key;
+											if (
+												/^[1-9]$/.test(key) &&
+												!event.metaKey &&
+												!event.ctrlKey
+											) {
+												event.preventDefault();
+												const index = Number.parseInt(key, 10) - 1;
+												if (index < repositories.length) {
+													onSelectRepository(repositories[index]);
+												}
+											}
+										}}
+									>
+										<CommandInput
+											placeholder={t("searchRepositories")}
+											className="h-9"
+										/>
+										<CommandList className="max-h-80">
+											<CommandEmpty>
+												<I18nText source="noRepositoriesFound" />
+											</CommandEmpty>
+											{repositories.slice(0, 9).map((repository, index) => {
+												const repoName = extractRepoName(repository.remoteUrl);
+												return (
+													<CommandItem
+														key={repository.id}
+														value={`${repository.name} ${repoName || ""}`}
+														onSelect={() => onSelectRepository(repository)}
+														className="gap-2"
+													>
+														<kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground opacity-100">
+															{index + 1}
+														</kbd>
+														<WorkspaceAvatar
+															repoIconSrc={repository.repoIconSrc}
+															repoInitials={repository.repoInitials}
+															repoName={repository.name}
+															title={repository.name}
+															className="size-5 rounded-md"
+															fallbackClassName="text-nano"
+														/>
+														<div className="flex min-w-0 flex-1 flex-col">
+															{repoName ? (
+																<>
+																	<span className="truncate text-[13px] font-medium">
+																		{repoName}
+																	</span>
+																	<span className="truncate text-[11px] text-muted-foreground">
+																		{repository.name}
+																	</span>
+																</>
+															) : (
+																<span className="truncate text-[13px]">
+																	{repository.name}
+																</span>
+															)}
+														</div>
+													</CommandItem>
+												);
+											})}
+										</CommandList>
+									</Command>
+								</PopoverContent>
+							</Popover>
 						) : null}
 						<DropdownMenu>
 							<Tooltip>
@@ -519,10 +710,10 @@ export function WorkspaceStartPage({
 											)}
 											<span>
 												{mode === "local"
-													? "Work locally"
+													? t("workLocally")
 													: mode === "chat"
-														? "Just chat"
-														: "New worktree"}
+														? t("justChat")
+														: t("newWorktree")}
 											</span>
 											<ChevronDown
 												className="size-3 shrink-0 text-muted-foreground"
@@ -536,7 +727,7 @@ export function WorkspaceStartPage({
 									sideOffset={4}
 									className="rounded-md px-2 text-small leading-none"
 								>
-									Select where to run the task
+									<I18nText source="selectWhereRunTask" />
 								</TooltipContent>
 							</Tooltip>
 							{/* Skip focus return so the wrapping Tooltip doesn't re-open via onFocus after selection. */}
@@ -557,7 +748,7 @@ export function WorkspaceStartPage({
 											className="gap-2 pr-3"
 										>
 											<FolderPlus className="size-3.5" strokeWidth={1.8} />
-											<span>Add a repository…</span>
+											<I18nText source="addRepository" />
 										</DropdownMenuItem>
 										<DropdownMenuSeparator />
 										<DropdownMenuItem
@@ -566,7 +757,7 @@ export function WorkspaceStartPage({
 											data-checked="true"
 										>
 											<MessageCircle className="size-3.5" strokeWidth={1.8} />
-											<span>Just chat</span>
+											<I18nText source="justChat" />
 											{justChatShortcut ? (
 												<InlineShortcutDisplay
 													hotkey={justChatShortcut}
@@ -575,6 +766,15 @@ export function WorkspaceStartPage({
 											) : null}
 										</DropdownMenuItem>
 									</>
+								) : selectedRepositoryIsPlainDirectory ? (
+									<DropdownMenuItem
+										onClick={() => onModeChange("local")}
+										className="gap-2 pr-3"
+										data-checked="true"
+									>
+										<Laptop className="size-3.5" strokeWidth={1.8} />
+										<span>Work locally</span>
+									</DropdownMenuItem>
 								) : (
 									<>
 										<DropdownMenuItem
@@ -583,7 +783,7 @@ export function WorkspaceStartPage({
 											data-checked={mode === "local" ? "true" : undefined}
 										>
 											<Laptop className="size-3.5" strokeWidth={1.8} />
-											<span>Work locally</span>
+											<I18nText source="workLocally" />
 										</DropdownMenuItem>
 										<DropdownMenuItem
 											onClick={() => onModeChange("worktree")}
@@ -591,7 +791,7 @@ export function WorkspaceStartPage({
 											data-checked={mode === "worktree" ? "true" : undefined}
 										>
 											<Split className="size-3.5 rotate-90" strokeWidth={1.8} />
-											<span>New worktree</span>
+											<I18nText source="newWorktree" />
 										</DropdownMenuItem>
 										<DropdownMenuItem
 											onClick={() => onModeChange("chat")}
@@ -599,7 +799,7 @@ export function WorkspaceStartPage({
 											data-checked={mode === "chat" ? "true" : undefined}
 										>
 											<MessageCircle className="size-3.5" strokeWidth={1.8} />
-											<span>Just chat</span>
+											<I18nText source="justChat" />
 											{justChatShortcut ? (
 												<InlineShortcutDisplay
 													hotkey={justChatShortcut}
@@ -612,7 +812,7 @@ export function WorkspaceStartPage({
 							</DropdownMenuContent>
 						</DropdownMenu>
 						{/* Branch intent picker. Worktree mode only. */}
-						{mode === "worktree" ? (
+						{mode === "worktree" && !selectedRepositoryIsPlainDirectory ? (
 							<DropdownMenu>
 								<Tooltip>
 									<TooltipTrigger asChild>
@@ -635,8 +835,8 @@ export function WorkspaceStartPage({
 												)}
 												<span>
 													{branchIntent === "use_branch"
-														? "Reuse"
-														: "Branch off"}
+														? t("reuse")
+														: t("branchOff")}
 												</span>
 												<ChevronDown
 													className="size-3 shrink-0 text-muted-foreground"
@@ -651,8 +851,8 @@ export function WorkspaceStartPage({
 										className="rounded-md px-2 text-small leading-none"
 									>
 										{branchIntent === "use_branch"
-											? "Check out the picked branch directly."
-											: "Fork a fresh branch off the picked base"}
+											? t("checkOutPickedBranchDirectly")
+											: t("forkFreshBranchOffPickedBase")}
 									</TooltipContent>
 								</Tooltip>
 								{/* Skip focus return so the wrapping Tooltip doesn't re-open via onFocus after selection. */}
@@ -670,10 +870,10 @@ export function WorkspaceStartPage({
 									>
 										<div className="flex items-center gap-2">
 											<GitBranchPlus className="size-3.5" strokeWidth={1.8} />
-											<span>Branch off</span>
+											<I18nText source="branchOff" />
 										</div>
 										<span className="pl-[1.375rem] text-mini text-muted-foreground">
-											Fork a fresh branch off the picked base.
+											<I18nText source="forkFreshBranchOffPickedBase" />
 										</span>
 									</DropdownMenuItem>
 									<DropdownMenuItem
@@ -685,17 +885,17 @@ export function WorkspaceStartPage({
 									>
 										<div className="flex items-center gap-2">
 											<GitMerge className="size-3.5" strokeWidth={1.8} />
-											<span>Reuse</span>
+											<I18nText source="reuse" />
 										</div>
 										<span className="pl-[1.375rem] text-mini text-muted-foreground">
-											Check out the picked branch directly.
+											<I18nText source="checkOutPickedBranchDirectly" />
 										</span>
 									</DropdownMenuItem>
 								</DropdownMenuContent>
 							</DropdownMenu>
 						) : null}
 						{/* Branch picker: hidden in chat mode (no branches). */}
-						{mode !== "chat" ? (
+						{mode !== "chat" && !selectedRepositoryIsPlainDirectory ? (
 							<>
 								<Tooltip>
 									<BranchPickerPopover
@@ -718,7 +918,9 @@ export function WorkspaceStartPage({
 															}}
 														>
 															<Plus className="size-3.5" strokeWidth={2} />
-															<span>Create and checkout new branch…</span>
+															<span>
+																<I18nText source="createCheckoutNewBranch" />
+															</span>
 														</button>
 													)
 												: undefined
@@ -755,10 +957,10 @@ export function WorkspaceStartPage({
 										className="rounded-md px-2 text-small leading-none"
 									>
 										{mode === "local"
-											? "Switch branch"
+											? t("miscSwitchBranch")
 											: branchIntent === "use_branch"
-												? "Branch to reuse"
-												: "Base to fork off"}
+												? t("miscBranchToReuse")
+												: t("miscBaseToForkOff")}
 									</TooltipContent>
 								</Tooltip>
 								<CreateBranchDialog

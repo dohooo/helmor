@@ -14,6 +14,7 @@ import {
 	buildComposerPreviewLabel,
 	locatePastedTextRanges,
 } from "@/lib/composer-insert";
+import { useI18n } from "@/lib/i18n";
 import type { QueuedSubmit } from "@/lib/use-submit-queue";
 import { cn } from "@/lib/utils";
 import { splitTextWithFiles } from "@/lib/workspace-helpers";
@@ -69,6 +70,7 @@ function QueueRow({
 	onEdit?: () => void;
 	disabled?: boolean;
 }) {
+	const { t } = useI18n();
 	const { prompt, imagePaths, filePaths, customTags } = item.payload;
 	// Reuse the chat-bubble splitter so attachment chips render the
 	// same way here as in the sent message — pasted tags included.
@@ -136,7 +138,7 @@ function QueueRow({
 						{onEdit ? (
 							<Button
 								type="button"
-								aria-label="Edit in composer"
+								aria-label="editComposer"
 								variant="ghost"
 								size="sm"
 								disabled={disabled}
@@ -144,12 +146,12 @@ function QueueRow({
 								className="h-7 gap-1 rounded-md px-2 text-small font-medium text-muted-foreground hover:text-foreground"
 							>
 								<Pencil className="size-[13px] shrink-0" strokeWidth={1.8} />
-								<span>Edit</span>
+								<span>{t("edit")}</span>
 							</Button>
 						) : null}
 						<Button
 							type="button"
-							aria-label="Steer now"
+							aria-label="steerNow"
 							variant="ghost"
 							size="sm"
 							disabled={disabled}
@@ -160,12 +162,12 @@ function QueueRow({
 								className="size-[13px] shrink-0"
 								strokeWidth={1.8}
 							/>
-							<span>Steer</span>
+							<span>{t("steer")}</span>
 						</Button>
 					</div>
 					<Button
 						type="button"
-						aria-label="Remove from queue"
+						aria-label="removeFromQueue"
 						variant="ghost"
 						size="icon-xs"
 						disabled={disabled}

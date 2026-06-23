@@ -1,21 +1,17 @@
-// Adapter for the two opencode-protocol providers (OpenCode + MiMo Code fork):
-// drives the server-sync Models row and model sync.
+// Adapter for the opencode-protocol provider (OpenCode): drives the
+// server-sync Models row and model sync.
 
 import {
 	type CustomProvider,
 	listCustomProviders,
-	listMimoModels,
 	listOpencodeModels,
 } from "@/lib/api";
-import {
-	isMimoBuiltinProvider,
-	isOpencodeBuiltinProvider,
-} from "./opencode-model-defaults";
+import { isOpencodeBuiltinProvider } from "./opencode-model-defaults";
 
 export type SlugProviderAdapter = {
-	provider: "opencode" | "mimo";
+	provider: "opencode";
 	displayName: string;
-	settingsKey: "opencodeProvider" | "mimoProvider";
+	settingsKey: "opencodeProvider";
 	/** Shown in the sync tooltip. */
 	configPathLabel: string;
 	listModels: typeof listOpencodeModels;
@@ -38,15 +34,4 @@ export const OPENCODE_ADAPTER: SlugProviderAdapter = {
 	getCustomProviders: () => listCustomProviders("opencode"),
 	modelSyncMutationKey: ["opencodeModelSync"],
 	isBuiltinIntentional: isOpencodeBuiltinProvider,
-};
-
-export const MIMO_ADAPTER: SlugProviderAdapter = {
-	provider: "mimo",
-	displayName: "MiMo Code",
-	settingsKey: "mimoProvider",
-	configPathLabel: "~/.config/mimocode",
-	listModels: listMimoModels,
-	getCustomProviders: () => listCustomProviders("mimo"),
-	modelSyncMutationKey: ["mimoModelSync"],
-	isBuiltinIntentional: isMimoBuiltinProvider,
 };

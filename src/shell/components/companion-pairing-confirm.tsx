@@ -1,5 +1,6 @@
 import { HelmorLogoAnimated } from "@/components/helmor-logo-animated";
 import { Button } from "@/components/ui/button";
+import { I18nText } from "@/lib/i18n";
 import { confirmCompanionPairing } from "@/lib/ipc";
 
 /**
@@ -15,12 +16,10 @@ export function CompanionPairingConfirm() {
 				<HelmorLogoAnimated size={56} className="opacity-90" />
 				<div className="flex flex-col gap-2">
 					<h1 className="font-semibold text-foreground text-heading">
-						Pair this browser
+						<I18nText source="pairBrowser" />
 					</h1>
 					<p className="text-muted-foreground text-body">
-						Connect this browser to your Helmor desktop so you can open your
-						workspaces, sessions, and agents from here. Only continue if you
-						started this pairing yourself.
+						<I18nText source="connectBrowserHelmorDesktopSoCan" />
 					</p>
 				</div>
 				<Button
@@ -29,7 +28,7 @@ export function CompanionPairingConfirm() {
 						confirmCompanionPairing();
 					}}
 				>
-					Confirm pairing
+					<I18nText source="confirmPairing" />
 				</Button>
 			</div>
 		</div>

@@ -242,6 +242,32 @@ impl ScriptProcessManager {
         attempts
     }
 
+    /// Signal every live script and terminal handle bound to `workspace_id`,
+    /// regardless of repo or script_type. Used by the archive path so a
+    /// workspace's run/terminal processes don't outlive the worktree they were
+    /// spawned in. Returns the number of handles that were signaled.
+    ///
+    /// Same lock discipline as `kill_all` / `kill_others_in_repo`: snapshot the
+    /// matching handles under the map lock, drop the lock, then signal each —
+    /// holding the lock across the signal would deadlock against `run_script`'s
+    /// post-wait `unregister`.
+    pub fn kill_workspace(&self, workspace_id: &str) -> usize {
+        let victims: Vec<ProcessHandle> = {
+            let map = self.processes.lock().expect("process map poisoned");
+            map.iter()
+                .filter(|(k, _)| k.2.as_deref() == Some(workspace_id))
+                .map(|(_, h)| h.clone())
+                .collect()
+        };
+        let count = victims.len();
+        for h in victims {
+            h.killed.store(true, Ordering::Release);
+            kill_in_flight_stop_command(&h.stop_pgid);
+            escalating_kill(h.pid, h.pgid);
+        }
+        count
+    }
+
     /// Signal the process group (and leader as a fallback) with SIGTERM,
     /// escalating to SIGKILL after `PROCESS_TERM_TIMEOUT`. Returns true if
     /// there was a live handle to signal.
@@ -1339,6 +1365,61 @@ mod tests {
     fn kill_others_in_repo_with_no_matches_is_noop() {
         let mgr = ScriptProcessManager::new();
         assert_eq!(mgr.kill_others_in_repo("nope", "run", None), 0);
+    }
+
+    // ── kill_workspace (archive path) ──────────────────────────────────────
+
+    #[test]
+    fn kill_workspace_signals_every_handle_for_that_workspace_only() {
+        let mgr = ScriptProcessManager::new();
+        // The target workspace has a run script, a setup script, and two
+        // embedded terminals — kill_workspace must hit all four regardless
+        // of script_type. Another workspace in the same repo, and an entry
+        // with no workspace_id, must be left untouched.
+        let run: ProcessKey = ("A".into(), "run:dev".into(), Some("ws-target".into()));
+        let setup: ProcessKey = ("A".into(), "setup".into(), Some("ws-target".into()));
+        let term1: ProcessKey = ("A".into(), "terminal:abc".into(), Some("ws-target".into()));
+        let term2: ProcessKey = ("A".into(), "terminal:def".into(), Some("ws-target".into()));
+        let other_ws: ProcessKey = ("A".into(), "run:dev".into(), Some("ws-other".into()));
+        let no_ws: ProcessKey = ("__auth__".into(), "agent-login:claude".into(), None);
+
+        let (mut c_run, _, _, k_run) = spawn_and_register(&mgr, run.clone());
+        let (mut c_setup, _, _, k_setup) = spawn_and_register(&mgr, setup.clone());
+        let (mut c_t1, _, _, k_t1) = spawn_and_register(&mgr, term1.clone());
+        let (mut c_t2, _, _, k_t2) = spawn_and_register(&mgr, term2.clone());
+        let (mut c_other, other_pid, _, k_other) = spawn_and_register(&mgr, other_ws.clone());
+        let (mut c_nows, nows_pid, _, k_nows) = spawn_and_register(&mgr, no_ws.clone());
+
+        let signaled = mgr.kill_workspace("ws-target");
+        assert_eq!(signaled, 4);
+
+        // Reap the four victims and confirm their killed flags flipped.
+        let _ = c_run.wait();
+        let _ = c_setup.wait();
+        let _ = c_t1.wait();
+        let _ = c_t2.wait();
+        assert!(k_run.load(Ordering::Acquire));
+        assert!(k_setup.load(Ordering::Acquire));
+        assert!(k_t1.load(Ordering::Acquire));
+        assert!(k_t2.load(Ordering::Acquire));
+
+        // The other workspace and the no-workspace entry are untouched.
+        assert!(!k_other.load(Ordering::Acquire));
+        assert!(!k_nows.load(Ordering::Acquire));
+        assert_eq!(unsafe { libc::kill(other_pid, 0) }, 0, "ws-other alive");
+        assert_eq!(unsafe { libc::kill(nows_pid, 0) }, 0, "no-ws entry alive");
+
+        // Cleanup.
+        mgr.kill(&other_ws);
+        mgr.kill(&no_ws);
+        let _ = c_other.wait();
+        let _ = c_nows.wait();
+    }
+
+    #[test]
+    fn kill_workspace_with_no_matches_is_noop() {
+        let mgr = ScriptProcessManager::new();
+        assert_eq!(mgr.kill_workspace("nope"), 0);
     }
 
     // ── kill_all (graceful-quit path) ──────────────────────────────────────

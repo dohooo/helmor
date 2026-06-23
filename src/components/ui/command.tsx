@@ -11,6 +11,7 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { InputGroup, InputGroupAddon } from "@/components/ui/input-group";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 function Command({
@@ -43,11 +44,12 @@ function CommandDialog({
 	showCloseButton?: boolean;
 	children: React.ReactNode;
 }) {
+	const { t } = useI18n();
 	return (
 		<Dialog {...props}>
 			<DialogHeader className="sr-only">
-				<DialogTitle>{title}</DialogTitle>
-				<DialogDescription>{description}</DialogDescription>
+				<DialogTitle>{t(title)}</DialogTitle>
+				<DialogDescription>{t(description)}</DialogDescription>
 			</DialogHeader>
 			<DialogContent
 				className={cn(
@@ -64,13 +66,18 @@ function CommandDialog({
 
 function CommandInput({
 	className,
+	placeholder,
+	"aria-label": ariaLabel,
 	...props
 }: React.ComponentProps<typeof CommandPrimitive.Input>) {
+	const { t } = useI18n();
 	return (
 		<div data-slot="command-input-wrapper" className="p-1">
 			<InputGroup className="h-8! rounded-lg! border-input/30 bg-input/30 shadow-none! *:data-[slot=input-group-addon]:pl-2!">
 				<CommandPrimitive.Input
 					data-slot="command-input"
+					placeholder={placeholder ? t(placeholder) : undefined}
+					aria-label={typeof ariaLabel === "string" ? t(ariaLabel) : ariaLabel}
 					className={cn(
 						"w-full text-body outline-hidden disabled:cursor-not-allowed disabled:opacity-50",
 						className,
@@ -103,6 +110,7 @@ function CommandList({
 
 function CommandEmpty({
 	className,
+	children,
 	...props
 }: React.ComponentProps<typeof CommandPrimitive.Empty>) {
 	return (
@@ -110,23 +118,32 @@ function CommandEmpty({
 			data-slot="command-empty"
 			className={cn("py-6 text-center text-body", className)}
 			{...props}
-		/>
+		>
+			{children}
+		</CommandPrimitive.Empty>
 	);
 }
 
 function CommandGroup({
 	className,
+	children,
+	heading,
 	...props
 }: React.ComponentProps<typeof CommandPrimitive.Group>) {
+	const { t } = useI18n();
+
 	return (
 		<CommandPrimitive.Group
 			data-slot="command-group"
+			heading={typeof heading === "string" ? t(heading) : heading}
 			className={cn(
 				"overflow-hidden p-1 text-foreground **:[[cmdk-group-heading]]:px-2 **:[[cmdk-group-heading]]:py-1.5 **:[[cmdk-group-heading]]:text-small **:[[cmdk-group-heading]]:font-medium **:[[cmdk-group-heading]]:text-muted-foreground",
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{children}
+		</CommandPrimitive.Group>
 	);
 }
 
@@ -165,6 +182,7 @@ function CommandItem({
 
 function CommandShortcut({
 	className,
+	children,
 	...props
 }: React.ComponentProps<"span">) {
 	return (
@@ -175,7 +193,9 @@ function CommandShortcut({
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{children}
+		</span>
 	);
 }
 

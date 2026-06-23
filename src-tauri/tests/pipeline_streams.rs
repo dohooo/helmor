@@ -275,7 +275,7 @@ fn stream_replay() {
         assert!(
             matches!(
                 provider,
-                "claude" | "codex" | "cursor" | "opencode" | "mimo" | "kimi"
+                "claude" | "codex" | "cursor" | "opencode" | "kimi"
             ),
             "fixture {path:?} is under unknown provider directory {provider:?}"
         );

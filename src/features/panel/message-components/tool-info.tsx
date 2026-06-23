@@ -14,6 +14,7 @@ import {
 	Sparkles,
 	Terminal,
 } from "lucide-react";
+import { formatSource, translateSource } from "@/lib/i18n";
 import type { FileChangeInfo, ToolInfo } from "./shared";
 import { basename, isObj, str, truncate } from "./shared";
 
@@ -25,6 +26,13 @@ const neutralToolIconClassName = "size-3.5 text-muted-foreground";
 export function getToolInfo(
 	name: string,
 	input: Record<string, unknown> | null,
+	// Default to the global resolvers (fine for non-React callers/tests); pass
+	// the reactive t/f from useI18n() in render so labels track language changes.
+	t: (key: string) => string = translateSource,
+	f: (
+		key: string,
+		values: Record<string, string | number>,
+	) => string = formatSource,
 ): ToolInfo {
 	if (name.startsWith("mcp__")) {
 		const segments = name.split("__");
@@ -91,7 +99,7 @@ export function getToolInfo(
 			};
 		}
 		return {
-			action: `Edit ${parsed.length} files`,
+			action: f("panelEditFilesCount", { count: parsed.length }),
 			icon,
 			diffAdd: totalAdd || undefined,
 			diffDel: totalDel || undefined,
@@ -103,7 +111,7 @@ export function getToolInfo(
 		const filePath = str(input.file_path);
 		const limit = typeof input.limit === "number" ? input.limit : null;
 		return {
-			action: limit ? `Read ${limit} lines` : "Read",
+			action: limit ? f("panelReadLinesCount", { count: limit }) : "Read",
 			file: filePath ? basename(filePath) : undefined,
 			icon: <FileText className={neutralToolIconClassName} strokeWidth={1.8} />,
 		};
@@ -122,7 +130,7 @@ export function getToolInfo(
 		const command = str(input.command);
 		const description = str(input.description);
 		return {
-			action: description ?? "Run",
+			action: description ?? t("panelToolRun"),
 			icon: <Terminal className={neutralToolIconClassName} strokeWidth={1.8} />,
 			command: command ? truncate(command, 80) : undefined,
 			fullCommand: command ?? undefined,
@@ -167,7 +175,7 @@ export function getToolInfo(
 		if (actionType === "openPage") {
 			const url = str(action!.url);
 			return {
-				action: "Open page",
+				action: t("panelOpenPage"),
 				icon,
 				detail: url ? truncate(url, 60) : undefined,
 			};
@@ -175,7 +183,7 @@ export function getToolInfo(
 		if (actionType === "findInPage") {
 			const pattern = str(action!.pattern) ?? str(action!.url);
 			return {
-				action: "Find in page",
+				action: t("panelFindInPage"),
 				icon,
 				detail: pattern ? truncate(pattern, 60) : undefined,
 			};
@@ -248,7 +256,7 @@ export function getToolInfo(
 				? (str(firstQuestion.question) ?? str(firstQuestion.header))
 				: null);
 		return {
-			action: "Ask user",
+			action: t("panelAskUser"),
 			icon: (
 				<MessageSquareMore
 					className={neutralToolIconClassName}
@@ -261,7 +269,7 @@ export function getToolInfo(
 
 	if (name === "EnterPlanMode") {
 		return {
-			action: "Enter Plan mode",
+			action: t("panelEnterPlanMode"),
 			icon: (
 				<ClipboardList className={neutralToolIconClassName} strokeWidth={1.8} />
 			),
@@ -270,7 +278,7 @@ export function getToolInfo(
 
 	if (name === "ExitPlanMode") {
 		return {
-			action: "Exit plan mode",
+			action: t("panelExitPlanMode"),
 			icon: (
 				<ClipboardCheck
 					className={neutralToolIconClassName}

@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/tooltip";
 import { type SlackInboxItem, slackPrepareThreadContext } from "@/lib/api";
 import type { ComposerInsertTarget } from "@/lib/composer-insert";
+import { formatSource, I18nText, translateSource, useI18n } from "@/lib/i18n";
 import {
 	formatSlackTextPlain,
 	renderSlackText,
@@ -47,6 +48,7 @@ export function SlackSourceCard({
 	selected?: boolean;
 	appendContextTarget?: ComposerInsertTarget;
 }) {
+	const { t } = useI18n();
 	const meta = describeKind(item);
 	return (
 		<article
@@ -101,11 +103,11 @@ export function SlackSourceCard({
 					<span className="absolute right-1 bottom-0.5 z-10 inline-flex">
 						<AppendContextButton
 							subjectLabel={card.title}
-							ariaLabel="Add to context"
+							ariaLabel="addContext2"
 							getPayload={() =>
 								prepareSlackContextPayload(item, card, appendContextTarget)
 							}
-							errorTitle="Couldn't insert context card"
+							errorTitle={t("inboxCouldntInsertContextCard")}
 							className={cn(
 								"flex size-7.5 cursor-interactive items-center justify-center rounded-md",
 								"border-0 bg-transparent text-muted-foreground opacity-0 shadow-none",
@@ -118,7 +120,9 @@ export function SlackSourceCard({
 						/>
 					</span>
 				</TooltipTrigger>
-				<TooltipContent side="top">Add to context</TooltipContent>
+				<TooltipContent side="top">
+					<I18nText source="addContext2" />
+				</TooltipContent>
 			</Tooltip>
 		</article>
 	);
@@ -144,9 +148,9 @@ async function prepareSlackContextPayload(
 	appendContextTarget: ComposerInsertTarget | undefined,
 ): Promise<AppendContextPayload> {
 	const toastId = `slack-prepare:${item.id}`;
-	toast.loading("Preparing Slack context…", {
+	toast.loading(translateSource("inboxPreparingSlackContext"), {
 		id: toastId,
-		description: "Fetching thread",
+		description: translateSource("fetchingThread"),
 	});
 	try {
 		const prepared = await slackPrepareThreadContext({
@@ -159,17 +163,20 @@ async function prepareSlackContextPayload(
 			anchorTs: item.ts,
 			onProgress: (event) => {
 				if (event.stage === "fetchingThread") {
-					toast.loading("Preparing Slack context…", {
+					toast.loading(translateSource("inboxPreparingSlackContext"), {
 						id: toastId,
-						description: "Fetching thread",
+						description: translateSource("fetchingThread"),
 					});
 				} else if (event.stage === "cachingFiles") {
-					toast.loading("Preparing Slack context…", {
+					toast.loading(translateSource("inboxPreparingSlackContext"), {
 						id: toastId,
 						description:
 							event.total === 0
-								? "No attachments to cache"
-								: `Caching attachments ${event.current + 1}/${event.total}`,
+								? translateSource("inboxNoAttachmentsToCache")
+								: formatSource("inboxCachingAttachments", {
+										current: event.current + 1,
+										total: event.total,
+									}),
 					});
 				}
 			},
@@ -183,15 +190,19 @@ async function prepareSlackContextPayload(
 		const attachedCount = prepared.imagePaths.length;
 		const totalImageCandidates = prepared.filesTotal;
 		const summary = (() => {
-			if (totalImageCandidates === 0) return "Thread inlined";
+			if (totalImageCandidates === 0)
+				return translateSource("inboxThreadInlined");
 			if (attachedCount === totalImageCandidates) {
 				return attachedCount === 1
-					? "Thread inlined · 1 image attached"
-					: `Thread inlined · ${attachedCount} images attached`;
+					? translateSource("inboxThreadInlinedOneImage")
+					: formatSource("inboxThreadInlinedImages", { count: attachedCount });
 			}
-			return `Thread inlined · ${attachedCount}/${totalImageCandidates} images attached (rest unavailable)`;
+			return formatSource("inboxThreadInlinedPartialImages", {
+				attached: attachedCount,
+				total: totalImageCandidates,
+			});
 		})();
-		toast.success("Slack context ready", {
+		toast.success(translateSource("inboxSlackContextReady"), {
 			id: toastId,
 			description: summary,
 		});
@@ -231,12 +242,12 @@ async function prepareSlackContextPayload(
 		}
 		return fallbackPayload;
 	} catch (error) {
-		toast.error("Couldn't prepare Slack context", {
+		toast.error(translateSource("inboxCouldntPrepareSlackContext"), {
 			id: toastId,
 			description:
 				error instanceof Error
 					? error.message
-					: "Falling back to summary-only context.",
+					: translateSource("inboxFallingBackSummaryOnly"),
 		});
 		// Degraded fallback so the user still gets something inserted.
 		return buildCardContextPayload(card, appendContextTarget);
@@ -298,18 +309,22 @@ function describeKind(item: SlackInboxItem): {
 	if (item.kind === "direct_message") {
 		return {
 			Icon: MessageCircle,
-			label: "DM",
+			label: translateSource("dm"),
 			chip: dmPartnerLabel(item.channelLabel),
 		};
 	}
 	if (item.threadTs) {
 		return {
 			Icon: MessagesSquare,
-			label: "Thread in",
+			label: translateSource("thread2"),
 			chip: item.channelLabel,
 		};
 	}
-	return { Icon: AtSign, label: "Mention in", chip: item.channelLabel };
+	return {
+		Icon: AtSign,
+		label: translateSource("mention"),
+		chip: item.channelLabel,
+	};
 }
 
 /** `channelLabel` for DMs comes back as `"DM · Partner"` (or
@@ -331,11 +346,11 @@ function initialsFor(name: string): string {
 function formatRelativeTime(timestamp: number) {
 	const deltaMs = Date.now() - timestamp;
 	const minutes = Math.max(1, Math.round(deltaMs / 60_000));
-	if (minutes < 60) return `${minutes}m ago`;
+	if (minutes < 60) return formatSource("countMAgo", { count: minutes });
 
 	const hours = Math.round(minutes / 60);
-	if (hours < 24) return `${hours}h ago`;
+	if (hours < 24) return formatSource("countHAgo", { count: hours });
 
 	const days = Math.round(hours / 24);
-	return `${days}d ago`;
+	return formatSource("countDAgo", { count: days });
 }

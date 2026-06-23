@@ -17,6 +17,7 @@ import {
 	pinWorkspace,
 	prepareArchiveWorkspace,
 	prepareWorkspaceFromRepo,
+	renameWorkspace,
 	restoreWorkspace,
 	setWorkspaceStatus,
 	startArchiveWorkspace,
@@ -29,6 +30,7 @@ import {
 	type WorkspaceStatus,
 } from "@/lib/api";
 import { extractError, isRecoverableByPurge } from "@/lib/errors";
+import { formatSource, translateSource } from "@/lib/i18n";
 import {
 	archivedWorkspacesQueryOptions,
 	helmorQueryKeys,
@@ -58,7 +60,6 @@ import {
 	summaryToArchivedRow,
 	workspaceGroupIdFromStatus,
 } from "@/lib/workspace-helpers";
-import { useShellEvent } from "@/shell/event-bus";
 import {
 	type PendingArchiveEntry,
 	type PendingCreationEntry,
@@ -254,7 +255,7 @@ export function useWorkspacesSidebarController({
 				pushWorkspaceToast(message, title, "destructive", {
 					persistent: true,
 					action: {
-						label: "Permanently Delete",
+						label: translateSource("permanentlyDelete"),
 						destructive: true,
 						onClick: () => handleDeleteWorkspaceRef.current(workspaceId),
 					},
@@ -310,7 +311,7 @@ export function useWorkspacesSidebarController({
 			// stale worktree) they need a way out without restarting the app.
 			pushPermanentDeleteRecoveryToastRef.current(
 				workspaceId,
-				"Archive failed",
+				translateSource("navArchiveFailed"),
 				error,
 				fallbackMessage,
 			);
@@ -333,15 +334,19 @@ export function useWorkspacesSidebarController({
 			if (payload.origin === "autoAfterMerge") {
 				const { message } = extractError(
 					payload,
-					"Unable to auto-archive workspace.",
+					translateSource("navUnableAutoArchiveWorkspace"),
 				);
-				pushWorkspaceToast(message, "Auto-archive failed", "default");
+				pushWorkspaceToast(
+					message,
+					translateSource("navAutoArchiveFailed"),
+					"default",
+				);
 				return;
 			}
 			rollbackArchivedWorkspace(
 				payload.workspaceId,
 				payload,
-				"Unable to archive workspace.",
+				translateSource("navUnableArchiveWorkspace"),
 			);
 		}).then((cleanup) => {
 			if (disposed) {
@@ -680,7 +685,10 @@ export function useWorkspacesSidebarController({
 						previousDetail,
 					);
 					pushWorkspaceToast(
-						describeUnknownError(error, "Unable to mark workspace as unread."),
+						describeUnknownError(
+							error,
+							translateSource("navUnableMarkWorkspaceUnread"),
+						),
 					);
 				});
 		},
@@ -750,7 +758,10 @@ export function useWorkspacesSidebarController({
 				// reconciles, which pulls the canonical post-failure
 				// state from the server.
 				pushWorkspaceToast(
-					describeUnknownError(error, "Unable to update pin state."),
+					describeUnknownError(
+						error,
+						translateSource("navUnableUpdatePinState"),
+					),
 				);
 			} finally {
 				releaseSidebar();
@@ -766,11 +777,25 @@ export function useWorkspacesSidebarController({
 				requestSidebarReconcile(queryClient);
 			} catch (error) {
 				pushWorkspaceToast(
-					describeUnknownError(error, "Unable to set status."),
+					describeUnknownError(error, translateSource("navUnableSetStatus")),
 				);
 			}
 		},
 		[pushWorkspaceToast, queryClient],
+	);
+
+	const handleRenameWorkspace = useCallback(
+		async (workspaceId: string, name: string) => {
+			try {
+				// Backend broadcasts WorkspaceChanged → sidebar reconciles.
+				await renameWorkspace(workspaceId, name);
+			} catch (error) {
+				pushWorkspaceToast(
+					describeUnknownError(error, translateSource("navRenameWorkspace")),
+				);
+			}
+		},
+		[pushWorkspaceToast],
 	);
 
 	const handleMoveRepositoryInSidebar = useCallback(
@@ -798,7 +823,10 @@ export function useWorkspacesSidebarController({
 					queryKey: helmorQueryKeys.workspaceGroups,
 				});
 				pushWorkspaceToast(
-					describeUnknownError(error, "Unable to reorder repository."),
+					describeUnknownError(
+						error,
+						translateSource("navUnableReorderRepository"),
+					),
 				);
 			}
 		},
@@ -841,7 +869,10 @@ export function useWorkspacesSidebarController({
 					queryKey: helmorQueryKeys.workspaceGroups,
 				});
 				pushWorkspaceToast(
-					describeUnknownError(error, "Unable to move workspace."),
+					describeUnknownError(
+						error,
+						translateSource("navUnableMoveWorkspace"),
+					),
 				);
 			}
 		},
@@ -859,7 +890,7 @@ export function useWorkspacesSidebarController({
 			);
 			if (!repository) {
 				pushWorkspaceToast(
-					"Unable to resolve repository for workspace creation.",
+					translateSource("navUnableResolveRepositoryForCreation"),
 				);
 				return;
 			}
@@ -877,7 +908,10 @@ export function useWorkspacesSidebarController({
 			} catch (error) {
 				setCreatingWorkspaceRepoId(null);
 				pushWorkspaceToast(
-					describeUnknownError(error, "Unable to create workspace."),
+					describeUnknownError(
+						error,
+						translateSource("navUnableCreateWorkspace"),
+					),
 				);
 				return;
 			}
@@ -1125,7 +1159,10 @@ export function useWorkspacesSidebarController({
 						);
 					}
 					pushWorkspaceToast(
-						describeUnknownError(error, "Unable to create workspace."),
+						describeUnknownError(
+							error,
+							translateSource("navUnableCreateWorkspace"),
+						),
 					);
 					void refetchNavigation();
 				})
@@ -1156,8 +1193,8 @@ export function useWorkspacesSidebarController({
 				onSelectWorkspace(response.selectedWorkspaceId);
 				if (!response.createdRepository) {
 					pushWorkspaceToast(
-						"Switched to the existing workspace.",
-						"Repository already added",
+						translateSource("navSwitchedToExistingWorkspace"),
+						translateSource("navRepositoryAlreadyAdded"),
 						"default",
 					);
 				}
@@ -1168,8 +1205,8 @@ export function useWorkspacesSidebarController({
 			onAddRepositoryNeedsStart?.(response.repositoryId);
 			if (!response.createdRepository) {
 				pushWorkspaceToast(
-					"Repository already added — opened the start page so you can spin up a workspace.",
-					"Repository already added",
+					translateSource("navRepositoryAlreadyAddedOpenedStart"),
+					translateSource("navRepositoryAlreadyAdded"),
 					"default",
 				);
 			}
@@ -1204,16 +1241,23 @@ export function useWorkspacesSidebarController({
 				return;
 			}
 
-			const response = await addRepositoryFromLocalPath(selectedPath);
+			const response = await addRepositoryFromLocalPath(selectedPath, {
+				allowNonGitDirectory: settings.allowNonGitDirectories,
+			});
 			await applyAddRepositoryResponse(response);
 		} catch (error) {
 			pushWorkspaceToast(
-				describeUnknownError(error, "Unable to add repository."),
+				describeUnknownError(error, translateSource("navUnableAddRepository")),
 			);
 		} finally {
 			setAddingRepository(false);
 		}
-	}, [addingRepository, applyAddRepositoryResponse, pushWorkspaceToast]);
+	}, [
+		addingRepository,
+		applyAddRepositoryResponse,
+		pushWorkspaceToast,
+		settings.allowNonGitDirectories,
+	]);
 
 	const handleOpenCloneDialog = useCallback(() => {
 		setIsCloneDialogOpen(true);
@@ -1312,8 +1356,11 @@ export function useWorkspacesSidebarController({
 						onSelectWorkspace(workspaceId);
 					}
 					pushWorkspaceToast(
-						describeUnknownError(error, "Unable to delete workspace."),
-						"Delete failed",
+						describeUnknownError(
+							error,
+							translateSource("navUnableDeleteWorkspace"),
+						),
+						translateSource("navDeleteFailed"),
 						"destructive",
 					);
 				})
@@ -1344,7 +1391,7 @@ export function useWorkspacesSidebarController({
 				{
 					persistent: true,
 					action: {
-						label: "Permanently Delete",
+						label: translateSource("permanentlyDelete"),
 						destructive: true,
 						onClick: () => {
 							handleDeleteWorkspace(workspaceId);
@@ -1362,8 +1409,8 @@ export function useWorkspacesSidebarController({
 				return;
 			}
 			pushWorkspaceToast(
-				`No archive commit was available, so the workspace was restored from "${targetBranch}".`,
-				"Restored from target branch",
+				formatSource("navRestoredFromTargetBranchDetail", { targetBranch }),
+				translateSource("navRestoredFromTargetBranch"),
 				"default",
 			);
 		},
@@ -1384,8 +1431,11 @@ export function useWorkspacesSidebarController({
 	const notifyBranchRename = useCallback(
 		(rename: { original: string; actual: string }) => {
 			pushWorkspaceToast(
-				`Branch "${rename.original}" was already taken. Restored on "${rename.actual}" instead.`,
-				"Branch renamed",
+				formatSource("navBranchTakenRestoredOn", {
+					original: rename.original,
+					actual: rename.actual,
+				}),
+				translateSource("navBranchRenamed"),
 			);
 		},
 		[pushWorkspaceToast],
@@ -1406,9 +1456,9 @@ export function useWorkspacesSidebarController({
 					updateArchivingWorkspaceId(workspaceId, false);
 					pushWorkspaceErrorToast(
 						workspaceId,
-						"Archive failed",
+						translateSource("navArchiveFailed"),
 						error,
-						"Unable to archive workspace.",
+						translateSource("navUnableArchiveWorkspace"),
 					);
 					return;
 				}
@@ -1450,8 +1500,8 @@ export function useWorkspacesSidebarController({
 				) {
 					updateArchivingWorkspaceId(workspaceId, false);
 					pushWorkspaceToast(
-						"Unable to find workspace in the sidebar cache.",
-						"Archive failed",
+						translateSource("navUnableFindWorkspaceCache"),
+						translateSource("navArchiveFailed"),
 						"destructive",
 					);
 					return;
@@ -1539,7 +1589,7 @@ export function useWorkspacesSidebarController({
 						rollbackArchivedWorkspace(
 							workspaceId,
 							error,
-							"Unable to archive workspace.",
+							translateSource("navUnableArchiveWorkspace"),
 						);
 					})
 					.finally(() => {
@@ -1603,9 +1653,9 @@ export function useWorkspacesSidebarController({
 					.catch((error) => {
 						pushPermanentDeleteRecoveryToast(
 							workspaceId,
-							"Restore failed",
+							translateSource("navRestoreFailed"),
 							error,
-							"Unable to restore workspace.",
+							translateSource("navUnableRestoreWorkspace"),
 						);
 					})
 					.finally(releaseSidebar);
@@ -1687,9 +1737,9 @@ export function useWorkspacesSidebarController({
 					);
 					pushPermanentDeleteRecoveryToast(
 						workspaceId,
-						"Restore failed",
+						translateSource("navRestoreFailed"),
 						error,
-						"Unable to restore workspace.",
+						translateSource("navUnableRestoreWorkspace"),
 					);
 				})
 				.finally(releaseSidebar);
@@ -1705,11 +1755,6 @@ export function useWorkspacesSidebarController({
 		],
 	);
 
-	// Bridge for surfaces outside the controller (e.g. composer triage Dismiss).
-	useShellEvent("request-archive-workspace", (event) => {
-		handleArchiveWorkspace(event.workspaceId);
-	});
-
 	const handleRestoreWorkspace = useCallback(
 		(workspaceId: string) => {
 			void (async () => {
@@ -1719,13 +1764,17 @@ export function useWorkspacesSidebarController({
 						const { currentBranch, suggestedBranch, remote } =
 							validation.targetBranchConflict;
 						pushWorkspaceToast(
-							`Branch "${currentBranch}" no longer exists on ${remote}. Switch target to "${suggestedBranch}"?`,
-							"Target branch changed",
+							formatSource("navBranchNoLongerExistsSwitchTarget", {
+								currentBranch,
+								remote,
+								suggestedBranch,
+							}),
+							translateSource("navTargetBranchChanged"),
 							"default",
 							{
 								persistent: true,
 								action: {
-									label: `Switch to ${suggestedBranch}`,
+									label: formatSource("navSwitchToBranch", { suggestedBranch }),
 									onClick: () => executeRestore(workspaceId, suggestedBranch),
 								},
 							},
@@ -1735,9 +1784,9 @@ export function useWorkspacesSidebarController({
 				} catch (error) {
 					pushPermanentDeleteRecoveryToast(
 						workspaceId,
-						"Restore failed",
+						translateSource("navRestoreFailed"),
 						error,
-						"Unable to restore workspace.",
+						translateSource("navUnableRestoreWorkspace"),
 					);
 					return;
 				}
@@ -1772,6 +1821,7 @@ export function useWorkspacesSidebarController({
 		handleMoveWorkspaceInSidebar,
 		handleMoveRepositoryInSidebar,
 		handleSetWorkspaceStatus,
+		handleRenameWorkspace,
 		handleTogglePin,
 		isCloneDialogOpen,
 		prefetchWorkspace,

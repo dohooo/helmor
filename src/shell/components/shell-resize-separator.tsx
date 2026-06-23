@@ -8,6 +8,7 @@ import {
 	useLayoutEffect,
 	useRef,
 } from "react";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
 	MAX_SIDEBAR_WIDTH,
@@ -32,6 +33,7 @@ export function ShellResizeSeparator({
 	onPointerDown,
 	onKeyDown,
 }: Props) {
+	const { t } = useI18n();
 	// Inline position written via ref so each remount re-applies it; the
 	// drag pipeline updates the same node per-frame.
 	const ref = useRef<HTMLDivElement>(null);
@@ -65,7 +67,11 @@ export function ShellResizeSeparator({
 			role="separator"
 			tabIndex={collapsed ? -1 : 0}
 			aria-hidden={collapsed}
-			aria-label={`Resize ${side === "sidebar" ? "sidebar" : "inspector sidebar"}`}
+			aria-label={
+				side === "sidebar"
+					? t("miscResizeSidebar")
+					: t("miscResizeInspectorSidebar")
+			}
 			aria-orientation="vertical"
 			aria-valuemin={MIN_SIDEBAR_WIDTH}
 			aria-valuemax={MAX_SIDEBAR_WIDTH}

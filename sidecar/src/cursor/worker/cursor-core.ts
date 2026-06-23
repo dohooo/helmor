@@ -27,6 +27,7 @@ import {
 	parseTitleAndBranchWithDiagnostics,
 	TITLE_GENERATION_TIMEOUT_MS,
 } from "../../title.js";
+import { loadCursorMcpServers } from "../project-mcp.js";
 import { scanCursorSkills } from "../skill-scanner.js";
 import {
 	buildCursorMessage,
@@ -38,6 +39,7 @@ import {
 	namespaceEvent,
 	toCursorMode,
 } from "./cursor-helpers.js";
+import { fatalScope, sessionContext } from "./fatal-context.js";
 
 /// Cheapest model on the title-gen hot path.
 const TITLE_MODEL_ID = "composer-2";
@@ -121,207 +123,230 @@ export class CursorCore {
 		params: SendMessageParams,
 		emitter: SidecarEmitter,
 	): Promise<void> {
-		const apiKey = this.resolveApiKey();
-		if (!apiKey) {
-			emitter.error(
-				requestId,
-				"Cursor API key is not configured. Add it in Settings → Models → Cursor.",
-			);
-			emitter.end(requestId);
-			return;
-		}
-
-		// Register the turn before any startup await so a Stop pressed during
-		// Agent.create / agent.send aborts instantly. Teardown reads the run
-		// lazily — it's null until agent.send resolves.
-		this.turns.begin(params.sessionId, requestId, emitter, () => {
-			void this.sessions
-				.get(params.sessionId)
-				?.currentRun?.cancel()
-				.catch(() => {});
-		});
-
-		const modelId = params.model ?? "composer-2";
-		const cwd = params.cwd ?? process.cwd();
-
-		let session = this.sessions.get(params.sessionId);
-		if (!session) {
-			try {
-				const agent = await withCursorRetry("Agent.create", () =>
-					params.resume
-						? Agent.resume(params.resume, { apiKey, local: { cwd } })
-						: Agent.create({
-								apiKey,
-								model: { id: modelId },
-								local: { cwd },
-								mode: toCursorMode(params.permissionMode),
-							}),
+		// Tag this turn's async context so a detached SDK fault (uncaught in
+		// the worker) is attributed to THIS session — see worker.ts's fatal
+		// handler. Without it, one session's fault fails every active session.
+		return sessionContext.run({ sessionId: params.sessionId }, async () => {
+			const apiKey = this.resolveApiKey();
+			if (!apiKey) {
+				emitter.error(
+					requestId,
+					"Cursor API key is not configured. Add it in Settings → Models → Cursor.",
 				);
-				session = {
-					agent,
-					modelId,
-					currentRun: null,
-					currentRequestId: null,
-				};
-				this.sessions.set(params.sessionId, session);
-				// Synthetic event — Rust persists agentId as provider_session_id.
-				emitter.passthrough(requestId, {
-					type: "cursor/agent_init",
-					session_id: agent.agentId,
-					model: modelId,
+				emitter.end(requestId);
+				return;
+			}
+
+			// Register the turn before any startup await so a Stop pressed during
+			// Agent.create / agent.send aborts instantly. Teardown reads the run
+			// lazily — it's null until agent.send resolves.
+			this.turns.begin(params.sessionId, requestId, emitter, () => {
+				void this.sessions
+					.get(params.sessionId)
+					?.currentRun?.cancel()
+					.catch(() => {});
+			});
+
+			const modelId = params.model ?? "composer-2";
+			const cwd = params.cwd ?? process.cwd();
+			// Cursor MCP servers (~/.cursor/mcp.json + project) aren't auto-loaded
+			// by the SDK without `settingSources`; inject them explicitly so Helmor
+			// agents get the same MCP tools as the Cursor IDE/CLI.
+			const mcpServers = loadCursorMcpServers(params.sourceRepoPath);
+			if (mcpServers) {
+				logger.info(`[${requestId}] cursor MCPs injected`, {
+					servers: Object.keys(mcpServers),
 				});
+			}
+
+			let session = this.sessions.get(params.sessionId);
+			if (!session) {
+				try {
+					const agent = await withCursorRetry("Agent.create", () =>
+						params.resume
+							? Agent.resume(params.resume, { apiKey, local: { cwd } })
+							: Agent.create({
+									apiKey,
+									model: { id: modelId },
+									local: { cwd },
+									mode: toCursorMode(params.permissionMode),
+									...(mcpServers ? { mcpServers } : {}),
+								}),
+					);
+					session = {
+						agent,
+						modelId,
+						currentRun: null,
+						currentRequestId: null,
+					};
+					this.sessions.set(params.sessionId, session);
+					// Synthetic event — Rust persists agentId as provider_session_id.
+					emitter.passthrough(requestId, {
+						type: "cursor/agent_init",
+						session_id: agent.agentId,
+						model: modelId,
+					});
+				} catch (error) {
+					const msg = error instanceof Error ? error.message : String(error);
+					logger.error(`[${requestId}] Cursor Agent.create failed: ${msg}`, {
+						...errorDetails(error),
+					});
+					emitter.error(requestId, `Cursor: ${msg}`);
+					emitter.end(requestId);
+					return;
+				}
+			}
+
+			// Stop pressed during Agent.create — `requestStop` already emitted
+			// `aborted`. Keep the freshly-minted agent for reuse; just bail.
+			if (this.turns.isAbortRequested(params.sessionId)) {
+				this.turns.end(params.sessionId, requestId);
+				return;
+			}
+
+			// Use this turn's modelId, not the agent's create-time pick —
+			// composer can switch models mid-conversation. `thinking` is
+			// auto-enabled inside buildSendModelParams when present.
+			session.modelId = modelId;
+			const modelParams = await this.buildSendModelParams(
+				modelId,
+				params.effortLevel,
+				params.fastMode,
+				apiKey,
+			);
+			// Lift `@<path>` image markers out of the prompt and materialize
+			// them as base64 attachments. Local agents only accept the
+			// `{ data, mimeType }` SDKImage variant (`url` throws).
+			const { text, imagePaths } = parseImageRefs(params.prompt, params.images);
+			const message = await buildCursorMessage(text, imagePaths);
+			const activeSession = session;
+			// `local.force` expires a wedged active run (left non-terminal in the
+			// cwd-scoped store by a worker that died mid-turn) before starting this
+			// one. Only set on the recovery retry — never force-expire a run that's
+			// legitimately in flight.
+			const sendOptions = (force: boolean) => ({
+				// Pass mode every turn — Cursor sticks with the create-time mode
+				// otherwise, so toggling Plan on/off mid-conversation (incl.
+				// "Implement" → back to agent) wouldn't take effect.
+				mode: toCursorMode(params.permissionMode),
+				model: {
+					id: modelId,
+					...(modelParams.length > 0 ? { params: modelParams } : {}),
+				},
+				// Re-assert MCP servers per turn so resumed sessions and mid-
+				// session config edits pick them up (mirrors `mode`).
+				...(mcpServers ? { mcpServers } : {}),
+				...(force ? { local: { force: true } } : {}),
+			});
+			let run: Run;
+			try {
+				run = await withCursorRetry("agent.send", () =>
+					activeSession.agent.send(message, sendOptions(false)),
+				);
+			} catch (error) {
+				// A run wedged in the local store ("already has active run") blocks
+				// every follow-up send and survives app restarts. Retry once with
+				// `local.force` — the SDK's recovery path for agents left wedged by a
+				// crashed CLI/worker process — before surfacing a hard failure.
+				if (!isAgentBusyError(error)) {
+					const msg = error instanceof Error ? error.message : String(error);
+					logger.error(`[${requestId}] Cursor agent.send failed: ${msg}`, {
+						...errorDetails(error),
+					});
+					emitter.error(requestId, `Cursor: ${msg}`);
+					emitter.end(requestId);
+					return;
+				}
+				logger.info(
+					`[${requestId}] Cursor agent has a wedged active run; retrying agent.send with local.force`,
+				);
+				try {
+					run = await withCursorRetry("agent.send(force)", () =>
+						activeSession.agent.send(message, sendOptions(true)),
+					);
+				} catch (retryError) {
+					const msg =
+						retryError instanceof Error
+							? retryError.message
+							: String(retryError);
+					logger.error(
+						`[${requestId}] Cursor agent.send(force) failed: ${msg}`,
+						{
+							...errorDetails(retryError),
+						},
+					);
+					emitter.error(requestId, `Cursor: ${msg}`);
+					emitter.end(requestId);
+					return;
+				}
+			}
+			session.currentRun = run;
+			session.currentRequestId = requestId;
+
+			// Stop pressed during agent.send — the run now exists, so cancel it.
+			if (this.turns.isAbortRequested(params.sessionId)) {
+				void run.cancel().catch(() => {});
+				this.turns.end(params.sessionId, requestId);
+				return;
+			}
+
+			// Plan mode ends by calling the `createPlan` tool, whose `args.plan`
+			// is the finished plan markdown. We suppress the raw tool_call (so it
+			// doesn't render inline) and re-surface it on the same rail as Claude's
+			// ExitPlanMode (`planCaptured`) — but only AFTER the terminal FINISHED
+			// has flushed the assistant text, so the plan-review card lands after
+			// the turn's prose rather than racing ahead of it.
+			let pendingPlan: { callId: string; text: string | null } | null = null;
+			try {
+				for await (const event of run.stream()) {
+					const e = event as unknown as Record<string, unknown>;
+					if (e.type === "tool_call" && e.name === "createPlan") {
+						if (e.status === "completed") {
+							pendingPlan = {
+								callId: typeof e.call_id === "string" ? e.call_id : "",
+								text: extractCreatePlanText(e),
+							};
+						}
+						continue;
+					}
+					emitter.passthrough(requestId, namespaceEvent(event));
+					// Cursor SDK stream may not close on its own after FINISHED;
+					// break explicitly so emitter.end() is called promptly.
+					if (e.type === "status" && e.status === "FINISHED") {
+						if (pendingPlan) {
+							emitter.planCaptured(
+								requestId,
+								pendingPlan.callId,
+								pendingPlan.text,
+							);
+							pendingPlan = null;
+						}
+						break;
+					}
+				}
 			} catch (error) {
 				const msg = error instanceof Error ? error.message : String(error);
-				logger.error(`[${requestId}] Cursor Agent.create failed: ${msg}`, {
-					...errorDetails(error),
-				});
-				emitter.error(requestId, `Cursor: ${msg}`);
-				emitter.end(requestId);
-				return;
+				if (this.turns.isAbortRequested(params.sessionId)) {
+					// run.cancel() throws inside stream() — clean abort, not failure.
+					logger.debug(`[${requestId}] Cursor stream aborted by user`);
+				} else {
+					logger.error(`[${requestId}] Cursor stream error: ${msg}`, {
+						...errorDetails(error),
+					});
+					emitter.error(requestId, `Cursor: ${msg}`);
+				}
+			} finally {
+				session.currentRun = null;
+				session.currentRequestId = null;
 			}
-		}
 
-		// Stop pressed during Agent.create — `requestStop` already emitted
-		// `aborted`. Keep the freshly-minted agent for reuse; just bail.
-		if (this.turns.isAbortRequested(params.sessionId)) {
+			// `aborted` is terminal — `requestStop` already emitted it. Only emit
+			// `end` on natural completion, then clear the turn.
+			if (!this.turns.isAbortRequested(params.sessionId)) {
+				emitter.end(requestId);
+			}
 			this.turns.end(params.sessionId, requestId);
-			return;
-		}
-
-		// Use this turn's modelId, not the agent's create-time pick —
-		// composer can switch models mid-conversation. `thinking` is
-		// auto-enabled inside buildSendModelParams when present.
-		session.modelId = modelId;
-		const modelParams = await this.buildSendModelParams(
-			modelId,
-			params.effortLevel,
-			params.fastMode,
-			apiKey,
-		);
-		// Lift `@<path>` image markers out of the prompt and materialize
-		// them as base64 attachments. Local agents only accept the
-		// `{ data, mimeType }` SDKImage variant (`url` throws).
-		const { text, imagePaths } = parseImageRefs(params.prompt, params.images);
-		const message = await buildCursorMessage(text, imagePaths);
-		const activeSession = session;
-		// `local.force` expires a wedged active run (left non-terminal in the
-		// cwd-scoped store by a worker that died mid-turn) before starting this
-		// one. Only set on the recovery retry — never force-expire a run that's
-		// legitimately in flight.
-		const sendOptions = (force: boolean) => ({
-			// Pass mode every turn — Cursor sticks with the create-time mode
-			// otherwise, so toggling Plan on/off mid-conversation (incl.
-			// "Implement" → back to agent) wouldn't take effect.
-			mode: toCursorMode(params.permissionMode),
-			model: {
-				id: modelId,
-				...(modelParams.length > 0 ? { params: modelParams } : {}),
-			},
-			...(force ? { local: { force: true } } : {}),
 		});
-		let run: Run;
-		try {
-			run = await withCursorRetry("agent.send", () =>
-				activeSession.agent.send(message, sendOptions(false)),
-			);
-		} catch (error) {
-			// A run wedged in the local store ("already has active run") blocks
-			// every follow-up send and survives app restarts. Retry once with
-			// `local.force` — the SDK's recovery path for agents left wedged by a
-			// crashed CLI/worker process — before surfacing a hard failure.
-			if (!isAgentBusyError(error)) {
-				const msg = error instanceof Error ? error.message : String(error);
-				logger.error(`[${requestId}] Cursor agent.send failed: ${msg}`, {
-					...errorDetails(error),
-				});
-				emitter.error(requestId, `Cursor: ${msg}`);
-				emitter.end(requestId);
-				return;
-			}
-			logger.info(
-				`[${requestId}] Cursor agent has a wedged active run; retrying agent.send with local.force`,
-			);
-			try {
-				run = await withCursorRetry("agent.send(force)", () =>
-					activeSession.agent.send(message, sendOptions(true)),
-				);
-			} catch (retryError) {
-				const msg =
-					retryError instanceof Error ? retryError.message : String(retryError);
-				logger.error(`[${requestId}] Cursor agent.send(force) failed: ${msg}`, {
-					...errorDetails(retryError),
-				});
-				emitter.error(requestId, `Cursor: ${msg}`);
-				emitter.end(requestId);
-				return;
-			}
-		}
-		session.currentRun = run;
-		session.currentRequestId = requestId;
-
-		// Stop pressed during agent.send — the run now exists, so cancel it.
-		if (this.turns.isAbortRequested(params.sessionId)) {
-			void run.cancel().catch(() => {});
-			this.turns.end(params.sessionId, requestId);
-			return;
-		}
-
-		// Plan mode ends by calling the `createPlan` tool, whose `args.plan`
-		// is the finished plan markdown. We suppress the raw tool_call (so it
-		// doesn't render inline) and re-surface it on the same rail as Claude's
-		// ExitPlanMode (`planCaptured`) — but only AFTER the terminal FINISHED
-		// has flushed the assistant text, so the plan-review card lands after
-		// the turn's prose rather than racing ahead of it.
-		let pendingPlan: { callId: string; text: string | null } | null = null;
-		try {
-			for await (const event of run.stream()) {
-				const e = event as unknown as Record<string, unknown>;
-				if (e.type === "tool_call" && e.name === "createPlan") {
-					if (e.status === "completed") {
-						pendingPlan = {
-							callId: typeof e.call_id === "string" ? e.call_id : "",
-							text: extractCreatePlanText(e),
-						};
-					}
-					continue;
-				}
-				emitter.passthrough(requestId, namespaceEvent(event));
-				// Cursor SDK stream may not close on its own after FINISHED;
-				// break explicitly so emitter.end() is called promptly.
-				if (e.type === "status" && e.status === "FINISHED") {
-					if (pendingPlan) {
-						emitter.planCaptured(
-							requestId,
-							pendingPlan.callId,
-							pendingPlan.text,
-						);
-						pendingPlan = null;
-					}
-					break;
-				}
-			}
-		} catch (error) {
-			const msg = error instanceof Error ? error.message : String(error);
-			if (this.turns.isAbortRequested(params.sessionId)) {
-				// run.cancel() throws inside stream() — clean abort, not failure.
-				logger.debug(`[${requestId}] Cursor stream aborted by user`);
-			} else {
-				logger.error(`[${requestId}] Cursor stream error: ${msg}`, {
-					...errorDetails(error),
-				});
-				emitter.error(requestId, `Cursor: ${msg}`);
-			}
-		} finally {
-			session.currentRun = null;
-			session.currentRequestId = null;
-		}
-
-		// `aborted` is terminal — `requestStop` already emitted it. Only emit
-		// `end` on natural completion, then clear the turn.
-		if (!this.turns.isAbortRequested(params.sessionId)) {
-			emitter.end(requestId);
-		}
-		this.turns.end(params.sessionId, requestId);
 	}
 
 	async generateTitle(
@@ -481,10 +506,47 @@ export class CursorCore {
 		this.sessions.clear();
 	}
 
+	/// Fail the turn(s) implicated by a worker-fatal error. `isAuth` faults are
+	/// per-stream, so when the async context (`sessionContext`) attributes one
+	/// to a session we scope the failure to just it — sibling workspaces keep
+	/// streaming (#868). Non-auth (network/connection) faults may be
+	/// connection-level, so they fall back to failing every in-flight turn (see
+	/// `fatalScope`), never leaving a real victim hung.
+	failTurnsForFatal(
+		message: string,
+		isAuth: boolean,
+		attributedSessionId?: string,
+	): string[] {
+		const scope = fatalScope(
+			isAuth,
+			attributedSessionId,
+			this.turns.activeSessionIds(),
+		);
+		return scope.kind === "session"
+			? this.failSession(scope.sessionId, message)
+			: this.failActiveTurns(message);
+	}
+
+	/// Terminal-fail one session's in-flight turn (if any) and drop that
+	/// session — its HTTP/2 connection is presumed dead. Sibling sessions are
+	/// left untouched.
+	private failSession(sessionId: string, message: string): string[] {
+		const requestId = this.turns.failOne(sessionId, message);
+		const session = this.sessions.get(sessionId);
+		if (session) {
+			try {
+				session.agent.close();
+			} catch {
+				/* swallow */
+			}
+			this.sessions.delete(sessionId);
+		}
+		return requestId ? [requestId] : [];
+	}
+
 	/// Terminal-fail every in-flight turn with a clean error and drop all
-	/// sessions (their HTTP/2 connections are presumed dead). Called by the
-	/// worker's uncaughtException net so a transient network blow-up surfaces
-	/// as a real error instead of a silent worker death. Returns the affected
+	/// sessions (their HTTP/2 connections are presumed dead). Fallback for an
+	/// unattributable fatal with multiple turns in flight. Returns the affected
 	/// requestIds so the caller can release the proxy's awaiting send promises.
 	failActiveTurns(message: string): string[] {
 		const requestIds = this.turns.failAll(message);

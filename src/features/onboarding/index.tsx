@@ -16,9 +16,12 @@ import {
 	listConductorWorkspaces,
 	loadAddRepositoryDefaults,
 } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
+import { useSettings } from "@/lib/settings";
 import { describeUnknownError } from "@/lib/workspace-helpers";
 import { buildAgentLoginItems } from "./agent-login-state";
 import { IntroPreview } from "./components/intro-preview";
+import { OnboardingLanguageMenu } from "./components/language-menu";
 import { AgentLoginStep } from "./steps/agent-login-step";
 import { RepoImportStep } from "./steps/repo-import-step";
 import { RepositoryCliStep } from "./steps/repository-cli-step";
@@ -39,6 +42,8 @@ function queueWindowMode(run: () => Promise<unknown>): Promise<unknown> {
 }
 
 export function AppOnboarding({ onComplete }: AppOnboardingProps) {
+	const { settings } = useSettings();
+	const { t } = useI18n();
 	const [step, setStep] = useState<OnboardingStep>("intro");
 	const [loginItems, setLoginItems] = useState(() => buildAgentLoginItems());
 	const [isRoutingImport, setIsRoutingImport] = useState(false);
@@ -180,7 +185,9 @@ export function AppOnboarding({ onComplete }: AppOnboardingProps) {
 			if (!selectedPath) {
 				return;
 			}
-			const response = await addRepositoryFromLocalPath(selectedPath);
+			const response = await addRepositoryFromLocalPath(selectedPath, {
+				allowNonGitDirectory: settings.allowNonGitDirectories,
+			});
 			rememberImportedRepository({
 				id: response.repositoryId,
 				name: basename(selectedPath),
@@ -189,12 +196,17 @@ export function AppOnboarding({ onComplete }: AppOnboardingProps) {
 			});
 		} catch (error) {
 			setRepoImportError(
-				describeUnknownError(error, "Unable to add repository."),
+				describeUnknownError(error, t("miscUnableToAddRepository")),
 			);
 		} finally {
 			setIsAddingLocalRepository(false);
 		}
-	}, [isAddingLocalRepository, rememberImportedRepository]);
+	}, [
+		isAddingLocalRepository,
+		rememberImportedRepository,
+		settings.allowNonGitDirectories,
+		t,
+	]);
 
 	const openCloneDialog = useCallback(() => {
 		setCloneDialogOpen(true);
@@ -237,26 +249,29 @@ export function AppOnboarding({ onComplete }: AppOnboardingProps) {
 		[rememberImportedRepository],
 	);
 
-	const removeImportedRepository = useCallback(async (repoId: string) => {
-		setRepoImportError(null);
-		setRemovingRepositoryIds((current) => new Set(current).add(repoId));
-		try {
-			await deleteRepository(repoId);
-			setImportedRepositories((current) =>
-				current.filter((repo) => repo.id !== repoId),
-			);
-		} catch (error) {
-			setRepoImportError(
-				describeUnknownError(error, "Unable to remove repository."),
-			);
-		} finally {
-			setRemovingRepositoryIds((current) => {
-				const next = new Set(current);
-				next.delete(repoId);
-				return next;
-			});
-		}
-	}, []);
+	const removeImportedRepository = useCallback(
+		async (repoId: string) => {
+			setRepoImportError(null);
+			setRemovingRepositoryIds((current) => new Set(current).add(repoId));
+			try {
+				await deleteRepository(repoId);
+				setImportedRepositories((current) =>
+					current.filter((repo) => repo.id !== repoId),
+				);
+			} catch (error) {
+				setRepoImportError(
+					describeUnknownError(error, t("miscUnableToRemoveRepository")),
+				);
+			} finally {
+				setRemovingRepositoryIds((current) => {
+					const next = new Set(current);
+					next.delete(repoId);
+					return next;
+				});
+			}
+		},
+		[t],
+	);
 
 	const completeOnboarding = useCallback(() => {
 		setStep("completeTransition");
@@ -274,15 +289,18 @@ export function AppOnboarding({ onComplete }: AppOnboardingProps) {
 
 	return (
 		<main
-			aria-label="Helmor onboarding"
+			aria-label={t("helmorOnboarding")}
 			className="relative h-dvh overflow-hidden bg-background font-sans text-foreground antialiased"
 		>
 			<div
-				aria-label="Helmor onboarding drag region"
+				aria-label={t("helmorOnboardingDragRegion")}
 				className="absolute inset-x-0 top-0 z-20 flex h-11 items-center"
 			>
 				<TrafficLightSpacer side="left" width={94} />
 				<div data-tauri-drag-region className="h-full flex-1" />
+				<div className="flex h-full items-center pr-3">
+					<OnboardingLanguageMenu />
+				</div>
 				<TrafficLightSpacer side="right" width={140} />
 			</div>
 

@@ -1,12 +1,12 @@
 import {
 	ClaudeIcon,
 	CursorIcon,
-	MiMoCodeIcon,
 	OpenAIIcon,
 	OpenCodeIcon,
 } from "@/components/icons";
 import type { SessionContextCandidate } from "@/features/panel/session-context";
 import { type AgentProvider, isCodexProvider } from "@/lib/api";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 type SessionContextInjectorProps = {
@@ -20,6 +20,7 @@ export function SessionContextInjector({
 	selectedSessionIds,
 	onToggleSession,
 }: SessionContextInjectorProps) {
+	const { t } = useI18n();
 	if (candidates.length === 0) return null;
 
 	const selected = new Set(selectedSessionIds);
@@ -27,12 +28,12 @@ export function SessionContextInjector({
 	return (
 		<div className="pointer-events-auto mb-2 flex w-full items-center gap-2 self-start pl-[17px]">
 			<span className="shrink-0 text-small leading-none text-muted-foreground">
-				Inject sessions:
+				<I18nText source="injectSessions" />
 			</span>
 			<div className="scrollbar-none flex min-w-0 flex-1 flex-nowrap items-center justify-start gap-1 overflow-x-auto overscroll-x-contain">
 				{candidates.map((session) => {
 					const isSelected = selected.has(session.id);
-					const title = session.title?.trim() || "Untitled";
+					const title = session.title?.trim() || t("untitled");
 
 					return (
 						<button
@@ -83,9 +84,6 @@ function SessionProviderIcon({
 	}
 	if (provider === "opencode") {
 		return <OpenCodeIcon className={className} />;
-	}
-	if (provider === "mimo") {
-		return <MiMoCodeIcon className={className} />;
 	}
 	return <ClaudeIcon className={className} />;
 }

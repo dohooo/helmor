@@ -16,6 +16,7 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { stopAgentStream } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import { activeStreamsQueryOptions, helmorQueryKeys } from "@/lib/query-client";
 import {
 	OPENCODE_CACHE_VERSION,
@@ -43,6 +44,7 @@ export function SlugProviderModels({
 	adapter: SlugProviderAdapter;
 	ref?: React.Ref<SlugProviderModelsHandle>;
 }) {
+	const { f } = useI18n();
 	const queryClient = useQueryClient();
 	const { settings, updateSettings } = useSettings();
 	const current = settings[adapter.settingsKey];
@@ -152,7 +154,7 @@ export function SlugProviderModels({
 						type="button"
 						variant="outline"
 						size="icon-sm"
-						aria-label="Sync models"
+						aria-label="syncModels"
 						disabled={isSyncing}
 						onClick={onSyncClick}
 					>
@@ -162,7 +164,9 @@ export function SlugProviderModels({
 					</Button>
 				</TooltipTrigger>
 				<TooltipContent>
-					Sync models — re-reads {adapter.configPathLabel}
+					{f("syncModelsReReadsPath", {
+						path: adapter.configPathLabel,
+					})}
 				</TooltipContent>
 			</Tooltip>
 			<ConfirmDialog
@@ -170,9 +174,18 @@ export function SlugProviderModels({
 				onOpenChange={(open) => {
 					if (!isSyncing) setConfirmOpen(open);
 				}}
-				title={`Sync ${adapter.displayName} models?`}
-				description={`Re-reading your config restarts ${adapter.displayName} and will stop ${runningCount} running ${runningCount === 1 ? "chat" : "chats"}.`}
-				confirmLabel="Sync anyway"
+				title={f("syncNameModels", { name: adapter.displayName })}
+				description={
+					runningCount === 1
+						? f("reReadingConfigRestartsNameWill", {
+								name: adapter.displayName,
+							})
+						: f("reReadingConfigRestartsNameWill2", {
+								name: adapter.displayName,
+								count: runningCount,
+							})
+				}
+				confirmLabel="syncAnyway"
 				onConfirm={() => {
 					void reloadSync().finally(() => setConfirmOpen(false));
 				}}

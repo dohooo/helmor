@@ -4,6 +4,7 @@ import {
 	InputGroupAddon,
 	InputGroupInput,
 } from "@/components/ui/input-group";
+import { useI18n } from "@/lib/i18n";
 
 /**
  * The "Optional reason / note" row used in:
@@ -31,6 +32,7 @@ export function InteractionOptionalInput({
 	disabled = false,
 	ariaLabel,
 }: InteractionOptionalInputProps) {
+	const { t } = useI18n();
 	return (
 		<div className="px-1 py-2">
 			<InputGroup className="border-border/55 bg-background/70">
@@ -38,9 +40,9 @@ export function InteractionOptionalInput({
 					<Icon aria-hidden="true" />
 				</InputGroupAddon>
 				<InputGroupInput
-					aria-label={ariaLabel ?? placeholder}
+					aria-label={t(ariaLabel ?? placeholder)}
 					disabled={disabled}
-					placeholder={placeholder}
+					placeholder={t(placeholder)}
 					value={value}
 					onChange={(event) => onChange(event.target.value)}
 					className="placeholder:text-muted-foreground/70"

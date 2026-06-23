@@ -102,4 +102,27 @@ export class ActiveTurnRegistry {
 		this.turns.clear();
 		return ids;
 	}
+
+	/** Session ids with a live (begun, not-yet-ended) turn. */
+	activeSessionIds(): string[] {
+		return [...this.turns.keys()];
+	}
+
+	/** Terminal-fail just this session's live turn (scoped worker-fatal): emit
+	 *  error+end and clear it. Returns the failed requestId, or `null` when the
+	 *  session has no live turn. Mirror of `failAll` for a single entry. */
+	failOne(sessionId: string, message: string, internal = true): string | null {
+		const turn = this.turns.get(sessionId);
+		if (!turn) return null;
+		this.turns.delete(sessionId);
+		if (turn.abortEmitted) return turn.requestId;
+		turn.abortEmitted = true;
+		try {
+			turn.emitter.error(turn.requestId, message, internal);
+			turn.emitter.end(turn.requestId);
+		} catch {
+			// best-effort — must never throw past recovery
+		}
+		return turn.requestId;
+	}
 }
