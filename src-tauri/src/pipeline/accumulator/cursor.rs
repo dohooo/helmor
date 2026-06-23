@@ -29,6 +29,9 @@ pub(super) struct CursorRunState {
     /// O(1) lookup `call_id` → index into `tools`.
     pub tool_index: HashMap<String, usize>,
     pub started_at: Option<f64>,
+    /// Monotonic index for `cursor-text:{turn}:{idx}` ids so each assistant
+    /// text segment (flushed at a tool boundary) gets a stable distinct id.
+    pub text_segment_idx: usize,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -137,6 +140,9 @@ pub(super) fn handle_tool_call_start(acc: &mut StreamAccumulator, value: &Value)
         }
         idx
     } else {
+        // New tool boundary — flush any pending narration as its own message
+        // so it renders before this tool, not merged into one paragraph.
+        flush_assistant_segment(acc);
         let idx = acc.cursor_state.tools.len();
         acc.cursor_state.tools.push(CursorToolCall {
             call_id: call_id.clone(),
@@ -323,6 +329,43 @@ fn materialize_cursor_thinking(acc: &mut StreamAccumulator, persist: bool) {
     }
 }
 
+/// Flush the current open assistant-text segment as its own discrete
+/// `assistant{text}` message + persisted turn, keyed by a stable
+/// `cursor-text:{turn}:{idx}` id, then advance the segment index and clear
+/// the streaming buffers. Called at each tool boundary and at finalize so
+/// Composer's narration renders as separate updates between tool calls
+/// instead of one ever-growing paragraph (codex/claude parity). No-op when
+/// the open segment is empty.
+fn flush_assistant_segment(acc: &mut StreamAccumulator) {
+    if acc.cursor_state.assistant_text.is_empty() {
+        return;
+    }
+    let text = std::mem::take(&mut acc.cursor_state.assistant_text);
+    let idx = acc.cursor_state.text_segment_idx;
+    acc.cursor_state.text_segment_idx += 1;
+    let (turn_id, _) = acc.get_or_create_turn_identity();
+    let msg_id = format!("cursor-text:{turn_id}:{idx}");
+    let msg = cursor_assistant_msg(
+        acc,
+        &msg_id,
+        vec![json!({"type": "text", "text": text.as_str()})],
+    );
+    let msg_str = msg.to_string();
+    acc.collect_message(&msg_str, &msg, MessageRole::Assistant, Some(&msg_id));
+    acc.turns.push(CollectedTurn {
+        id: msg_id,
+        role: MessageRole::Assistant,
+        content_json: msg_str,
+    });
+    // Roll into the cross-turn persistence field (same '\n' join codex/
+    // opencode/kimi use for multi-segment turns).
+    if !acc.assistant_text.is_empty() {
+        acc.assistant_text.push('\n');
+    }
+    acc.assistant_text.push_str(&text);
+    acc.fallback_text.clear();
+}
+
 /// Finalize a cursor turn on `status FINISHED`. Tools were already
 /// materialized live (per `tool_call_start`/`end`); here we persist any tool
 /// left running (abort flush), push the leading thinking + trailing text
@@ -353,33 +396,11 @@ fn finalize(acc: &mut StreamAccumulator) -> PushOutcome {
         materialize_cursor_thinking(acc, true);
     }
 
-    // Trailing assistant text (streamed via the fallback partial).
-    if has_text {
-        let text = acc.cursor_state.assistant_text.clone();
-        let (turn_id, _) = acc.get_or_create_turn_identity();
-        let msg = cursor_assistant_msg(acc, &turn_id, vec![json!({"type": "text", "text": text})]);
-        let msg_str = msg.to_string();
-        acc.collect_or_replace(
-            &msg_str,
-            &msg,
-            MessageRole::Assistant,
-            Some(turn_id.clone()),
-        );
-        acc.turns.push(CollectedTurn {
-            id: turn_id,
-            role: MessageRole::Assistant,
-            content_json: msg_str,
-        });
-    }
+    // Trailing assistant text — flush the final open segment as its own
+    // discrete message (the end-of-turn summary); earlier segments already
+    // flushed at their tool boundaries. Also rolls into the persistence field.
+    flush_assistant_segment(acc);
 
-    // Roll into persistence fields for parsed_output().
-    if has_text {
-        let text = acc.cursor_state.assistant_text.clone();
-        if !acc.assistant_text.is_empty() {
-            acc.assistant_text.push('\n');
-        }
-        acc.assistant_text.push_str(&text);
-    }
     if has_thinking {
         let thinking = acc.cursor_state.thinking_text.clone();
         if !acc.thinking_text.is_empty() {
@@ -596,6 +617,26 @@ fn translate_cursor_tool(tool: &CursorToolCall) -> (String, Value) {
             // full visual contract.
             ("cursor_task".to_string(), args.clone())
         }
+        "mcp" => {
+            // Cursor wraps every MCP call as a single `mcp` tool with the real
+            // server + tool nested in args (`{providerIdentifier, toolName,
+            // args}`). Rewrite to claude's `mcp__<server>__<tool>` convention
+            // and unwrap the inner args, so the shared frontend MCP renderer
+            // (Plug icon + tool name + "via <server>") picks it up — matching
+            // claude/codex instead of rendering a bare "mcp".
+            let provider = tool
+                .args
+                .get("providerIdentifier")
+                .and_then(Value::as_str)
+                .unwrap_or("mcp");
+            let tool_name = tool
+                .args
+                .get("toolName")
+                .and_then(Value::as_str)
+                .unwrap_or("tool");
+            let inner = tool.args.get("args").cloned().unwrap_or_else(|| json!({}));
+            (format!("mcp__{provider}__{tool_name}"), inner)
+        }
         // `apply_patch` already matches claude's expected shape — pass
         // through. Anything unrecognized (MCP tools `mcp__server__name`
         // included) likewise passes through; the renderer has its own
@@ -619,8 +660,38 @@ fn format_tool_result(result: &Value) -> String {
             }
             return format!("{stdout}\n[stderr]\n{stderr}");
         }
+        // MCP tool result: `value.content` is an array of content blocks.
+        // Extract + join their text so it reads cleanly instead of a raw JSON
+        // dump (claude/codex parity).
+        if let Some(text) = extract_mcp_content_text(value) {
+            return text;
+        }
     }
     serde_json::to_string_pretty(result).unwrap_or_default()
+}
+
+/// Pull readable text out of an MCP tool result's `content[]` blocks. Cursor
+/// nests text as `{text: {text}}`; the standard MCP `{type:"text", text}` is
+/// also accepted. Returns `None` when there's no array or no text (the caller
+/// falls back to a JSON dump).
+fn extract_mcp_content_text(value: &Value) -> Option<String> {
+    let content = value.get("content")?.as_array()?;
+    let parts: Vec<String> = content
+        .iter()
+        .filter_map(|block| {
+            block
+                .get("text")
+                .and_then(|t| t.get("text"))
+                .and_then(Value::as_str)
+                .or_else(|| block.get("text").and_then(Value::as_str))
+                .map(str::to_string)
+        })
+        .collect();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n"))
+    }
 }
 
 #[cfg(test)]
@@ -726,6 +797,41 @@ mod tests {
         assert_eq!(acc.turns_len(), 2);
         assert!(acc.turn_at(0).content_json.contains("thinking"));
         assert!(acc.turn_at(1).content_json.contains("answer"));
+    }
+
+    #[test]
+    fn assistant_text_splits_into_discrete_segments_between_tools() {
+        // Composer emits narration interleaved with tools: text → tool →
+        // text → tool → text. Each text segment must be its own discrete
+        // message positioned at its place in the stream, not merged into one
+        // ever-growing paragraph after all tools (#867).
+        let mut acc = StreamAccumulator::new("cursor", "composer-2");
+        for s in [
+            r#"{"type":"cursor/status","status":"RUNNING","run_id":"r1"}"#,
+            r#"{"type":"cursor/assistant","message":{"role":"assistant","content":[{"type":"text","text":"AAA"}]}}"#,
+            r#"{"type":"cursor/tool_call_start","call_id":"t1","name":"shell","status":"running","args":{"command":"ls"}}"#,
+            r#"{"type":"cursor/tool_call_end","call_id":"t1","name":"shell","status":"completed","args":{"command":"ls"},"result":{"status":"success","value":{"stdout":"x\n"}}}"#,
+            r#"{"type":"cursor/assistant","message":{"role":"assistant","content":[{"type":"text","text":"BBB"}]}}"#,
+            r#"{"type":"cursor/tool_call_start","call_id":"t2","name":"shell","status":"running","args":{"command":"pwd"}}"#,
+            r#"{"type":"cursor/tool_call_end","call_id":"t2","name":"shell","status":"completed","args":{"command":"pwd"},"result":{"status":"success","value":{"stdout":"/\n"}}}"#,
+            r#"{"type":"cursor/assistant","message":{"role":"assistant","content":[{"type":"text","text":"CCC"}]}}"#,
+            r#"{"type":"cursor/status","status":"FINISHED","run_id":"r1"}"#,
+        ] {
+            push(&mut acc, s);
+        }
+        // 3 text turns + 2 tools (asst + user each) = 7 persisted turns.
+        assert_eq!(acc.turns_len(), 7);
+        let pos = |needle: &str| {
+            (0..acc.turns_len())
+                .find(|&i| acc.turn_at(i).content_json.contains(needle))
+                .unwrap_or_else(|| panic!("no turn contains {needle}"))
+        };
+        // Each segment is its own message, ordered, and the narration sits
+        // before its tool — not all lumped after every tool.
+        assert!(pos("AAA") < pos("cursor-tool-asst:t1"));
+        assert!(pos("cursor-tool-asst:t1") < pos("BBB"));
+        assert!(pos("BBB") < pos("cursor-tool-asst:t2"));
+        assert!(pos("cursor-tool-asst:t2") < pos("CCC"));
     }
 
     /// Build a `CursorToolCall` from one of the captured wire-format
@@ -936,5 +1042,71 @@ mod tests {
         let (name, args) = translate_cursor_tool(&tool);
         assert_eq!(name, "mcp__server__do_thing");
         assert_eq!(args, json!({"x": 1}));
+    }
+
+    #[test]
+    fn mcp_tool_rewrites_to_claude_namespaced_name() {
+        // Cursor's real wire shape: a bare `mcp` tool with server + tool nested
+        // in args. Must become `mcp__<server>__<tool>` so the frontend MCP
+        // renderer (Plug + "via context7") fires instead of showing "mcp".
+        let tool = CursorToolCall {
+            call_id: "t1".to_string(),
+            name: "mcp".to_string(),
+            args: json!({
+                "providerIdentifier": "context7",
+                "toolName": "query-docs",
+                "args": { "libraryId": "/microsoft/typescript", "query": "latest" },
+            }),
+            result: None,
+            is_error: false,
+        };
+        let (name, args) = translate_cursor_tool(&tool);
+        assert_eq!(name, "mcp__context7__query-docs");
+        // Inner args unwrapped — the expand shows the real MCP arguments.
+        assert_eq!(
+            args,
+            json!({ "libraryId": "/microsoft/typescript", "query": "latest" })
+        );
+    }
+
+    #[test]
+    fn mcp_tool_missing_fields_fall_back_gracefully() {
+        let tool = CursorToolCall {
+            call_id: "t1".to_string(),
+            name: "mcp".to_string(),
+            args: json!({}),
+            result: None,
+            is_error: false,
+        };
+        let (name, args) = translate_cursor_tool(&tool);
+        assert_eq!(name, "mcp__mcp__tool");
+        assert_eq!(args, json!({}));
+    }
+
+    #[test]
+    fn mcp_result_extracts_text_content() {
+        // Cursor nests MCP result text as `value.content[].text.text` — extract
+        // it so the expand reads cleanly instead of dumping nested JSON.
+        let result = json!({
+            "status": "success",
+            "value": {
+                "content": [
+                    { "text": { "text": "Available Libraries:" } },
+                    { "text": { "text": "- TypeScript" } },
+                ],
+            },
+        });
+        assert_eq!(
+            format_tool_result(&result),
+            "Available Libraries:\n- TypeScript"
+        );
+    }
+
+    #[test]
+    fn mcp_result_accepts_standard_content_shape() {
+        let result = json!({
+            "value": { "content": [{ "type": "text", "text": "hi" }] },
+        });
+        assert_eq!(format_tool_result(&result), "hi");
     }
 }

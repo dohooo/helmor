@@ -1,0 +1,10 @@
+{"type":"cursor/agent_init","session_id":"agent-interleaved","model":"composer-2","id":"test-request"}
+{"type":"cursor/status","agent_id":"agent-interleaved","run_id":"run-il","status":"RUNNING","id":"test-request"}
+{"type":"cursor/assistant","agent_id":"agent-interleaved","run_id":"run-il","message":{"role":"assistant","content":[{"type":"text","text":"First, listing the files."}]},"id":"test-request"}
+{"type":"cursor/tool_call_start","agent_id":"agent-interleaved","run_id":"run-il","call_id":"tool_a","name":"shell","status":"running","args":{"command":"ls","timeout":30000},"id":"test-request"}
+{"type":"cursor/tool_call_end","agent_id":"agent-interleaved","run_id":"run-il","call_id":"tool_a","name":"shell","status":"completed","args":{"command":"ls","timeout":30000},"result":{"status":"success","value":{"exitCode":0,"signal":"","stdout":"a.txt\n","stderr":"","executionTime":5}},"id":"test-request"}
+{"type":"cursor/assistant","agent_id":"agent-interleaved","run_id":"run-il","message":{"role":"assistant","content":[{"type":"text","text":"Now reading a.txt."}]},"id":"test-request"}
+{"type":"cursor/tool_call_start","agent_id":"agent-interleaved","run_id":"run-il","call_id":"tool_b","name":"read","status":"running","args":{"path":"a.txt"},"id":"test-request"}
+{"type":"cursor/tool_call_end","agent_id":"agent-interleaved","run_id":"run-il","call_id":"tool_b","name":"read","status":"completed","args":{"path":"a.txt"},"result":{"status":"success","value":{"content":"hi\n","totalLines":1,"fileSize":3}},"id":"test-request"}
+{"type":"cursor/assistant","agent_id":"agent-interleaved","run_id":"run-il","message":{"role":"assistant","content":[{"type":"text","text":"All done."}]},"id":"test-request"}
+{"type":"cursor/status","agent_id":"agent-interleaved","run_id":"run-il","status":"FINISHED","id":"test-request"}
