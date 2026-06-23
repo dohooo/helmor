@@ -10,8 +10,7 @@ export const CODEX_ADAPTER: ProviderConfigAdapter = {
 	displayName: "Codex",
 	presets: [],
 	caps: { baseUrlEditable: true, apiStyleSelectable: false },
-	customProvidersDescription:
-		"Add an OpenAI-compatible endpoint (Responses API only).",
+	customProvidersDescription: "addOpenaiCompatibleEndpointResponsesApi",
 	useCustomProviders: () => useSettingsBackedProviders("codex"),
 	fetchModels: (provider) =>
 		fetchProviderModels("codex", provider.baseUrl, provider.apiKey),

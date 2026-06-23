@@ -6,6 +6,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { renameWorkspaceBranch, type WorkspaceDetail } from "@/lib/api";
 import { extractError } from "@/lib/errors";
+import { translateSource } from "@/lib/i18n";
 import { helmorQueryKeys } from "@/lib/query-client";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
 import { normalizeBranchRenameInput } from "../branch-rename";
@@ -60,8 +61,15 @@ export function useBranchRename({
 				if (previous) {
 					queryClient.setQueryData<WorkspaceDetail | null>(detailKey, previous);
 				}
-				const { message } = extractError(error, "Unable to rename branch.");
-				pushToast(message, "Branch rename failed", "destructive");
+				const { message } = extractError(
+					error,
+					translateSource("panelUnableRenameBranch"),
+				);
+				pushToast(
+					message,
+					translateSource("panelBranchRenameFailed"),
+					"destructive",
+				);
 			}
 		}
 		setEditingBranch(null);

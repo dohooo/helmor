@@ -42,6 +42,7 @@ import {
 	type WorkspaceDetail,
 	writeForgeCliAuthTerminalStdin,
 } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
 
@@ -395,12 +396,14 @@ export function ForgeConnectDialog({
 				className="w-[640px] max-w-[calc(100vw-4rem)] gap-0 overflow-hidden p-0 sm:max-w-[640px]"
 			>
 				<DialogTitle className="sr-only">
-					Connect {providerLabel(provider)}
+					<I18nText source="connect" /> {providerLabel(provider)}
 				</DialogTitle>
 				<header className="flex h-10 items-center gap-2 border-b border-border/55 px-3">
 					<div className="flex items-center gap-1.5 text-small font-medium text-foreground">
 						{providerIcon(provider)}
-						<span>Connect {providerLabel(provider)}</span>
+						<span>
+							<I18nText source="connect" /> {providerLabel(provider)}
+						</span>
 						{provider === "gitlab" ? (
 							<span className="ml-1 text-muted-foreground/80">· {host}</span>
 						) : null}
@@ -411,7 +414,7 @@ export function ForgeConnectDialog({
 							variant="ghost"
 							size="sm"
 							onClick={() => handleOpenChange(false)}
-							aria-label="Close"
+							aria-label="close"
 							className={cn(
 								"gap-1.5 px-2 text-muted-foreground hover:text-foreground",
 							)}

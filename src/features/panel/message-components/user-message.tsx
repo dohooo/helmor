@@ -8,6 +8,7 @@ import {
 	type ComposerPreviewPayload,
 	inferComposerPreviewLanguage,
 } from "@/lib/composer-insert";
+import { useI18n } from "@/lib/i18n";
 import { USER_MESSAGE_CLAMP_LINES } from "@/lib/message-layout-estimator";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
@@ -50,6 +51,7 @@ function PastedTextBadge({ text }: { text: string }) {
 
 export function ChatUserMessage({ message }: { message: RenderedMessage }) {
 	const parts = message.content as MessagePart[];
+	const { t } = useI18n();
 	const { settings } = useSettings();
 
 	// Long messages clamp to the first N VISUAL lines with a "Show more"
@@ -191,7 +193,7 @@ export function ChatUserMessage({ message }: { message: RenderedMessage }) {
 							aria-expanded={expanded}
 							className="mt-1 flex cursor-pointer items-center gap-1 text-muted-foreground transition-colors hover:text-foreground"
 						>
-							{expanded ? "Show less" : "Show more"}
+							{expanded ? t("panelShowLess") : t("panelShowMore")}
 							<ChevronDown
 								className={cn("size-3.5 shrink-0", expanded && "rotate-180")}
 								strokeWidth={1.8}

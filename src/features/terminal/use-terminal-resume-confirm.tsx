@@ -1,4 +1,5 @@
 import { type ReactNode, useCallback, useState } from "react";
+import { useI18n } from "@/lib/i18n";
 import { useSettings } from "@/lib/settings";
 import { TerminalResumeDialog } from "./terminal-resume-dialog";
 
@@ -21,6 +22,7 @@ type UseTerminalResumeConfirmReturn = {
  *  sync back. Mount `dialogNode` once near the top of the tree (mirrors
  *  `useConfirmSessionClose`); call `confirmResume` from the terminal-send path. */
 export function useTerminalResumeConfirm(): UseTerminalResumeConfirmReturn {
+	const { t } = useI18n();
 	const { settings, updateSettings } = useSettings();
 	const [pending, setPending] = useState<PendingResume | null>(null);
 	const [dontRemind, setDontRemind] = useState(false);
@@ -45,7 +47,7 @@ export function useTerminalResumeConfirm(): UseTerminalResumeConfirmReturn {
 		<TerminalResumeDialog
 			open={pending !== null}
 			providerLabel={
-				(pending && PROVIDER_LABELS[pending.provider]) || "the agent"
+				(pending && PROVIDER_LABELS[pending.provider]) || t("miscTheAgent")
 			}
 			dontRemind={dontRemind}
 			onDontRemindChange={setDontRemind}

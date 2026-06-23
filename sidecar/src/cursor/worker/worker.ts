@@ -11,6 +11,7 @@ import { applyAgentProxyToProcessEnv } from "../../agent-proxy.js";
 import type { SidecarEmitter } from "../../emitter.js";
 import { CursorCore } from "./cursor-core.js";
 import { isAuthError, isRetryableCursorError } from "./cursor-helpers.js";
+import { sessionContext } from "./fatal-context.js";
 import type { EmitMsg, FromWorker, ToWorker } from "./protocol.js";
 
 // Keep stdout pristine: any stray console.log from the SDK would corrupt the
@@ -62,11 +63,12 @@ const core = new CursorCore();
 // reach this handler only when they escape every try/catch — in practice that's
 // the SDK's HTTP/2 client throwing an operational error from a detached
 // background task (a network reset, or a raw `[unauthenticated]` ConnectError
-// from an event stream). Operational errors don't corrupt the process, and
-// `failActiveTurns` already drops every session, so the worker is as clean as a
-// fresh one afterwards. Killing it would only cold-restart every *other*
-// session for nothing — so we stay alive: log, fail the in-flight turns with an
-// actionable message, drop sessions (the next send re-resumes cleanly).
+// from an event stream). Operational errors don't corrupt the process, so we
+// stay alive: log, fail the *originating* session's in-flight turn with an
+// actionable message (`failTurnsForFatal`, attributed via `sessionContext`),
+// and drop only that session — its next send re-resumes cleanly. Sibling
+// sessions keep streaming. Killing the worker would cold-restart every other
+// session for nothing.
 //
 // Error type selects ONLY the user-facing copy, never the process lifecycle.
 //
@@ -91,7 +93,16 @@ function handleFatal(kind: string, err: unknown): void {
 	const message = errMessage(err);
 	console.error(`[cursor-worker] ${kind}: ${message}`);
 	try {
-		for (const requestId of core.failActiveTurns(fatalReason(err, message))) {
+		// Attribute the fault to its originating session (set in
+		// CursorCore.sendMessage). Auth faults are per-session so they scope to
+		// just it; non-auth faults may be connection-level and fall back to
+		// failing every turn — see `failTurnsForFatal` / `fatalScope`.
+		const attributedSessionId = sessionContext.getStore()?.sessionId;
+		for (const requestId of core.failTurnsForFatal(
+			fatalReason(err, message),
+			isAuthError(err),
+			attributedSessionId,
+		)) {
 			out({ t: "sendDone", requestId });
 		}
 	} catch (recoverErr) {

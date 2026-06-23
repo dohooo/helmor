@@ -1,14 +1,16 @@
 import type { WorkspaceRow } from "@/lib/api";
+import { translateSource } from "@/lib/i18n";
 
+// Values are i18n catalog KEYS, resolved via translateSource at read time.
 export const WORKSPACE_STATUS_LABEL: Record<
 	NonNullable<WorkspaceRow["status"]>,
 	string
 > = {
-	"in-progress": "In progress",
-	review: "In review",
-	done: "Done",
-	backlog: "Backlog",
-	canceled: "Canceled",
+	"in-progress": "progress",
+	review: "review",
+	done: "done",
+	backlog: "backlog",
+	canceled: "canceled",
 };
 
 export const WORKSPACE_STATUS_DOT_CLASS: Record<
@@ -42,7 +44,7 @@ export function deriveWorkspaceStatusDot(
 			? (raw as WorkspaceStatusValue)
 			: "in-progress";
 	return {
-		label: WORKSPACE_STATUS_LABEL[status],
+		label: translateSource(WORKSPACE_STATUS_LABEL[status]),
 		dotClass: WORKSPACE_STATUS_DOT_CLASS[status],
 	};
 }

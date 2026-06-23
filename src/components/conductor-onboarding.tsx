@@ -5,6 +5,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import conductorLogoSrc from "@/assets/conductor.webp";
 import helmorLogoSrc from "@/assets/helmor-logo.png";
 import { type ConductorWorkspace, importConductorWorkspaces } from "@/lib/api";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { Button } from "./ui/button";
 import { NumberTicker } from "./ui/number-ticker";
 import {
@@ -428,6 +429,7 @@ export function ConductorOnboarding({
 	workspaces = [],
 	isLoadingWorkspaces = false,
 }: ConductorOnboardingProps) {
+	const { t, f } = useI18n();
 	const [phase, setPhase] = useState<Phase>("revealed");
 	const [importedCount, setImportedCount] = useState(0);
 	const [importError, setImportError] = useState<string | null>(null);
@@ -477,7 +479,7 @@ export function ConductorOnboarding({
 				Math.max(1000 - elapsed, 0),
 			);
 		} catch {
-			setImportError("Import failed. Try again.");
+			setImportError("miscImportFailedTryAgain");
 			setPhase("revealed");
 		}
 	}, [phase, workspaces, onComplete]);
@@ -670,7 +672,9 @@ export function ConductorOnboarding({
 												isLoadingWorkspaces || phase === "importing" ? 0 : 0.4,
 										}}
 									>
-										{isLoadingWorkspaces ? "\u00A0" : `+${overflow} more`}
+										{isLoadingWorkspaces
+											? "\u00A0"
+											: f("countMore", { count: overflow })}
 									</p>
 								)}
 							</motion.div>
@@ -746,7 +750,8 @@ export function ConductorOnboarding({
 									}}
 									className="font-medium text-muted-foreground"
 								>
-									<NumberTicker value={importedCount} /> imported
+									<NumberTicker value={importedCount} />{" "}
+									<I18nText source={"imported"} />
 								</motion.p>
 							)}
 						</motion.div>
@@ -777,7 +782,7 @@ export function ConductorOnboarding({
 										))}
 										{overflow > 0 && (
 											<p className="px-3 py-0.5 text-mini text-primary text-right opacity-40">
-												+{overflow} more
+												+{overflow} <I18nText source={"more"} />
 											</p>
 										)}
 									</div>
@@ -790,11 +795,14 @@ export function ConductorOnboarding({
 									>
 										<div>
 											<p className="text-base font-semibold text-foreground">
-												Welcome to Helmor
+												<I18nText source="welcomeHelmor" />
 											</p>
 											<p className="mt-0.5 text-body text-muted-foreground">
 												{importedCount}{" "}
-												{importedCount === 1 ? "workspace" : "workspaces"} ready
+												{importedCount === 1
+													? t("workspace2")
+													: t("miscWorkspacesLower")}{" "}
+												<I18nText source={"ready2"} />
 											</p>
 										</div>
 										<Button
@@ -802,7 +810,7 @@ export function ConductorOnboarding({
 											onClick={onComplete}
 											className="h-10 px-7 text-body font-semibold"
 										>
-											Get started
+											<I18nText source="getStarted" />
 										</Button>
 									</motion.div>
 								</motion.div>
@@ -824,7 +832,7 @@ export function ConductorOnboarding({
 								exit={{ opacity: 0 }}
 								className="text-small text-destructive"
 							>
-								{importError}
+								{t(importError)}
 							</motion.p>
 						)}
 
@@ -847,10 +855,10 @@ export function ConductorOnboarding({
 										className="pointer-events-none absolute inset-0 -translate-x-full bg-linear-to-r from-transparent via-white/15 to-transparent transition-transform duration-700 group-hover:translate-x-full"
 										aria-hidden="true"
 									/>
-									Import{" "}
+									<I18nText source="import" />{" "}
 									{newCount > 0
-										? `${newCount} workspace${newCount !== 1 ? "s" : ""}`
-										: "workspaces"}
+										? `${newCount} ${newCount === 1 ? t("workspace2") : t("miscWorkspacesLower")}`
+										: t("miscWorkspacesLower")}
 									<ArrowRight
 										className="size-3.5 transition-transform group-hover:translate-x-0.5"
 										strokeWidth={2.5}
@@ -862,14 +870,14 @@ export function ConductorOnboarding({
 										onClick={onComplete}
 										className="text-mini text-muted-foreground transition-colors hover:text-foreground cursor-interactive"
 									>
-										Skip for now
+										<I18nText source="skipNow" />
 									</button>
 									<TooltipProvider delayDuration={150}>
 										<Tooltip>
 											<TooltipTrigger asChild>
 												<button
 													type="button"
-													aria-label="About importing"
+													aria-label={t("aboutImporting")}
 													className="absolute left-full ml-2 flex size-4 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground cursor-interactive"
 												>
 													<Info className="size-3.5" strokeWidth={2} />
@@ -879,9 +887,7 @@ export function ConductorOnboarding({
 												side="bottom"
 												className="max-w-[240px] text-center"
 											>
-												Don't worry — we only read your Conductor data to import
-												it here. Your Conductor data won't be modified in any
-												way.
+												<I18nText source="donTWorryWeOnlyRead" />
 											</TooltipContent>
 										</Tooltip>
 									</TooltipProvider>
@@ -906,7 +912,7 @@ export function ConductorOnboarding({
 										ease: "linear",
 									}}
 								/>
-								Importing…
+								<I18nText source="importing2" />
 							</motion.div>
 						)}
 					</AnimatePresence>

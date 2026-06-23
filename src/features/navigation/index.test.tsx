@@ -700,7 +700,7 @@ describe("WorkspacesSidebar", () => {
 		).toBeInTheDocument();
 
 		// Collapse the group
-		await user.click(screen.getByRole("button", { name: /^In Progress/ }));
+		await user.click(screen.getByRole("button", { name: /^In progress/i }));
 		expect(
 			screen.queryByRole("button", { name: "Workspace 1" }),
 		).not.toBeInTheDocument();

@@ -49,6 +49,7 @@ import {
 	CommandList,
 } from "@/components/ui/command";
 import type { SlashCommandEntry } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 class SlashCommandOption extends MenuOption {
@@ -238,7 +239,9 @@ export function SlashCommandPlugin({
 						stateRow = (
 							<div className="flex items-center gap-2 px-3 py-2 text-ui text-muted-foreground">
 								<Loader2 className="size-3.5 shrink-0 animate-spin" />
-								<span>Loading commands…</span>
+								<span>
+									<I18nText source="loadingCommands" />
+								</span>
 							</div>
 						);
 					} else if (isError) {
@@ -255,19 +258,21 @@ export function SlashCommandPlugin({
 									data-icon="inline-start"
 									className="size-3.5 shrink-0"
 								/>
-								<span>Failed to load commands · click to retry</span>
+								<span>
+									<I18nText source="failedLoadCommandsClickRetry" />
+								</span>
 							</Button>
 						);
 					} else if (queryActive) {
 						stateRow = (
 							<div className="px-3 py-2 text-ui text-muted-foreground">
-								No matches
+								<I18nText source="noMatches" />
 							</div>
 						);
 					} else {
 						stateRow = (
 							<div className="px-3 py-2 text-ui text-muted-foreground">
-								No commands available
+								<I18nText source="noCommandsAvailable" />
 							</div>
 						);
 					}
@@ -300,7 +305,7 @@ export function SlashCommandPlugin({
 							<CommandList className="max-h-72">
 								{stateRow}
 								{hasOptions ? (
-									<CommandGroup heading="Commands">
+									<CommandGroup heading="commands">
 										{options.map((opt, index) => {
 											const cmd = opt.entry;
 											const isSelected = index === selectedIndex;

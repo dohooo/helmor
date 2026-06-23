@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { devResetAllData, loadDataInfo } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import { saveSettings } from "@/lib/settings";
 import {
 	SettingsGroup,
@@ -55,23 +56,24 @@ export function DevToolsPanel() {
 								className="size-3.5 text-muted-foreground"
 								strokeWidth={1.8}
 							/>
-							<span>Show Onboarding Again</span>
+							<span>
+								<I18nText source="showOnboardingAgain" />
+							</span>
 						</span>
 					}
 					description={
 						<>
-							Mark onboarding as incomplete so it appears the next time Helmor
-							starts.
+							<I18nText source="markOnboardingIncompleteSoAppearsNext" />
 							{onboardingReset ? (
 								<SettingsNotice tone="ok">
-									Onboarding will be shown on the next launch.
+									<I18nText source="onboardingWillShownNextLaunch" />
 								</SettingsNotice>
 							) : null}
 						</>
 					}
 				>
 					<Button variant="outline" size="sm" onClick={handleResetOnboarding}>
-						Reset Onboarding
+						<I18nText source="resetOnboarding" />
 					</Button>
 				</SettingsRow>
 
@@ -80,17 +82,17 @@ export function DevToolsPanel() {
 					title={
 						<span className="flex items-center gap-1.5">
 							<Trash2 className="size-3.5 text-destructive" strokeWidth={1.8} />
-							<span>Reset All Data</span>
+							<span>
+								<I18nText source="resetAllData" />
+							</span>
 						</span>
 					}
 					description={
 						<>
-							Delete all workspaces, sessions, messages, and repositories from
-							the development database. Filesystem artefacts (worktrees,
-							paste-cache) will also be removed.
+							<I18nText source="deleteAllWorkspacesSessionsMessagesRepositories" />
 							{dataDir ? (
 								<SettingsNotice tone="info">
-									Data directory:{" "}
+									<I18nText source="dataDirectory" />{" "}
 									<code className="rounded bg-muted px-1 py-0.5">
 										{dataDir}
 									</code>
@@ -114,10 +116,10 @@ export function DevToolsPanel() {
 						{resetting ? (
 							<>
 								<Loader2 className="mr-1.5 size-3.5 animate-spin" />
-								Resetting...
+								<I18nText source="resetting" />
 							</>
 						) : (
-							"Reset All Dev Data"
+							<I18nText source="resetAllDevData" />
 						)}
 					</Button>
 				</SettingsRow>
@@ -126,16 +128,17 @@ export function DevToolsPanel() {
 			<ConfirmDialog
 				open={confirmOpen}
 				onOpenChange={setConfirmOpen}
-				title="Confirm Reset"
+				title="confirmReset"
 				description={
 					<>
-						This will permanently delete{" "}
-						<strong>all workspaces, sessions, and repositories</strong> from the
-						development database. This action cannot be undone. You can
-						re-import from Conductor afterwards.
+						<I18nText source="willPermanentlyDelete" />{" "}
+						<strong>
+							<I18nText source="allWorkspacesSessionsRepositories" />
+						</strong>{" "}
+						<I18nText source="fromDevelopmentDatabaseActionCannotUndone" />
 					</>
 				}
-				confirmLabel={resetting ? "Resetting..." : "Delete Everything"}
+				confirmLabel={resetting ? "resetting" : "deleteEverything"}
 				onConfirm={() => void handleReset()}
 				loading={resetting}
 			/>

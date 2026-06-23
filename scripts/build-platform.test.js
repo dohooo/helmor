@@ -99,7 +99,6 @@ describe("build platform boundary", () => {
 		);
 		expect(config.bundle.externalBin).toEqual([
 			"../sidecar/dist/helmor-sidecar",
-			"./target/bundled/helmor-cli",
 		]);
 		expect(config.bundle.resources).toEqual({
 			"../sidecar/dist/vendor/": "vendor",

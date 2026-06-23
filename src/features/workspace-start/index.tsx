@@ -44,6 +44,7 @@ import type {
 	WorkspaceMode,
 } from "@/lib/api";
 import type { ComposerInsertTarget } from "@/lib/composer-insert";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { useSettings } from "@/lib/settings";
 import type { ContextCard } from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
@@ -118,10 +119,17 @@ export function WorkspaceStartPage({
 	composerAtBottom = false,
 	children,
 }: WorkspaceStartPageProps) {
+	const { t } = useI18n();
 	const [createBranchOpen, setCreateBranchOpen] = useState(false);
 	const selectedRepositoryIsPlainDirectory = Boolean(
 		selectedRepository && !selectedRepository.defaultBranch,
 	);
+	// Split the localized heading on the {repo} token so the repo picker keeps
+	// its place while word order follows each language (en: text→repo→"?",
+	// zh: "在 "→repo→" 里构建什么？").
+	const [buildHeadingBefore, buildHeadingAfter] = t("whatShouldWeBuildRepo")
+		.split("{repo}")
+		.map((part) => part.trim());
 
 	// Local mode mirrors git DWIM (local-first) for icon resolution; UseBranch
 	// has the same shape. Worktree mode follows the user-picked intent.
@@ -247,7 +255,7 @@ export function WorkspaceStartPage({
 									variant="ghost"
 									size="sm"
 									onClick={onClosePreview}
-									aria-label="Close source preview"
+									aria-label="closeSourcePreview"
 									className="gap-1.5 px-2 text-muted-foreground hover:text-foreground"
 								>
 									<ShortcutDisplay hotkey="Escape" />
@@ -307,7 +315,7 @@ export function WorkspaceStartPage({
 											: "max-w-[32rem] translate-y-0 opacity-100",
 									)}
 								>
-									What should we work on?
+									<I18nText source="whatShouldWeWork" />
 								</span>
 							) : (
 								<>
@@ -316,20 +324,10 @@ export function WorkspaceStartPage({
 											"inline-block overflow-hidden transition-[max-width,opacity,transform] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
 											previewCard
 												? "max-w-0 -translate-y-1 opacity-0"
-												: "max-w-[22rem] translate-y-0 opacity-100",
+												: "max-w-[24rem] translate-y-0 opacity-100",
 										)}
 									>
-										What should we build
-									</span>
-									<span
-										className={cn(
-											"inline-block overflow-hidden transition-[max-width,opacity,transform] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-											previewCard
-												? "max-w-0 -translate-y-1 opacity-0"
-												: "max-w-[2rem] translate-y-0 opacity-100",
-										)}
-									>
-										in
+										{buildHeadingBefore}
 									</span>
 									<DropdownMenu>
 										<Tooltip>
@@ -370,7 +368,7 @@ export function WorkspaceStartPage({
 															</>
 														) : (
 															<span className="text-muted-foreground">
-																a repository
+																<I18nText source="repository2" />
 															</span>
 														)}
 													</Button>
@@ -381,7 +379,7 @@ export function WorkspaceStartPage({
 												sideOffset={4}
 												className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 											>
-												<span>Switch repository</span>
+												<I18nText source="switchRepository" />
 												<InlineShortcutDisplay
 													hotkey={cycleRepositoryShortcut}
 													className="text-background/60"
@@ -420,10 +418,10 @@ export function WorkspaceStartPage({
 											"inline-block overflow-hidden transition-[max-width,opacity,transform] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
 											previewCard
 												? "max-w-0 -translate-y-1 opacity-0"
-												: "max-w-[2rem] translate-y-0 opacity-100",
+												: "max-w-[12rem] translate-y-0 opacity-100",
 										)}
 									>
-										?
+										{buildHeadingAfter}
 									</span>
 								</>
 							)}
@@ -466,7 +464,9 @@ export function WorkspaceStartPage({
 												/>
 											</>
 										) : (
-											<span className="truncate">Repository</span>
+											<span className="truncate">
+												<I18nText source="repository" />
+											</span>
 										)}
 									</button>
 								</DropdownMenuTrigger>
@@ -522,10 +522,10 @@ export function WorkspaceStartPage({
 											)}
 											<span>
 												{mode === "local"
-													? "Work locally"
+													? t("workLocally")
 													: mode === "chat"
-														? "Just chat"
-														: "New worktree"}
+														? t("justChat")
+														: t("newWorktree")}
 											</span>
 											<ChevronDown
 												className="size-3 shrink-0 text-muted-foreground"
@@ -539,7 +539,7 @@ export function WorkspaceStartPage({
 									sideOffset={4}
 									className="rounded-md px-2 text-small leading-none"
 								>
-									Select where to run the task
+									<I18nText source="selectWhereRunTask" />
 								</TooltipContent>
 							</Tooltip>
 							{/* Skip focus return so the wrapping Tooltip doesn't re-open via onFocus after selection. */}
@@ -560,7 +560,7 @@ export function WorkspaceStartPage({
 											className="gap-2 pr-3"
 										>
 											<FolderPlus className="size-3.5" strokeWidth={1.8} />
-											<span>Add a repository…</span>
+											<I18nText source="addRepository" />
 										</DropdownMenuItem>
 										<DropdownMenuSeparator />
 										<DropdownMenuItem
@@ -569,7 +569,7 @@ export function WorkspaceStartPage({
 											data-checked="true"
 										>
 											<MessageCircle className="size-3.5" strokeWidth={1.8} />
-											<span>Just chat</span>
+											<I18nText source="justChat" />
 											{justChatShortcut ? (
 												<InlineShortcutDisplay
 													hotkey={justChatShortcut}
@@ -595,7 +595,7 @@ export function WorkspaceStartPage({
 											data-checked={mode === "local" ? "true" : undefined}
 										>
 											<Laptop className="size-3.5" strokeWidth={1.8} />
-											<span>Work locally</span>
+											<I18nText source="workLocally" />
 										</DropdownMenuItem>
 										<DropdownMenuItem
 											onClick={() => onModeChange("worktree")}
@@ -603,7 +603,7 @@ export function WorkspaceStartPage({
 											data-checked={mode === "worktree" ? "true" : undefined}
 										>
 											<Split className="size-3.5 rotate-90" strokeWidth={1.8} />
-											<span>New worktree</span>
+											<I18nText source="newWorktree" />
 										</DropdownMenuItem>
 										<DropdownMenuItem
 											onClick={() => onModeChange("chat")}
@@ -611,7 +611,7 @@ export function WorkspaceStartPage({
 											data-checked={mode === "chat" ? "true" : undefined}
 										>
 											<MessageCircle className="size-3.5" strokeWidth={1.8} />
-											<span>Just chat</span>
+											<I18nText source="justChat" />
 											{justChatShortcut ? (
 												<InlineShortcutDisplay
 													hotkey={justChatShortcut}
@@ -647,8 +647,8 @@ export function WorkspaceStartPage({
 												)}
 												<span>
 													{branchIntent === "use_branch"
-														? "Reuse"
-														: "Branch off"}
+														? t("reuse")
+														: t("branchOff")}
 												</span>
 												<ChevronDown
 													className="size-3 shrink-0 text-muted-foreground"
@@ -663,8 +663,8 @@ export function WorkspaceStartPage({
 										className="rounded-md px-2 text-small leading-none"
 									>
 										{branchIntent === "use_branch"
-											? "Check out the picked branch directly."
-											: "Fork a fresh branch off the picked base"}
+											? t("checkOutPickedBranchDirectly")
+											: t("forkFreshBranchOffPickedBase")}
 									</TooltipContent>
 								</Tooltip>
 								{/* Skip focus return so the wrapping Tooltip doesn't re-open via onFocus after selection. */}
@@ -682,10 +682,10 @@ export function WorkspaceStartPage({
 									>
 										<div className="flex items-center gap-2">
 											<GitBranchPlus className="size-3.5" strokeWidth={1.8} />
-											<span>Branch off</span>
+											<I18nText source="branchOff" />
 										</div>
 										<span className="pl-[1.375rem] text-mini text-muted-foreground">
-											Fork a fresh branch off the picked base.
+											<I18nText source="forkFreshBranchOffPickedBase" />
 										</span>
 									</DropdownMenuItem>
 									<DropdownMenuItem
@@ -697,10 +697,10 @@ export function WorkspaceStartPage({
 									>
 										<div className="flex items-center gap-2">
 											<GitMerge className="size-3.5" strokeWidth={1.8} />
-											<span>Reuse</span>
+											<I18nText source="reuse" />
 										</div>
 										<span className="pl-[1.375rem] text-mini text-muted-foreground">
-											Check out the picked branch directly.
+											<I18nText source="checkOutPickedBranchDirectly" />
 										</span>
 									</DropdownMenuItem>
 								</DropdownMenuContent>
@@ -730,7 +730,9 @@ export function WorkspaceStartPage({
 															}}
 														>
 															<Plus className="size-3.5" strokeWidth={2} />
-															<span>Create and checkout new branch…</span>
+															<span>
+																<I18nText source="createCheckoutNewBranch" />
+															</span>
 														</button>
 													)
 												: undefined
@@ -767,10 +769,10 @@ export function WorkspaceStartPage({
 										className="rounded-md px-2 text-small leading-none"
 									>
 										{mode === "local"
-											? "Switch branch"
+											? t("miscSwitchBranch")
 											: branchIntent === "use_branch"
-												? "Branch to reuse"
-												: "Base to fork off"}
+												? t("miscBranchToReuse")
+												: t("miscBaseToForkOff")}
 									</TooltipContent>
 								</Tooltip>
 								<CreateBranchDialog
