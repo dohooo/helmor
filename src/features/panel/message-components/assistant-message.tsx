@@ -1,5 +1,6 @@
 import { AlertCircle, AlertTriangle, Clock3, Info } from "lucide-react";
 import { memo, Suspense } from "react";
+import { CodeBlockStreamingContext } from "@/components/ai/code-block";
 import {
 	Reasoning,
 	ReasoningContent,
@@ -12,6 +13,7 @@ import {
 	partKey,
 	type ToolCallPart,
 } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import {
@@ -34,6 +36,7 @@ import {
 	isTextPart,
 	isTodoListPart,
 	isToolCallPart,
+	isUserQuestionPart,
 	isWorkflowPart,
 	reasoningLifecycle,
 } from "./shared";
@@ -45,6 +48,7 @@ import {
 } from "./subagent-tool";
 import { SystemNotice } from "./system-message";
 import { AssistantToolCall, CollapsedToolGroup } from "./tool-call";
+import { UserQuestionCard } from "./user-question";
 
 // --- AssistantText ---
 
@@ -69,15 +73,17 @@ const AssistantText = memo(function AssistantText({
 			style={{ fontSize: `${settings.chatFontSize}px` }}
 		>
 			<Suspense fallback={<AssistantTextFallback text={smoothedText} />}>
-				<LazyStreamdown
-					animated={false}
-					caret={undefined}
-					className="conversation-streamdown"
-					isAnimating={false}
-					mode={mode}
-				>
-					{smoothedText}
-				</LazyStreamdown>
+				<CodeBlockStreamingContext.Provider value={streaming}>
+					<LazyStreamdown
+						animated={false}
+						caret={undefined}
+						className="conversation-streamdown"
+						isAnimating={false}
+						mode={mode}
+					>
+						{smoothedText}
+					</LazyStreamdown>
+				</CodeBlockStreamingContext.Provider>
 			</Suspense>
 		</div>
 	);
@@ -101,25 +107,25 @@ function statusBadgeMeta(
 	switch (reason) {
 		case "max_tokens":
 			return {
-				label: "Output truncated",
+				label: "outputTruncated",
 				tone: warmTone,
 				icon: <AlertTriangle className="size-3" strokeWidth={1.8} />,
 			};
 		case "context_window_exceeded":
 			return {
-				label: "Context window exceeded",
+				label: "contextWindowExceeded",
 				tone: negativeTone,
 				icon: <AlertCircle className="size-3" strokeWidth={1.8} />,
 			};
 		case "refusal":
 			return {
-				label: "Model declined",
+				label: "modelDeclined",
 				tone: warmTone,
 				icon: <Info className="size-3" strokeWidth={1.8} />,
 			};
 		case "pause_turn":
 			return {
-				label: "Paused",
+				label: "paused",
 				tone: warmTone,
 				icon: <Clock3 className="size-3" strokeWidth={1.8} />,
 			};
@@ -133,6 +139,7 @@ function statusBadgeMeta(
 }
 
 function MessageStatusBadge({ reason }: { reason?: string }) {
+	const { t } = useI18n();
 	if (!reason) {
 		return null;
 	}
@@ -148,7 +155,7 @@ function MessageStatusBadge({ reason }: { reason?: string }) {
 			)}
 		>
 			{meta.icon}
-			<span>{meta.label}</span>
+			<span>{t(meta.label)}</span>
 		</div>
 	);
 }
@@ -302,6 +309,9 @@ export function ChatAssistantMessage({
 				}
 				if (isPlanReviewPart(part)) {
 					return <PlanReviewCard key={key} part={part} />;
+				}
+				if (isUserQuestionPart(part)) {
+					return <UserQuestionCard key={key} part={part} />;
 				}
 				return null;
 			})}

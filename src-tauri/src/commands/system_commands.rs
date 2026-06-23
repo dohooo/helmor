@@ -81,6 +81,8 @@ pub struct AgentLoginStatus {
     pub codex: bool,
     pub cursor: bool,
     pub opencode: bool,
+    pub mimo: bool,
+    pub kimi: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codex_provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -94,6 +96,8 @@ pub struct AgentVersions {
     pub claude: Option<String>,
     pub codex: Option<String>,
     pub opencode: Option<String>,
+    pub mimo: Option<String>,
+    pub kimi: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -202,6 +206,63 @@ fn cli_status_for_paths(
             .then(|| install_path.display().to_string()),
         build_mode: crate::data_dir::data_mode_label().to_string(),
         install_state,
+    }
+}
+
+/// Startup self-heal for the managed CLI launcher. If `/usr/local/bin/helmor`
+/// exists but resolves to a DIFFERENT Helmor install (pre-update app path,
+/// moved bundle), re-link it to this app's CLI so the launcher always matches
+/// the running app version. Conservative on purpose:
+/// - `Missing` is left alone — the user never opted into the CLI.
+/// - A stale entry is only adopted when it already points at a Helmor CLI
+///   binary; a user's own same-named tool is never clobbered.
+/// - Never elevates: a permission failure logs and leaves Settings → CLI
+///   install as the explicit (elevating) repair path.
+/// - No-op in dev builds, which must not steal the production link.
+pub fn ensure_cli_install_current() {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    let Ok(app_exe) = std::env::current_exe() else {
+        return;
+    };
+    let Ok(bundled_cli) = bundled_cli_binary(&app_exe) else {
+        return;
+    };
+    if !bundled_cli.is_file() {
+        return;
+    }
+    let install_path = cli_install_target();
+    use crate::platform::cli_install::ManagedCliStatus;
+    if crate::platform::cli_install::classify(&install_path, &bundled_cli)
+        != ManagedCliStatus::Stale
+    {
+        return;
+    }
+    let points_at_helmor_cli = std::fs::read_link(&install_path)
+        .map(|target| {
+            target
+                .file_name()
+                .map(|name| name == std::ffi::OsStr::new(cli_source_binary_name()))
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+    if !points_at_helmor_cli {
+        return;
+    }
+    match try_install_symlink_unprivileged(&bundled_cli, &install_path) {
+        Ok(()) => {
+            tracing::info!(
+                install_path = %install_path.display(),
+                "CLI launcher pointed at an old install; re-linked to this app"
+            );
+        }
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "CLI launcher is stale but auto-repair failed; reinstall from Settings"
+            );
+        }
     }
 }
 
@@ -436,8 +497,11 @@ fn helmor_skills_status() -> anyhow::Result<HelmorSkillsStatus> {
             claude: claude_login_ready(),
             codex: codex_auth_status().ready,
             cursor: cursor_login_ready(),
-            // opencode readiness comes from the login-status path, not here.
+            // opencode/mimo readiness comes from the login-status path, not here.
             opencode: false,
+            mimo: false,
+            // kimi has no Helmor-skills install path; irrelevant here.
+            kimi: false,
             codex_provider: None,
             codex_auth_method: None,
         },
@@ -577,8 +641,10 @@ pub async fn install_helmor_skills() -> CmdResult<HelmorSkillsStatus> {
             claude: claude_login_ready(),
             codex: codex_auth_status().ready,
             cursor: cursor_login_ready(),
-            // opencode readiness comes from the login-status path, not here.
+            // opencode/mimo readiness comes from the login-status path, not here.
             opencode: false,
+            mimo: false,
+            kimi: false,
             codex_provider: None,
             codex_auth_method: None,
         };
@@ -785,6 +851,8 @@ fn run_components_check_inner(force: bool) -> ComponentsUpdateCheck {
         codex: codex_auth_status().ready,
         cursor: cursor_login_ready(),
         opencode: false,
+        mimo: false,
+        kimi: false,
         codex_provider: None,
         codex_auth_method: None,
     };
@@ -1143,6 +1211,8 @@ pub async fn get_agent_login_status() -> CmdResult<AgentLoginStatus> {
             codex: codex.ready,
             cursor: cursor_login_ready(),
             opencode: opencode_login_ready(),
+            mimo: mimo_login_ready(),
+            kimi: kimi_login_ready(),
             codex_provider: codex.provider,
             codex_auth_method: codex.auth_method.map(str::to_string),
         })
@@ -1157,6 +1227,8 @@ pub async fn get_agent_versions() -> CmdResult<AgentVersions> {
             claude: agent_cli_version("claude"),
             codex: agent_cli_version("codex"),
             opencode: agent_cli_version("opencode"),
+            mimo: agent_cli_version("mimo"),
+            kimi: agent_cli_version("kimi"),
         })
     })
     .await
@@ -1217,6 +1289,17 @@ fn cursor_login_ready() -> bool {
         .unwrap_or(false)
 }
 
+/// Kimi "ready" = a non-empty credentials store under the kimi-code home
+/// (`$KIMI_CODE_HOME`, else `~/.kimi-code`), which `kimi login` populates.
+fn kimi_login_ready() -> bool {
+    let Some(home) = crate::provider::kimi::kimi_code_home() else {
+        return false;
+    };
+    std::fs::read_dir(home.join("credentials"))
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false)
+}
+
 /// Resolve the binary to spawn for an agent CLI subcommand.
 ///
 /// Prefers the bundled binary under `Helmor.app/Contents/Resources/vendor/`
@@ -1229,35 +1312,87 @@ fn resolve_agent_binary(provider: &str) -> PathBuf {
         "claude" => bundled.claude_bin,
         "codex" => bundled.codex_bin,
         "opencode" => bundled.opencode_bin,
+        "mimo" => bundled.mimo_bin,
+        "kimi" => bundled.kimi_bin,
         _ => None,
     };
     bundled_path.unwrap_or_else(|| crate::platform::executable::resolve_for_spawn(provider))
 }
 
-// Read from the sidecar-computed settings row, NOT `auth.json` (which misses env/config/Zen providers).
+// "Ready" means the user explicitly SIGNED IN (`<cli> auth login`), i.e. the
+// "Credentials" section of `<cli> auth list` is non-empty. Ambient env-var
+// providers and Helmor-configured custom providers (jsonc) still populate the
+// model list, but they are NOT a login — the Login entry must stay available
+// until the user signs in, so it can't be hidden behind a "Ready" badge.
 fn opencode_login_ready() -> bool {
-    let raw = match crate::models::settings::load_setting_value("app.opencode_provider") {
-        Ok(Some(value)) => value,
-        Ok(None) => return false,
-        Err(error) => {
-            tracing::debug!("Failed to read app.opencode_provider: {error}");
-            return false;
+    auth_list_has_credentials("opencode")
+}
+
+fn mimo_login_ready() -> bool {
+    auth_list_has_credentials("mimo")
+}
+
+fn auth_list_has_credentials(provider: &str) -> bool {
+    let mut command = std::process::Command::new(resolve_agent_binary(provider));
+    crate::platform::process::configure_background_cli(&mut command);
+    match command.args(["auth", "list"]).output() {
+        Ok(output) if output.status.success() => {
+            parse_auth_list_credentials(&String::from_utf8_lossy(&output.stdout))
         }
-    };
-    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) else {
-        return false;
-    };
-    let status_ready = parsed
-        .get("status")
-        .and_then(serde_json::Value::as_str)
-        .map(|status| status == "ready")
-        .unwrap_or(false);
-    let connected_nonempty = parsed
-        .get("connected")
-        .and_then(serde_json::Value::as_array)
-        .map(|arr| !arr.is_empty())
-        .unwrap_or(false);
-    status_ready || connected_nonempty
+        Ok(output) => {
+            tracing::trace!(
+                provider,
+                stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+                "auth list returned non-zero"
+            );
+            false
+        }
+        Err(error) => {
+            tracing::debug!("{provider} auth list unavailable: {error}");
+            false
+        }
+    }
+}
+
+/// Parse the credential count from `<cli> auth list`. Its "Credentials" section
+/// prints "<N> credentials"; the "Environment" section prints "environment
+/// variable(s)" (no "credential" token), so the count preceding a `credential*`
+/// token is exactly the logged-in (auth.json) total — env providers are
+/// excluded by construction. ANSI styling is stripped first.
+fn parse_auth_list_credentials(output: &str) -> bool {
+    let stripped = strip_ansi(output);
+    let tokens: Vec<&str> = stripped.split_whitespace().collect();
+    for (i, token) in tokens.iter().enumerate() {
+        if token.starts_with("credential") {
+            if let Some(count) = i
+                .checked_sub(1)
+                .and_then(|j| tokens.get(j))
+                .and_then(|prev| prev.parse::<u64>().ok())
+            {
+                return count > 0;
+            }
+        }
+    }
+    false
+}
+
+/// Drop ANSI CSI escape sequences (`ESC [ … m`) so token parsing isn't fooled
+/// by color codes wrapping the count.
+fn strip_ansi(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            for next in chars.by_ref() {
+                if next.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn claude_login_ready() -> bool {
@@ -1371,6 +1506,9 @@ fn agent_login_command(provider: &str) -> anyhow::Result<String> {
         "claude" => "auth login",
         "codex" => "login",
         "opencode" => "auth login",
+        "mimo" => "auth login",
+        // `kimi login` runs the device-code OAuth flow in the PTY.
+        "kimi" => "login",
         _ => anyhow::bail!("Unknown agent provider: {provider}"),
     };
     // Quote the resolved binary path so spaces in `Helmor.app` survive
@@ -1450,6 +1588,7 @@ pub async fn spawn_agent_login_terminal(
             &context,
             channel.clone(),
             Some(&boot_input),
+            None,
         ) {
             tracing::warn!(
                 provider = %provider,
@@ -1778,7 +1917,13 @@ fn base64_decode(input: &str) -> anyhow::Result<Vec<u8>> {
 #[tauri::command]
 pub async fn request_quit(app: tauri::AppHandle, force: bool) {
     tracing::info!(force, "request_quit invoked from frontend");
+    cleanup_before_exit(&app, force);
 
+    // Done: terminate the process.
+    app.exit(0);
+}
+
+pub fn cleanup_before_exit(app: &tauri::AppHandle, force: bool) {
     // 1. Stop filesystem watchers so no new events arrive.
     app.state::<git_watcher::GitWatcherManager>().shutdown();
 
@@ -1800,29 +1945,47 @@ pub async fn request_quit(app: tauri::AppHandle, force: bool) {
     //    Helmor itself spawned. Each handle's owning `run_script` thread
     //    reaps its own `Child`, so we just need to deliver the signal.
     let scripts = app.state::<ScriptProcessManager>();
-    let signaled = scripts.kill_all();
+    let kill_attempts = scripts.kill_all();
+
+    // Belt-and-suspenders: stamp only rows for processes we just proved gone.
+    // The per-process `record_ended` calls in `run_script_with_shell` cover
+    // the common case; this catches handles that did not make it through their
+    // reaper before app exit. Prior maybe-alive stale rows must remain open so
+    // the next launch can keep reporting them.
+    let confirmed_gone: Vec<_> = kill_attempts
+        .iter()
+        .filter(|attempt| attempt.gone)
+        .map(
+            |attempt| crate::workspace::runtime_registry::RuntimeProcessIdentity {
+                repo_id: attempt.repo_id.clone(),
+                workspace_id: attempt.workspace_id.clone(),
+                script_type: attempt.script_type.clone(),
+                pid: attempt.pid,
+                pgid: attempt.pgid,
+            },
+        )
+        .collect();
+
+    let signaled = kill_attempts.len();
     if signaled > 0 {
+        let timed_out = signaled.saturating_sub(confirmed_gone.len());
         tracing::info!(
             signaled,
+            confirmed_gone = confirmed_gone.len(),
+            timed_out,
             "request_quit: signaled live script/terminal handles"
         );
     }
 
-    // Belt-and-suspenders: stamp every still-open runtime registry
-    // row as ended, so the next launch's classification sweep
-    // doesn't waste cycles probing PIDs we've already terminated.
-    // The per-process `record_ended` calls in `run_script_with_shell`
-    // cover the common case; this catches handles that didn't make
-    // it through their reaper before app exit.
-    match crate::workspace::runtime_registry::record_all_ended() {
+    match crate::workspace::runtime_registry::record_processes_ended(&confirmed_gone) {
         Ok(0) => {}
         Ok(stamped) => tracing::debug!(
             stamped,
-            "request_quit: stamped runtime registry rows as ended"
+            "request_quit: stamped confirmed runtime registry rows as ended"
         ),
         Err(error) => tracing::warn!(
             %error,
-            "request_quit: failed to stamp runtime registry rows ended; \
+            "request_quit: failed to stamp confirmed runtime registry rows ended; \
              next launch's sweep will reclassify"
         ),
     }
@@ -1841,9 +2004,6 @@ pub async fn request_quit(app: tauri::AppHandle, force: bool) {
         )
     };
     sidecar.shutdown(cooperative, escalation);
-
-    // 5. Done — terminate the process.
-    app.exit(0);
 }
 
 // ---------------------------------------------------------------------------
@@ -2117,6 +2277,23 @@ mod tests {
             command,
             "sudo ln -sfn '/Applications/Helmor.app/Contents/MacOS/helmor-cli' '/usr/local/bin/helmor-dev'"
         );
+    }
+
+    #[test]
+    fn parse_auth_list_credentials_counts_only_credentials_section() {
+        // 0 credentials + an env var present → signed OUT (env ≠ login).
+        assert!(!parse_auth_list_credentials(
+            "Credentials ~/.local/share/opencode/auth.json\n0 credentials\nEnvironment\nOpenAI OPENAI_API_KEY\n1 environment variable"
+        ));
+        // A real login → ready, regardless of env providers.
+        assert!(parse_auth_list_credentials(
+            "Credentials ~/x/auth.json\n2 credentials\nEnvironment\n0 environment variables"
+        ));
+        // ANSI-wrapped count still parses.
+        assert!(parse_auth_list_credentials(
+            "Credentials\n\u{1b}[1m1\u{1b}[0m credential\n"
+        ));
+        assert!(!parse_auth_list_credentials("garbage with no count"));
     }
 
     #[cfg(target_os = "macos")]

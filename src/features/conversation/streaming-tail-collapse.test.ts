@@ -312,4 +312,62 @@ describe("stabilizeStreamingMessages", () => {
 		expect(part.result).toBe("ok");
 		expect(part.args).toHaveProperty("file_path");
 	});
+
+	it("dedupes the assistant text the base snapshot and pending partial both carry", () => {
+		// Live-streaming reproduction (cursor): the backend Full snapshot already
+		// includes the in-flight assistant text, and the pending partial re-sends
+		// the same text. Without text dedupe the bubble renders the paragraph twice.
+		const dup = "仓库里没有单独的 `provider/` 根目录；";
+		const messages = stabilizeStreamingMessages([
+			assistant(
+				"base",
+				[toolCall("cmd1", "ls", "done"), { type: "text", id: "t0", text: dup }],
+				true,
+			),
+			assistant("partial", [{ type: "text", id: "t1", text: dup }], true),
+		]);
+
+		expect(messages).toHaveLength(1);
+		const textParts = (messages[0]?.content ?? []).filter(
+			(p) => p.type === "text",
+		);
+		expect(textParts).toHaveLength(1);
+		if (textParts[0]?.type !== "text") throw new Error("expected text");
+		expect(textParts[0].text).toBe(dup);
+	});
+
+	it("keeps the longer copy when the partial text extends the base snapshot", () => {
+		const messages = stabilizeStreamingMessages([
+			assistant("base", [{ type: "text", id: "t0", text: "Hello" }], true),
+			assistant(
+				"partial",
+				[{ type: "text", id: "t1", text: "Hello world" }],
+				true,
+			),
+		]);
+
+		expect(messages).toHaveLength(1);
+		expect(messages[0]?.content).toHaveLength(1);
+		const [part] = messages[0]?.content ?? [];
+		if (part?.type !== "text") throw new Error("expected text");
+		expect(part.text).toBe("Hello world");
+	});
+
+	it("does not merge two genuinely distinct adjacent text blocks", () => {
+		const messages = stabilizeStreamingMessages([
+			assistant(
+				"base",
+				[{ type: "text", id: "t0", text: "First paragraph." }],
+				true,
+			),
+			assistant(
+				"partial",
+				[{ type: "text", id: "t1", text: "Different paragraph." }],
+				true,
+			),
+		]);
+
+		expect(messages).toHaveLength(1);
+		expect(messages[0]?.content).toHaveLength(2);
+	});
 });

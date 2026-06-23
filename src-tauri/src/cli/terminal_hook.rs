@@ -77,13 +77,15 @@ pub fn run(agent: &str, _cli: &Cli) -> Result<()> {
 }
 
 /// Map a hook event to a busy/idle transition (None = not state-changing).
-/// Busy on prompt submit / tool use, idle on Stop. SessionStart is NOT busy —
-/// the agent fires it just by opening, which would spin the sidebar before any
-/// input (mirrors ORCA's hook state machine).
+/// Busy on prompt submit / tool use, idle on Stop or SessionEnd — Stop never
+/// fires on a user interrupt, so SessionEnd is the only hook left when the
+/// user quits claude mid-turn. SessionStart is NOT busy — the agent fires it
+/// just by opening, which would spin the sidebar before any input (mirrors
+/// ORCA's hook state machine).
 fn event_to_busy(payload: &serde_json::Value) -> Option<bool> {
     match payload.get("hook_event_name").and_then(|v| v.as_str()) {
         Some("UserPromptSubmit" | "PreToolUse" | "PostToolUse") => Some(true),
-        Some("Stop") => Some(false),
+        Some("Stop" | "SessionEnd") => Some(false),
         _ => None,
     }
 }
@@ -166,9 +168,11 @@ mod tests {
     }
 
     #[test]
-    fn stop_clears_busy() {
-        let p = json!({ "hook_event_name": "Stop" });
-        assert_eq!(event_to_busy(&p), Some(false));
+    fn stop_and_session_end_clear_busy() {
+        for name in ["Stop", "SessionEnd"] {
+            let p = json!({ "hook_event_name": name });
+            assert_eq!(event_to_busy(&p), Some(false), "{name}");
+        }
     }
 
     #[test]

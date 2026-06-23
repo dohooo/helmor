@@ -24,6 +24,43 @@ export type ComposerPreviewPayload =
 export const COMPOSER_PREVIEW_BADGE_THRESHOLD = 500;
 const COMPOSER_PREVIEW_LABEL_MAX_CHARS = 40;
 
+/** The size gate for "this paste is bulk, not prose" — at or above it the
+ *  composer turns the paste into a tag badge. */
+export function exceedsComposerPreviewBadgeThreshold(content: string): boolean {
+	return content.trim().length >= COMPOSER_PREVIEW_BADGE_THRESHOLD;
+}
+
+/**
+ * Locate each pasted tag's `submitText` inside the final composed prompt,
+ * returning UTF-16 ranges (in tag document order) for the send request's
+ * `pastedTexts`. The composer's extraction normalizes the joined text
+ * (3+ newlines collapse, edge trim), so each needle gets the same newline
+ * normalization, with an edge-trimmed retry for tags sitting at the prompt
+ * boundary. A tag that still can't be found is skipped — that span simply
+ * renders as plain text instead of a chip.
+ */
+export function locatePastedTextRanges(
+	prompt: string,
+	customTags: readonly ComposerCustomTag[],
+): { start: number; end: number }[] {
+	const ranges: { start: number; end: number }[] = [];
+	let searchFrom = 0;
+	for (const tag of customTags) {
+		const normalized = tag.submitText.replace(/\n{3,}/g, "\n\n");
+		let needle = normalized;
+		let index = prompt.indexOf(needle, searchFrom);
+		if (index === -1) {
+			needle = normalized.trim();
+			if (!needle) continue;
+			index = prompt.indexOf(needle, searchFrom);
+		}
+		if (index === -1) continue;
+		ranges.push({ start: index, end: index + needle.length });
+		searchFrom = index + needle.length;
+	}
+	return ranges;
+}
+
 export type ComposerCustomTag = {
 	id: string;
 	label: string;
@@ -126,7 +163,7 @@ export function buildComposerPreviewPayload({
 	content: string;
 	preferredKind?: "auto" | "text" | "code";
 }): ComposerPreviewPayload | null {
-	if (content.trim().length < COMPOSER_PREVIEW_BADGE_THRESHOLD) {
+	if (!exceedsComposerPreviewBadgeThreshold(content)) {
 		return null;
 	}
 

@@ -212,28 +212,23 @@ export const DEFAULT_REPO_PREFERENCE_PROMPTS: Record<
 	general: "",
 };
 
+// Values are i18n catalog keys (resolved via t()/I18nText at render).
 export const REPO_PREFERENCE_LABELS: Record<RepoPreferenceKey, string> = {
-	createPr: "Create PR preferences",
-	review: "Review preferences",
-	fixErrors: "Fix errors preferences",
-	resolveConflicts: "Resolve conflicts preferences",
-	branchRename: "Branch rename preferences",
-	general: "General preferences",
+	createPr: "createPrPreferences",
+	review: "reviewPreferences",
+	fixErrors: "fixErrorsPreferences",
+	resolveConflicts: "resolveConflictsPreferences",
+	branchRename: "branchRenamePreferences",
+	general: "generalPreferences",
 };
 
 export const REPO_PREFERENCE_DESCRIPTIONS: Record<RepoPreferenceKey, string> = {
-	createPr:
-		"Add custom instructions sent to the agent when you click the Create PR button.",
-	review:
-		"Add custom instructions sent to the agent when you click Review in the inspector.",
-	fixErrors:
-		"Add custom instructions sent to the agent when you click the Fix errors button.",
-	resolveConflicts:
-		"Add custom instructions sent to the agent when you click the Resolve conflicts button.",
-	branchRename:
-		"Add custom instructions used when Helmor generates the first branch rename suggestion for a new chat.",
-	general:
-		"Add custom instructions sent to the agent at the start of every new chat.",
+	createPr: "addCustomInstructionsSentAgentWhen2",
+	review: "addCustomInstructionsSentAgentWhen",
+	fixErrors: "addCustomInstructionsSentAgentWhen3",
+	resolveConflicts: "addCustomInstructionsSentAgentWhen4",
+	branchRename: "addCustomInstructionsUsedWhenHelmor",
+	general: "addCustomInstructionsSentAgentStart",
 };
 
 function repoPreferenceOverride(

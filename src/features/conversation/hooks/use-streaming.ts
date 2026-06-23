@@ -31,8 +31,12 @@ import {
 	steerAgentStream,
 	stopAgentStream,
 } from "@/lib/api";
-import type { ComposerCustomTag } from "@/lib/composer-insert";
+import {
+	type ComposerCustomTag,
+	locatePastedTextRanges,
+} from "@/lib/composer-insert";
 import { extractError, isRecoverableByPurge } from "@/lib/errors";
+import { translateSource } from "@/lib/i18n";
 import {
 	agentModelSectionsQueryOptions,
 	helmorQueryKeys,
@@ -56,32 +60,18 @@ import {
 } from "@/lib/workspace-helpers";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 import {
+	buildSessionContextPrompt,
+	type SessionContextReference,
+} from "../session-context-prompt";
+import {
 	createStreamEventDispatcher,
 	createStreamFlushers,
 	type StreamAccumulator,
 } from "./dispatch-stream-event";
-import { seedSessionTitle } from "./seed-session-title";
+import { buildTitleSeed, seedSessionTitle } from "./seed-session-title";
 
 const EMPTY_IMAGES: string[] = [];
 const EMPTY_FILES: string[] = [];
-
-function buildTitleSeed(prompt: string): string {
-	const normalized = prompt
-		.trim()
-		.split(/\r?\n/g)[0]
-		?.trim()
-		.replace(/\s+/g, " ");
-
-	if (!normalized) {
-		return "Untitled";
-	}
-
-	if (normalized.length <= 36) {
-		return normalized;
-	}
-
-	return `${normalized.slice(0, 33).trimEnd()}...`;
-}
 
 /**
  * Re-export from the streaming store — kept here so existing import
@@ -123,6 +113,9 @@ type SubmitPayload = {
 	 *  `prepareChatWorkspace` / `prepareWorkspaceFromRepo` as
 	 *  `seedSessionId`; other paths ignore it. */
 	provisionalSessionId?: string;
+	/** Start composer only: once the created workspace finalizes, open the
+	 *  prompt in the agent's TUI instead of streaming a GUI turn. */
+	terminalMode?: boolean;
 };
 
 export type ComposerSubmitPayload = SubmitPayload;
@@ -146,6 +139,9 @@ type UseConversationStreamingArgs = {
 	 *  follow-up routing and the queue-drain trigger; survives this
 	 *  hook's unmount/remount. */
 	activeStreams: readonly ActiveStreamSummary[];
+	getSessionContextReferences?: (
+		sessionId: string,
+	) => readonly SessionContextReference[];
 	onInteractionSessionsChange?: (
 		sessionWorkspaceMap: Map<string, string>,
 		interactionCounts: Map<string, number>,
@@ -164,6 +160,7 @@ export function useConversationStreaming({
 	followUpBehavior,
 	submitQueue,
 	activeStreams,
+	getSessionContextReferences,
 	onInteractionSessionsChange,
 	onSessionCompleted,
 	onSessionAborted,
@@ -597,7 +594,7 @@ export function useConversationStreaming({
 				console.error("[conversation] user-input response:", error);
 				const { code, message: errorMsg } = extractError(
 					error,
-					"Failed to deliver user-input response.",
+					translateSource("composerFailedDeliverResponse"),
 				);
 				if (isRecoverableByPurge(code) && displayedWorkspaceId) {
 					showWorkspaceBrokenToast({
@@ -846,8 +843,20 @@ export function useConversationStreaming({
 			// side persists to `session_messages` as the user_prompt body.
 			const promptPrefix =
 				isFirstUserMessage && !isCompactCommand
-					? resolveGeneralPreferencePrefix(repoPreferences)
+					? [
+							buildSessionContextPrompt(
+								getSessionContextReferences?.(targetSessionId) ?? [],
+							),
+							resolveGeneralPreferencePrefix(repoPreferences),
+						]
+							.filter((prefix): prefix is string => Boolean(prefix?.trim()))
+							.join("\n\n") || null
 					: null;
+			// Pasted-tag spans inside the prompt — rendered as tag chips (the
+			// composer badge, post-send) instead of inlining the full paste.
+			// Computed against `trimmedPrompt`, which is byte-identical to what
+			// the Rust side persists as the user_prompt body.
+			const pastedTexts = locatePastedTextRanges(trimmedPrompt, customTags);
 			const now = new Date().toISOString();
 			const userMessageId = crypto.randomUUID();
 			const optimisticUserMessage = createLiveThreadMessage({
@@ -857,6 +866,7 @@ export function useConversationStreaming({
 				createdAt: now,
 				files: filePaths,
 				images: imagePaths,
+				pastedTexts,
 			});
 			let titleSeed: string | null = null;
 			if (isFirstUserMessage && !isCompactCommand) {
@@ -896,7 +906,6 @@ export function useConversationStreaming({
 						targetSessionId,
 						trimmedPrompt,
 						titleSeed,
-						model.provider,
 					).then((result) => {
 						if (result?.title || result?.branchRenamed) {
 							requestSidebarReconcile(queryClient);
@@ -979,6 +988,7 @@ export function useConversationStreaming({
 						userMessageId,
 						files: filePaths,
 						images: imagePaths,
+						pastedTexts: pastedTexts.length > 0 ? pastedTexts : null,
 					},
 					createStreamEventDispatcher({
 						contextKey,
@@ -1033,7 +1043,7 @@ export function useConversationStreaming({
 				console.error("[conversation] invoke error:", error);
 				const { code, message: errorMsg } = extractError(
 					error,
-					"Failed to send message.",
+					translateSource("composerFailedSendMessage"),
 				);
 				if (isRecoverableByPurge(code) && targetWorkspaceId) {
 					showWorkspaceBrokenToast({
@@ -1069,6 +1079,7 @@ export function useConversationStreaming({
 			composerContextKey,
 			displayedSessionId,
 			displayedWorkspaceId,
+			getSessionContextReferences,
 			invalidateConversationQueries,
 			markSendingState,
 			pushToast,

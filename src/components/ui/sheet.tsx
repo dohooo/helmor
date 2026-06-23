@@ -2,6 +2,7 @@ import { XIcon } from "lucide-react";
 import { Dialog as SheetPrimitive } from "radix-ui";
 import type * as React from "react";
 import { Button } from "@/components/ui/button";
+
 import { cn } from "@/lib/utils";
 
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
@@ -104,22 +105,26 @@ function SheetFooter({ className, ...props }: React.ComponentProps<"div">) {
 
 function SheetTitle({
 	className,
+	children,
 	...props
 }: React.ComponentProps<typeof SheetPrimitive.Title>) {
 	return (
 		<SheetPrimitive.Title
 			data-slot="sheet-title"
 			className={cn(
-				"font-heading text-base font-medium text-foreground",
+				"font-heading text-heading font-medium text-foreground",
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{children}
+		</SheetPrimitive.Title>
 	);
 }
 
 function SheetDescription({
 	className,
+	children,
 	...props
 }: React.ComponentProps<typeof SheetPrimitive.Description>) {
 	return (
@@ -127,7 +132,9 @@ function SheetDescription({
 			data-slot="sheet-description"
 			className={cn("text-body text-muted-foreground", className)}
 			{...props}
-		/>
+		>
+			{children}
+		</SheetPrimitive.Description>
 	);
 }
 

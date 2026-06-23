@@ -8,11 +8,9 @@ use uuid::Uuid;
 use crate::error::CommandError;
 
 pub mod action_kind;
-mod builtin_claude_providers;
 mod catalog;
 pub(crate) mod claude_project_files;
-mod custom_providers;
-pub(crate) mod opencode_config;
+pub(crate) mod model_ref;
 mod persistence;
 pub mod provider_capabilities;
 mod queries;
@@ -23,7 +21,9 @@ mod support;
 pub(crate) mod system_prompt;
 
 pub use self::action_kind::ActionKind;
-pub use self::catalog::{resolve_model, AgentModelOption, AgentModelSection, ResolvedModel};
+pub use self::catalog::{
+    resolve_model, AgentModelOption, AgentModelSection, CodexProviderConfig, ResolvedModel,
+};
 pub use self::queries::{
     fetch_agent_model_sections, fetch_live_context_usage, GenerateSessionTitleRequest,
     GenerateSessionTitleResponse, GetLiveContextUsageRequest, ListSlashCommandsRequest,
@@ -191,6 +191,12 @@ pub struct AgentSendRequest {
     /// round-trip without regex re-extraction.
     #[serde(default)]
     pub images: Option<Vec<String>>,
+    /// UTF-16 ranges of pasted-text tag spans inside `prompt` (composer
+    /// badge pastes). Persisted with the user_prompt so the renderer shows
+    /// those spans as tag chips; the agent still receives the full prompt
+    /// text — this never alters the wire payload.
+    #[serde(default)]
+    pub pasted_texts: Option<Vec<crate::pipeline::types::PastedTextRange>>,
 }
 
 #[cfg(test)]
@@ -207,6 +213,12 @@ pub(crate) struct ExchangeContext {
 #[tauri::command]
 pub async fn list_agent_model_sections() -> CmdResult<Vec<AgentModelSection>> {
     Ok(queries::fetch_agent_model_sections())
+}
+
+/// Full unfiltered catalog, for the Settings "Models" multi-selects.
+#[tauri::command]
+pub async fn list_all_agent_model_sections() -> CmdResult<Vec<AgentModelSection>> {
+    Ok(queries::fetch_all_agent_model_sections())
 }
 
 /// Return the provider-capability table for every provider Helmor
@@ -239,6 +251,15 @@ pub async fn list_opencode_models(
 ) -> CmdResult<Vec<queries::OpencodeModelEntry>> {
     // force_reload restarts the opencode server to pick up a just-written config.
     queries::fetch_opencode_models(sidecar.inner(), force_reload.unwrap_or(false))
+}
+
+#[tauri::command]
+pub async fn list_mimo_models(
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    force_reload: Option<bool>,
+) -> CmdResult<Vec<queries::OpencodeModelEntry>> {
+    // force_reload restarts the mimo server to pick up a just-written config.
+    queries::fetch_mimo_models(sidecar.inner(), force_reload.unwrap_or(false))
 }
 
 #[tauri::command]
@@ -789,9 +810,12 @@ mod tests {
     #[test]
     fn resolve_model_infers_provider() {
         let _env = crate::testkit::TestEnv::new("resolve-model-infers-provider");
-        let claude = resolve_model("default", None);
+        // Hint-less ids that match no other provider infer to claude and pass
+        // through verbatim (legacy "default" rows are normalized by the DB
+        // migration, so resolve_model needs no special case for it).
+        let claude = resolve_model("claude-opus-4-8[1m]", None);
         assert_eq!(claude.provider, "claude");
-        assert_eq!(claude.cli_model, "default");
+        assert_eq!(claude.cli_model, "claude-opus-4-8[1m]");
 
         let codex = resolve_model("gpt-5.4", None);
         assert_eq!(codex.provider, "codex");
@@ -843,7 +867,7 @@ mod tests {
         };
 
         // 1. Persist user message
-        persist_user_message(&conn, &ctx, "Hello", &[], &[]).unwrap();
+        persist_user_message(&conn, &ctx, "Hello", &[], &[], &[]).unwrap();
 
         persist_result_and_finalize(
             &conn,
@@ -915,7 +939,7 @@ mod tests {
             user_message_id: Uuid::new_v4().to_string(),
         };
 
-        persist_user_message(&conn, &ctx, "Hi", &[], &[]).unwrap();
+        persist_user_message(&conn, &ctx, "Hi", &[], &[], &[]).unwrap();
         persist_result_and_finalize(
             &conn,
             &ctx,
@@ -974,7 +998,7 @@ mod tests {
         };
 
         // Persist user message
-        persist_user_message(&conn, &ctx, "Do something", &[], &[]).unwrap();
+        persist_user_message(&conn, &ctx, "Do something", &[], &[], &[]).unwrap();
 
         // Persist two intermediate turns
         let turn1 = CollectedTurn {
@@ -1045,7 +1069,7 @@ mod tests {
         };
 
         // 1. Initial prompt persisted via the normal path.
-        persist_user_message(&conn, &ctx, "investigate the bug", &[], &[]).unwrap();
+        persist_user_message(&conn, &ctx, "investigate the bug", &[], &[], &[]).unwrap();
 
         // 2. Drive the accumulator the same way the streaming loop does:
         //    assistant deltas, steer event, more assistant deltas, result.

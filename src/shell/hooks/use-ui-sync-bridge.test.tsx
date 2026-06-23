@@ -1,6 +1,10 @@
 import { QueryClient } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	__resetStreamingStoreForTests,
+	useStreamingStore,
+} from "@/features/conversation/state/streaming-store";
 import type { UiMutationEvent } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import {
@@ -454,6 +458,100 @@ describe("useUiSyncBridge", () => {
 			expect(invalidateQueries).toHaveBeenCalledWith({
 				queryKey: helmorQueryKeys.workspaceGroups,
 			});
+		});
+	});
+
+	describe("sessionTurnPersisted — background turn landed in DB", () => {
+		// The streaming store is module-level and leaks between tests —
+		// always reset what these tests seed.
+		afterEach(() => {
+			__resetStreamingStoreForTests();
+		});
+
+		it("marks the thread cache stale WITHOUT an active refetch when no local stream owns the session", async () => {
+			const queryClient = makeClient();
+			const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+
+			renderHook(() =>
+				useUiSyncBridge({
+					queryClient,
+					processPendingCliSends: vi.fn(),
+					reloadSettings: vi.fn(),
+				}),
+			);
+
+			act(() => {
+				capturedSubscription?.({
+					type: "sessionTurnPersisted",
+					sessionId: "session-9",
+				});
+			});
+
+			await waitFor(() => {
+				expect(invalidateQueries).toHaveBeenCalledTimes(1);
+			});
+			// `refetchType: 'none'` is load-bearing: a late cross-channel
+			// event must not trigger an active refetch that flickers the
+			// on-screen conversation (the same contract the local stream
+			// dispatcher's done-path enforces).
+			expect(invalidateQueries).toHaveBeenCalledWith({
+				queryKey: helmorQueryKeys.sessionMessages("session-9"),
+				refetchType: "none",
+			});
+		});
+
+		it("skips invalidation while a local active stream owns the session snapshot", () => {
+			const queryClient = makeClient();
+			const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+
+			useStreamingStore.setState({
+				activeSessionByContext: {
+					"session:session-9": { stopSessionId: "stop-1", provider: "claude" },
+				},
+			});
+
+			renderHook(() =>
+				useUiSyncBridge({
+					queryClient,
+					processPendingCliSends: vi.fn(),
+					reloadSettings: vi.fn(),
+				}),
+			);
+
+			act(() => {
+				capturedSubscription?.({
+					type: "sessionTurnPersisted",
+					sessionId: "session-9",
+				});
+			});
+
+			expect(invalidateQueries).not.toHaveBeenCalled();
+		});
+
+		it("skips invalidation while a send is still in flight (sending-only state)", () => {
+			const queryClient = makeClient();
+			const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+
+			useStreamingStore.setState({
+				sendingContextKeys: new Set(["session:session-9"]),
+			});
+
+			renderHook(() =>
+				useUiSyncBridge({
+					queryClient,
+					processPendingCliSends: vi.fn(),
+					reloadSettings: vi.fn(),
+				}),
+			);
+
+			act(() => {
+				capturedSubscription?.({
+					type: "sessionTurnPersisted",
+					sessionId: "session-9",
+				});
+			});
+
+			expect(invalidateQueries).not.toHaveBeenCalled();
 		});
 	});
 

@@ -5,7 +5,8 @@ import {
 	HoverCardContent,
 	HoverCardTrigger,
 } from "@/components/ui/hover-card";
-import { setSessionContextUsage } from "@/lib/api";
+import { type AgentProvider, setSessionContextUsage } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import {
 	claudeRichContextUsageQueryOptions,
 	sessionContextUsageQueryOptions,
@@ -29,7 +30,7 @@ type Props = {
 	 *  right project config. */
 	cwd: string | null;
 	/** Only Claude supports the rich hover breakdown. */
-	agentType: "claude" | "codex" | "cursor" | "opencode" | null;
+	agentType: AgentProvider | null;
 	/** Composer's current model id; used as the rich-fetch cache key. */
 	composerModelId: string | null;
 	alwaysShow: boolean;
@@ -55,6 +56,7 @@ export function ContextUsageRing({
 	disabled,
 	className,
 }: Props) {
+	const { t, f } = useI18n();
 	const { data: metaJson = null } = useQuery(
 		sessionContextUsageQueryOptions(sessionId),
 	);
@@ -127,8 +129,10 @@ export function ContextUsageRing({
 
 	const ariaLabel =
 		display.kind === "full"
-			? `Context usage ${display.percentage.toFixed(0)}%`
-			: "Context usage";
+			? f("composerContextUsagePercent", {
+					percent: display.percentage.toFixed(0),
+				})
+			: t("composerContextUsage");
 
 	return (
 		<HoverCard

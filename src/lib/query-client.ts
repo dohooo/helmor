@@ -33,6 +33,7 @@ import {
 	listWorkspaceFiles,
 	listWorkspaceLinkedDirectories,
 	loadAgentModelSections,
+	loadAllAgentModelSections,
 	loadArchivedWorkspaces,
 	loadAutoCloseActionKinds,
 	loadAutoCloseOptInAsked,
@@ -50,12 +51,14 @@ import {
 // mobile browser companion too (not just the Tauri webview).
 import { invoke } from "./ipc";
 import { parsePrUrl } from "./pr-url";
+// Lazy-cycle-safe: session-thread-cache imports `helmorQueryKeys` from this
+// module, but both sides only dereference inside function bodies.
+import { shareMessages } from "./session-thread-cache";
 import {
 	getSessionThreadPaginationState,
 	setSessionThreadPaginationState,
 } from "./session-thread-pagination";
 
-const SESSION_STALE_TIME = 10 * 60_000;
 const CHANGES_STALE_TIME = 3_000;
 const CHANGES_REFETCH_INTERVAL = 10_000;
 const WORKSPACE_FORGE_REFETCH_INTERVAL = 60_000;
@@ -68,7 +71,9 @@ export const helmorQueryKeys = {
 	archivedWorkspaces: ["archivedWorkspaces"] as const,
 	repositories: ["repositories"] as const,
 	agentModelSections: ["agentModelSections"] as const,
-	opencodeCustomProviders: ["opencodeCustomProviders"] as const,
+	allAgentModelSections: ["allAgentModelSections"] as const,
+	customProviders: (family: string) => ["customProviders", family] as const,
+	kimiProviderConfig: ["kimiProviderConfig"] as const,
 	agentLoginStatus: ["agentLoginStatus"] as const,
 	agentVersions: ["agentVersions"] as const,
 	providerCapabilities: ["providerCapabilities"] as const,
@@ -426,6 +431,18 @@ export function agentModelSectionsQueryOptions() {
 	});
 }
 
+/** Full, unfiltered catalog for the Settings "Models" multi-selects. */
+export function allAgentModelSectionsQueryOptions() {
+	return queryOptions({
+		queryKey: helmorQueryKeys.allAgentModelSections,
+		queryFn: loadAllAgentModelSections,
+		staleTime: 0,
+		refetchOnWindowFocus: false,
+		retry: false,
+		meta: PERSIST_META,
+	});
+}
+
 /** Provider-capability table. The shape is intentionally static across
  *  the app's lifetime (no per-session inputs), persisted to disk like the
  *  model catalog so first paint on cold start has the data ready.
@@ -684,7 +701,26 @@ export function sessionThreadMessagesQueryOptions(sessionId: string) {
 		// working unchanged.
 		queryFn: () => loadSessionThreadMessages(sessionId),
 		gcTime: SESSION_GC_TIME,
-		staleTime: SESSION_STALE_TIME,
+		// Threads never go stale by clock — every write path broadcasts a
+		// `sessionTurnPersisted` / `sessionMessagesAppended` UiMutationEvent
+		// that marks this key stale explicitly. Keeps warm revisits and
+		// window-focus refetches at zero IPC.
+		staleTime: Number.POSITIVE_INFINITY,
+		// Reuse per-message references on refetch via the same helper the
+		// streaming writes use, so per-message memos bail out. First fetch
+		// passes `oldData === undefined` and must flow straight through —
+		// `shareMessages` iterates prev unconditionally. Note: a key whose
+		// first write comes from `setQueryData` before any observer mounts
+		// is built with default options (default structural sharing for
+		// that one write) — known and fine; this fn applies once an
+		// observer mounts with these options.
+		structuralSharing: (oldData, newData) =>
+			oldData == null
+				? newData
+				: shareMessages(
+						oldData as ThreadMessageLike[],
+						newData as ThreadMessageLike[],
+					),
 	});
 }
 

@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { getShortcut } from "@/features/shortcuts/registry";
 import { useGlobalHotkeySync } from "@/features/shortcuts/use-global-hotkey-sync";
 import { openWorkspaceInEditor, toggleMiniWindowMode } from "@/lib/api";
+import { translateSource } from "@/lib/i18n";
 import { detectedEditorsQueryOptions } from "@/lib/query-client";
 import type { AppSettings, ShortcutOverrides } from "@/lib/settings";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
@@ -105,7 +106,7 @@ export function useShellChromeState({
 		void toggleMiniWindowMode()
 			.catch((error: unknown) => {
 				console.error("[app] failed to resize window", error);
-				toast.error("Unable to resize window", {
+				toast.error(translateSource("miscUnableToResizeWindow"), {
 					description: String(error),
 				});
 			})

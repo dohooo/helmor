@@ -8,6 +8,7 @@ import type {
 } from "@/lib/composer-insert";
 import { buildComposerPreviewInsertItem } from "@/lib/composer-insert";
 import { useComposerInsert } from "@/lib/composer-insert-context";
+import { useI18n } from "@/lib/i18n";
 import type {
 	ContextCardSource,
 	ContextCardStateTone,
@@ -110,11 +111,12 @@ export function AppendContextButton({
 	subjectLabel,
 	getPayload,
 	ariaLabel,
-	errorTitle = "Couldn't append context",
+	errorTitle = "miscCouldntAppendContext",
 	disabled = false,
 	className,
 	onInserted,
 }: AppendContextButtonProps) {
+	const { t } = useI18n();
 	const insertIntoComposer = useComposerInsert();
 	const pushToast = useWorkspaceToast();
 	const [isPending, setIsPending] = useState(false);
@@ -131,8 +133,8 @@ export function AppendContextButton({
 			onInserted?.();
 		} catch (error) {
 			pushToast(
-				error instanceof Error ? error.message : "Unable to append context.",
-				errorTitle,
+				error instanceof Error ? error.message : t("miscUnableToAppendContext"),
+				t(errorTitle),
 				"destructive",
 			);
 		} finally {
@@ -146,6 +148,7 @@ export function AppendContextButton({
 		isPending,
 		onInserted,
 		pushToast,
+		t,
 	]);
 
 	return (
@@ -153,7 +156,11 @@ export function AppendContextButton({
 			type="button"
 			variant="ghost"
 			size="icon-xs"
-			aria-label={ariaLabel ?? `Append ${subjectLabel} to composer`}
+			aria-label={
+				ariaLabel
+					? t(ariaLabel)
+					: t("appendSubjectComposer").replace("{subject}", subjectLabel)
+			}
 			disabled={disabled || isPending}
 			onClick={(event) => {
 				event.stopPropagation();

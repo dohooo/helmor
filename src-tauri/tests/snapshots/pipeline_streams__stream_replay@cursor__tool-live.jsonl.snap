@@ -24,15 +24,17 @@ checkpoints:
     roles:
       - assistant
     last_part_types:
-      - collapsed-group
+      - tool-call
       - text
+      - tool-call
   - line_index: 6
     event_type: cursor/tool_call_end
     roles:
       - assistant
     last_part_types:
-      - collapsed-group
+      - tool-call
       - text
+      - tool-call
   - line_index: 8
     event_type: cursor/status
     roles:
@@ -45,10 +47,10 @@ final_state:
   roles:
     - assistant
     - system
-  total_parts: 3
+  total_parts: 5
 persisted_turns:
-  turn_count: 5
-  total_blocks: 5
+  turn_count: 6
+  total_blocks: 6
   turns:
     - role: assistant
       block_types:
@@ -56,6 +58,9 @@ persisted_turns:
     - role: user
       block_types:
         - tool_result
+    - role: assistant
+      block_types:
+        - text
     - role: assistant
       block_types:
         - tool_use
@@ -70,5 +75,7 @@ historical_render:
   messages:
     - role: assistant
       part_types:
-        - collapsed-group
+        - tool-call
+        - text
+        - tool-call
         - text

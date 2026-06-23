@@ -57,6 +57,10 @@ describe("findProviderCapabilities", () => {
 		expect(findProviderCapabilities(table, "copilot")).toBeNull();
 	});
 
+	it("maps custom Codex providers (codex:<id>) to the official Codex row", () => {
+		expect(findProviderCapabilities(table, "codex:hundun")).toBe(codexCaps);
+	});
+
 	it("returns null on an empty table", () => {
 		expect(findProviderCapabilities([], "claude")).toBeNull();
 	});
@@ -109,6 +113,8 @@ describe("DEFAULT_PROVIDER_CAPABILITIES (cold-start initialData)", () => {
 			"codex",
 			"cursor",
 			"opencode",
+			"mimo",
+			"kimi",
 		]);
 	});
 
@@ -148,6 +154,26 @@ describe("DEFAULT_PROVIDER_CAPABILITIES (cold-start initialData)", () => {
 		expect(opencode?.supportsContextUsage).toBe(true);
 		expect(opencode?.supportsActiveGoal).toBe(false);
 		expect(opencode?.requiresApiKey).toBe(false);
+		// Kimi (ACP) must resolve to itself, not fall back to "Claude".
+		const kimi = findProviderCapabilities(
+			DEFAULT_PROVIDER_CAPABILITIES,
+			"kimi",
+		);
+		expect(kimi?.displayName).toBe("Kimi");
+		expect(kimi?.requiresApiKey).toBe(false);
+		expect(kimi?.supportsSlashCommands).toBe(true);
+		expect(kimi?.supportsPlanMode).toBe(false);
+		expect(kimi?.supportsContextUsage).toBe(false);
+		expect(kimi?.supportsSteer).toBe(false);
+		// MiMo Code (opencode-protocol fork) mirrors OpenCode's capability row.
+		const mimo = findProviderCapabilities(
+			DEFAULT_PROVIDER_CAPABILITIES,
+			"mimo",
+		);
+		expect(mimo?.displayName).toBe("MiMo Code");
+		expect(mimo?.supportsContextUsage).toBe(true);
+		expect(mimo?.supportsActiveGoal).toBe(false);
+		expect(mimo?.requiresApiKey).toBe(false);
 	});
 
 	it("is wired as the query's initialData so the cold-start window is closed", () => {

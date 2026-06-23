@@ -5,7 +5,14 @@ import { type ErrorCode, extractError } from "./errors";
 // frontend works in the desktop Tauri webview AND when served to a phone
 // browser by the companion server. See `src/lib/ipc.ts`.
 import { Channel, closeChannel, invoke, listen, type UnlistenFn } from "./ipc";
+import type {
+	CustomProvider,
+	CustomProviderModel,
+	ProviderFamily,
+} from "./provider-config";
 import { setSessionThreadPaginationState } from "./session-thread-pagination";
+
+export type { CustomProvider, CustomProviderModel, ProviderFamily };
 
 export type GroupTone =
 	| "pinned"
@@ -159,7 +166,21 @@ export type DataInfo = {
 	archiveRoot: string;
 };
 
-export type AgentProvider = "claude" | "codex" | "cursor" | "opencode";
+export type AgentProvider =
+	| "claude"
+	| "codex"
+	| "cursor"
+	| "opencode"
+	| "mimo"
+	| "kimi"
+	// Custom Codex providers: `codex:<id>` per instance.
+	| `codex:${string}`;
+
+// True for official Codex AND any custom `codex:<id>` provider. Official-only
+// behaviour (e.g. ChatGPT rate limits) must keep the exact `=== "codex"` check.
+export function isCodexProvider(provider: string | null | undefined): boolean {
+	return provider === "codex" || (provider?.startsWith("codex:") ?? false);
+}
 
 export type LocalLlmStatus = {
 	enabled: boolean;
@@ -215,6 +236,12 @@ export type ProviderCapabilities = {
 	requiresApiKey: boolean;
 };
 
+/** UTF-16 code-unit range of one pasted-text tag inside a prompt string. */
+export type PastedTextRange = {
+	start: number;
+	end: number;
+};
+
 export type AgentSendRequest = {
 	provider: AgentProvider;
 	modelId: string;
@@ -238,6 +265,11 @@ export type AgentSendRequest = {
 	 *  matching `@<path>` substrings out as image attachments without
 	 *  re-parsing the text — paths may contain whitespace. */
 	images?: string[] | null;
+	/** UTF-16 ranges of pasted-text tag spans inside `prompt` (composer
+	 *  badge pastes — see `locatePastedTextRanges`). Persisted with the
+	 *  user_prompt so those spans render as tag chips; the agent still
+	 *  receives the full prompt text. */
+	pastedTexts?: PastedTextRange[] | null;
 };
 
 export type WorkspaceSummary = {
@@ -837,12 +869,35 @@ export async function installDownloadedAppUpdate(): Promise<AppUpdateStatus> {
 	return invoke<AppUpdateStatus>("install_downloaded_app_update");
 }
 
-export async function syncGlobalHotkey(hotkey: string | null): Promise<void> {
+export type OsGlobalHotkeyId = "global.hotkey" | "quickPanel.hotkey";
+
+export async function syncGlobalHotkey(
+	id: OsGlobalHotkeyId,
+	hotkey: string | null,
+): Promise<void> {
 	try {
-		await invoke<void>("sync_global_hotkey", { hotkey });
+		await invoke<void>("sync_global_hotkey", { id, hotkey });
 	} catch (error) {
 		throw new Error(describeInvokeError(error, "Unable to set global hotkey."));
 	}
+}
+
+export async function toggleQuickPanel(): Promise<void> {
+	return invoke<void>("toggle_quick_panel");
+}
+
+export async function hideQuickPanel(): Promise<void> {
+	return invoke<void>("hide_quick_panel");
+}
+
+export async function revealWorkspaceInMainWindow(
+	workspaceId: string,
+	sessionId: string | null,
+): Promise<void> {
+	return invoke<void>("reveal_workspace_in_main_window", {
+		workspaceId,
+		sessionId,
+	});
 }
 
 export async function listenAppUpdateStatus(
@@ -913,13 +968,21 @@ export async function toggleMiniWindowMode(): Promise<boolean> {
 	return await invoke("toggle_mini_window_mode");
 }
 
-export type AgentLoginProvider = "claude" | "codex" | "cursor" | "opencode";
+export type AgentLoginProvider =
+	| "claude"
+	| "codex"
+	| "cursor"
+	| "opencode"
+	| "mimo"
+	| "kimi";
 
 export type AgentLoginStatusResult = {
 	claude: boolean;
 	codex: boolean;
 	cursor: boolean;
 	opencode: boolean;
+	mimo: boolean;
+	kimi: boolean;
 	codexProvider?: string | null;
 	codexAuthMethod?: "login" | "apiKey" | string | null;
 };
@@ -933,6 +996,8 @@ export type AgentVersionsResult = {
 	claude: string | null;
 	codex: string | null;
 	opencode: string | null;
+	mimo: string | null;
+	kimi: string | null;
 };
 
 export async function getAgentVersions(): Promise<AgentVersionsResult> {
@@ -1101,6 +1166,81 @@ export async function loadAgentModelSections(): Promise<AgentModelSection[]> {
 	}
 }
 
+// Full unfiltered catalog (ignores model selection) for the Settings multi-selects.
+export async function loadAllAgentModelSections(): Promise<
+	AgentModelSection[]
+> {
+	try {
+		return await invoke<AgentModelSection[]>("list_all_agent_model_sections");
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to load agent models."));
+	}
+}
+
+// Unified custom-provider config surface (all families).
+
+export async function listCustomProviders(
+	family: ProviderFamily,
+): Promise<CustomProvider[]> {
+	try {
+		return await invoke<CustomProvider[]>("list_custom_providers", { family });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load custom providers."),
+		);
+	}
+}
+
+export async function upsertCustomProvider(
+	family: ProviderFamily,
+	provider: CustomProvider,
+): Promise<void> {
+	try {
+		await invoke("upsert_custom_provider", { family, provider });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to save custom provider."),
+		);
+	}
+}
+
+export async function removeCustomProvider(
+	family: ProviderFamily,
+	id: string,
+): Promise<void> {
+	try {
+		await invoke("remove_custom_provider", { family, id });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to remove custom provider."),
+		);
+	}
+}
+
+// Fetch a provider's models from its `/v1/models`; throws on failure.
+export async function fetchProviderModels(
+	family: ProviderFamily,
+	baseUrl: string,
+	apiKey: string,
+	apiStyle?: string,
+): Promise<CustomProviderModel[]> {
+	try {
+		return await invoke<CustomProviderModel[]>("fetch_provider_models", {
+			family,
+			baseUrl,
+			apiKey,
+			apiStyle,
+		});
+	} catch (error) {
+		// Surface the real reason (e.g. "models endpoint returned HTTP 401")
+		// as an Error — the raw IPC rejection is a plain object that would
+		// otherwise render as "[object Object]" in the card.
+		throw new Error(
+			describeInvokeError(error, "Unable to fetch models from the endpoint."),
+		);
+	}
+}
+
 /** Static provider-capability table. Backed by the Rust source of truth
  *  in `agents::provider_capabilities`; callers cache the result for the
  *  lifetime of the app and look up rows by `provider`. */
@@ -1161,6 +1301,27 @@ export const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities[] = [
 		supportsSlashCommands: true,
 		requiresApiKey: false,
 	},
+	// MiMo Code is an opencode-protocol fork — identical capability surface.
+	{
+		provider: "mimo",
+		displayName: "MiMo Code",
+		supportsPlanMode: true,
+		supportsActiveGoal: false,
+		supportsContextUsage: true,
+		supportsSteer: true,
+		supportsSlashCommands: true,
+		requiresApiKey: false,
+	},
+	{
+		provider: "kimi",
+		displayName: "Kimi",
+		supportsPlanMode: false,
+		supportsActiveGoal: false,
+		supportsContextUsage: false,
+		supportsSteer: false,
+		supportsSlashCommands: true,
+		requiresApiKey: false,
+	},
 ];
 
 /** Look up a single provider's capabilities from a previously-fetched
@@ -1171,7 +1332,9 @@ export function findProviderCapabilities(
 	table: readonly ProviderCapabilities[],
 	provider: string,
 ): ProviderCapabilities | null {
-	return table.find((caps) => caps.provider === provider) ?? null;
+	// Custom Codex providers (`codex:<id>`) share the official Codex caps.
+	const normalized = isCodexProvider(provider) ? "codex" : provider;
+	return table.find((caps) => caps.provider === normalized) ?? null;
 }
 
 export type CursorModelParameterValue = {
@@ -1231,59 +1394,47 @@ export async function listOpencodeModels(
 	}
 }
 
-export type OpencodeCustomModel = {
-	id: string;
-	name: string;
-	// Only set true when the upstream endpoint accepts a reasoning effort.
-	reasoning: boolean;
-};
+// ---------------------------------------------------------------------------
+// MiMo Code (opencode-protocol fork) — server-side model listing.
+// ---------------------------------------------------------------------------
 
-export type OpencodeCustomProvider = {
-	id: string;
-	name: string;
-	// `@ai-sdk/openai-compatible` (/v1/chat/completions) or `@ai-sdk/openai` (/v1/responses).
-	npm: string;
-	baseUrl: string;
-	apiKey: string;
-	headers: Record<string, string>;
-	models: OpencodeCustomModel[];
-};
-
-export async function getOpencodeCustomProviders(): Promise<
-	OpencodeCustomProvider[]
-> {
+// `forceReload` restarts the mimo server to pick up config changes.
+export async function listMimoModels(
+	forceReload = false,
+): Promise<OpencodeModelEntry[]> {
 	try {
-		return await invoke<OpencodeCustomProvider[]>(
-			"get_opencode_custom_providers",
-		);
+		return await invoke<OpencodeModelEntry[]>("list_mimo_models", {
+			forceReload,
+		});
 	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to read opencode config."),
-		);
+		throw new Error(describeInvokeError(error, "Unable to list mimo models."));
 	}
 }
 
-// `preset` sets only `options.apiKey` (opencode fills npm/baseURL/models);
-// non-preset writes the full custom block.
-export async function upsertOpencodeCustomProvider(
-	provider: OpencodeCustomProvider,
-	preset: boolean,
-): Promise<void> {
-	try {
-		await invoke("upsert_opencode_custom_provider", { provider, preset });
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to save opencode provider."),
-		);
-	}
-}
+// ---------------------------------------------------------------------------
+// Kimi — model picker config. Custom-provider CRUD goes through the unified
+// `provider` commands (family = "kimi"); this read feeds the "Models" row.
+// ---------------------------------------------------------------------------
 
-export async function deleteOpencodeCustomProvider(id: string): Promise<void> {
+export type KimiProviderInfo = {
+	id: string;
+	label: string;
+	modelCount: number;
+};
+/** `id` is the Kimi model alias (what the model picker / `session/set_model` use). */
+export type KimiModelInfo = { id: string; label: string; providerId: string };
+export type KimiProviderConfig = {
+	providers: KimiProviderInfo[];
+	models: KimiModelInfo[];
+};
+
+/** Parsed `~/.kimi-code/config.toml` → configured providers + models. */
+export async function getKimiProviderConfig(): Promise<KimiProviderConfig> {
 	try {
-		await invoke("delete_opencode_custom_provider", { id });
+		return await invoke<KimiProviderConfig>("get_kimi_provider_config");
 	} catch (error) {
 		throw new Error(
-			describeInvokeError(error, "Unable to delete opencode provider."),
+			describeInvokeError(error, "Unable to read Kimi providers."),
 		);
 	}
 }
@@ -2177,6 +2328,7 @@ export type UiMutationEvent =
 	| { type: "codexGoalChanged"; sessionId: string }
 	| { type: "sessionPlanChanged"; sessionId: string }
 	| { type: "sessionMessagesAppended"; sessionId: string }
+	| { type: "sessionTurnPersisted"; sessionId: string }
 	| { type: "workspaceFilesChanged"; workspaceId: string }
 	| { type: "workspaceGitStateChanged"; workspaceId: string }
 	| { type: "workspaceForgeChanged"; workspaceId: string }
@@ -2207,6 +2359,11 @@ export type UiMutationEvent =
 			sessionId: string;
 			workspaceId: string;
 			prompt: string;
+	  }
+	| {
+			type: "workspaceRevealRequested";
+			workspaceId: string;
+			sessionId: string | null;
 	  };
 
 export type TriageConfig = {
@@ -2846,7 +3003,12 @@ export type ChangeRequestInfo = {
 	isMerged: boolean;
 };
 
-export type ActionStatusKind = "success" | "pending" | "running" | "failure";
+export type ActionStatusKind =
+	| "success"
+	| "skipped"
+	| "pending"
+	| "running"
+	| "failure";
 export type ActionProvider = "github" | "gitlab" | "vercel" | "unknown";
 export type WorkspaceGitSyncStatus = "upToDate" | "behind" | "unknown";
 export type WorkspacePushStatus = "published" | "unpublished" | "unknown";
@@ -3454,6 +3616,47 @@ export type FileMentionPart = {
 	id: string;
 	path: string;
 };
+/** A span of the user's prompt that entered the composer as a pasted-text
+ *  tag badge. Renders as the same tag chip (hover previews the content);
+ *  the text itself is still part of the prompt the agent received. */
+export type PastedTextPart = {
+	type: "pasted-text";
+	id: string;
+	text: string;
+};
+/** One option inside a `UserQuestionPart` question. */
+export type UserQuestionOption = {
+	label: string;
+	description?: string | null;
+	preview?: string | null;
+};
+export type UserQuestionItem = {
+	question: string;
+	header?: string | null;
+	multiSelect?: boolean;
+	options?: UserQuestionOption[];
+	/** Whether a free-text "Other" answer is allowed (Codex `isOther`). */
+	allowFreeText?: boolean;
+};
+export type UserQuestionStatus =
+	| "pending"
+	| "answered"
+	| "declined"
+	| "cancelled";
+/**
+ * Normalized agent→user question card — one shape for Claude
+ * AskUserQuestion, Codex `requestUserInput` and OpenCode `question`.
+ * `answers` maps question text → answer string (multi-select answers are
+ * comma-joined labels; free-text answers pass through verbatim).
+ */
+export type UserQuestionPart = {
+	type: "user-question";
+	id: string;
+	source: string;
+	questions: UserQuestionItem[];
+	answers?: Record<string, unknown>;
+	status: UserQuestionStatus;
+};
 export type PlanReviewAllowedPrompt = {
 	tool: string;
 	prompt: string;
@@ -3476,7 +3679,9 @@ export type MessagePart =
 	| ImagePart
 	| PromptSuggestionPart
 	| FileMentionPart
-	| PlanReviewPart;
+	| PastedTextPart
+	| PlanReviewPart
+	| UserQuestionPart;
 
 export type CollapsedGroupPart = {
 	type: "collapsed-group";
@@ -3567,8 +3772,10 @@ export type AgentStreamEvent =
 			source: string;
 			message: string;
 			/** Discriminated by `payload.kind`:
-			 *  - `ask-user-question` → Claude AskUserQuestion (raw multi-question / option / preview shape)
-			 *  - `form` → JSON-Schema form (MCP form elicitation or Codex's synthesized form)
+			 *  - `ask-user-question` → canonical question card (Claude AskUserQuestion,
+			 *    Codex requestUserInput, OpenCode question — normalized by Rust's
+			 *    `pipeline::user_question`, see `UserQuestionItem`)
+			 *  - `form` → JSON-Schema form (MCP form elicitation)
 			 *  - `url` → URL launcher (MCP url-mode elicitation)
 			 *  See `pending-user-input.ts` for the typed payload union. */
 			payload: Record<string, unknown>;
@@ -4051,7 +4258,7 @@ export async function createSession(
 		/** Pin the session row's `model` at creation. Inspector helpers
 		 *  (Create PR/MR, Review) push the user's configured model here so
 		 *  the composer reads it off the row instead of falling back to
-		 *  settings.defaultModelId. Leave null for the default flow. */
+		 *  settings.defaultModel. Leave null for the default flow. */
 		model?: string | null;
 		/** Pin `effort_level` at creation; null falls back to the user
 		 *  setting on the backend. */
@@ -4108,7 +4315,6 @@ export async function generateSessionTitle(
 	sessionId: string,
 	userMessage: string,
 	titleSeed?: string | null,
-	provider?: AgentProvider | null,
 ): Promise<GenerateSessionTitleResponse | null> {
 	try {
 		return await invoke<GenerateSessionTitleResponse>(
@@ -4118,7 +4324,6 @@ export async function generateSessionTitle(
 					sessionId,
 					userMessage,
 					titleSeed: titleSeed ?? null,
-					provider: provider ?? null,
 				},
 			},
 		);
@@ -4308,6 +4513,16 @@ export async function unhideSession(sessionId: string): Promise<void> {
 
 export async function deleteSession(sessionId: string): Promise<void> {
 	await invoke("delete_session", { sessionId });
+}
+
+/** Convert a GUI session into a Terminal session in place (one-way). Works on
+ * empty and populated sessions alike — a session that already ran a turn resumes
+ * by its provider session id in the TUI so the same conversation continues. */
+export async function convertSessionToTerminal(
+	sessionId: string,
+	agentType: string,
+): Promise<void> {
+	await invoke("convert_session_to_terminal", { sessionId, agentType });
 }
 
 export async function loadHiddenSessions(
@@ -4628,6 +4843,9 @@ export async function spawnTerminal(
 	onEvent: (event: ScriptEvent) => void,
 	bootCommand?: string | null,
 	agentKind?: string | null,
+	fastMode?: boolean,
+	initialCols?: number | null,
+	initialRows?: number | null,
 ): Promise<void> {
 	const channel = new Channel<ScriptEvent>();
 	channel.onmessage = onEvent;
@@ -4637,6 +4855,9 @@ export async function spawnTerminal(
 		instanceId,
 		agentKind: agentKind ?? null,
 		bootCommand: bootCommand ?? null,
+		fastMode: fastMode ?? null,
+		initialCols: initialCols ?? null,
+		initialRows: initialRows ?? null,
 		channel,
 	});
 }

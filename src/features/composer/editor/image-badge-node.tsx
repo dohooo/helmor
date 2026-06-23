@@ -20,6 +20,7 @@ import {
 import { ImageIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { InlineBadge } from "@/components/inline-badge";
+import { useI18n } from "@/lib/i18n";
 import { basename } from "@/lib/path-util";
 
 // ---------------------------------------------------------------------------
@@ -43,6 +44,7 @@ function ComposerImageBadge({
 	nodeKey: NodeKey;
 }) {
 	const [editor] = useLexicalComposerContext();
+	const { t } = useI18n();
 	const fileName = basename(imagePath);
 
 	return (
@@ -54,7 +56,7 @@ function ComposerImageBadge({
 				/>
 			}
 			label={fileName}
-			removeLabel="Remove image"
+			removeLabel={t("composerRemoveImage")}
 			preview={{
 				kind: "image",
 				title: fileName,
@@ -104,7 +106,11 @@ export class ImageBadgeNode extends DecoratorNode<ReactNode> {
 
 	createDOM(): HTMLElement {
 		const span = document.createElement("span");
-		span.style.display = "inline";
+		span.style.display = "inline-flex";
+		span.style.alignItems = "center";
+		span.style.justifyContent = "center";
+		span.style.lineHeight = "1";
+		span.style.verticalAlign = "-1px";
 		return span;
 	}
 

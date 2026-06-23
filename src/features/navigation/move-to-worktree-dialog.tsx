@@ -6,6 +6,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { I18nText, useI18n } from "@/lib/i18n";
 
 export type MoveToWorktreeDialogProps = {
 	open: boolean;
@@ -23,6 +24,7 @@ export function MoveToWorktreeDialog({
 	onConfirm,
 }: MoveToWorktreeDialogProps) {
 	const [submitting, setSubmitting] = useState(false);
+	const { t } = useI18n();
 
 	useEffect(() => {
 		if (open) {
@@ -44,23 +46,23 @@ export function MoveToWorktreeDialog({
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className="gap-3 sm:max-w-md">
 				<DialogHeader>
-					<DialogTitle>Move into a new worktree</DialogTitle>
+					<DialogTitle>
+						<I18nText source="moveIntoNewWorktree" />
+					</DialogTitle>
 				</DialogHeader>
 				<div className="flex flex-col gap-2 text-ui leading-snug text-muted-foreground">
 					<p>
 						<span className="font-medium text-foreground">
 							{workspaceTitle}
 						</span>{" "}
-						will continue in a fresh worktree on a new auto-named branch.
+						<I18nText source="willContinueFreshWorktreeNewAuto" />
 					</p>
 					<ul className="list-disc space-y-0.5 pl-4">
 						<li>
-							Your local repository stays exactly as it is — branch and files
-							untouched.
+							<I18nText source="localRepositoryStaysExactlyBranchFiles" />
 						</li>
 						<li>
-							Tracked + untracked changes are carried over into the new
-							worktree.
+							<I18nText source="trackedUntrackedChangesCarriedOverInto" />
 						</li>
 					</ul>
 				</div>
@@ -72,7 +74,7 @@ export function MoveToWorktreeDialog({
 						disabled={submitting}
 						onClick={() => onOpenChange(false)}
 					>
-						Cancel
+						<I18nText source="cancel" />
 					</Button>
 					<Button
 						type="button"
@@ -80,7 +82,7 @@ export function MoveToWorktreeDialog({
 						disabled={submitting}
 						onClick={handleConfirm}
 					>
-						{submitting ? "Moving…" : "Move into worktree"}
+						{submitting ? t("moving") : t("navMoveIntoWorktree")}
 					</Button>
 				</div>
 			</DialogContent>

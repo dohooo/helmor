@@ -1,0 +1,19 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: msg-1
+  content_length: 3
+  content:
+    - type: todo-list
+      item_count: 2
+      statuses:
+        - completed
+        - completed
+    - type: text
+      text: Reading.
+    - type: text
+      text: Done.
+  status: ~
+  streaming: ~

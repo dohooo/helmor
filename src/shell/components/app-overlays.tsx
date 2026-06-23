@@ -21,6 +21,7 @@ type Props = {
 	quickSwitch: QuickSwitchControls;
 	liveWorkspaceRowMap: Map<string, WorkspaceRow>;
 	closeConfirmDialog: ReactNode;
+	terminalResumeDialog: ReactNode;
 	editorDiscardConfirmDialog: ReactNode;
 	mergeConfirmDialogNode: ReactNode;
 };
@@ -34,6 +35,7 @@ export function AppOverlays({
 	quickSwitch,
 	liveWorkspaceRowMap,
 	closeConfirmDialog,
+	terminalResumeDialog,
 	editorDiscardConfirmDialog,
 	mergeConfirmDialogNode,
 }: Props) {
@@ -60,6 +62,7 @@ export function AppOverlays({
 				}}
 			/>
 			{closeConfirmDialog}
+			{terminalResumeDialog}
 			{editorDiscardConfirmDialog}
 			{mergeConfirmDialogNode}
 		</>

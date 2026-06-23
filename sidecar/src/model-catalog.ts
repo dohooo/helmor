@@ -11,7 +11,7 @@ const MODEL_CATALOG: Record<Provider, readonly ProviderModelInfo[]> = {
 	claude: [
 		// Fable 5 leads the list as the most capable pick, but it burns limits
 		// ~2x faster than Opus — `useEnsureDefaultModel` pins the app default
-		// to the `default` (Opus) entry below, NOT to the first entry. No fast
+		// to the Opus 4.8 entry below, NOT to the first entry. No fast
 		// mode (Opus 4.6+ only).
 		{
 			id: "claude-fable-5[1m]",
@@ -19,16 +19,17 @@ const MODEL_CATALOG: Record<Provider, readonly ProviderModelInfo[]> = {
 			cliModel: "claude-fable-5[1m]",
 			effortLevels: ["low", "medium", "high", "xhigh", "max"],
 		},
-		// `default` resolves to the newest Opus the bundled claude-code knows
-		// about — in 2.1.170 that is Opus 4.8 (1M context, adaptive thinking,
-		// default high effort, fast mode at 2x rate / 2.5x speed). Kept as
-		// `default` (rather than pinned `claude-opus-4-8`) so it stays the
-		// auto-latest pick AND remains the app default selection (see
-		// `useEnsureDefaultModel`, which prefers id == "default").
+		// App default selection (see `useEnsureDefaultModel`, which pins this
+		// id). Pinned to the explicit `claude-opus-4-8[1m]` wire id — the `[1m]`
+		// suffix selects the 1M-context variant, matching the label. We do NOT
+		// use the CLI's `default` sentinel: it resolves to whatever the bundled
+		// claude-code decides is "default" (non-deterministic across CLI bumps),
+		// whereas a pinned id is stable. Bump when a newer Opus ships. MUST stay
+		// in sync with the Rust catalog (`official_claude_section`).
 		{
-			id: "default",
+			id: "claude-opus-4-8[1m]",
 			label: "Opus 4.8 1M",
-			cliModel: "default",
+			cliModel: "claude-opus-4-8[1m]",
 			effortLevels: ["low", "medium", "high", "xhigh", "max"],
 			supportsFastMode: true,
 		},
@@ -83,15 +84,8 @@ const MODEL_CATALOG: Record<Provider, readonly ProviderModelInfo[]> = {
 			effortLevels: CODEX_EFFORT_LEVELS,
 			supportsFastMode: true,
 		},
-		{
-			id: "gpt-5.3-codex-spark",
-			label: "GPT-5.3-Codex-Spark",
-			cliModel: "gpt-5.3-codex-spark",
-			effortLevels: CODEX_EFFORT_LEVELS,
-			supportsFastMode: true,
-		},
 	],
-	// Static seed; live set comes from `OpencodeSessionManager.listModels`.
+	// Static seed; live set comes from `OpencodeProtocolSessionManager.listModels`.
 	// MUST stay in sync with Rust `opencode_section()` in agents/catalog.rs.
 	// Ids are opencode's `provider/model` slug.
 	opencode: [
@@ -121,6 +115,33 @@ const MODEL_CATALOG: Record<Provider, readonly ProviderModelInfo[]> = {
 			cliModel: "openai/gpt-5-codex",
 		},
 	],
+	// Static seed; live set comes from the shared opencode-protocol
+	// `listModels` (provider.list against `mimo serve`). MUST stay in sync
+	// with Rust `mimo_section()` in agents/catalog.rs. Ids are the fork's
+	// `provider/model` slug; `xiaomi` is the official MiMo platform provider,
+	// `mimo` is the bundled MiMo Auto meta-provider.
+	mimo: [
+		{
+			id: "xiaomi/mimo-v2.5-pro",
+			label: "MiMo V2.5 Pro",
+			cliModel: "xiaomi/mimo-v2.5-pro",
+		},
+		{
+			id: "xiaomi/mimo-v2.5",
+			label: "MiMo V2.5",
+			cliModel: "xiaomi/mimo-v2.5",
+		},
+		{
+			id: "xiaomi/mimo-v2-flash",
+			label: "MiMo V2 Flash",
+			cliModel: "xiaomi/mimo-v2-flash",
+		},
+		{
+			id: "mimo/mimo-auto",
+			label: "MiMo Auto",
+			cliModel: "mimo/mimo-auto",
+		},
+	],
 	// Static fallback only — `CursorSessionManager.listModels` hits the live
 	// `Cursor.models.list` API for the full set with up-to-date capability
 	// metadata. This list is what shows when the API key isn't configured
@@ -143,6 +164,20 @@ const MODEL_CATALOG: Record<Provider, readonly ProviderModelInfo[]> = {
 			label: "Sonnet 4.5",
 			cliModel: "claude-sonnet-4-5",
 			effortLevels: CURSOR_REASONING_LEVELS,
+		},
+	],
+	// Kimi Code resolves models from the user's `~/.kimi-code` config; the
+	// universally-available default is the managed alias
+	// `kimi-code/kimi-for-coding` (`kimi login` keys models as
+	// `kimi-code/<id>`, and `session/set_model` only accepts those exact
+	// alias keys). The live set is account/config-specific (discoverable over
+	// ACP once authed), so this is just the stable seed. MUST stay in sync
+	// with Rust `kimi_section()`.
+	kimi: [
+		{
+			id: "kimi-for-coding",
+			label: "Kimi for Coding",
+			cliModel: "kimi-code/kimi-for-coding",
 		},
 	],
 };

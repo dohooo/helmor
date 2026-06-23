@@ -1,5 +1,6 @@
 import { Check, Circle, CircleDot } from "lucide-react";
 import type { ReactNode } from "react";
+import { useLocalizedNode } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 /**
@@ -36,6 +37,8 @@ export function InteractionOptionRow({
 	className,
 	...dataAttrs
 }: InteractionOptionRowProps) {
+	const localizedLabel = useLocalizedNode(label);
+	const localizedDescription = useLocalizedNode(description);
 	return (
 		<div
 			className={cn(
@@ -73,10 +76,12 @@ export function InteractionOptionRow({
 					)}
 				</span>
 				<div className="min-w-0 flex-1">
-					<p className="text-ui font-medium text-foreground">{label}</p>
+					<p className="text-ui font-medium text-foreground">
+						{localizedLabel}
+					</p>
 					{description ? (
 						<p className="mt-0.5 text-mini leading-snug text-muted-foreground">
-							{description}
+							{localizedDescription}
 						</p>
 					) : null}
 				</div>

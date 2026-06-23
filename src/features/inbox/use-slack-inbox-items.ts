@@ -5,6 +5,7 @@ import {
 	type SlackInboxPage,
 	slackListInboxItems,
 } from "@/lib/api";
+import { translateSource } from "@/lib/i18n";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 
@@ -68,8 +69,8 @@ export function useSlackInboxItems(
 		const message =
 			query.error instanceof Error
 				? query.error.message
-				: "Couldn't load Slack inbox items.";
-		pushToast(message, "Slack fetch failed", "destructive");
+				: translateSource("inboxCouldntLoadSlackInboxItems");
+		pushToast(message, translateSource("inboxSlackFetchFailed"), "destructive");
 	}, [query.error, pushToast]);
 
 	const items = useMemo<SlackInboxItem[]>(

@@ -26,6 +26,7 @@ import {
 	updateRepositoryDefaultBranch,
 	updateRepositoryRemote,
 } from "@/lib/api";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { initialsFor } from "@/lib/initials";
 import { useForgeAccountsAll } from "@/lib/use-forge-accounts";
 import { cn } from "@/lib/utils";
@@ -49,6 +50,7 @@ export function RepositorySettingsPanel({
 }) {
 	// The bound gh/glab account login lives on the repo row now;
 	// no more global OAuth identity.
+	const { f } = useI18n();
 	const githubLogin = repo.forgeLogin ?? null;
 	const [branches, setBranches] = useState<string[]>([]);
 	const [loading, setLoading] = useState(false);
@@ -126,7 +128,7 @@ export function RepositorySettingsPanel({
 					if (response.orphanedWorkspaceCount > 0) {
 						const n = response.orphanedWorkspaceCount;
 						setRemoteNotice(
-							`${n} workspace${n === 1 ? "" : "s"} target a branch not on this remote. Update them via the header branch picker.`,
+							f("settingsWorkspacesTargetBranchNotRemote", { count: n }),
 						);
 					}
 					onRepoSettingsChanged();
@@ -146,10 +148,10 @@ export function RepositorySettingsPanel({
 
 			<div className="py-5">
 				<div className="text-ui font-medium leading-snug text-foreground">
-					Remote origin
+					<I18nText source="remoteOrigin" />
 				</div>
 				<div className="mt-1 text-small leading-snug text-muted-foreground">
-					Where should we push, pull, and create PRs?
+					<I18nText source="whereShouldWePushPullCreate" />
 				</div>
 				<div className="mt-3">
 					<Popover
@@ -169,7 +171,9 @@ export function RepositorySettingsPanel({
 						<PopoverContent align="start" className="w-[220px] p-0">
 							<Command className="rounded-lg! p-0.5">
 								<CommandList className="max-h-52">
-									<CommandEmpty>No remotes found</CommandEmpty>
+									<CommandEmpty>
+										<I18nText source="noRemotesFound" />
+									</CommandEmpty>
 									{remotes.map((remote) => (
 										<CommandItem
 											key={remote}
@@ -205,10 +209,10 @@ export function RepositorySettingsPanel({
 
 			<div className="py-5">
 				<div className="text-ui font-medium leading-snug text-foreground">
-					Branch new workspaces from
+					<I18nText source="branchNewWorkspacesFrom" />
 				</div>
 				<div className="mt-1 text-small leading-snug text-muted-foreground">
-					Each workspace is an isolated copy of your codebase.
+					<I18nText source="eachWorkspaceIsolatedCopyCodebase" />
 				</div>
 				<div className="mt-3">
 					<BranchPickerPopover
@@ -316,11 +320,14 @@ function ForgeAccountHeader({
 				<div className="min-w-0 flex-1">
 					<div className="flex items-center gap-1.5 text-ui font-medium text-foreground">
 						{providerIcon}
-						<span>{providerLabel} not connected</span>
+						<span>
+							{providerLabel} <I18nText source="notConnected" />
+						</span>
 					</div>
 					<div className="mt-0.5 text-small text-muted-foreground">
-						Connect a {providerLabel} account to enable the {providerLabel}{" "}
-						workflow for this repo.
+						<I18nText source="connect2" /> {providerLabel}{" "}
+						<I18nText source="accountEnable" /> {providerLabel}{" "}
+						<I18nText source="workflowRepo" />
 					</div>
 				</div>
 				<NotConnectedConnectButton repo={repo} workspaceId={workspaceId} />
@@ -396,7 +403,7 @@ function NotConnectedConnectButton({
 						strokeWidth={2}
 					/>
 				) : null}
-				{connecting ? "Connecting" : "Connect"}
+				<I18nText source={connecting ? "connecting" : "connect"} />
 			</Button>
 			<ForgeConnectDialog
 				open={open}

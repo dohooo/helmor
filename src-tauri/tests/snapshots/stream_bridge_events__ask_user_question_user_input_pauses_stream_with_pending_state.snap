@@ -10,7 +10,8 @@ control_events:
     payload:
       kind: ask-user-question
       questions:
-        - options: []
+        - allowFreeText: true
+          multiSelect: false
           question: Pick one
     permissionMode: default
     provider: claude

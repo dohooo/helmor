@@ -6,6 +6,7 @@ import {
 	stopTerminal,
 	writeTerminalStdin,
 } from "@/lib/api";
+import { formatSource, translateSource } from "@/lib/i18n";
 
 // Module-level store for Terminal Mode (message-area) sessions. Keyed by
 // sessionId — each Terminal session owns exactly one PTY. In-memory only;
@@ -39,22 +40,29 @@ type Listener = {
 /** ~2 MB ≈ 20k lines, well beyond xterm's 5000-line scrollback. */
 const MAX_CHUNK_BYTES = 2 * 1024 * 1024;
 
-export const TRUNCATION_NOTICE =
-	"\r\n\x1b[2m… earlier output truncated (buffer limit reached) …\x1b[0m\r\n";
+export function truncationNotice(): string {
+	return `\r\n\x1b[2m… ${translateSource("miscEarlierOutputTruncated")} …\x1b[0m\r\n`;
+}
 
 /** sessionId → instance */
 const instances = new Map<string, Instance>();
 /** sessionId → live listener (the mounted xterm) */
 const listeners = new Map<string, Listener>();
-/** sessionId → one-shot boot command for a composer-initiated terminal
- * (set before the panel mounts; consumed on first spawn). */
-const pendingBoots = new Map<string, string>();
+export type PendingBoot = {
+	bootCommand: string;
+	/** claude only: rides the injected --settings file (no CLI flag). */
+	fastMode: boolean;
+};
 
-export function setPendingBoot(sessionId: string, bootCommand: string) {
-	pendingBoots.set(sessionId, bootCommand);
+/** sessionId → one-shot boot for a composer-initiated terminal
+ * (set before the panel mounts; consumed on first spawn). */
+const pendingBoots = new Map<string, PendingBoot>();
+
+export function setPendingBoot(sessionId: string, boot: PendingBoot) {
+	pendingBoots.set(sessionId, boot);
 }
 
-export function takePendingBoot(sessionId: string): string | null {
+export function takePendingBoot(sessionId: string): PendingBoot | null {
 	const boot = pendingBoots.get(sessionId) ?? null;
 	pendingBoots.delete(sessionId);
 	return boot;
@@ -76,32 +84,57 @@ function deliver(entry: Instance, data: string) {
 	listeners.get(entry.sessionId)?.onChunk(data);
 }
 
-// claude/codex TUIs enter the alternate screen on startup; everything before
-// that (shell prompt, boot-command echo) is noise we never render.
-// biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI alt-screen sequences are ESC-framed.
-const ALT_SCREEN_ENTER_RE = /\x1b\[\?(?:1049|1047|47)h/;
+// TUI startup markers — everything before the first one (shell prompt,
+// boot-command echo) is noise we never render. Verified by capturing both
+// CLIs' boot bytes: claude enters the alternate screen (1049h); codex is an
+// inline ratatui TUI that never does, but it enables focus-event reporting
+// (1004h) and synchronized output (2026h) on startup. A shell's echo phase
+// emits none of these (zsh only toggles bracketed paste, 2004h).
+// biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI sequences are ESC-framed.
+const TUI_START_RE = /\x1b\[\?(?:1049|1047|47|2026|1004)h/;
 /** Agent CLIs can take a moment to reach the TUI; past this, show everything
  * (a non-TUI command would otherwise render nothing at all). */
 const BOOT_GATE_TIMEOUT_MS = 3000;
 
-/** Stop gating: emit from `fromIndex` (the alt-screen sequence itself must
- * reach xterm) — or everything on a timeout/exit fallback (fromIndex 0). */
+// Terminal protocol sequences (CSI / OSC / two-byte ESC) the shell emits
+// before the TUI marker — bracketed paste (?2004h), cursor hide (?25l), kitty
+// keyboard (>1u), etc. Their plain-text neighbours (prompt, boot echo) are
+// dropped, but swallowing the sequences too desyncs xterm's mode state, so we
+// replay them ahead of the visible region.
+const PRELUDE_SEQ_RE =
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI is ESC-framed.
+	/\x1b(?:\[[0-9;?>=]*[A-Za-z]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[=>78])/g;
+
+/** Stop gating: emit from `fromIndex` (the TUI start sequence itself must
+ * reach xterm) — or everything on a timeout/exit fallback (fromIndex 0). The
+ * dropped prefix's control sequences are still replayed so xterm's mode state
+ * stays in sync with the TUI. */
 function releaseGate(entry: Instance, fromIndex: number) {
 	const gate = entry.gate;
 	if (!gate) return;
 	clearTimeout(gate.timer);
 	entry.gate = null;
-	const visible = gate.buf.slice(fromIndex);
-	if (visible) deliver(entry, visible);
+	const prelude =
+		fromIndex > 0
+			? (gate.buf.slice(0, fromIndex).match(PRELUDE_SEQ_RE)?.join("") ?? "")
+			: "";
+	const payload = prelude + gate.buf.slice(fromIndex);
+	if (payload) deliver(entry, payload);
 }
 
-/** Spawn the PTY for a session if not already running. Idempotent. */
+/** Spawn the PTY for a session if not already running. Idempotent.
+ *
+ * `cols`/`rows` are the renderer's real size — an inline TUI paints its first
+ * frame against them, so callers spawn only once their xterm has fit. */
 export function ensureTerminal(
 	repoId: string,
 	workspaceId: string,
 	sessionId: string,
 	bootCommand: string | null,
 	agentKind: string | null,
+	fastMode = false,
+	cols?: number | null,
+	rows?: number | null,
 ) {
 	if (instances.has(sessionId)) return;
 	const entry: Instance = {
@@ -141,7 +174,7 @@ export function ensureTerminal(
 				case "stderr": {
 					if (current.gate) {
 						current.gate.buf += event.data;
-						const match = ALT_SCREEN_ENTER_RE.exec(current.gate.buf);
+						const match = TUI_START_RE.exec(current.gate.buf);
 						if (match) releaseGate(current, match.index);
 						break;
 					}
@@ -157,9 +190,9 @@ export function ensureTerminal(
 					).catch(() => {});
 					current.status = "exited";
 					current.exitCode = event.code;
-					const tail = `\r\n\x1b[2m[Process exited with code ${
-						event.code ?? "?"
-					}]\x1b[0m\r\n`;
+					const tail = `\r\n\x1b[2m${formatSource("miscProcessExitedWithCode", {
+						code: event.code ?? "?",
+					})}\x1b[0m\r\n`;
 					appendChunk(current, tail);
 					listeners.get(sessionId)?.onChunk(tail);
 					listeners.get(sessionId)?.onStatusChange("exited", event.code);
@@ -184,10 +217,15 @@ export function ensureTerminal(
 		},
 		bootCommand,
 		agentKind,
+		fastMode,
+		cols,
+		rows,
 	).catch((err) => {
 		const current = instances.get(sessionId);
 		if (!current) return;
-		const msg = `\r\n\x1b[31mFailed to start terminal: ${err}\x1b[0m\r\n`;
+		const msg = `\r\n\x1b[31m${formatSource("miscFailedStartTerminal", {
+			error: String(err),
+		})}\x1b[0m\r\n`;
 		appendChunk(current, msg);
 		current.status = "exited";
 		current.exitCode = current.exitCode ?? 1;
@@ -209,6 +247,13 @@ export function detach(sessionId: string) {
 export function writeStdin(sessionId: string, data: string) {
 	const entry = instances.get(sessionId);
 	if (!entry) return;
+	// NOTE: no ESC-keypress interrupt heuristic here, and don't re-add one.
+	// claude fires NO hook on a user interrupt (Stop is documented as not
+	// running then), so interrupt inference IS needed — but it lives in the
+	// backend off this same write (terminal::observe_stdin in src-tauri). A
+	// renderer-side heuristic was removed because each misfire kicked an IPC
+	// + session-list invalidation whose re-render could break an in-flight
+	// IME composition (typing went dead until a session switch).
 	void writeTerminalStdin(entry.repoId, entry.workspaceId, sessionId, data);
 }
 

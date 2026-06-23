@@ -6,6 +6,8 @@ import {
 	HoverCardContent,
 	HoverCardTrigger,
 } from "@/components/ui/hover-card";
+import type { AgentProvider } from "@/lib/api";
+import { I18nText, useI18n } from "@/lib/i18n";
 import {
 	claudeRateLimitsQueryOptions,
 	codexRateLimitsQueryOptions,
@@ -22,7 +24,8 @@ import {
 import { LimitRow } from "../context-usage-ring/popover-parts";
 
 type Props = {
-	agentType: "claude" | "codex" | "cursor" | "opencode" | null;
+	// Custom Codex providers fall through the `=== "codex"` checks: no rate limits.
+	agentType: AgentProvider | null;
 	disabled?: boolean;
 	className?: string;
 };
@@ -31,6 +34,7 @@ const HOVER_OPEN_DELAY_MS = 180;
 const HOVER_CLOSE_DELAY_MS = 80;
 
 export function UsageStatsIndicator({ agentType, disabled, className }: Props) {
+	const { t } = useI18n();
 	const { settings } = useSettings();
 	const [open, setOpen] = useState(false);
 	const queryClient = useQueryClient();
@@ -93,7 +97,7 @@ export function UsageStatsIndicator({ agentType, disabled, className }: Props) {
 				<button
 					type="button"
 					disabled={disabled}
-					aria-label="Usage Stats"
+					aria-label={t("usageStats")}
 					className={cn(
 						"flex size-7 cursor-interactive items-center justify-center rounded-md disabled:cursor-not-allowed disabled:opacity-50",
 						className,
@@ -109,7 +113,7 @@ export function UsageStatsIndicator({ agentType, disabled, className }: Props) {
 				<div className="flex flex-col gap-3 px-1 py-1">
 					<div className="flex items-center justify-between">
 						<div className="text-body font-semibold text-foreground">
-							Usage Stats
+							<I18nText source="usageStats" />
 						</div>
 						<span
 							className="text-muted-foreground"

@@ -33,6 +33,7 @@ import type { WorkspaceCommitButtonMode } from "@/features/commit/button";
 import { getShortcut } from "@/features/shortcuts/registry";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import type { RunAction } from "@/lib/api";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import type { ScriptIconState } from "./hooks/use-script-status";
@@ -152,10 +153,16 @@ export function getInitialTabsHeight(defaultHeight: number): number {
 export const INSPECTOR_SECTION_HEADER_CLASS =
 	"flex h-8 min-w-0 shrink-0 items-center justify-between border-b border-border/60 bg-inspector-section-header px-3";
 export const INSPECTOR_SECTION_TITLE_CLASS =
-	"text-ui leading-8 font-medium tracking-[-0.01em] text-muted-foreground";
+	"text-ui font-medium leading-none text-muted-foreground";
 /** `px-3` + `gap-0` on tablist → uniform 24px gap between any two tabs. */
 const INSPECTOR_TAB_BUTTON_CLASS =
-	"relative inline-flex h-full cursor-interactive items-center justify-center gap-1.5 px-3 text-small font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-0";
+	"relative inline-flex h-8 cursor-interactive items-center justify-center gap-1.5 px-3 pb-[2px] text-ui font-medium leading-none text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-0";
+const INSPECTOR_TAB_ACTIVE_INDICATOR_CLASS =
+	"pointer-events-none absolute inset-x-0 bottom-px h-[2px] bg-foreground opacity-0 transition-opacity";
+const INSPECTOR_INLINE_CONTROL_CLASS =
+	"hover:bg-accent/45 hover:text-foreground";
+const INSPECTOR_INLINE_CONTROL_OPEN_CLASS =
+	"data-[state=open]:bg-accent/45 data-[state=open]:text-foreground";
 
 /** Zoom state published to tab bodies (e.g. corner Stop/Rerun button). */
 type TabsZoomState = {
@@ -286,6 +293,7 @@ export function InspectorTabsSection({
 	canHoverExpand,
 	children,
 }: InspectorTabsSectionProps) {
+	const { t, f } = useI18n();
 	const { settings } = useSettings();
 	const newTerminalShortcut = getShortcut(settings.shortcuts, "terminal.new");
 
@@ -426,7 +434,7 @@ export function InspectorTabsSection({
 				}}
 			>
 				<section
-					aria-label="Inspector section Tabs"
+					aria-label={t("inspectorSectionTabs")}
 					// Whole scripts-area belongs to terminal scope so Mod+T from
 					// Run output spawns a terminal instead of a chat session.
 					data-focus-scope="terminal"
@@ -481,11 +489,11 @@ export function InspectorTabsSection({
 									onClick={() => handleTabClick("setup")}
 								>
 									<ScriptStatusIcon state={setupScriptState} />
-									Setup
+									<I18nText source="setup" />
 									<span
 										aria-hidden="true"
 										className={cn(
-											"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
+											INSPECTOR_TAB_ACTIVE_INDICATOR_CLASS,
 											activeTab === "setup" && "opacity-100",
 										)}
 									/>
@@ -493,7 +501,7 @@ export function InspectorTabsSection({
 								{/* Run tab + dropdown chevron share a wrapper so the
 								    active-tab underline can span both — covering the
 								    chevron too, not just the "Run" label. */}
-								<div className="relative flex shrink-0 items-stretch">
+								<div className="relative flex h-8 shrink-0 items-stretch">
 									<button
 										type="button"
 										role="tab"
@@ -538,7 +546,7 @@ export function InspectorTabsSection({
 									<span
 										aria-hidden="true"
 										className={cn(
-											"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
+											INSPECTOR_TAB_ACTIVE_INDICATOR_CLASS,
 											activeTab === "run" && "opacity-100",
 										)}
 									/>
@@ -561,7 +569,7 @@ export function InspectorTabsSection({
 											"shrink-0 disabled:cursor-not-allowed disabled:opacity-50",
 										)}
 									>
-										Terminal
+										<I18nText source="terminal" />
 									</button>
 								) : (
 									terminalInstances.map((instance, index) => {
@@ -587,7 +595,7 @@ export function InspectorTabsSection({
 														// stable on mask toggle). `transform-gpu` keeps it
 														// on its own compositing layer.
 														className={cn(
-															"group/tab relative flex h-full min-w-[5rem] shrink-0 transform-gpu cursor-interactive items-center overflow-hidden px-3 text-small font-medium text-muted-foreground focus-visible:outline-none focus-visible:ring-0",
+															"group/tab relative flex h-8 min-w-[5rem] shrink-0 transform-gpu cursor-interactive items-center overflow-hidden px-3 pb-[2px] text-ui font-medium leading-none text-muted-foreground focus-visible:outline-none focus-visible:ring-0",
 															isActive && "text-foreground",
 														)}
 														onClick={() => handleTabClick(instance.id)}
@@ -612,21 +620,21 @@ export function InspectorTabsSection({
 														</span>
 														<button
 															type="button"
-															aria-label={`Close ${label}`}
+															aria-label={f("inspectorCloseLabel", { label })}
 															onClick={(e) => {
 																e.stopPropagation();
 																onCloseTerminal(instance.id);
 															}}
 															// Visibility-only toggle (no opacity transition) —
 															// matches session-tab + workspace-row patterns.
-															className="pointer-events-none invisible absolute inset-y-0 right-0 flex w-3 cursor-interactive items-center justify-center text-muted-foreground/70 hover:text-foreground group-hover/tab:pointer-events-auto group-hover/tab:visible focus-visible:pointer-events-auto focus-visible:visible"
+															className="pointer-events-none invisible absolute inset-y-0 right-0 flex w-3 cursor-interactive items-center justify-center pb-[2px] text-muted-foreground/70 hover:text-foreground group-hover/tab:pointer-events-auto group-hover/tab:visible focus-visible:pointer-events-auto focus-visible:visible"
 														>
 															<X className="size-3" strokeWidth={2} />
 														</button>
 														<span
 															aria-hidden="true"
 															className={cn(
-																"pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground opacity-0 transition-opacity",
+																INSPECTOR_TAB_ACTIVE_INDICATOR_CLASS,
 																isActive && "opacity-100",
 															)}
 														/>
@@ -654,8 +662,8 @@ export function InspectorTabsSection({
 														)}
 														<span>
 															{isHoverZoomDisabled
-																? "Enable hover zoom"
-																: "Disable hover zoom"}
+																? t("inspectorEnableHoverZoom")
+																: t("inspectorDisableHoverZoom")}
 														</span>
 													</ContextMenuItem>
 													<ContextMenuSeparator />
@@ -663,7 +671,7 @@ export function InspectorTabsSection({
 														onClick={() => onCloseTerminal(instance.id)}
 													>
 														<X className="size-4 shrink-0" strokeWidth={1.6} />
-														<span>Close terminal</span>
+														<span>{t("closeTerminal")}</span>
 													</ContextMenuItem>
 												</ContextMenuContent>
 											</ContextMenu>
@@ -674,7 +682,7 @@ export function InspectorTabsSection({
 									<TooltipTrigger asChild>
 										<button
 											type="button"
-											aria-label="New terminal"
+											aria-label={t("newTerminal")}
 											onClick={handleNewTerminalClick}
 											disabled={!canSpawnTerminal}
 											className="ml-1 flex h-full w-6 shrink-0 cursor-interactive items-center justify-center self-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
@@ -686,7 +694,7 @@ export function InspectorTabsSection({
 										side="bottom"
 										className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 									>
-										<span>New terminal</span>
+										<span>{t("newTerminal")}</span>
 										{newTerminalShortcut ? (
 											<InlineShortcutDisplay
 												hotkey={newTerminalShortcut}
@@ -700,11 +708,14 @@ export function InspectorTabsSection({
 								{tabActions}
 								<Button
 									type="button"
-									aria-label="Toggle inspector tabs section"
+									aria-label="toggleInspectorTabsSection"
 									onClick={onToggle}
 									variant="ghost"
 									size="icon-sm"
-									className="shrink-0 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+									className={cn(
+										"shrink-0 text-muted-foreground",
+										INSPECTOR_INLINE_CONTROL_CLASS,
+									)}
 								>
 									<ChevronDown
 										className="size-3.5"
@@ -720,7 +731,7 @@ export function InspectorTabsSection({
 
 						{open && (
 							<div
-								aria-label="Inspector tabs body"
+								aria-label={t("inspectorTabsBody")}
 								onMouseEnter={handleBodyMouseEnter}
 								onMouseDown={handleBodyMouseDown}
 								className="relative flex min-h-0 flex-1 flex-col bg-inspector"
@@ -812,6 +823,7 @@ function RunActionsDropdown({
 	 * toggle rather than being auto-closed by Radix mid-toggle. */
 	labelRef: RefObject<HTMLButtonElement | null>;
 }) {
+	const { t } = useI18n();
 	// Resolve which radio value should be checked. Falls back to the first
 	// action when the persisted id is missing or stale (recently deleted).
 	const resolvedActiveId =
@@ -823,20 +835,22 @@ function RunActionsDropdown({
 			<DropdownMenuTrigger asChild>
 				<button
 					type="button"
-					aria-label="Switch run action"
+					aria-label={t("switchRunAction")}
 					// Sit visually adjacent to the Run tab without claiming
 					// tab semantics — pure menu trigger. Pull a hair to the
 					// left so it nests against the label.
 					//
 					// Hover feedback mirrors the inline-icon-button pattern
 					// already used in this file: muted → foreground text +
-					// a soft `bg-accent/60` halo so the affordance reads
+					// a soft accent halo so the affordance reads
 					// even when the chevron is already at full color
 					// (active-Run case). `data-[state=open]` keeps the bg
 					// pinned while the dropdown is open — Radix sets that
 					// attribute on the trigger automatically.
 					className={cn(
-						"-ml-0.5 flex h-full w-5 shrink-0 cursor-interactive items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-0 data-[state=open]:bg-accent/60 data-[state=open]:text-foreground",
+						"-ml-0.5 flex h-full w-5 shrink-0 cursor-interactive items-center justify-center rounded-sm pb-[2px] text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-0",
+						INSPECTOR_INLINE_CONTROL_CLASS,
+						INSPECTOR_INLINE_CONTROL_OPEN_CLASS,
 						activeTab === "run" && "text-foreground",
 					)}
 					// Don't bubble the click — the parent tablist would
@@ -892,7 +906,7 @@ function RunActionsDropdown({
 				    "current". */}
 				<DropdownMenuItem onSelect={onCreateRunAction} className="gap-2">
 					<Plus className="size-3" strokeWidth={1.8} />
-					<span>Create</span>
+					<span>{t("create")}</span>
 				</DropdownMenuItem>
 			</DropdownMenuContent>
 		</DropdownMenu>

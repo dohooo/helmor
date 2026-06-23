@@ -1,0 +1,6 @@
+{"type":"kimi/session_init","session_id":"ses_kimi_1","model":"kimi-for-coding"}
+{"type":"kimi/tool_call_update","session_id":"ses_kimi_1","tool_call_id":"call_1","status":"in_progress"}
+{"type":"kimi/tool_call","session_id":"ses_kimi_1","tool_call_id":"call_1","title":"Run tests","kind":"execute","status":"in_progress","raw_input":{"command":"bun test"}}
+{"type":"kimi/tool_call_update","session_id":"ses_kimi_1","tool_call_id":"call_1","status":"completed","output_text":"3 passed"}
+{"type":"kimi/agent_message_chunk","session_id":"ses_kimi_1","text":"All tests pass."}
+{"type":"kimi/turn_complete","session_id":"ses_kimi_1"}

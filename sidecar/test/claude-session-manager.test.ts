@@ -101,7 +101,7 @@ mock.module("@anthropic-ai/claude-agent-sdk", () => ({
 // mocked `query`. A static top-level import of the manager would resolve
 // the real SDK before the mock is applied.
 const { ClaudeSessionManager } = await import(
-	"../src/claude-session-manager.js"
+	"../src/claude/session-manager.js"
 );
 
 // ---------------------------------------------------------------------------
@@ -493,8 +493,9 @@ describe("ClaudeSessionManager.sendMessage", () => {
 			models.map((m) => [m.id, m.supportsFastMode]),
 		);
 
-		// `default` now resolves to Opus 4.8, which supports fast mode.
-		expect(bySupports.default).toBe(true);
+		// Opus 4.8 1M supports fast mode.
+		expect(bySupports["claude-opus-4-8[1m]"]).toBe(true);
+		expect(bySupports.default).toBeUndefined();
 		expect(bySupports.sonnet).toBeUndefined();
 		expect(bySupports["claude-opus-4-7[1m]"]).toBeUndefined();
 		expect(bySupports["claude-opus-4-6[1m]"]).toBe(true);
@@ -539,7 +540,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 			{
 				sessionId: `helmor-sess-effort-${level}`,
 				prompt: "test",
-				model: "default",
+				model: "claude-opus-4-8[1m]",
 				cwd: undefined,
 				resume: undefined,
 				permissionMode: undefined,
@@ -562,7 +563,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 			{
 				sessionId: "helmor-sess-effort-bogus",
 				prompt: "test",
-				model: "default",
+				model: "claude-opus-4-8[1m]",
 				cwd: undefined,
 				resume: undefined,
 				permissionMode: undefined,
@@ -585,7 +586,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 			{
 				sessionId: "helmor-sess-mcp-blocking",
 				prompt: "test",
-				model: "default",
+				model: "claude-opus-4-8[1m]",
 				cwd: undefined,
 				resume: undefined,
 				permissionMode: undefined,
@@ -633,7 +634,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 			{
 				sessionId: "helmor-sess-fm",
 				prompt: "hi",
-				model: "default",
+				model: "claude-opus-4-8[1m]",
 				cwd: undefined,
 				resume: undefined,
 				permissionMode: undefined,
@@ -675,7 +676,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 			{
 				sessionId: "helmor-sess-fm-init",
 				prompt: "hi",
-				model: "default",
+				model: "claude-opus-4-8[1m]",
 				cwd: undefined,
 				resume: undefined,
 				permissionMode: undefined,
@@ -714,7 +715,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 			{
 				sessionId: "helmor-sess-fm-on",
 				prompt: "hi",
-				model: "default",
+				model: "claude-opus-4-8[1m]",
 				cwd: undefined,
 				resume: undefined,
 				permissionMode: undefined,
@@ -1043,12 +1044,12 @@ describe("ClaudeSessionManager.sendMessage", () => {
 	});
 
 	// AskUserQuestion goes through `canUseTool`: the sidecar emits a
-	// `deferredToolUse` event, parks the callback on a promise, and the
-	// frontend's `respondToDeferredTool` RPC resolves it with the user's
+	// `userInputRequest` event, parks the callback on a promise, and the
+	// frontend's `respondToUserInput` RPC resolves it with the user's
 	// answer. The same live `query()` continues — no `--resume`, no new
-	// process. The assistant message that contained the AUQ tool_use
-	// block must be stripped on the passthrough so the UI's deferred
-	// panel handles rendering instead of a duplicate tool-use bubble.
+	// process. The assistant message that contains the AUQ tool_use
+	// block passes through INTACT — the Rust adapter renders it as the
+	// persistent Q&A transcript card.
 	test("AskUserQuestion: canUseTool emits deferredToolUse, parks, returns answer via updatedInput", async () => {
 		let canUseToolResult: unknown = null;
 
@@ -1131,26 +1132,26 @@ describe("ClaudeSessionManager.sendMessage", () => {
 		);
 
 		// User submits answers — resolves the parked canUseTool promise.
-		// The frontend AUQ renderer produces the full `updatedInput` shape
-		// directly (questions + answers), and the sidecar passes that
-		// through to the SDK without further conversion.
+		// The unified AUQ renderer submits only the canonical answer payload
+		// (answers keyed by question text); the sidecar merges it over the
+		// original tool input to build `updatedInput`.
 		manager.resolveUserInput("tool-ask-1", {
 			action: "submit",
 			content: {
-				questions: [{ question: "Which path should we take?", options: [] }],
 				answers: { "Which path should we take?": "Option A" },
 			},
 		});
 
 		await sending;
 
-		// Assistant passthrough: the AUQ tool_use block must be stripped so
-		// the UI doesn't double-render it alongside the user-input panel.
+		// Assistant passthrough keeps the AUQ tool_use block — the Rust
+		// adapter converts it into the persistent Q&A card.
 		const assistantEvent = captured.find(
 			(event) => (event as { type?: string }).type === "assistant",
-		) as { message?: { content?: Array<{ type?: string; text?: string }> } };
+		) as { message?: { content?: Array<{ type?: string; name?: string }> } };
 		expect(assistantEvent?.message?.content).toEqual([
 			{ type: "text", text: "Need a quick decision." },
+			expect.objectContaining({ type: "tool_use", name: "AskUserQuestion" }),
 		]);
 
 		// userInputRequest event surfaces the question to the frontend with
@@ -1771,9 +1772,9 @@ describe("ClaudeSessionManager.listModels", () => {
 				effortLevels: ["low", "medium", "high", "xhigh", "max"],
 			},
 			{
-				id: "default",
+				id: "claude-opus-4-8[1m]",
 				label: "Opus 4.8 1M",
-				cliModel: "default",
+				cliModel: "claude-opus-4-8[1m]",
 				effortLevels: ["low", "medium", "high", "xhigh", "max"],
 				supportsFastMode: true,
 			},

@@ -324,6 +324,7 @@ fn normalize_check_context(node: &ActionCheckContextNode) -> Option<ForgeActionI
             } else {
                 provider
             };
+            let status = normalize_check_run_status(&check.status, check.conclusion.as_deref());
             Some(ForgeActionItem {
                 id: check
                     .database_id
@@ -331,11 +332,13 @@ fn normalize_check_context(node: &ActionCheckContextNode) -> Option<ForgeActionI
                     .unwrap_or_else(|| format!("check-run-{}", check.name)),
                 name: check.name.clone(),
                 provider,
-                status: normalize_check_run_status(&check.status, check.conclusion.as_deref()),
-                duration: format_duration(
-                    check.started_at.as_deref(),
-                    check.completed_at.as_deref(),
-                ),
+                status,
+                // Skipped checks never ran, so a "0s" duration is misleading.
+                duration: if status == ActionStatusKind::Skipped {
+                    None
+                } else {
+                    format_duration(check.started_at.as_deref(), check.completed_at.as_deref())
+                },
                 url,
             })
         }
@@ -413,13 +416,15 @@ fn action_status_priority(status: ActionStatusKind) -> u8 {
         ActionStatusKind::Running => 1,
         ActionStatusKind::Pending => 2,
         ActionStatusKind::Success => 3,
+        ActionStatusKind::Skipped => 4,
     }
 }
 
 fn normalize_check_run_status(status: &str, conclusion: Option<&str>) -> ActionStatusKind {
     match status {
         "COMPLETED" => match conclusion {
-            Some("SUCCESS" | "NEUTRAL" | "SKIPPED") => ActionStatusKind::Success,
+            Some("SKIPPED") => ActionStatusKind::Skipped,
+            Some("SUCCESS" | "NEUTRAL") => ActionStatusKind::Success,
             _ => ActionStatusKind::Failure,
         },
         "IN_PROGRESS" => ActionStatusKind::Running,
@@ -496,6 +501,7 @@ fn action_provider_label(provider: ActionProvider) -> &'static str {
 fn action_status_label(status: ActionStatusKind) -> &'static str {
     match status {
         ActionStatusKind::Success => "success",
+        ActionStatusKind::Skipped => "skipped",
         ActionStatusKind::Pending => "pending",
         ActionStatusKind::Running => "running",
         ActionStatusKind::Failure => "failure",
@@ -605,7 +611,7 @@ mod tests {
         );
         assert_eq!(
             normalize_check_run_status("COMPLETED", Some("SKIPPED")),
-            ActionStatusKind::Success
+            ActionStatusKind::Skipped
         );
         assert_eq!(
             normalize_check_run_status("COMPLETED", Some("FAILURE")),

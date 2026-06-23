@@ -4,6 +4,7 @@ import * as TogglePrimitive from "@radix-ui/react-toggle";
 import { cva, type VariantProps } from "class-variance-authority";
 import type * as React from "react";
 
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const toggleVariants = cva(
@@ -32,15 +33,24 @@ function Toggle({
 	className,
 	variant = "default",
 	size = "default",
+	children,
+	"aria-label": ariaLabel,
+	title,
 	...props
 }: React.ComponentProps<typeof TogglePrimitive.Root> &
 	VariantProps<typeof toggleVariants>) {
+	const { t } = useI18n();
+
 	return (
 		<TogglePrimitive.Root
 			data-slot="toggle"
+			aria-label={typeof ariaLabel === "string" ? t(ariaLabel) : ariaLabel}
+			title={typeof title === "string" ? t(title) : title}
 			className={cn(toggleVariants({ variant, size, className }))}
 			{...props}
-		/>
+		>
+			{children}
+		</TogglePrimitive.Root>
 	);
 }
 

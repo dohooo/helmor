@@ -13,7 +13,6 @@ pub struct GenerateSessionTitleRequest {
     pub session_id: String,
     pub user_message: String,
     pub title_seed: Option<String>,
-    pub provider: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -24,11 +23,165 @@ pub struct GenerateSessionTitleResponse {
     pub skipped: bool,
 }
 
-/// Sidecar response timeout. The sidecar may try a configured Claude-compatible
-/// model, official Claude, then Codex, so keep a small buffer for handoff.
-const TITLE_GEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(95);
+/// Per-attempt cap the sidecar enforces on title generation
+/// (`TITLE_GENERATION_TIMEOUT_MS` in `title.ts`).
+const TITLE_ATTEMPT_TIMEOUT_SECS: u64 = 15;
+/// Handoff buffer added on top of the whole attempt chain. The Rust wait gets
+/// no intermediate events to reset `recv_timeout`, so it must cover every
+/// attempt end-to-end: `attempts × 15s + buffer`.
+const TITLE_CHAIN_BUFFER_SECS: u64 = 10;
 
 type WorkspaceInfo = (String, String, Option<String>, String, Option<String>);
+
+/// Build the deduped provider order for title generation from the user's
+/// configured models, in priority order: action (`pr_model_id`) → review →
+/// default. Repeated providers collapse to their first occurrence. Defaults
+/// to `[claude]` when nothing is configured.
+fn detect_title_providers() -> Vec<String> {
+    let mut providers: Vec<String> = Vec::new();
+    for key in [
+        "app.pr_model_id",
+        "app.review_model_id",
+        "app.default_model_id",
+    ] {
+        let Ok(Some(raw)) = crate::settings::load_setting_value(key) else {
+            continue;
+        };
+        let Some(stored) = super::model_ref::parse_stored_model(&raw) else {
+            continue;
+        };
+        // New `{provider, modelId}` form carries the provider; legacy bare ids
+        // fall back to the resolve_model heuristic (provider hint = None).
+        let provider =
+            super::catalog::resolve_model(&stored.model_id, stored.provider.as_deref()).provider;
+        if !providers.contains(&provider) {
+            tracing::debug!(
+                setting = key,
+                model_id = stored.model_id,
+                provider = %provider,
+                "detect_title_providers: provider from configured model"
+            );
+            providers.push(provider);
+        }
+    }
+    if providers.is_empty() {
+        tracing::debug!("detect_title_providers: none configured, defaulting to claude");
+        providers.push("claude".to_string());
+    }
+    providers
+}
+
+/// Build the ordered title-generation attempt chain. For each detected
+/// provider: try the user's custom model first (claude only), then the
+/// provider's own fast/default pick. The sidecar walks this list and stops
+/// at the first attempt that produces a title.
+fn build_title_attempts() -> Vec<Value> {
+    let claude_custom = crate::provider::claude::configured_models()
+        .into_iter()
+        .next();
+    let opencode_custom = first_opencode_custom_model();
+    let mimo_custom = first_mimo_custom_model();
+    let kimi_custom = first_kimi_custom_model();
+    let mut attempts: Vec<Value> = Vec::new();
+    for provider in detect_title_providers() {
+        // Custom Codex providers run through the Codex sidecar with the
+        // provider definition injected.
+        if let Some(instance_id) = provider.strip_prefix(crate::provider::codex::PROVIDER_PREFIX) {
+            if let Some(model) = crate::provider::codex::first_model_for(instance_id) {
+                attempts.push(serde_json::json!({
+                    "provider": "codex",
+                    "model": model.cli_model,
+                    "codexProvider": {
+                        "id": model.instance_id,
+                        "baseUrl": model.base_url,
+                        "apiKey": model.api_key,
+                        "wireApi": "responses",
+                        "model": model.cli_model,
+                    },
+                }));
+            }
+            continue;
+        }
+        // A provider's custom model (if the user configured one) is tried
+        // before its fast/default pick.
+        match provider.as_str() {
+            "claude" => {
+                if let Some(model) = &claude_custom {
+                    attempts.push(serde_json::json!({
+                        "provider": "claude",
+                        "model": model.cli_model,
+                        "claudeEnvironment": {
+                            "ANTHROPIC_BASE_URL": model.base_url,
+                            "ANTHROPIC_AUTH_TOKEN": model.api_key,
+                        },
+                    }));
+                }
+            }
+            "opencode" => {
+                if let Some(slug) = &opencode_custom {
+                    attempts.push(serde_json::json!({
+                        "provider": "opencode",
+                        "model": slug,
+                    }));
+                }
+            }
+            "mimo" => {
+                if let Some(slug) = &mimo_custom {
+                    attempts.push(serde_json::json!({
+                        "provider": "mimo",
+                        "model": slug,
+                    }));
+                }
+            }
+            "kimi" => {
+                if let Some(model) = &kimi_custom {
+                    attempts.push(serde_json::json!({
+                        "provider": "kimi",
+                        "model": model,
+                    }));
+                }
+            }
+            _ => {}
+        }
+        // Provider's own fast/default model. For claude this is the
+        // post-custom fallback (haiku); for others it's the default pick.
+        attempts.push(serde_json::json!({ "provider": provider }));
+    }
+    attempts
+}
+
+/// First custom opencode model the user configured in `opencode.jsonc`, as a
+/// `provider/model` slug (e.g. `hundun/deepseek-v4-flash`). `None` when no
+/// custom opencode provider is set up.
+fn first_opencode_custom_model() -> Option<String> {
+    first_slug_custom_model(crate::provider::opencode_config::read_custom_providers().ok()?)
+}
+
+/// Same, for MiMo Code's `mimocode.json`.
+fn first_mimo_custom_model() -> Option<String> {
+    first_slug_custom_model(crate::provider::opencode_config::read_mimo_custom_providers().ok()?)
+}
+
+fn first_slug_custom_model(
+    providers: Vec<crate::provider::opencode_config::OpencodeCustomProvider>,
+) -> Option<String> {
+    let provider = providers.into_iter().next()?;
+    let model = provider.models.into_iter().next()?;
+    Some(format!("{}/{}", provider.id, model.id))
+}
+
+/// First custom kimi model the user configured in `config.toml`, as the
+/// `provider/model` key kimi expects (e.g. `a8d84452/gpt-5.5`). `None` when no
+/// custom kimi provider is set up. Mirrors `first_opencode_custom_model` —
+/// custom is tried before the provider's session default.
+fn first_kimi_custom_model() -> Option<String> {
+    crate::provider::kimi::read_provider_config()
+        .ok()?
+        .models
+        .into_iter()
+        .next()
+        .map(|model| model.id)
+}
 
 fn can_replace_session_title(current_title: &str, title_seed: Option<&str>) -> bool {
     current_title == "Untitled"
@@ -206,33 +359,43 @@ pub async fn generate_session_title(
             (Some(title), branch)
         } else {
             let request_id = Uuid::new_v4().to_string();
-            // Skip the branch slug instruction in the prompt when we already know we
-            // won't apply it (local mode, already-renamed worktree, etc.). Saves a
-            // line of LLM output and the branch-rename instruction block of input.
+            // Build the provider/model attempt chain from the user's configured
+            // models (action → review → default, deduped); each claude/opencode
+            // step tries the custom model then the fast default, other providers
+            // contribute their own fast/default pick. The sidecar walks the list
+            // and stops at the first attempt that produces a title. Skip the
+            // branch slug instruction when we won't apply it (local mode,
+            // already-renamed worktree, etc.) to save LLM output.
+            let attempts = build_title_attempts();
+            // No intermediate events reset `recv_timeout`, so the Rust wait must
+            // cover the whole chain end-to-end: attempts × per-attempt + buffer.
+            let title_timeout = std::time::Duration::from_secs(
+                attempts.len() as u64 * TITLE_ATTEMPT_TIMEOUT_SECS + TITLE_CHAIN_BUFFER_SECS,
+            );
+            let attempt_chain: Vec<String> = attempts
+                .iter()
+                .map(|a| {
+                    let p = a.get("provider").and_then(|v| v.as_str()).unwrap_or("?");
+                    let m = a
+                        .get("model")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("(default)");
+                    format!("{p}:{m}")
+                })
+                .collect();
+            tracing::debug!(
+                session_id = %session_id,
+                request_id = %request_id,
+                attempts = ?attempt_chain,
+                generate_branch = should_generate_branch,
+                "generate_session_title: dispatching title attempt chain"
+            );
             let mut params = serde_json::json!({
                 "userMessage": request.user_message,
                 "branchRenamePrompt": branch_rename_prompt,
                 "generateBranch": should_generate_branch,
-                "provider": request.provider,
+                "attempts": attempts,
             });
-            if let Some(model) = super::custom_providers::configured_models()
-                .into_iter()
-                .next()
-            {
-                if let Some(obj) = params.as_object_mut() {
-                    obj.insert(
-                        "claudeModel".to_string(),
-                        Value::String(model.cli_model.clone()),
-                    );
-                    obj.insert(
-                        "claudeEnvironment".to_string(),
-                        serde_json::json!({
-                            "ANTHROPIC_BASE_URL": model.base_url,
-                            "ANTHROPIC_AUTH_TOKEN": model.api_key,
-                        }),
-                    );
-                }
-            }
             if let Some(agent_proxy) = super::streaming::load_agent_proxy_setting() {
                 if let Some(obj) = params.as_object_mut() {
                     obj.insert("agentProxy".to_string(), agent_proxy);
@@ -262,7 +425,7 @@ pub async fn generate_session_title(
                     let mut branch_name: Option<String> = None;
 
                     loop {
-                        match rx.recv_timeout(TITLE_GEN_TIMEOUT) {
+                        match rx.recv_timeout(title_timeout) {
                             Ok(event) => match event.event_type() {
                                 "titleGenerated" => {
                                     title = event
@@ -300,7 +463,7 @@ pub async fn generate_session_title(
                             },
                             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                                 tracing::error!(
-                                    "generate_session_title: timed out after {TITLE_GEN_TIMEOUT:?}"
+                                    "generate_session_title: timed out after {title_timeout:?}"
                                 );
                                 break;
                             }
@@ -1031,6 +1194,10 @@ pub fn fetch_agent_model_sections() -> Vec<super::catalog::AgentModelSection> {
     super::catalog::static_model_sections()
 }
 
+pub fn fetch_all_agent_model_sections() -> Vec<super::catalog::AgentModelSection> {
+    super::catalog::full_catalog_sections()
+}
+
 // ---------------------------------------------------------------------------
 // Cursor model list — proxied to the sidecar's `Cursor.models.list`
 // ---------------------------------------------------------------------------
@@ -1194,7 +1361,8 @@ fn parse_cursor_parameters(arr: &[Value]) -> Vec<CursorModelParameter> {
         .collect()
 }
 
-// opencode model list — proxied to the sidecar's `client.provider.list()`
+// opencode-protocol model list (opencode + mimo) — proxied to the sidecar's
+// `client.provider.list()`
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1213,11 +1381,26 @@ pub fn fetch_opencode_models(
     sidecar: &crate::sidecar::ManagedSidecar,
     force_reload: bool,
 ) -> CmdResult<Vec<OpencodeModelEntry>> {
+    fetch_slug_models(sidecar, "opencode", force_reload)
+}
+
+pub fn fetch_mimo_models(
+    sidecar: &crate::sidecar::ManagedSidecar,
+    force_reload: bool,
+) -> CmdResult<Vec<OpencodeModelEntry>> {
+    fetch_slug_models(sidecar, "mimo", force_reload)
+}
+
+fn fetch_slug_models(
+    sidecar: &crate::sidecar::ManagedSidecar,
+    provider: &str,
+    force_reload: bool,
+) -> CmdResult<Vec<OpencodeModelEntry>> {
     let request_id = Uuid::new_v4().to_string();
     let sidecar_req = crate::sidecar::SidecarRequest {
         id: request_id.clone(),
         method: "listModels".to_string(),
-        params: serde_json::json!({ "provider": "opencode", "forceReload": force_reload }),
+        params: serde_json::json!({ "provider": provider, "forceReload": force_reload }),
     };
 
     let rx = sidecar.subscribe(&request_id);
@@ -1276,13 +1459,13 @@ pub fn fetch_opencode_models(
             },
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 error = Some(format!(
-                    "opencode model list timed out after {}s",
+                    "{provider} model list timed out after {}s",
                     LIST_OPENCODE_MODELS_TIMEOUT.as_secs()
                 ));
                 break;
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                error = Some("Sidecar disconnected during opencode model list".to_string());
+                error = Some(format!("Sidecar disconnected during {provider} model list"));
                 break;
             }
         }
@@ -1497,6 +1680,174 @@ mod tests {
         let req = make_request(None, Some("ghost-repo"));
         let resolved = resolve_repo_fallback_cwd(req);
         assert_eq!(resolved.working_directory, None);
+
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    #[test]
+    fn detect_title_providers_dedupes_in_priority_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+        setup_test_db(dir.path());
+
+        // Nothing configured → [claude].
+        assert_eq!(detect_title_providers(), vec!["claude".to_string()]);
+
+        // default only → [its provider].
+        crate::settings::upsert_setting_value("app.default_model_id", "cursor-gpt-5.3-codex")
+            .unwrap();
+        assert_eq!(detect_title_providers(), vec!["cursor".to_string()]);
+
+        // review (codex) leads, default (cursor) follows.
+        crate::settings::upsert_setting_value("app.review_model_id", "gpt-5.5").unwrap();
+        assert_eq!(
+            detect_title_providers(),
+            vec!["codex".to_string(), "cursor".to_string()]
+        );
+
+        // action (claude) leads the deduped chain.
+        crate::settings::upsert_setting_value("app.pr_model_id", "sonnet").unwrap();
+        assert_eq!(
+            detect_title_providers(),
+            vec![
+                "claude".to_string(),
+                "codex".to_string(),
+                "cursor".to_string()
+            ]
+        );
+
+        // Duplicate providers collapse: review → another claude model is skipped.
+        crate::settings::upsert_setting_value("app.review_model_id", "haiku").unwrap();
+        assert_eq!(
+            detect_title_providers(),
+            vec!["claude".to_string(), "cursor".to_string()]
+        );
+
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    #[test]
+    fn detect_title_providers_uses_stored_provider_for_slug_models() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+        setup_test_db(dir.path());
+
+        // New JSON form pins the provider → a mimo slug resolves to mimo, NOT
+        // opencode (the bare-slug heuristic would have misrouted it).
+        crate::settings::upsert_setting_value(
+            "app.default_model_id",
+            r#"{"provider":"mimo","modelId":"xiaomi/mimo-v2.5-pro"}"#,
+        )
+        .unwrap();
+        assert_eq!(detect_title_providers(), vec!["mimo".to_string()]);
+
+        // Legacy bare slug still falls back to the heuristic (opencode).
+        crate::settings::upsert_setting_value("app.default_model_id", "anthropic/claude-opus-4-5")
+            .unwrap();
+        assert_eq!(detect_title_providers(), vec!["opencode".to_string()]);
+
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    #[test]
+    fn build_title_attempts_chains_providers_without_custom() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+        setup_test_db(dir.path());
+
+        // pr=codex, default=cursor → providers [codex, cursor]; no custom set.
+        crate::settings::upsert_setting_value("app.pr_model_id", "gpt-5.5").unwrap();
+        crate::settings::upsert_setting_value("app.default_model_id", "cursor-gpt-5.3-codex")
+            .unwrap();
+
+        let attempts = build_title_attempts();
+        let chain: Vec<&str> = attempts
+            .iter()
+            .map(|a| a.get("provider").unwrap().as_str().unwrap())
+            .collect();
+        assert_eq!(chain, vec!["codex", "cursor"]);
+        // No custom configured → no attempt carries an explicit model.
+        assert!(attempts.iter().all(|a| a.get("model").is_none()));
+
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    #[test]
+    fn build_title_attempts_includes_kimi_custom_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+        setup_test_db(dir.path());
+
+        // Custom kimi provider lives in `$KIMI_CODE_HOME/config.toml`, exactly
+        // like opencode/mimo read theirs from their config — NOT from settings.
+        let kimi_home = dir.path().join("kimi-home");
+        std::fs::create_dir_all(&kimi_home).unwrap();
+        std::fs::write(
+            kimi_home.join("config.toml"),
+            "[providers.acme]\ntype = \"openai\"\napi_key = \"sk-test\"\nbase_url = \"https://api.acme.test/v1\"\n\n[models.\"acme/gpt-5.5\"]\nprovider = \"acme\"\nmodel = \"gpt-5.5\"\nmax_context_size = 128000\n",
+        )
+        .unwrap();
+        std::env::set_var("KIMI_CODE_HOME", &kimi_home);
+
+        // Selecting a kimi model makes kimi a detected title provider.
+        crate::settings::upsert_setting_value(
+            "app.default_model_id",
+            r#"{"provider":"kimi","modelId":"kimi:acme/gpt-5.5"}"#,
+        )
+        .unwrap();
+
+        // Consistent with claude/opencode/mimo: the custom model (config key, no
+        // `kimi:` prefix) is tried first, then kimi's session default.
+        let attempts = build_title_attempts();
+        let chain: Vec<(&str, Option<&str>)> = attempts
+            .iter()
+            .map(|a| {
+                (
+                    a.get("provider").unwrap().as_str().unwrap(),
+                    a.get("model").and_then(serde_json::Value::as_str),
+                )
+            })
+            .collect();
+        assert_eq!(chain, vec![("kimi", Some("acme/gpt-5.5")), ("kimi", None)]);
+
+        std::env::remove_var("KIMI_CODE_HOME");
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    #[test]
+    fn build_title_attempts_includes_custom_codex_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+        setup_test_db(dir.path());
+
+        crate::settings::upsert_setting_value(
+            "app.codex_custom_providers",
+            r#"[{"id":"hundun","name":"Codex (Hundun)","baseUrl":"http://dollar.hundun.cn/v1","apiKey":"sk-secret","models":[{"slug":"gpt-5.5","label":"GPT-5.5"}],"enabledModelIds":null}]"#,
+        )
+        .unwrap();
+        crate::settings::upsert_setting_value("app.default_model_id", "codex:hundun|gpt-5.5")
+            .unwrap();
+
+        // One attempt, routed through `codex`, carrying the injected provider.
+        let attempts = build_title_attempts();
+        assert_eq!(attempts.len(), 1);
+        let attempt = &attempts[0];
+        assert_eq!(attempt.get("provider").unwrap().as_str().unwrap(), "codex");
+        assert_eq!(attempt.get("model").unwrap().as_str().unwrap(), "gpt-5.5");
+        let codex = attempt.get("codexProvider").unwrap();
+        assert_eq!(codex.get("id").unwrap().as_str().unwrap(), "hundun");
+        assert_eq!(
+            codex.get("baseUrl").unwrap().as_str().unwrap(),
+            "http://dollar.hundun.cn/v1"
+        );
+        assert_eq!(codex.get("apiKey").unwrap().as_str().unwrap(), "sk-secret");
+        assert_eq!(codex.get("wireApi").unwrap().as_str().unwrap(), "responses");
+        assert_eq!(codex.get("model").unwrap().as_str().unwrap(), "gpt-5.5");
 
         std::env::remove_var("HELMOR_DATA_DIR");
     }

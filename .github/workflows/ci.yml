@@ -1,0 +1,422 @@
+name: CI
+
+# Single PR/push pipeline: one `changes` job evaluates path filters, every
+# downstream job gates on exactly one output, so a change only runs the suites
+# it can affect (a marketing-only PR runs just Biome; a Rust-only PR skips the
+# frontend/sidecar/e2e lanes; etc.).
+#
+# Filters compose via YAML anchors — `global` (CI config, lockfile, root
+# tool/build config, build scripts) is folded into every category, so a
+# cross-cutting tooling change force-runs the full suite and can never
+# silently skip a lane. paths-filter flattens nested anchor lists.
+#
+# macOS is the upstream reference platform; the windows-* jobs mirror the
+# platform-sensitive parts on windows-latest (process/fs/paths/executable
+# boundaries, the `.cmd` CLI shim, bundled-binary resolution, win32 vendor
+# staging). The NSIS installer build is NOT run here — it's expensive and
+# covered at release time by publish.yml (build-and-publish-windows).
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - windows-port
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  CI: true
+
+jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      biome: ${{ steps.filter.outputs.biome }}
+      typecheck: ${{ steps.filter.outputs.typecheck }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      e2e: ${{ steps.filter.outputs.e2e }}
+      sidecar: ${{ steps.filter.outputs.sidecar }}
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            global: &global
+              - '.github/**'
+              - 'package.json'
+              - 'bun.lock'
+              - 'biome.json'
+              - 'tsconfig*.json'
+              - 'scripts/**'
+            frontend: &frontend
+              - *global
+              - 'src/**'
+              - 'public/**'
+              - 'index.html'
+              - 'vite.config.ts'
+              - 'vite.e2e.config.ts'
+              - 'vitest.shims.d.ts'
+              - 'components.json'
+              - '.storybook/**'
+            sidecar: &sidecar
+              - *global
+              - 'sidecar/**'
+            # Agent SDK bumps land in sidecar/package.json + sidecar/bun.lock;
+            # the SDK event shape is the contract the Rust accumulator depends
+            # on, so those two files must re-run the pipeline snapshot tests
+            # (see AGENTS.md "Bundled agent CLIs").
+            rust:
+              - *global
+              - 'src-tauri/**'
+              - 'sidecar/package.json'
+              - 'sidecar/bun.lock'
+            e2e:
+              - *global
+              - 'src/**'
+              - 'e2e/**'
+              - 'playwright.config.ts'
+              - 'vite.e2e.config.ts'
+            # Root tsc also checks playwright.config.ts via tsconfig.node.json
+            # references (vite configs are already in `frontend`).
+            typecheck:
+              - *frontend
+              - *sidecar
+              - 'playwright.config.ts'
+            # Biome lints the whole repo (biome.json includes: ["**"]), so gate
+            # on every extension Biome can parse, anywhere — this mirrors
+            # `biome check .` instead of trying to enumerate directories.
+            biome:
+              - *global
+              - '**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts,json,jsonc,css,html,vue,svelte,astro,graphql}'
+
+  # ---------- Quality ----------
+
+  biome:
+    name: Biome
+    needs: changes
+    if: needs.changes.outputs.biome == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+
+      - name: Run Biome
+        run: bunx biome check . --config-path=./biome.json
+
+  clippy:
+    name: Clippy
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+
+      - name: Setup Rust Tauri
+        uses: ./.github/actions/setup-rust-tauri
+
+      # Stage the sidecar vendor tree, but NOT the release helmor-cli. The crate
+      # compile needs `sidecar/dist/vendor/` (a Tauri bundle resource) to exist;
+      # `cargo clippy --all-targets` compiles helmor-cli from source and
+      # build.rs stubs the externalBin placeholders. This skips the
+      # `cargo build --bin helmor-cli --release` the full build-sidecar action
+      # runs — ~3m16s clippy never uses.
+      - name: Stage sidecar vendor tree
+        shell: bash
+        run: cd sidecar && bun install --frozen-lockfile && bun run build
+
+      - name: Run clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+  typecheck:
+    name: Typecheck
+    needs: changes
+    if: needs.changes.outputs.typecheck == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+
+      - name: Run typecheck
+        run: bun run typecheck
+
+  # ---------- Test ----------
+
+  frontend-test:
+    name: Frontend Test
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+
+      - name: Run frontend tests
+        run: bun run test:frontend
+
+  sidecar-test:
+    name: Sidecar Test
+    needs: changes
+    if: needs.changes.outputs.sidecar == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+
+      - name: Run sidecar tests
+        shell: bash
+        run: bun run test:sidecar
+
+  rust-test:
+    name: Rust Test
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+
+      - name: Setup Rust Tauri
+        uses: ./.github/actions/setup-rust-tauri
+
+      # rust-test stages for the host arch (macos-latest is arm64) — `bun run
+      # build` below has no TAURI_TARGET_TRIPLE, so it downloads aarch64 archives.
+      - name: Cache bundle archives
+        uses: ./.github/actions/cache-bundle-archives
+        with:
+          target-triple: aarch64-apple-darwin
+
+      # Stage the sidecar vendor tree, but NOT the release helmor-cli. The crate
+      # compile needs `sidecar/dist/vendor/` (a Tauri bundle resource) to exist;
+      # build.rs stubs the helmor-cli / helmor-sidecar externalBin placeholders,
+      # and no test spawns the real sidecar. This skips the
+      # `cargo build --bin helmor-cli --release` the full build-sidecar action
+      # runs — ~3m16s the tests never use. (`bun run build` = stage-vendor plus
+      # the ~4s bun sidecar compile.)
+      - name: Stage sidecar vendor tree
+        shell: bash
+        run: cd sidecar && bun install --frozen-lockfile && bun run build
+
+      - name: Run Rust tests with nextest
+        shell: bash
+        run: cd src-tauri && cargo nextest run
+
+      - name: Run Rust doctests
+        shell: bash
+        run: cd src-tauri && cargo test --doc
+
+  e2e-test:
+    name: E2E Test
+    needs: changes
+    if: needs.changes.outputs.e2e == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+
+      # Cache the WebKit bundle (~90MB) so cold runs aren't gated on the
+      # Playwright CDN. Keyed on bun.lock so a `@playwright/test` bump busts
+      # the cache automatically — under-specifying the key risks booting with
+      # a mismatched browser after a version bump.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install Playwright WebKit
+        shell: bash
+        run: bunx playwright install webkit
+
+      - name: Run E2E tests
+        shell: bash
+        run: bun run test:e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # ---------- Build ----------
+
+  app-build:
+    name: App Build
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+
+      - name: Run app build
+        run: bun run build
+
+  storybook-build:
+    name: Storybook Build
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+
+      - name: Run Storybook build
+        run: bun run build-storybook
+
+  # ---------- Windows ----------
+
+  windows-typecheck:
+    name: Windows Typecheck
+    needs: changes
+    if: needs.changes.outputs.typecheck == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+        with:
+          # sccache is unused by the Windows jobs and its installer is flaky
+          # on Windows runners; skip it.
+          install-sccache: "false"
+
+      # Covers the win32 branches added to sidecar/scripts/vendor-platform.ts
+      # and the frontend, neither of which the macOS typecheck exercises with
+      # `process.platform === "win32"`.
+      - name: Run typecheck
+        shell: bash
+        run: bun run typecheck
+
+  windows-sidecar-test:
+    name: Windows Sidecar Test
+    needs: changes
+    if: needs.changes.outputs.sidecar == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+        with:
+          # sccache is unused by the Windows jobs and its installer is flaky
+          # on Windows runners; skip it.
+          install-sccache: "false"
+
+      - name: Run sidecar tests
+        shell: bash
+        run: bun run test:sidecar
+
+  windows-rust-test:
+    name: Windows Rust Test
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      # src-tauri/.cargo/config.toml sets rustc-wrapper = "sccache" for the
+      # macOS jobs (where setup-rust-tauri installs sccache). Override it
+      # back to empty on Windows so cargo doesn't try to invoke a binary
+      # that isn't on PATH.
+      RUSTC_WRAPPER: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+        with:
+          # sccache is unused by the Windows jobs and its installer is flaky
+          # on Windows runners; skip it.
+          install-sccache: "false"
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # boring-sys2 (transitive native dep) assembles with NASM on Windows;
+      # the runner ships Perl (Strawberry) but not NASM.
+      - name: Setup NASM
+        uses: ilammy/setup-nasm@v1
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          shared-key: windows-tauri-v1
+          workspaces: src-tauri -> target
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      # The crate compile needs `sidecar/dist/vendor/` (a Tauri bundle resource)
+      # to exist; build.rs stubs the externalBin placeholders. On Windows this
+      # stages the win32 vendor tree (see vendor-platform.ts).
+      - name: Stage sidecar vendor tree
+        shell: bash
+        run: cd sidecar && bun install --frozen-lockfile && bun run build
+
+      - name: Run Rust tests with nextest
+        shell: bash
+        run: cd src-tauri && cargo nextest run
+
+      - name: Run Rust doctests
+        shell: bash
+        run: cd src-tauri && cargo test --doc

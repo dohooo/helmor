@@ -1,0 +1,21 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: msg-1
+  content_length: 2
+  content:
+    - type: text
+      text: Let me confirm one thing.
+    - type: user-question
+      id: tu-auq-1
+      source: Claude
+      status: declined
+      questions:
+        - "Pick a color [Red|Blue]"
+      answers: []
+  status:
+    type: complete
+    reason: stop
+  streaming: ~

@@ -32,6 +32,7 @@ pub use bridges::{
     bridge_user_input_request_event,
 };
 pub(crate) use cleanup::cleanup_abnormal_stream_exit;
+use cleanup::finalize_aborted_exchange;
 pub use params::{
     build_send_message_params, lookup_workspace_linked_directories, BuildSendMessageParamsInput,
 };
@@ -161,7 +162,8 @@ pub(super) fn stream_via_sidecar(
         cli_model: &model.cli_model,
         cwd: &working_directory.display().to_string(),
         resume_session_id: resume_session_id.as_deref(),
-        provider: &model.provider,
+        // `codex:<id>` collapses to `codex` (same app-server pipeline).
+        provider: model.sidecar_provider(),
         effort_level: request.effort_level.as_deref(),
         permission_mode: request.permission_mode.as_deref(),
         fast_mode: request.fast_mode.unwrap_or(false),
@@ -171,6 +173,7 @@ pub(super) fn stream_via_sidecar(
         agent_proxy: agent_proxy.as_ref(),
         claude_thinking_display: claude_thinking_display.as_deref(),
         images: &images_for_wire,
+        codex_provider: model.codex_provider.as_ref(),
     });
 
     // Surface the `/add-dir` decision in logs — we often debug linked-
@@ -256,6 +259,7 @@ pub(super) fn stream_via_sidecar(
     let user_message_id_copy = request.user_message_id.clone();
     let files_copy = request.files.clone().unwrap_or_default();
     let images_copy = request.images.clone().unwrap_or_default();
+    let pasted_texts_copy = request.pasted_texts.clone().unwrap_or_default();
     let sidecar_session_id_copy = sidecar_session_id.clone();
     let rid = request_id.clone();
 
@@ -323,8 +327,14 @@ pub(super) fn stream_via_sidecar(
                         tracing::error!(rid = %rid, "Failed to update fast_mode: {e}");
                     }
 
-                    match persist_user_message(&conn, &ctx, &prompt_copy, &files_copy, &images_copy)
-                    {
+                    match persist_user_message(
+                        &conn,
+                        &ctx,
+                        &prompt_copy,
+                        &files_copy,
+                        &images_copy,
+                        &pasted_texts_copy,
+                    ) {
                         Ok(()) => {
                             tracing::debug!(rid = %rid, "User message persisted to DB");
                             exchange_ctx = Some(ctx);
@@ -418,7 +428,7 @@ pub(super) fn stream_via_sidecar(
                         .as_ref()
                         .map(|p| p.accumulator.resolved_model().to_string())
                         .unwrap_or_else(|| model_copy.cli_model.to_string());
-                    let persisted = cleanup_abnormal_stream_exit(
+                    let cleanup_outcome = cleanup_abnormal_stream_exit(
                         &rid,
                         exchange_ctx.as_ref(),
                         &resolved_model,
@@ -426,6 +436,21 @@ pub(super) fn stream_via_sidecar(
                         effort_copy.as_deref(),
                         turn_session.ctx.permission_mode.as_deref(),
                     );
+                    let persisted = cleanup_outcome.finalized;
+                    // The synthesized error row really inserted — let idle
+                    // observers mark the thread cache stale. Published here
+                    // (not inside the cleanup fn) so the helper stays free
+                    // of AppHandle plumbing.
+                    if cleanup_outcome.persisted_error {
+                        if let Some(ctx) = exchange_ctx.as_ref() {
+                            crate::ui_sync::publish(
+                                &app,
+                                crate::ui_sync::UiMutationEvent::SessionTurnPersisted {
+                                    session_id: ctx.helmor_session_id.clone(),
+                                },
+                            );
+                        }
+                    }
 
                     tracing::info!(
                         rid = %rid,
@@ -591,6 +616,14 @@ pub(super) fn stream_via_sidecar(
                             pipeline_state.accumulator.flush_codex_in_progress();
                             pipeline_state.accumulator.flush_cursor_in_progress();
                             pipeline_state.accumulator.flush_opencode_in_progress();
+                        }
+                        // Kimi finalizes on `kimi/turn_complete`, which never
+                        // arrives when the stream ends via `error`+`end`
+                        // (e.g. child crash) — flush on every termination so
+                        // the partial turn reaches the persist loop below.
+                        // Idempotent after a normal turn_complete.
+                        pipeline_state.accumulator.flush_kimi_in_progress();
+                        if is_aborted {
                             pipeline_state.materialize_partial();
                             pipeline_state.accumulator.append_aborted_notice();
                         }
@@ -650,7 +683,16 @@ pub(super) fn stream_via_sidecar(
                                     &resolved_model,
                                     BAD_RESUME_USER_MESSAGE,
                                 ) {
-                                    Ok(_) => {}
+                                    Ok(_) => {
+                                        // Real insert — idle observers mark
+                                        // the thread cache stale.
+                                        crate::ui_sync::publish(
+                                            &app,
+                                            crate::ui_sync::UiMutationEvent::SessionTurnPersisted {
+                                                session_id: ctx.helmor_session_id.clone(),
+                                            },
+                                        );
+                                    }
                                     Err(error) => {
                                         tracing::error!(
                                             rid = %rid,
@@ -674,17 +716,25 @@ pub(super) fn stream_via_sidecar(
                                     }
                                 }
                             } else if is_aborted {
-                                match finalize_session_metadata(
+                                if finalize_aborted_exchange(
+                                    &rid,
                                     conn,
                                     ctx,
                                     status,
                                     effort_copy.as_deref(),
                                     turn_session.ctx.permission_mode.as_deref(),
                                 ) {
-                                    Ok(_) => persisted = true,
-                                    Err(error) => {
-                                        tracing::error!(rid = %rid, "Failed to finalize exchange: {error}");
-                                    }
+                                    persisted = true;
+                                    // The aborted turn's rows (user prompt,
+                                    // flushed turns, aborted notice) are in
+                                    // the DB — idle observers mark the
+                                    // thread cache stale.
+                                    crate::ui_sync::publish(
+                                        &app,
+                                        crate::ui_sync::UiMutationEvent::SessionTurnPersisted {
+                                            session_id: ctx.helmor_session_id.clone(),
+                                        },
+                                    );
                                 }
                             } else {
                                 let preassigned = pipeline_state.accumulator.take_result_id();
@@ -700,7 +750,19 @@ pub(super) fn stream_via_sidecar(
                                     status,
                                     preassigned,
                                 ) {
-                                    Ok(_) => persisted = true,
+                                    Ok(_) => {
+                                        persisted = true;
+                                        // The turn's result row really
+                                        // inserted — idle observers mark the
+                                        // thread cache stale (the local
+                                        // dispatcher skips this event).
+                                        crate::ui_sync::publish(
+                                            &app,
+                                            crate::ui_sync::UiMutationEvent::SessionTurnPersisted {
+                                                session_id: ctx.helmor_session_id.clone(),
+                                            },
+                                        );
+                                    }
                                     Err(error) => {
                                         tracing::error!(rid = %rid, "Failed to finalize exchange: {error}");
                                     }
@@ -1113,7 +1175,17 @@ pub(super) fn stream_via_sidecar(
                             .unwrap_or_else(|| model_copy.cli_model.to_string());
 
                         match persist_error_message(conn, ctx, &resolved_model, &message) {
-                            Ok(_) => persisted = true,
+                            Ok(_) => {
+                                persisted = true;
+                                // Real insert — idle observers mark the
+                                // thread cache stale.
+                                crate::ui_sync::publish(
+                                    &app,
+                                    crate::ui_sync::UiMutationEvent::SessionTurnPersisted {
+                                        session_id: ctx.helmor_session_id.clone(),
+                                    },
+                                );
+                            }
                             Err(error) => {
                                 tracing::error!(rid = %rid, "Failed to persist error message: {error}");
                             }

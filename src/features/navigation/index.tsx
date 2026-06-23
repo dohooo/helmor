@@ -40,6 +40,7 @@ import type {
 	WorkspaceRow,
 	WorkspaceStatus,
 } from "@/lib/api";
+import { I18nText, useI18n } from "@/lib/i18n";
 import type { SidebarGrouping, SidebarSort } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { workspaceStatusFromGroupId } from "@/lib/workspace-helpers";
@@ -52,6 +53,7 @@ import {
 	useWorkspaceDnd,
 	type WorkspaceDndPolicy,
 } from "./dnd/use-workspace-dnd";
+import { applyImmediateWorkspaceHighlight } from "./immediate-highlight";
 import {
 	createInitialSectionOpenState,
 	readStoredSectionOpenState,
@@ -115,10 +117,6 @@ function getGroupHeaderHeight(_hasRows: boolean) {
 
 function getGroupGapSize(previousHasRows: boolean, nextHasRows: boolean) {
 	return previousHasRows && nextHasRows ? GROUP_GAP : EMPTY_GROUP_GAP;
-}
-
-function escapeAttributeSelectorValue(value: string) {
-	return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
 // ---------------------------------------------------------------------------
@@ -220,6 +218,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	markingUnreadWorkspaceId?: string | null;
 	restoringWorkspaceId?: string | null;
 }) {
+	const { t, f } = useI18n();
 	const [isAddRepositoryMenuOpen, setIsAddRepositoryMenuOpen] = useState(false);
 	const [isSidebarViewPopoverOpen, setIsSidebarViewPopoverOpen] =
 		useState(false);
@@ -329,7 +328,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		if (!activeDragWorkspaceId) return null;
 		for (const group of groups) {
 			const meta = group.stackMeta?.get(activeDragWorkspaceId);
-			if (!meta || meta.role !== "tip") continue;
+			if (meta?.role !== "tip") continue;
 			const members = group.rows
 				.filter((row) => group.stackMeta?.get(row.id)?.tipId === meta.tipId)
 				.sort(
@@ -742,18 +741,10 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	}, []);
 	const applyImmediateSelectionClass = useCallback(
 		(workspaceId: string | null) => {
-			const root = scrollContainerRef.current;
-			if (!root) return;
-			for (const element of root.querySelectorAll(
-				"[data-workspace-row-body].workspace-row-selected",
-			)) {
-				element.classList.remove("workspace-row-selected");
-			}
-			if (!workspaceId) return;
-			const target = root.querySelector(
-				`[data-workspace-row-body][data-workspace-row-id="${escapeAttributeSelectorValue(workspaceId)}"]`,
-			);
-			target?.classList.add("workspace-row-selected");
+			// Root stays the sidebar's own scroll container (NOT a document-wide
+			// query) so standalone renders — and the pointerdown preview they
+			// test — keep working without `[data-helmor-sidebar-root]`.
+			applyImmediateWorkspaceHighlight(scrollContainerRef.current, workspaceId);
 		},
 		[],
 	);
@@ -893,12 +884,26 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						) : (
 							<GroupIcon tone={item.group.tone} />
 						)}
-						<span>{item.group.label}</span>
+						<span>
+							{isRepoGroup ? (
+								item.group.label
+							) : (
+								<I18nText
+									source={
+										isArchived
+											? "archived"
+											: isChatGroup
+												? "chats"
+												: item.group.tone
+									}
+								/>
+							)}
+						</span>
 					</span>
 				);
 
 				const headerClassName = cn(
-					"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 text-ui font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60 py-1",
+					"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 py-1 text-ui font-medium text-foreground hover:bg-accent/60",
 				);
 
 				// Repo header: no chevron/badge, but the header still toggles
@@ -946,7 +951,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 									<TooltipTrigger asChild>
 										<Button
 											type="button"
-											aria-label={`New workspace in ${item.group.label}`}
+											aria-label={f("navNewWorkspaceInLabel", {
+												label: item.group.label,
+											})}
 											variant="ghost"
 											size="icon-xs"
 											className="size-5 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover/trigger:opacity-100 focus-visible:opacity-100"
@@ -963,7 +970,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 										sideOffset={4}
 										className="flex h-[24px] items-center rounded-md px-2 text-small leading-none"
 									>
-										New workspace in {item.group.label}
+										<I18nText source="newWorkspace3" /> {item.group.label}
 									</TooltipContent>
 								</Tooltip>
 							) : null}
@@ -1054,11 +1061,14 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 								<TooltipContent side="left" sideOffset={6}>
 									{`${
 										item.stackMeta.role === "tip"
-											? "Stack tip"
+											? t("navStackTip")
 											: item.stackMeta.role === "root"
-												? "Stack base"
-												: "Stack"
-									} · ${item.stackMeta.depth + 1} of ${item.stackMeta.stackSize}`}
+												? t("navStackBase")
+												: t("navStack")
+									} · ${f("navStackDepthOfSize", {
+										depth: item.stackMeta.depth + 1,
+										size: item.stackMeta.stackSize,
+									})}`}
 								</TooltipContent>
 							</Tooltip>
 						</>
@@ -1111,6 +1121,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			);
 		},
 		[
+			t,
+			f,
 			sectionOpenState,
 			sidebarGrouping,
 			toggleSection,
@@ -1162,8 +1174,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			</div>
 
 			<div className="mt-1 flex items-center justify-between px-3">
-				<h2 className="text-body font-medium tracking-[-0.01em] text-muted-foreground">
-					Workspaces
+				<h2 className="text-title font-medium text-muted-foreground">
+					<I18nText source="workspaces" />
 				</h2>
 
 				<div className="flex items-center gap-1 text-muted-foreground">
@@ -1189,7 +1201,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 								<DropdownMenuTrigger asChild>
 									<Button
 										type="button"
-										aria-label="Add repository"
+										aria-label="addRepository2"
 										variant="ghost"
 										size="icon-xs"
 										disabled={
@@ -1218,7 +1230,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 								sideOffset={4}
 								className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 							>
-								<span>Add repository</span>
+								<span>
+									<I18nText source="addRepository2" />
+								</span>
 								{addRepositoryShortcut ? (
 									<InlineShortcutDisplay
 										hotkey={addRepositoryShortcut}
@@ -1234,7 +1248,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 								}}
 							>
 								<Folder strokeWidth={2} />
-								<span>Open project</span>
+								<span>
+									<I18nText source="openProject" />
+								</span>
 							</DropdownMenuItem>
 							<DropdownMenuItem
 								onSelect={() => {
@@ -1242,7 +1258,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 								}}
 							>
 								<Globe strokeWidth={2} />
-								<span>Clone from URL</span>
+								<span>
+									<I18nText source="cloneFromUrl" />
+								</span>
 							</DropdownMenuItem>
 						</DropdownMenuContent>
 					</DropdownMenu>
@@ -1251,7 +1269,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						<TooltipTrigger asChild>
 							<Button
 								type="button"
-								aria-label="New workspace"
+								aria-label="newWorkspace2"
 								variant="ghost"
 								size="icon-xs"
 								disabled={
@@ -1280,7 +1298,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							sideOffset={4}
 							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 						>
-							<span>Create new workspace</span>
+							<span>
+								<I18nText source="createNewWorkspace" />
+							</span>
 							{newWorkspaceShortcut ? (
 								<InlineShortcutDisplay
 									hotkey={newWorkspaceShortcut}

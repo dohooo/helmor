@@ -26,6 +26,7 @@ export type ShortcutId =
 	| "zoom.out"
 	| "zoom.reset"
 	| "global.hotkey"
+	| "quickPanel.hotkey"
 	| "action.createPr"
 	| "action.commitAndPush"
 	| "action.pullLatest"
@@ -50,15 +51,15 @@ export type ShortcutId =
 	| "inspector.focusTerminal";
 
 export type ShortcutGroup =
-	| "Navigation"
-	| "Session"
-	| "Workspace"
-	| "Actions"
-	| "System"
-	| "Composer"
-	| "Start surface"
-	| "Editor"
-	| "Terminal";
+	| "navigation"
+	| "session"
+	| "workspace"
+	| "actions"
+	| "system"
+	| "miscComposer"
+	| "miscStartSurface"
+	| "miscEditor"
+	| "terminal";
 
 // Scopes a shortcut can live in. "app" = always active regardless of focus.
 // All others gate on [data-focus-scope] DOM ancestors of the active element;
@@ -70,8 +71,7 @@ export type ShortcutGroup =
 // `start-composer` and `workspace-composer` are sibling leaf scopes that split
 // the composer namespace by surface. They both inherit from `composer` (and
 // transitively from `chat`) so generic composer shortcuts keep firing, but
-// surface-specific shortcuts (Shift+Tab → cycle repo on start, toggle plan
-// mode on workspace) can target one and not the other.
+// surface-specific shortcuts can target one and not the other.
 export type ShortcutScope =
 	| "app"
 	| "chat"

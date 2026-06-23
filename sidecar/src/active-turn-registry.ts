@@ -72,9 +72,15 @@ export class ActiveTurnRegistry {
 		return this.turns.get(sessionId)?.abortEmitted ?? false;
 	}
 
-	/** Clear the turn once a terminal event has been emitted. */
-	end(sessionId: string): void {
-		this.turns.delete(sessionId);
+	/** Clear the turn once its terminal event has been emitted. Guarded by
+	 *  `requestId`: a slow-unwinding aborted turn must NOT delete the slot a
+	 *  newer same-session turn already re-claimed via `begin` (the
+	 *  abort → queue-drain race — else the new turn's Stop silently no-ops).
+	 *  No-op when the slot no longer belongs to `requestId`. */
+	end(sessionId: string, requestId: string): void {
+		if (this.turns.get(sessionId)?.requestId === requestId) {
+			this.turns.delete(sessionId);
+		}
 	}
 
 	/** Terminal-fail every live turn (worker-fatal network blow-up): emit
@@ -95,5 +101,28 @@ export class ActiveTurnRegistry {
 		}
 		this.turns.clear();
 		return ids;
+	}
+
+	/** Session ids with a live (begun, not-yet-ended) turn. */
+	activeSessionIds(): string[] {
+		return [...this.turns.keys()];
+	}
+
+	/** Terminal-fail just this session's live turn (scoped worker-fatal): emit
+	 *  error+end and clear it. Returns the failed requestId, or `null` when the
+	 *  session has no live turn. Mirror of `failAll` for a single entry. */
+	failOne(sessionId: string, message: string, internal = true): string | null {
+		const turn = this.turns.get(sessionId);
+		if (!turn) return null;
+		this.turns.delete(sessionId);
+		if (turn.abortEmitted) return turn.requestId;
+		turn.abortEmitted = true;
+		try {
+			turn.emitter.error(turn.requestId, message, internal);
+			turn.emitter.end(turn.requestId);
+		} catch {
+			// best-effort — must never throw past recovery
+		}
+		return turn.requestId;
 	}
 }

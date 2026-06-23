@@ -156,14 +156,19 @@ describe("useAppShortcuts", () => {
 		fireModT();
 		expect(sessionNew).toHaveBeenCalledTimes(1);
 
-		// Shift+Tab (composer) fires.
+		// Cmd+Shift+P (workspace composer) fires.
 		window.dispatchEvent(
-			new KeyboardEvent("keydown", { key: "Tab", code: "Tab", shiftKey: true }),
+			new KeyboardEvent("keydown", {
+				key: "p",
+				code: "KeyP",
+				metaKey: true,
+				shiftKey: true,
+			}),
 		);
 		expect(togglePlanMode).toHaveBeenCalledTimes(1);
 	});
 
-	it("isolates start-composer and workspace-composer Shift+Tab bindings", () => {
+	it("routes start Shift+Tab and workspace plan shortcuts independently", () => {
 		const togglePlanMode = vi.fn();
 		const cycleRepository = vi.fn();
 
@@ -201,10 +206,15 @@ describe("useAppShortcuts", () => {
 
 		(getByTestId("workspace-input") as HTMLInputElement).focus();
 		window.dispatchEvent(
-			new KeyboardEvent("keydown", { key: "Tab", code: "Tab", shiftKey: true }),
+			new KeyboardEvent("keydown", {
+				key: "p",
+				code: "KeyP",
+				metaKey: true,
+				shiftKey: true,
+			}),
 		);
 		expect(togglePlanMode).toHaveBeenCalledTimes(1);
-		// Cycling stays put — the workspace surface doesn't claim its hotkey.
+		// Cycling stays put — the workspace surface doesn't claim Shift+Tab.
 		expect(cycleRepository).toHaveBeenCalledTimes(1);
 	});
 
@@ -266,7 +276,12 @@ describe("useAppShortcuts", () => {
 		(getByTestId("inspector-input") as HTMLInputElement).focus();
 
 		window.dispatchEvent(
-			new KeyboardEvent("keydown", { key: "Tab", code: "Tab", shiftKey: true }),
+			new KeyboardEvent("keydown", {
+				key: "p",
+				code: "KeyP",
+				metaKey: true,
+				shiftKey: true,
+			}),
 		);
 		expect(togglePlanMode).not.toHaveBeenCalled();
 	});

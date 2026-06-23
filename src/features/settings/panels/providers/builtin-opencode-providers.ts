@@ -26,7 +26,7 @@ export const OPENCODE_API_STYLES = [
 	},
 ] as const;
 
-// Dropdown order IS the catalog order — no runtime sort. "Custom" is rendered separately and always last.
+// Dropdown order IS the catalog order — no runtime sort. "Custom" is rendered separately and always first.
 export const OPENCODE_PROVIDER_PRESETS =
 	catalog.opencode as readonly OpencodeProviderPreset[];
 

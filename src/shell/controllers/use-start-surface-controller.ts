@@ -11,21 +11,31 @@ import type {
 	ComposerSubmitPayload,
 	PendingCreatedWorkspaceSubmit,
 } from "@/features/conversation";
+import {
+	buildTitleSeed,
+	seedSessionTitle,
+} from "@/features/conversation/hooks/seed-session-title";
+import { buildTerminalBootCommand } from "@/features/terminal/terminal-presets";
+import { setPendingBoot } from "@/features/terminal/terminal-session-store";
 import { createWorkspaceFromStartComposer } from "@/features/workspace-start/create-workspace";
 import {
 	type BranchPickerEntry,
+	convertSessionToTerminal,
 	createAndCheckoutBranch,
 	getRepoCurrentBranch,
 	listBranchesForWorkspacePicker,
 	moveLocalWorkspaceToWorktree,
+	prefetchRemoteRefs,
 	prewarmSlashCommandsForRepo,
 	type RepositoryCreateOption,
+	renameSession,
 	type ThreadMessageLike,
 	type WorkspaceBranchIntent,
 	type WorkspaceDetail,
 	type WorkspaceMode,
 } from "@/lib/api";
 import { extractError } from "@/lib/errors";
+import { translateSource } from "@/lib/i18n";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { sessionThreadCacheKey } from "@/lib/session-thread-cache";
 import {
@@ -426,8 +436,19 @@ export function useStartSurfaceController(
 	);
 
 	const refetchBranches = useCallback(() => {
+		// Show cached refs immediately, then sync the remote so freshly
+		// pushed branches appear without a restart. Mirrors the header
+		// target-branch picker; backend rate-limits the fetch to 10s.
 		void startBranchesQuery.refetch();
-	}, [startBranchesQuery]);
+		if (!startRepository) return;
+		void prefetchRemoteRefs({ repoId: startRepository.id })
+			.then((result) => {
+				if (result.fetched) {
+					void startBranchesQuery.refetch();
+				}
+			})
+			.catch(() => {});
+	}, [startBranchesQuery, startRepository]);
 
 	const moveLocalToWorktree = useCallback(
 		(workspaceId: string) => {
@@ -442,9 +463,9 @@ export function useStartSurfaceController(
 					pushToastRef.current(
 						describeUnknownError(
 							error,
-							"Could not move workspace into a new worktree.",
+							translateSource("miscCouldNotMoveToWorktree"),
 						),
-						"Move to worktree failed",
+						translateSource("miscMoveToWorktreeFailed"),
 					);
 				});
 		},
@@ -474,8 +495,8 @@ export function useStartSurfaceController(
 			// mode does.
 			if (startMode !== "chat" && !startRepository?.id) {
 				pushToastRef.current(
-					"Pick a repository before sending.",
-					"Can't create workspace",
+					translateSource("miscPickRepositoryBeforeSending"),
+					translateSource("miscCantCreateWorkspace"),
 				);
 				return { shouldStream: false };
 			}
@@ -562,6 +583,57 @@ export function useStartSurfaceController(
 				requestSidebarReconcile(queryClient);
 
 				if (outcome.shouldStream) {
+					// Terminal-Mode start sends: convert the pipeline's GUI session
+					// into a Terminal session IN PLACE (no throwaway placeholder)
+					// and stage its boot before anything selects it. The panel's
+					// spawn is gated on workspace readiness, so the PTY still
+					// waits for the worktree to finalize.
+					let terminalConverted = false;
+					if (payload.terminalMode) {
+						try {
+							await convertSessionToTerminal(sessionId, payload.model.provider);
+							// Layer 1 of the two-layer title (same as GUI): show a
+							// provisional title from the prompt immediately; the agent's
+							// UserPromptSubmit hook later triggers the AI rename (layer 2).
+							const titleSeed = buildTitleSeed(payload.prompt);
+							seedSessionTitle(
+								queryClient,
+								sessionId,
+								outcome.workspaceId,
+								titleSeed,
+							);
+							void renameSession(sessionId, titleSeed).catch((error) => {
+								console.warn("[start] failed to seed terminal title:", error);
+							});
+							const boot = buildTerminalBootCommand(payload.model.provider, {
+								prompt: payload.prompt,
+								modelId: payload.model.cliModel || null,
+								effortLevel: payload.effortLevel || null,
+								permissionMode: payload.permissionMode || null,
+								addDirs: startPendingLinkedDirectories,
+								fastMode: payload.fastMode,
+							});
+							if (boot) {
+								setPendingBoot(sessionId, {
+									bootCommand: boot,
+									fastMode: payload.fastMode,
+								});
+							}
+							terminalConverted = true;
+						} catch (error) {
+							// Fall back to a REAL chat send: the pending payload below
+							// clears terminalMode, so the consumer streams a GUI turn
+							// instead of skipping it (which would drop the prompt).
+							console.error(
+								"[start] terminal conversion failed; continuing as chat:",
+								error,
+							);
+							pushToastRef.current(
+								translateSource("miscTerminalSentAsChat"),
+								translateSource("miscTerminalModeUnavailable"),
+							);
+						}
+					}
 					// Defer the view-switch state burst to the next animation frame
 					// so the browser can paint the current frame (start page)
 					// before reconciling the heavy conversation tree. Without this
@@ -583,14 +655,28 @@ export function useStartSurfaceController(
 							...payload,
 							workingDirectory:
 								preparedWorkingDirectory ?? payload.workingDirectory,
+							// Only keep the terminal intent when the conversion really
+							// happened — otherwise the consumer must stream a chat turn.
+							terminalMode: terminalConverted,
 						},
 						finalized: false,
 					});
-					requestAnimationFrame(() => {
+					// WKWebView pauses rAF entirely while the webview is hidden or
+					// occluded (`document.visibilityState === "hidden"` — e.g. the
+					// quick panel dismissed right after submit, or a window on
+					// another Space). Race a timer fallback so the view switch can
+					// never be lost; when rAF is alive it wins and keeps the
+					// paint-first behavior.
+					let viewSwitchDone = false;
+					const switchToConversation = () => {
+						if (viewSwitchDone) return;
+						viewSwitchDone = true;
 						selectWorkspaceRef.current(outcome.workspaceId);
 						selectSessionRef.current(outcome.sessionId);
 						setViewModeRef.current("conversation");
-					});
+					};
+					requestAnimationFrame(switchToConversation);
+					setTimeout(switchToConversation, 120);
 
 					let finalizedWorkingDirectory: string | null =
 						preparedWorkingDirectory;
@@ -603,8 +689,11 @@ export function useStartSurfaceController(
 								current?.id === pendingId ? null : current,
 							);
 							pushToastRef.current(
-								describeUnknownError(error, "Workspace setup failed."),
-								"Workspace setup failed",
+								describeUnknownError(
+									error,
+									translateSource("miscWorkspaceSetupFailedDot"),
+								),
+								translateSource("miscWorkspaceSetupFailed"),
 							);
 							requestSidebarReconcile(queryClient);
 							return { shouldStream: false };
@@ -629,6 +718,9 @@ export function useStartSurfaceController(
 							: current,
 					);
 					requestSidebarReconcile(queryClient);
+					// `workspaceDetail` (initializing → ready) is refreshed by the
+					// backend's `WorkspaceChanged` event from finalize, so the
+					// Terminal panel's spawn gate opens without a manual tab switch.
 					return { shouldStream: false };
 				}
 
@@ -639,14 +731,14 @@ export function useStartSurfaceController(
 			} catch (error) {
 				const { code, message } = extractError(
 					error,
-					"Could not create workspace.",
+					translateSource("miscCouldNotCreateWorkspace"),
 				);
 				const title =
 					code === "BranchInUse"
-						? "Branch already in use"
+						? translateSource("miscBranchAlreadyInUse")
 						: code === "BranchNotFound"
-							? "Branch not found"
-							: "Can't create workspace";
+							? translateSource("miscBranchNotFound")
+							: translateSource("miscCantCreateWorkspace");
 				pushToastRef.current(message, title);
 				return { shouldStream: false };
 			}

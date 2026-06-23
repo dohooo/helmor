@@ -25,6 +25,7 @@ fn make_script_type(instance_id: &str) -> String {
 /// or the frontend invokes `stop_terminal`. Nothing is persisted to disk —
 /// closing the app discards the session entirely.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri IPC command — args mirror the frontend call.
 pub async fn spawn_terminal(
     manager: State<'_, ScriptProcessManager>,
     repo_id: String,
@@ -32,6 +33,9 @@ pub async fn spawn_terminal(
     instance_id: String,
     agent_kind: Option<String>,
     boot_command: Option<String>,
+    fast_mode: Option<bool>,
+    initial_cols: Option<u16>,
+    initial_rows: Option<u16>,
     channel: Channel<ScriptEvent>,
 ) -> CmdResult<()> {
     let (repo, workspace) = tauri::async_runtime::spawn_blocking({
@@ -89,13 +93,23 @@ pub async fn spawn_terminal(
     };
     let mgr = manager.inner().clone();
     let script_type = make_script_type(&instance_id);
+    // Spawn the PTY at the renderer's real size. An inline TUI paints its first
+    // frame against this; a stale default leaves ghost rows after fit/SIGWINCH.
+    let initial_size = match (initial_cols, initial_rows) {
+        (Some(c), Some(r)) if c > 0 && r > 0 => Some((c, r)),
+        _ => None,
+    };
 
     tauri::async_runtime::spawn_blocking(move || {
         // Wrap the preset command: export the hook env (so the agent hook can
         // report its real session id via `helmor terminal-hook`) and, for
         // Claude, inject a `--settings` file carrying the hook.
-        let boot_input =
-            build_terminal_boot(&instance_id, agent_kind.as_deref(), boot_command.as_deref());
+        let boot_input = build_terminal_boot(
+            &instance_id,
+            agent_kind.as_deref(),
+            boot_command.as_deref(),
+            fast_mode.unwrap_or(false),
+        );
         if let Err(e) = crate::workspace::scripts::run_terminal_session(
             &mgr,
             &repo_id,
@@ -105,6 +119,7 @@ pub async fn spawn_terminal(
             &context,
             channel.clone(),
             boot_input.as_deref(),
+            initial_size,
         ) {
             let _ = channel.send(ScriptEvent::Error {
                 message: e.to_string(),
@@ -131,21 +146,36 @@ fn inject_settings_flag(cmd: &str, hooks_path: &str) -> String {
     }
 }
 
-/// Write (idempotently) the hooks file Claude loads via `--settings`.
-/// Registers a SessionStart hook → `helmor terminal-hook` so we capture the
-/// agent's real session id for resume. Content is static per agent; the
-/// session association rides the HELMOR_TERMINAL_SESSION_ID env, not the file.
-fn ensure_agent_hooks_file(cli_path: &str, agent: &str) -> anyhow::Result<std::path::PathBuf> {
-    let path = crate::data_dir::run_dir()?.join(format!("terminal-hooks-{agent}.json"));
+/// Write (idempotently) the settings file Claude loads via `--settings`.
+/// Registers the `helmor terminal-hook` lifecycle hooks (real session id for
+/// resume, busy state, prompt capture) and, when the composer requested it,
+/// `fastMode` — Claude has no fast-mode flag, only this settings key, and a
+/// second `--settings` would risk clobbering the first, so both ride one
+/// file. Content is static per (agent, fastMode) pair; the session
+/// association rides the HELMOR_TERMINAL_SESSION_ID env, not the file.
+fn ensure_agent_hooks_file(
+    cli_path: &str,
+    agent: &str,
+    fast_mode: bool,
+) -> anyhow::Result<std::path::PathBuf> {
+    let suffix = if fast_mode { "-fast" } else { "" };
+    let path = crate::data_dir::run_dir()?.join(format!("terminal-hooks-{agent}{suffix}.json"));
     let command = format!("{} terminal-hook --agent {}", sh_quote(cli_path), agent);
-    let json = serde_json::json!({
+    let mut json = serde_json::json!({
         "hooks": {
             "SessionStart": [{ "hooks": [{ "type": "command", "command": command }] }],
             "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": command }] }],
             "PreToolUse": [{ "hooks": [{ "type": "command", "command": command }] }],
-            "Stop": [{ "hooks": [{ "type": "command", "command": command }] }]
+            "Stop": [{ "hooks": [{ "type": "command", "command": command }] }],
+            // Stop does NOT fire on a user interrupt; SessionEnd is the only
+            // signal when the user quits claude mid-turn (the shell stays
+            // alive, so the PTY-exit fallback never sees it either).
+            "SessionEnd": [{ "hooks": [{ "type": "command", "command": command }] }]
         }
     });
+    if fast_mode {
+        json["fastMode"] = serde_json::Value::Bool(true);
+    }
     std::fs::write(&path, serde_json::to_vec_pretty(&json)?)?;
     Ok(path)
 }
@@ -238,16 +268,52 @@ fn build_terminal_boot(
     instance_id: &str,
     agent_kind: Option<&str>,
     boot_command: Option<&str>,
+    fast_mode: bool,
 ) -> Option<String> {
     let cmd = boot_command?;
     let cli_path = crate::cli::agent_invocation_path();
+    // Prefer the bundled agent CLIs (pinned + checksum-verified) over
+    // whatever the user has on PATH. Empty in dev — resolve_bundled_agent_paths
+    // intentionally returns none there, so dev keeps using the local install.
+    let mut bundled_dirs: Vec<String> = Vec::new();
+    if cfg!(debug_assertions) {
+        // Dev: use ONLY the sidecar's npm-pinned CLIs. Never the
+        // target/debug/vendor staging leftovers — those copies can be stale
+        // or broken (a resident one was SIGKILLed on launch), and
+        // resolve_bundled_agent_paths happily finds them next to the dev exe.
+        if let Some(bin_dir) = std::env::current_exe().ok().and_then(|exe| {
+            exe.ancestors()
+                .map(|root| root.join("sidecar").join("node_modules").join(".bin"))
+                .find(|path| path.join("claude").is_file())
+        }) {
+            bundled_dirs.push(bin_dir.display().to_string());
+        }
+    } else {
+        let bundled = crate::sidecar::resolve_bundled_agent_paths();
+        for bin in [&bundled.claude_bin, &bundled.codex_bin] {
+            if let Some(dir) = bin.as_deref().and_then(|p| p.parent()) {
+                let dir = dir.display().to_string();
+                if !bundled_dirs.contains(&dir) {
+                    bundled_dirs.push(dir);
+                }
+            }
+        }
+    }
+    let path_prefix = if bundled_dirs.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "export PATH={}\":$PATH\"; ",
+            sh_quote(&bundled_dirs.join(":"))
+        )
+    };
     let prefix = format!(
-        "export HELMOR_TERMINAL_SESSION_ID={}; export HELMOR_CLI_PATH={}; ",
+        "{path_prefix}export HELMOR_TERMINAL_SESSION_ID={}; export HELMOR_CLI_PATH={}; ",
         sh_quote(instance_id),
         sh_quote(&cli_path),
     );
     let final_cmd = match agent_kind {
-        Some(kind @ "claude") => match ensure_agent_hooks_file(&cli_path, kind) {
+        Some(kind @ "claude") => match ensure_agent_hooks_file(&cli_path, kind, fast_mode) {
             Ok(hooks_path) => inject_settings_flag(cmd, &hooks_path.display().to_string()),
             Err(error) => {
                 tracing::warn!(%error, "terminal: hooks file write failed; spawning without resume hook");
@@ -281,14 +347,26 @@ pub async fn stop_terminal(
 
 #[tauri::command]
 pub async fn write_terminal_stdin(
+    app: tauri::AppHandle,
     manager: State<'_, ScriptProcessManager>,
     repo_id: String,
     workspace_id: String,
     instance_id: String,
     data: String,
 ) -> CmdResult<bool> {
-    let key = (repo_id, make_script_type(&instance_id), Some(workspace_id));
-    Ok(manager.write_stdin(&key, data.as_bytes())?)
+    let key = (
+        repo_id,
+        make_script_type(&instance_id),
+        Some(workspace_id.clone()),
+    );
+    let written = manager.write_stdin(&key, data.as_bytes())?;
+    if written {
+        // instance_id == the helmor session id (it rides into the agent as
+        // HELMOR_TERMINAL_SESSION_ID); see terminal::observe_stdin for why
+        // interrupt inference hangs off this write path.
+        crate::terminal::observe_stdin(&app, &instance_id, &workspace_id, &data);
+    }
+    Ok(written)
 }
 
 #[tauri::command]
@@ -304,34 +382,30 @@ pub async fn resize_terminal(
     Ok(manager.resize(&key, cols, rows)?)
 }
 
+/// Convert a freshly-prepared GUI session into a Terminal session (start-surface
+/// terminal flow). See `models::sessions::convert_session_to_terminal`.
+#[tauri::command]
+pub async fn convert_session_to_terminal(session_id: String, agent_type: String) -> CmdResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::models::sessions::convert_session_to_terminal(&session_id, &agent_type)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e}"))??;
+    Ok(())
+}
+
 /// Mirror a Terminal session's working/idle state into the shared active-stream
 /// registry so the sidebar spinner treats it like a GUI session. Used to clear
 /// busy when the PTY exits; the working state itself comes from the agent hook.
 #[tauri::command]
 pub async fn set_terminal_session_busy(
     app: tauri::AppHandle,
-    active_streams: State<'_, crate::agents::ActiveStreams>,
     session_id: String,
     workspace_id: String,
     provider: Option<String>,
     busy: bool,
 ) -> CmdResult<()> {
-    active_streams.set_session_active(
-        &session_id,
-        Some(workspace_id),
-        provider.as_deref().unwrap_or("terminal"),
-        busy,
-    );
-
-    let status = if busy { "streaming" } else { "idle" };
-    let sid = session_id.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::models::sessions::set_session_status(&sid, status)
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e}"))??;
-
-    crate::ui_sync::publish(&app, crate::ui_sync::UiMutationEvent::ActiveStreamsChanged);
+    crate::terminal::set_busy(&app, &session_id, &workspace_id, provider.as_deref(), busy).await?;
     Ok(())
 }
 

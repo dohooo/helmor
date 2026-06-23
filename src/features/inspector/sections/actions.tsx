@@ -3,6 +3,7 @@ import {
 	ArrowUpRightIcon,
 	CheckIcon,
 	ChevronDown,
+	CircleSlashIcon,
 	EyeIcon,
 	LoaderCircleIcon,
 	TriangleIcon,
@@ -34,6 +35,7 @@ import {
 	type WorkspaceGitActionStatus,
 } from "@/lib/api";
 import { buildComposerPreviewPayload } from "@/lib/composer-insert";
+import { formatSource, I18nText, translateSource, useI18n } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
 import {
 	helmorQueryKeys,
@@ -62,18 +64,20 @@ interface GitStatusItem {
 	};
 }
 
+// `label` is an i18n key (see buildGitRows action labels). Maps the action
+// key to the loading-state label key, both resolved via t() at the call site.
 function loadingActionLabel(label: string): string {
 	switch (label) {
-		case "Push":
-			return "Pushing";
-		case "Pull":
-			return "Pulling";
-		case "Resolve":
-			return "Resolving";
-		case "Commit and push":
-			return "Committing";
+		case "push":
+			return "pushing";
+		case "pull":
+			return "pulling";
+		case "resolve":
+			return "resolving";
+		case "commitPush":
+			return "committing";
 		default:
-			return "Loading";
+			return "loading";
 	}
 }
 
@@ -98,6 +102,11 @@ const EMPTY_FORGE_ACTION_STATUS: ForgeActionStatus = {
 	remoteState: "unavailable",
 	message: null,
 };
+
+const INSPECTOR_ACTION_ROW_STATE_CLASS =
+	"text-muted-foreground transition-colors hover:bg-accent/45";
+const INSPECTOR_ACTION_ICON_STATE_CLASS =
+	"hover:bg-accent/45 hover:text-foreground";
 
 type ActionsSectionProps = {
 	workspaceId: string | null;
@@ -166,6 +175,7 @@ export function ActionsSection({
 	commitButtonState,
 	changeRequest,
 }: ActionsSectionProps) {
+	const { t } = useI18n();
 	const queryClient = useQueryClient();
 	const [syncPending, setSyncPending] = useState(false);
 	const [reviewPending, setReviewPending] = useState(false);
@@ -249,9 +259,9 @@ export function ActionsSection({
 			const result = await syncWorkspaceWithTargetBranch(workspaceId);
 			const target = result.targetBranch;
 			if (result.outcome === "updated") {
-				toast.success(`Pulled latest from ${target}`);
+				toast.success(formatSource("inspectorPulledLatestFrom", { target }));
 			} else if (result.outcome === "alreadyUpToDate") {
-				toast(`Already up to date with ${target}`);
+				toast(formatSource("inspectorAlreadyUpToDateWith", { target }));
 			} else {
 				// conflict or stashPopConflict — both hand off to the agent
 				// with a kind-specific narrow prompt.
@@ -261,7 +271,7 @@ export function ActionsSection({
 			const message =
 				error instanceof Error
 					? error.message
-					: "Unable to pull target updates.";
+					: translateSource("inspectorUnableToPullTargetUpdates");
 			toast.error(message);
 		} finally {
 			requestSidebarReconcile(queryClient);
@@ -320,7 +330,7 @@ export function ActionsSection({
 	return (
 		<section
 			ref={sectionRef}
-			aria-label="Inspector section Actions"
+			aria-label={t("inspectorSectionActions")}
 			className={cn(
 				"flex min-h-0 shrink-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar transition-colors",
 			)}
@@ -333,14 +343,19 @@ export function ActionsSection({
 					!open && "border-b-transparent",
 				)}
 			>
-				<span className={INSPECTOR_SECTION_TITLE_CLASS}>Actions</span>
+				<span className={INSPECTOR_SECTION_TITLE_CLASS}>
+					<I18nText source="actions" />
+				</span>
 				<Button
 					type="button"
-					aria-label="Toggle inspector actions section"
+					aria-label="toggleInspectorActionsSection"
 					onClick={onToggle}
 					variant="ghost"
 					size="icon-sm"
-					className="shrink-0 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+					className={cn(
+						"shrink-0 text-muted-foreground",
+						INSPECTOR_ACTION_ICON_STATE_CLASS,
+					)}
 				>
 					<ChevronDown
 						className="size-3.5"
@@ -356,31 +371,38 @@ export function ActionsSection({
 			{open && (
 				<div className="min-h-0 flex-1">
 					<ScrollArea
-						aria-label="Actions panel body"
-						className="h-full min-h-0 bg-muted/18 text-mini"
+						aria-label={t("actionsPanelBody")}
+						className="h-full min-h-0 bg-muted/18 text-ui"
 					>
 						{showHelpersGroup && (
 							<>
 								<div className="px-2.5 pb-1 pt-2">
-									<span className="text-micro font-medium tracking-wide text-muted-foreground">
-										Helpers
+									<span className="text-mini font-medium tracking-wide text-muted-foreground/70">
+										<I18nText source="helpers" />
 									</span>
 								</div>
 								{showReviewHelper && (
-									<div className="flex items-center gap-1.5 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
+									<div
+										className={cn(
+											"flex items-center gap-1.5 px-2.5 py-[3px]",
+											INSPECTOR_ACTION_ROW_STATE_CLASS,
+										)}
+									>
 										<EyeIcon
 											aria-hidden="true"
 											className="size-3 shrink-0"
 											strokeWidth={2}
 										/>
-										<span className="truncate">Review changes</span>
+										<span className="truncate">
+											<I18nText source="reviewChanges" />
+										</span>
 										<button
 											type="button"
 											onClick={() => void handleReviewChanges()}
 											disabled={reviewPending || workspaceId === null}
 											aria-busy={reviewPending ? true : undefined}
-											aria-label={reviewPending ? "Reviewing" : undefined}
-											className="ml-auto shrink-0 cursor-interactive text-micro text-foreground transition-colors hover:text-foreground/80 disabled:cursor-not-allowed disabled:opacity-50"
+											aria-label={reviewPending ? t("reviewing") : undefined}
+											className="ml-auto shrink-0 cursor-interactive text-micro text-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
 										>
 											<span className="inline-flex items-center gap-1">
 												{reviewPending ? (
@@ -390,7 +412,7 @@ export function ActionsSection({
 														strokeWidth={2}
 													/>
 												) : null}
-												{reviewPending ? null : "Review"}
+												{reviewPending ? null : <I18nText source="review2" />}
 											</span>
 										</button>
 									</div>
@@ -398,8 +420,8 @@ export function ActionsSection({
 							</>
 						)}
 						<div className="px-2.5 pb-1 pt-2">
-							<span className="text-micro font-medium tracking-wide text-muted-foreground">
-								Git
+							<span className="text-mini font-medium tracking-wide text-muted-foreground/70">
+								<I18nText source="git" />
 							</span>
 						</div>
 						{gitRows.map((item) => {
@@ -414,7 +436,10 @@ export function ActionsSection({
 							return (
 								<div
 									key={item.label}
-									className="flex items-center gap-1.5 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60"
+									className={cn(
+										"flex items-center gap-1.5 px-2.5 py-[3px]",
+										INSPECTOR_ACTION_ROW_STATE_CLASS,
+									)}
 								>
 									<StatusIcon status={item.status} />
 									<span className="truncate">{item.label}</span>
@@ -434,14 +459,14 @@ export function ActionsSection({
 												}
 												void onCommitAction?.(action.mode!);
 											}}
-											className="ml-auto shrink-0 cursor-interactive text-micro text-foreground transition-colors hover:text-foreground/80 disabled:cursor-not-allowed disabled:opacity-50"
+											className="ml-auto shrink-0 cursor-interactive text-micro text-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
 											disabled={
 												action.kind === "commit" ? actionDisabled : syncPending
 											}
 											aria-busy={isActionBusy ? true : undefined}
 											aria-label={
 												isActionBusy
-													? loadingActionLabel(action.label)
+													? t(loadingActionLabel(action.label))
 													: undefined
 											}
 										>
@@ -453,7 +478,7 @@ export function ActionsSection({
 														strokeWidth={2}
 													/>
 												) : null}
-												{isActionBusy ? null : action.label}
+												{isActionBusy ? null : t(action.label)}
 											</span>
 										</button>
 									)}
@@ -464,14 +489,17 @@ export function ActionsSection({
 						{reviewRows.length > 0 && (
 							<>
 								<div className="px-2.5 pb-1 pt-2.5">
-									<span className="text-micro font-medium tracking-wide text-muted-foreground">
-										Review
+									<span className="text-mini font-medium tracking-wide text-muted-foreground/70">
+										<I18nText source="review2" />
 									</span>
 								</div>
 								{reviewRows.map((item) => (
 									<div
 										key={item.label}
-										className="flex items-center gap-1.5 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60"
+										className={cn(
+											"flex items-center gap-1.5 px-2.5 py-[3px]",
+											INSPECTOR_ACTION_ROW_STATE_CLASS,
+										)}
 									>
 										<StatusIcon status={item.status} />
 										<span className="truncate">{item.label}</span>
@@ -483,8 +511,8 @@ export function ActionsSection({
 						{sortedDeployments.length > 0 && (
 							<>
 								<div className="px-2.5 pb-1 pt-2.5">
-									<span className="text-micro font-medium tracking-wide text-muted-foreground">
-										Deployments
+									<span className="text-mini font-medium tracking-wide text-muted-foreground/70">
+										<I18nText source="deployments" />
 									</span>
 								</div>
 								{sortedDeployments.map((item) => (
@@ -496,8 +524,8 @@ export function ActionsSection({
 						{sortedChecks.length > 0 && (
 							<>
 								<div className="px-2.5 pb-1 pt-2.5">
-									<span className="text-micro font-medium tracking-wide text-muted-foreground">
-										Checks
+									<span className="text-mini font-medium tracking-wide text-muted-foreground/70">
+										<I18nText source="checks" />
 									</span>
 								</div>
 								{sortedChecks.map((item) => (
@@ -535,22 +563,33 @@ function ProviderIcon({ provider }: { provider: ActionProvider }) {
 }
 
 function StatusIcon({ status }: { status: ActionStatusKind }) {
+	const { t } = useI18n();
 	if (status === "success") {
 		return (
 			<CheckIcon
-				aria-label="Passed"
+				aria-label={t("passed")}
 				className="size-3 shrink-0 text-chart-2"
 				strokeWidth={2.2}
 			/>
 		);
 	}
 
+	if (status === "skipped") {
+		return (
+			<CircleSlashIcon
+				aria-label={t("skipped2")}
+				className="size-3 shrink-0 text-muted-foreground"
+				strokeWidth={2}
+			/>
+		);
+	}
+
 	const label =
 		status === "running"
-			? "Running"
+			? "running"
 			: status === "failure"
-				? "Failed"
-				: "Pending";
+				? "failed"
+				: "pending";
 	const color =
 		status === "running"
 			? "rgb(245, 158, 11)"
@@ -560,7 +599,7 @@ function StatusIcon({ status }: { status: ActionStatusKind }) {
 
 	return (
 		<span
-			aria-label={label}
+			aria-label={t(label)}
 			className="inline-flex size-3 shrink-0 items-center justify-center rounded-full border border-current text-muted-foreground"
 			style={color ? { color } : undefined}
 		>
@@ -589,77 +628,83 @@ function buildGitRows(
 	return [
 		uncommittedCount === 0
 			? {
-					label: "No uncommitted changes",
+					label: translateSource("noUncommittedChanges"),
 					status: "success",
 				}
 			: {
-					label:
-						uncommittedCount === 1
-							? "1 uncommitted change"
-							: `${uncommittedCount} uncommitted changes`,
+					label: formatSource("countUncommittedChangelabel", {
+						count: uncommittedCount,
+						changeLabel: uncommittedCount === 1 ? "change" : "changes",
+					}),
 					status: "pending",
 					action: {
-						label: "Commit and push",
+						label: "commitPush",
 						kind: "commit",
 						mode: "commit-and-push",
 					},
 				},
 		gitStatus.pushStatus === "unpublished"
 			? {
-					label: "Branch not published to remote",
+					label: translateSource("branchNotPublishedRemote"),
 					status: "pending",
 					action: {
-						label: "Push",
+						label: "push",
 						kind: "commit",
 						mode: "push",
 					},
 				}
 			: (gitStatus.aheadOfRemoteCount ?? 0) > 0
 				? {
-						label:
-							gitStatus.aheadOfRemoteCount === 1
-								? `1 commit ahead of ${gitStatus.remoteTrackingRef ?? "upstream"}`
-								: `${gitStatus.aheadOfRemoteCount} commits ahead of ${gitStatus.remoteTrackingRef ?? "upstream"}`,
+						label: formatSource("inspectorCommitsAheadOf", {
+							count: gitStatus.aheadOfRemoteCount,
+							commitLabel:
+								gitStatus.aheadOfRemoteCount === 1 ? "commit" : "commits",
+							target: gitStatus.remoteTrackingRef ?? "upstream",
+						}),
 						status: "pending",
 						action: {
-							label: "Push",
+							label: "push",
 							kind: "commit",
 							mode: "push",
 						},
 					}
 				: {
-						label: "Branch fully pushed",
+						label: translateSource("branchFullyPushed"),
 						status: "success",
 					},
 		conflictCount > 0
 			? {
-					label: "Merge conflicts detected",
+					label: translateSource("mergeConflictsDetected"),
 					status: "failure",
 					action: {
-						label: "Resolve",
+						label: "resolve",
 						kind: "commit",
 						mode: "resolve-conflicts",
 					},
 				}
 			: gitStatus.syncStatus === "behind"
 				? {
-						label:
-							gitStatus.behindTargetCount === 1
-								? `1 commit behind ${syncTargetBranch}`
-								: `${gitStatus.behindTargetCount} commits behind ${syncTargetBranch}`,
+						label: formatSource("countCommitlabelBehindTarget", {
+							count: gitStatus.behindTargetCount,
+							commitLabel:
+								gitStatus.behindTargetCount === 1 ? "commit" : "commits",
+							target: syncTargetBranch,
+						}),
 						status: "pending",
 						action: {
-							label: "Pull",
+							label: "pull",
 							kind: "sync",
 						},
 					}
 				: gitStatus.syncStatus === "upToDate"
 					? {
-							label: `Up to date with ${syncTargetBranch}`,
+							label: formatSource("inspectorUpToDateWithTarget", {
+								target: syncTargetBranch,
+							}),
 							status: "success",
 						}
 					: {
-							label: "Sync status unavailable",
+							label: translateSource("syncStatusUnavailable"),
 							status: "pending",
 						},
 	];
@@ -671,7 +716,7 @@ function formatSyncTargetRef(
 ): string {
 	const branch = syncTargetBranch?.trim();
 	if (!branch) {
-		return "target branch";
+		return translateSource("inspectorTargetBranch");
 	}
 	if (branch.includes("/")) {
 		return branch;
@@ -694,25 +739,37 @@ function buildReviewRows(
 
 	if (forgeStatus.remoteState === "unauthenticated") {
 		rows.push({
-			label: `${providerName} CLI authentication required`,
+			label: formatSource("inspectorProviderCliAuthRequired", {
+				provider: providerName,
+			}),
 			status: "pending",
 		});
 	} else if (isMerged || forgeStatus.reviewDecision === "APPROVED") {
-		rows.push({ label: "Review approved", status: "success" });
+		rows.push({ label: translateSource("reviewApproved"), status: "success" });
 	} else if (currentChangeRequest?.state === "CLOSED") {
-		rows.push({ label: `${changeRequestName} closed`, status: "failure" });
+		rows.push({
+			label: formatSource("inspectorChangeRequestClosed", {
+				name: changeRequestName,
+			}),
+			status: "failure",
+		});
 	} else if (forgeStatus.reviewDecision === "CHANGES_REQUESTED") {
-		rows.push({ label: "Changes requested", status: "failure" });
+		rows.push({
+			label: translateSource("changesRequested"),
+			status: "failure",
+		});
 	} else if (forgeStatus.remoteState !== "noPr") {
 		rows.push({
-			label: `Waiting for ${changeRequestName} review`,
+			label: formatSource("inspectorWaitingForReview", {
+				name: changeRequestName,
+			}),
 			status: "pending",
 		});
 	}
 
 	if (hasMergeConflict) {
 		rows.push({
-			label: "Merge conflicts detected",
+			label: translateSource("mergeConflictsDetected"),
 			status: "failure",
 		});
 	}
@@ -729,26 +786,42 @@ function ActionStatusRow({
 		item: ForgeActionItem,
 	) => AppendContextPayloadResult | Promise<AppendContextPayloadResult>;
 }) {
-	const actionButtonClassName =
-		"size-5 rounded-sm text-muted-foreground opacity-55 transition-[opacity,color,background-color] hover:bg-accent/60 hover:text-foreground hover:opacity-100 focus-visible:opacity-100 [&_svg]:size-3.5";
-	const appendActionButtonClassName =
-		"size-4 rounded-sm text-muted-foreground opacity-0 pointer-events-none group-hover/check-row:opacity-55 group-hover/check-row:pointer-events-auto group-focus-within/check-row:opacity-55 group-focus-within/check-row:pointer-events-auto hover:bg-accent/60 hover:text-foreground hover:opacity-100 focus-visible:opacity-100 [&_svg]:size-3";
+	const { t, f } = useI18n();
+	const actionButtonClassName = cn(
+		"size-5 rounded-sm text-muted-foreground opacity-55 transition-[opacity,color,background-color] hover:opacity-100 focus-visible:opacity-100 [&_svg]:size-3.5",
+		INSPECTOR_ACTION_ICON_STATE_CLASS,
+	);
+	const appendActionButtonClassName = cn(
+		"size-4 rounded-sm text-muted-foreground opacity-0 pointer-events-none group-hover/check-row:opacity-55 group-hover/check-row:pointer-events-auto group-focus-within/check-row:opacity-55 group-focus-within/check-row:pointer-events-auto hover:opacity-100 focus-visible:opacity-100 [&_svg]:size-3",
+		INSPECTOR_ACTION_ICON_STATE_CLASS,
+	);
 
 	return (
-		<div className="group/check-row flex items-center justify-between gap-3 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
+		<div
+			className={cn(
+				"group/check-row flex items-center justify-between gap-3 px-2.5 py-[3px]",
+				INSPECTOR_ACTION_ROW_STATE_CLASS,
+			)}
+		>
 			<div className="flex min-w-0 flex-1 items-center gap-1.5">
 				<StatusIcon status={item.status} />
 				<ProviderIcon provider={item.provider} />
 				<span
-					className="min-w-0 truncate whitespace-nowrap text-foreground"
+					className="min-w-0 truncate whitespace-nowrap text-muted-foreground"
 					title={item.name}
 				>
 					{item.name}
 				</span>
-				{item.duration && (
-					<span className="shrink-0 text-micro text-muted-foreground">
-						{item.duration}
+				{item.status === "skipped" ? (
+					<span className="shrink-0 text-micro text-muted-foreground/70">
+						<I18nText source={"skipped2"} />
 					</span>
+				) : (
+					item.duration && (
+						<span className="shrink-0 text-micro text-muted-foreground/70">
+							{item.duration}
+						</span>
+					)
 				)}
 			</div>
 			<div className="flex shrink-0 items-center justify-end gap-0">
@@ -756,7 +829,7 @@ function ActionStatusRow({
 					<AppendContextButton
 						subjectLabel={item.name}
 						getPayload={() => onInsertToComposer(item)}
-						errorTitle="Couldn't insert check"
+						errorTitle={t("inspectorCouldntInsertCheck")}
 						className={appendActionButtonClassName}
 					/>
 				)}
@@ -765,7 +838,7 @@ function ActionStatusRow({
 						type="button"
 						variant="ghost"
 						size="icon-xs"
-						aria-label={`Open ${item.name}`}
+						aria-label={f("inspectorOpenName", { name: item.name })}
 						onClick={() => {
 							if (!item.url) {
 								return;
@@ -837,5 +910,7 @@ function actionPriority(status: ActionStatusKind): number {
 			return 2;
 		case "success":
 			return 3;
+		case "skipped":
+			return 4;
 	}
 }

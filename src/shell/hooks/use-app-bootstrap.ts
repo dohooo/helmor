@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { hydrateDraftCache } from "@/features/composer/draft-storage";
 import type { ContextProviderTab, SettingsSection } from "@/features/settings";
 import { exitOnboardingWindowMode } from "@/lib/api";
+import { setCurrentLanguage } from "@/lib/i18n";
 import { createHelmorQueryClient } from "@/lib/query-client";
 import {
 	type AppSettings,
@@ -11,6 +12,7 @@ import {
 	loadSettings,
 	saveSettings,
 } from "@/lib/settings";
+import { isQuickPanelWindow } from "@/lib/window-role";
 import {
 	SPLASH_FADE_MS,
 	SPLASH_MIN_DURATION_MS,
@@ -73,6 +75,9 @@ export function useAppBootstrap(): AppBootstrap {
 		}),
 		[appSettings, preloadSettings],
 	);
+	useEffect(() => {
+		setCurrentLanguage(settingsContextValue.settings.language);
+	}, [settingsContextValue.settings.language]);
 	useShellEvent("open-settings", (event) => {
 		setSettingsInitialSection(event.section);
 		setSettingsInitialInboxProvider(event.inboxProvider);
@@ -129,6 +134,11 @@ export function useAppBootstrap(): AppBootstrap {
 
 	useEffect(() => {
 		if (appSettings?.onboardingCompleted !== true) {
+			return;
+		}
+		// The command restores the INVOKING window's size constraints — from
+		// the quick panel it would blow the small card up to main-window size.
+		if (isQuickPanelWindow) {
 			return;
 		}
 

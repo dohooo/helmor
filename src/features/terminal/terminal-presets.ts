@@ -12,6 +12,13 @@ export type TerminalBootOptions = {
 	modelId?: string | null;
 	effortLevel?: string | null;
 	permissionMode?: string | null;
+	/** Workspace linked directories (composer /add-dir). claude maps them to
+	 *  `--add-dir`; codex ignores them (danger-full-access reaches them
+	 *  anyway). Snapshot at launch — TUIs can't take new dirs mid-run. */
+	addDirs?: readonly string[] | null;
+	/** codex maps this to `-c service_tier="fast"`; claude's equivalent rides
+	 *  the backend-injected --settings file instead (no CLI flag). */
+	fastMode?: boolean;
 };
 
 export type TerminalAgentSpec = {
@@ -25,8 +32,12 @@ export type TerminalAgentSpec = {
 	 *  begins the turn immediately). */
 	boot(opts: TerminalBootOptions): string;
 	/** Resume a prior conversation by the agent's own session id;
-	 *  null = the CLI has no resume. */
-	resume(providerSessionId: string): string | null;
+	 *  null = the CLI has no resume. `prompt`, when set, rides along as the
+	 *  resumed turn's initial input (composer convert-in-place → TUI). */
+	resume(
+		providerSessionId: string,
+		opts?: { addDirs?: readonly string[] | null; prompt?: string | null },
+	): string | null;
 };
 
 /** POSIX single-quote a value so untrusted text (session ids, prompts) can't
@@ -35,22 +46,69 @@ function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+/** Quote the user prompt for the boot command. A multi-line prompt single-
+ * quoted with literal newlines makes the boot command span multiple physical
+ * lines; the interactive shell's line editor then submits at the first newline
+ * (dangling quote → `quote>`, the CLI never launches) and a literal tab fires
+ * completion. When the prompt has those control chars, use `$'...'` ANSI-C
+ * quoting so the command stays one physical line and the shell rebuilds the
+ * real newlines/tabs in the CLI's argv. zsh/bash both support it (the boot
+ * prefix already requires one via `export VAR=...;`). */
+function shellQuotePrompt(value: string): string {
+	if (!/[\n\r\t]/.test(value)) return shellQuote(value);
+	const escaped = value
+		.replaceAll("\\", "\\\\")
+		.replaceAll("'", "\\'")
+		.replaceAll("\n", "\\n")
+		.replaceAll("\r", "\\r")
+		.replaceAll("\t", "\\t");
+	return `$'${escaped}'`;
+}
+
+/** Empty/whitespace model id → no `--model` flag (the CLI falls back to its
+ * own default). Every catalog model is a real wire id, so nothing to strip. */
+function cliModelOrNull(modelId?: string | null): string | null {
+	return modelId?.trim() || null;
+}
+
+function claudeAddDirFlags(addDirs?: readonly string[] | null): string[] {
+	const parts: string[] = [];
+	for (const dir of addDirs ?? []) {
+		const trimmed = dir.trim();
+		if (trimmed) parts.push("--add-dir", shellQuote(trimmed));
+	}
+	return parts;
+}
+
 const CLAUDE_SPEC: TerminalAgentSpec = {
 	key: "claude",
 	presetCommand: "claude --dangerously-skip-permissions",
 	boot(opts) {
 		const parts = ["claude"];
-		const model = opts.modelId?.trim();
+		const model = cliModelOrNull(opts.modelId);
 		const effort = opts.effortLevel?.trim();
 		const permission = opts.permissionMode?.trim();
 		if (model) parts.push("--model", shellQuote(model));
 		if (effort) parts.push("--effort", shellQuote(effort));
 		if (permission) parts.push("--permission-mode", shellQuote(permission));
-		parts.push(shellQuote(opts.prompt));
+		parts.push(...claudeAddDirFlags(opts.addDirs));
+		parts.push(shellQuotePrompt(opts.prompt));
 		return parts.join(" ");
 	},
-	resume(id) {
-		return `claude --resume ${shellQuote(id)} --dangerously-skip-permissions`;
+	resume(id, opts) {
+		// --add-dir is a process-level grant, so a resumed session needs the
+		// workspace's linked directories re-passed too.
+		const parts = [
+			"claude",
+			"--resume",
+			shellQuote(id),
+			"--dangerously-skip-permissions",
+			...claudeAddDirFlags(opts?.addDirs),
+		];
+		// `claude [options] [prompt]` — a trailing positional prompt runs as the
+		// first turn of the resumed conversation.
+		if (opts?.prompt?.trim()) parts.push(shellQuotePrompt(opts.prompt));
+		return parts.join(" ");
 	},
 };
 
@@ -60,11 +118,17 @@ const CODEX_SPEC: TerminalAgentSpec = {
 		'codex -c model_reasoning_effort="high" --ask-for-approval never --sandbox danger-full-access',
 	boot(opts) {
 		const parts = ["codex"];
-		const model = opts.modelId?.trim();
+		const model = cliModelOrNull(opts.modelId);
 		const effort = opts.effortLevel?.trim();
 		if (model) parts.push("-m", shellQuote(model));
 		if (effort) {
 			parts.push("-c", shellQuote(`model_reasoning_effort="${effort}"`));
+		}
+		if (opts.fastMode) {
+			// Best-effort: the SDK requests fast via the app-server turn param
+			// `serviceTier: "fast"`; the TUI has no documented flag, so pass
+			// the matching config key and verify on-device.
+			parts.push("-c", shellQuote('service_tier="fast"'));
 		}
 		if (opts.permissionMode?.trim() === "bypassPermissions") {
 			parts.push(
@@ -74,11 +138,16 @@ const CODEX_SPEC: TerminalAgentSpec = {
 				"danger-full-access",
 			);
 		}
-		parts.push(shellQuote(opts.prompt));
+		parts.push(shellQuotePrompt(opts.prompt));
 		return parts.join(" ");
 	},
-	resume(id) {
-		return `codex resume ${shellQuote(id)} -c model_reasoning_effort="high" --ask-for-approval never --sandbox danger-full-access`;
+	resume(id, opts) {
+		// `codex resume [OPTIONS] [SESSION_ID] [PROMPT]` — the trailing prompt
+		// starts the resumed session with the composer's input.
+		const base = `codex resume ${shellQuote(id)} -c model_reasoning_effort="high" --ask-for-approval never --sandbox danger-full-access`;
+		return opts?.prompt?.trim()
+			? `${base} ${shellQuotePrompt(opts.prompt)}`
+			: base;
 	},
 };
 
@@ -119,7 +188,8 @@ export function buildTerminalBootCommand(
 export function resumeBootCommand(
 	key: string | null | undefined,
 	sessionId: string,
+	opts?: { addDirs?: readonly string[] | null; prompt?: string | null },
 ): string | null {
-	const invocation = findTerminalAgent(key)?.resume(sessionId);
+	const invocation = findTerminalAgent(key)?.resume(sessionId, opts);
 	return invocation ? `${invocation}\n` : null;
 }

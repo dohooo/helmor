@@ -39,6 +39,7 @@ export function useWorkspaceDataControllers({
 	handleSelectSession,
 	selectedWorkspaceId,
 	settledWorkspaceId,
+	displayedWorkspaceId,
 	displayedSessionId,
 	workspaceReselectTick,
 	pendingCreatedWorkspaceSubmit,
@@ -60,6 +61,9 @@ export function useWorkspaceDataControllers({
 	// during a rapid-switch burst). Feeds the forge/detail/git query cluster so it
 	// fetches the settled workspace, not every one scrubbed past.
 	settledWorkspaceId: string | null;
+	// Paint-track workspace id — the read-state controller compares it against
+	// the selected one to skip mark-read during the display-flip window.
+	displayedWorkspaceId: string | null;
 	displayedSessionId: string | null;
 	workspaceReselectTick: number;
 	pendingCreatedWorkspaceSubmit: PendingCreatedWorkspaceSubmit | null;
@@ -85,6 +89,7 @@ export function useWorkspaceDataControllers({
 			queryClient,
 			notify,
 			pushToast: pushWorkspaceToast,
+			displayedWorkspaceId,
 			displayedSessionId,
 			reselectTick: workspaceReselectTick,
 			getSelectedWorkspaceId: () => selectionActions.getSnapshot().workspaceId,

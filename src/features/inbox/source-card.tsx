@@ -9,6 +9,7 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type { ComposerInsertTarget } from "@/lib/composer-insert";
+import { formatSource, I18nText, useI18n } from "@/lib/i18n";
 import type { ContextCard } from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
 import { SourceIcon } from "./source-icon";
@@ -30,6 +31,7 @@ export const SourceCard = memo(function SourceCard({
 	selected?: boolean;
 	appendContextTarget?: ComposerInsertTarget;
 }) {
+	const { t } = useI18n();
 	return (
 		<article
 			aria-label={card.title}
@@ -85,11 +87,11 @@ export const SourceCard = memo(function SourceCard({
 					<span className="absolute right-1 bottom-0.5 z-10 inline-flex">
 						<AppendContextButton
 							subjectLabel={card.title}
-							ariaLabel="Add to context"
+							ariaLabel="addContext2"
 							getPayload={() =>
 								buildCardContextPayload(card, appendContextTarget)
 							}
-							errorTitle="Couldn't insert context card"
+							errorTitle={t("inboxCouldntInsertContextCard")}
 							className={cn(
 								"flex size-7.5 cursor-interactive items-center justify-center rounded-md",
 								"border-0 bg-transparent text-muted-foreground opacity-0 shadow-none",
@@ -102,7 +104,9 @@ export const SourceCard = memo(function SourceCard({
 						/>
 					</span>
 				</TooltipTrigger>
-				<TooltipContent side="top">Add to context</TooltipContent>
+				<TooltipContent side="top">
+					<I18nText source="addContext2" />
+				</TooltipContent>
 			</Tooltip>
 		</article>
 	);
@@ -165,11 +169,11 @@ function buildCardContextLabel(card: ContextCard) {
 function formatRelativeTime(timestamp: number) {
 	const deltaMs = Date.now() - timestamp;
 	const minutes = Math.max(1, Math.round(deltaMs / 60_000));
-	if (minutes < 60) return `${minutes}m ago`;
+	if (minutes < 60) return formatSource("countMAgo", { count: minutes });
 
 	const hours = Math.round(minutes / 60);
-	if (hours < 24) return `${hours}h ago`;
+	if (hours < 24) return formatSource("countHAgo", { count: hours });
 
 	const days = Math.round(hours / 24);
-	return `${days}d ago`;
+	return formatSource("countDAgo", { count: days });
 }

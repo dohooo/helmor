@@ -7,6 +7,7 @@ import type {
 } from "@/features/conversation";
 import { createWorkspaceFromStartComposer } from "@/features/workspace-start/create-workspace";
 import type { AgentModelOption, AgentModelSection } from "@/lib/api";
+import { translateSource } from "@/lib/i18n";
 import { helmorQueryKeys } from "@/lib/query-client";
 import type { AppSettings } from "@/lib/settings";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
@@ -57,14 +58,15 @@ export function useFeedbackSubmit(deps: Deps) {
 					helmorQueryKeys.agentModelSections,
 				) ?? [];
 			const allModels = sections.flatMap((section) => section.options);
-			const preferred = appSettings.defaultModelId
-				? allModels.find((m) => m.id === appSettings.defaultModelId)
+			const preferredId = appSettings.defaultModel?.modelId;
+			const preferred = preferredId
+				? allModels.find((m) => m.id === preferredId)
 				: undefined;
 			const model: AgentModelOption | undefined = preferred ?? allModels[0];
 			if (!model) {
 				pushToast(
-					"Pick a default model in Settings first.",
-					"Can't send feedback",
+					translateSource("feedbackPickDefaultModelFirst"),
+					translateSource("feedbackCantSendFeedback"),
 				);
 				return;
 			}
@@ -138,8 +140,11 @@ export function useFeedbackSubmit(deps: Deps) {
 							current?.id === pendingId ? null : current,
 						);
 						pushToast(
-							describeUnknownError(error, "Workspace setup failed."),
-							"Workspace setup failed",
+							describeUnknownError(
+								error,
+								translateSource("feedbackWorkspaceSetupFailed"),
+							),
+							translateSource("feedbackWorkspaceSetupFailed"),
 						);
 						requestSidebarReconcile(queryClient);
 						return;
@@ -166,15 +171,18 @@ export function useFeedbackSubmit(deps: Deps) {
 				requestSidebarReconcile(queryClient);
 			} catch (error) {
 				pushToast(
-					describeUnknownError(error, "Failed to send feedback to agent."),
-					"Couldn't open workspace",
+					describeUnknownError(
+						error,
+						translateSource("feedbackFailedSendToAgent"),
+					),
+					translateSource("feedbackCouldntOpenWorkspace"),
 				);
 			}
 		},
 		[
 			appSettings.defaultEffort,
 			appSettings.defaultFastMode,
-			appSettings.defaultModelId,
+			appSettings.defaultModel?.modelId,
 			queryClient,
 			pushToast,
 			selectSession,

@@ -99,6 +99,18 @@ pub enum NormPart {
     FileMention {
         path: String,
     },
+    PastedText {
+        text_length: usize,
+        text_preview: String,
+    },
+    UserQuestion {
+        id: String,
+        source: String,
+        status: String,
+        questions: Vec<String>,
+        /// `question => answer` pairs, sorted by question for stability.
+        answers: Vec<String>,
+    },
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -266,6 +278,51 @@ fn normalize_basic(part: &MessagePart) -> NormPart {
                 .collect(),
         },
         MessagePart::FileMention { path, .. } => NormPart::FileMention { path: path.clone() },
+        MessagePart::PastedText { text, .. } => NormPart::PastedText {
+            text_length: utf16_len(text),
+            text_preview: truncate(text),
+        },
+        MessagePart::UserQuestion {
+            id,
+            source,
+            questions,
+            answers,
+            status,
+        } => {
+            let mut answer_pairs: Vec<String> = answers
+                .as_ref()
+                .and_then(Value::as_object)
+                .map(|m| {
+                    m.iter()
+                        .map(|(q, a)| {
+                            format!("{} => {}", truncate(q), truncate(a.as_str().unwrap_or("?")))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            answer_pairs.sort();
+            NormPart::UserQuestion {
+                id: id.clone(),
+                source: source.clone(),
+                status: format!("{status:?}").to_lowercase(),
+                questions: questions
+                    .iter()
+                    .map(|q| {
+                        format!(
+                            "{} [{}{}]",
+                            truncate(&q.question),
+                            q.options
+                                .iter()
+                                .map(|o| o.label.as_str())
+                                .collect::<Vec<_>>()
+                                .join("|"),
+                            if q.multi_select { " multi" } else { "" },
+                        )
+                    })
+                    .collect(),
+                answers: answer_pairs,
+            }
+        }
     }
 }
 

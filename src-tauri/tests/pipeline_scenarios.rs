@@ -141,6 +141,72 @@ fn user_prompt_with_file_mention_at_start() {
 }
 
 #[test]
+fn user_prompt_with_pasted_text() {
+    // Composer pasted-text tag: the prompt carries the full paste inline and
+    // `pastedTexts` marks its UTF-16 span. The instruction is non-ASCII on
+    // purpose — it shifts UTF-16 and byte offsets apart, exercising the
+    // adapter's offset conversion. Expect Text("帮我看看这个\n") +
+    // PastedText(code) + Text("\n谢谢").
+    let text = "帮我看看这个\nconst a = 1;\nconst b = 2;\n谢谢";
+    let paste_start = 7u64; // after 6 CJK chars + newline (1 UTF-16 unit each)
+    let paste_end = paste_start + ("const a = 1;\nconst b = 2;".len() as u64);
+    let msgs = vec![user_prompt_with_pasted_texts(
+        "u1",
+        text,
+        &[(paste_start, paste_end)],
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn user_prompt_with_invalid_pasted_ranges() {
+    // Defensive degradation: out-of-bounds, empty, and overlapping ranges are
+    // dropped rather than corrupting the split. Only the first valid range
+    // becomes a PastedText part; the rest of the prompt stays plain text.
+    let text = "before PASTED after";
+    let msgs = vec![user_prompt_with_pasted_texts(
+        "u1",
+        text,
+        &[
+            (7, 13),   // valid: "PASTED"
+            (10, 16),  // overlaps the first — dropped
+            (5, 5),    // empty — dropped
+            (40, 500), // out of bounds — dropped
+        ],
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn user_prompt_with_pasted_range_mid_surrogate() {
+    // Emoji are surrogate pairs in UTF-16. A range boundary inside one can
+    // never map to a char boundary, so those ranges drop (their span stays
+    // plain text); a valid range past the emoji still resolves — and ends
+    // exactly at end-of-string. Expect Text("看 😀😀 ") + PastedText("ok").
+    let text = "看 😀😀 ok"; // UTF-16: 看=0, sp=1, 😀=2..4, 😀=4..6, sp=6, o=7, k=8
+    let msgs = vec![user_prompt_with_pasted_texts(
+        "u1",
+        text,
+        &[
+            (2, 5), // end lands mid-surrogate — dropped
+            (3, 6), // start lands mid-surrogate — dropped
+            (7, 9), // valid: "ok"
+        ],
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn user_prompt_with_adjacent_pasted_ranges() {
+    // Ranges sharing a boundary don't overlap — both survive as separate
+    // chips with no text part between them. Expect Text("see ") +
+    // PastedText("AA") + PastedText("BBB").
+    let text = "see AABBB";
+    let msgs = vec![user_prompt_with_pasted_texts("u1", text, &[(4, 6), (6, 9)])];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
 fn user_prompt_with_dotfile_mention() {
     // Dotfile (no `/`) — the picker can produce these from workspace root.
     let msgs = vec![user_prompt_with_files(
@@ -495,6 +561,44 @@ fn opencode_running_tool_renders_output() {
         "assistant",
         &serde_json::to_string(&assistant).unwrap(),
     )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+// kimi reload: two turns each carrying a plan snapshot. The collapse pass
+// folds the repeated todo lists into one widget — anchored at the first
+// occurrence, showing the LATEST entries' statuses.
+#[test]
+fn kimi_plan_snapshots_collapse_to_latest() {
+    let turn = |id: &str, entries: serde_json::Value, text: &str| {
+        let parsed = json!({
+            "type": "kimi_message",
+            "session_id": "ses_1",
+            "role": "assistant",
+            "parts": [
+                { "type": "plan", "entries": entries },
+                { "type": "text", "text": text },
+            ],
+        });
+        make_record(id, "assistant", &serde_json::to_string(&parsed).unwrap())
+    };
+    let msgs = vec![
+        turn(
+            "k1",
+            json!([
+                { "content": "read config", "priority": "high", "status": "in_progress" },
+                { "content": "bump timeout", "priority": "medium", "status": "pending" },
+            ]),
+            "Reading.",
+        ),
+        turn(
+            "k2",
+            json!([
+                { "content": "read config", "priority": "high", "status": "completed" },
+                { "content": "bump timeout", "priority": "medium", "status": "completed" },
+            ]),
+            "Done.",
+        ),
+    ];
     assert_yaml_snapshot!(run_normalized(msgs));
 }
 
@@ -2179,4 +2283,217 @@ fn stream_top_level_partial_stays_top_level() {
         "top-level partial must not be tagged as a child, got {:?}",
         partial.id
     );
+}
+
+// ============================================================================
+// AskUserQuestion / user_question — unified Q&A card (#796)
+// ============================================================================
+
+fn auq_tool_use(id: &str, tool_use_id: &str) -> HistoricalRecord {
+    assistant_json(
+        id,
+        json!([
+            {"type": "text", "text": "Let me confirm one thing."},
+            {"type": "tool_use", "id": tool_use_id, "name": "AskUserQuestion", "input": {
+                "questions": [{
+                    "question": "Pick a color",
+                    "header": "Color",
+                    "multiSelect": false,
+                    "options": [
+                        {"label": "Red", "description": "warm"},
+                        {"label": "Blue", "description": "cool"}
+                    ]
+                }]
+            }}
+        ]),
+        None,
+    )
+}
+
+#[test]
+fn auq_claude_answered_uses_structured_tool_use_result() {
+    // The SDK user message carries BOTH the flat result string and the
+    // structured `tool_use_result` `{questions, answers}` — the card must
+    // take its answers from the structured form.
+    let result_msg = json!({
+        "type": "user",
+        "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "tu-auq-1",
+             "content": "Your questions have been answered: \"Pick a color\"=\"Red\". You can now continue with these answers in mind."}
+        ]},
+        "tool_use_result": {
+            "questions": [{"question": "Pick a color", "header": "Color"}],
+            "answers": {"Pick a color": "Red"}
+        }
+    });
+    let msgs = vec![
+        auq_tool_use("a1", "tu-auq-1"),
+        make_record("u1", "user", &serde_json::to_string(&result_msg).unwrap()),
+    ];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn auq_claude_answers_parsed_from_result_text() {
+    // No structured `tool_use_result` — fall back to parsing the flat
+    // `"q"="a"` result string.
+    let result_msg = json!({
+        "type": "user",
+        "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "tu-auq-1",
+             "content": "Your questions have been answered: \"Pick a color\"=\"Blue\". You can now continue with these answers in mind."}
+        ]}
+    });
+    let msgs = vec![
+        auq_tool_use("a1", "tu-auq-1"),
+        make_record("u1", "user", &serde_json::to_string(&result_msg).unwrap()),
+    ];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn auq_claude_decline_marks_declined() {
+    let result_msg = json!({
+        "type": "user",
+        "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "tu-auq-1",
+             "content": "User declined", "is_error": true}
+        ]}
+    });
+    let msgs = vec![
+        auq_tool_use("a1", "tu-auq-1"),
+        make_record("u1", "user", &serde_json::to_string(&result_msg).unwrap()),
+    ];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn auq_claude_open_question_stays_pending() {
+    // Question asked, turn still paused — no tool_result yet.
+    let msgs = vec![auq_tool_use("a1", "tu-auq-1")];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn user_question_row_renders_answered_card() {
+    // Persisted `user_question` row written by the accumulator when a
+    // Codex/OpenCode question resolves (questions already canonical).
+    let parsed = json!({
+        "type": "user_question",
+        "userInputId": "codex-input-1",
+        "source": "Codex",
+        "status": "answered",
+        "questions": [{
+            "question": "Apply the patch?",
+            "header": "Proceed",
+            "multiSelect": false,
+            "options": [{"label": "Yes"}, {"label": "No"}],
+            "allowFreeText": false
+        }],
+        "answers": {"Apply the patch?": "Yes"}
+    });
+    let msgs = vec![make_record(
+        "q1",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn stream_codex_user_question_event_persists_card() {
+    // Sidecar `user_question` marker mid-stream (Codex requestUserInput
+    // answered) — must persist as its own turn between items and render
+    // the same card on historical reload. Questions arrive provider-raw
+    // (Codex shape) and are normalized by the accumulator.
+    let events = vec![
+        json!({
+            "type": "item/completed",
+            "item": {"id": "item_0", "type": "agentMessage", "text": "Before the question."},
+            "thread_id": "thread-1",
+        }),
+        json!({
+            "type": "user_question",
+            "userInputId": "codex-input-1",
+            "source": "Codex",
+            "questions": [{
+                "id": "q0",
+                "header": "Mode",
+                "question": "Pick one",
+                "options": [{"label": "Fast", "description": "skip checks"}]
+            }],
+            "answers": {"Pick one": "Fast"},
+            "action": "submit",
+        }),
+        json!({
+            "type": "item/completed",
+            "item": {"id": "item_1", "type": "agentMessage", "text": "Continuing after the answer."},
+            "thread_id": "thread-1",
+        }),
+    ];
+
+    let fingerprint = replay_stream_events("codex", &events);
+    assert_yaml_snapshot!(normalize_stream_fingerprint(&fingerprint));
+}
+
+#[test]
+fn stream_opencode_user_question_declined() {
+    // OpenCode question rejected — the card persists with `declined`
+    // status and no answers. Raw opencode shape uses `multiple`.
+    let events = vec![json!({
+        "type": "user_question",
+        "userInputId": "oc-q-1",
+        "source": "OpenCode",
+        "questions": [{
+            "question": "Which files?",
+            "header": "Files",
+            "multiple": true,
+            "options": [{"label": "a.rs", "description": ""}]
+        }],
+        "action": "decline",
+    })];
+
+    let fingerprint = replay_stream_events("opencode", &events);
+    assert_yaml_snapshot!(normalize_stream_fingerprint(&fingerprint));
+}
+
+#[test]
+fn auq_claude_split_rows_still_merge_answers() {
+    // The userInputRequest pause can flush the turn mid-message, splitting
+    // thinking and the AUQ tool_use into separate persisted rows. The
+    // cross-row late-merge must still attach the structured answers.
+    let thinking_row = assistant_json(
+        "a1",
+        json!([{"type": "thinking", "thinking": "Deciding what to ask.", "signature": "sig"}]),
+        None,
+    );
+    let tool_use_row = assistant_json(
+        "a2",
+        json!([{"type": "tool_use", "id": "tu-auq-1", "name": "AskUserQuestion", "input": {
+            "questions": [{
+                "question": "Pick a color",
+                "header": "Color",
+                "multiSelect": false,
+                "options": [{"label": "Red"}, {"label": "Blue"}]
+            }]
+        }}]),
+        None,
+    );
+    let result_msg = json!({
+        "type": "user",
+        "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "tu-auq-1",
+             "content": "Your questions have been answered: \"Pick a color\"=\"Red\". You can now continue with these answers in mind."}
+        ]},
+        "tool_use_result": {
+            "questions": [{"question": "Pick a color", "header": "Color"}],
+            "answers": {"Pick a color": "Red"}
+        }
+    });
+    let msgs = vec![
+        thinking_row,
+        tool_use_row,
+        make_record("u1", "user", &serde_json::to_string(&result_msg).unwrap()),
+    ];
+    assert_yaml_snapshot!(run_normalized(msgs));
 }

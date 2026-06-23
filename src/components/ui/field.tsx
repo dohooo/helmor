@@ -2,6 +2,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { useMemo } from "react";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+
 import { cn } from "@/lib/utils";
 
 function FieldSet({ className, ...props }: React.ComponentProps<"fieldset">) {
@@ -20,6 +21,7 @@ function FieldSet({ className, ...props }: React.ComponentProps<"fieldset">) {
 function FieldLegend({
 	className,
 	variant = "legend",
+	children,
 	...props
 }: React.ComponentProps<"legend"> & { variant?: "legend" | "label" }) {
 	return (
@@ -27,11 +29,13 @@ function FieldLegend({
 			data-slot="field-legend"
 			data-variant={variant}
 			className={cn(
-				"mb-1.5 font-medium data-[variant=label]:text-body data-[variant=legend]:text-base",
+				"mb-1.5 font-medium data-[variant=label]:text-body data-[variant=legend]:text-title",
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{children}
+		</legend>
 	);
 }
 
@@ -112,7 +116,11 @@ function FieldLabel({
 	);
 }
 
-function FieldTitle({ className, ...props }: React.ComponentProps<"div">) {
+function FieldTitle({
+	className,
+	children,
+	...props
+}: React.ComponentProps<"div">) {
 	return (
 		<div
 			data-slot="field-label"
@@ -121,11 +129,17 @@ function FieldTitle({ className, ...props }: React.ComponentProps<"div">) {
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{children}
+		</div>
 	);
 }
 
-function FieldDescription({ className, ...props }: React.ComponentProps<"p">) {
+function FieldDescription({
+	className,
+	children,
+	...props
+}: React.ComponentProps<"p">) {
 	return (
 		<p
 			data-slot="field-description"
@@ -136,7 +150,9 @@ function FieldDescription({ className, ...props }: React.ComponentProps<"p">) {
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{children}
+		</p>
 	);
 }
 

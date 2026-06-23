@@ -12,6 +12,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import type { ThreadMessageLike } from "./api";
+import { sessionThreadMessagesQueryOptions } from "./query-client";
 import {
 	appendUserMessage,
 	readSessionThread,
@@ -212,6 +213,57 @@ describe("shareMessages — structural reference reuse", () => {
 		const result = shareMessages(prev, next);
 		expect(result).not.toBe(prev);
 		expect(result).toHaveLength(1);
+		expect(result[0]).toBe(prev[0]);
+	});
+});
+
+describe("sessionThreadMessagesQueryOptions structuralSharing", () => {
+	function userMsg(id: string, text: string): ThreadMessageLike {
+		return {
+			role: "user",
+			id,
+			createdAt: "2026-04-08T00:00:00Z",
+			content: [{ type: "text", id: `${id}:txt:0`, text }],
+		};
+	}
+
+	function optionsSharing(): (
+		oldData: unknown | undefined,
+		newData: unknown,
+	) => unknown {
+		const sharing =
+			sessionThreadMessagesQueryOptions("session-1").structuralSharing;
+		expect(typeof sharing).toBe("function");
+		return sharing as (
+			oldData: unknown | undefined,
+			newData: unknown,
+		) => unknown;
+	}
+
+	it("passes the first fetch straight through without throwing (oldData is undefined)", () => {
+		const share = optionsSharing();
+		const data = [userMsg("m1", "hello")];
+		// shareMessages iterates prev unconditionally — the options-level
+		// wrapper MUST short-circuit undefined oldData or the very first
+		// fetch of every session would crash.
+		expect(share(undefined, data)).toBe(data);
+	});
+
+	it("keeps the old array reference when the refetched data is equivalent", () => {
+		const share = optionsSharing();
+		const prev = [userMsg("m1", "hello"), userMsg("m2", "world")];
+		const next = [userMsg("m1", "hello"), userMsg("m2", "world")];
+		expect(share(prev, next)).toBe(prev);
+	});
+
+	it("returns a new reference when the refetched data changed", () => {
+		const share = optionsSharing();
+		const prev = [userMsg("m1", "hello")];
+		const next = [userMsg("m1", "hello"), userMsg("m2", "world")];
+		const result = share(prev, next) as ThreadMessageLike[];
+		expect(result).not.toBe(prev);
+		expect(result).toHaveLength(2);
+		// Per-message sharing still applies inside the new array.
 		expect(result[0]).toBe(prev[0]);
 	});
 });

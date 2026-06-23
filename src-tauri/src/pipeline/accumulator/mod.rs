@@ -11,6 +11,7 @@
 
 mod codex;
 mod cursor;
+mod kimi;
 mod opencode;
 mod streaming;
 
@@ -163,6 +164,12 @@ pub struct StreamAccumulator {
     opencode_state: opencode::OpencodeRunState,
     /// Index into `collected[]` driving `build_opencode_partial`.
     opencode_partial_idx: Option<usize>,
+
+    // ── kimi (ACP) state ─────────────────────────────────────────────
+    /// Per-turn kimi part accumulation; see `kimi.rs`.
+    kimi_state: kimi::KimiRunState,
+    /// Index into `collected[]` driving `build_kimi_partial`.
+    kimi_partial_idx: Option<usize>,
 
     // ── Coverage guard ───────────────────────────────────────────────
     /// Top-level event types that fell through `push_event`'s match
@@ -352,6 +359,8 @@ impl StreamAccumulator {
             cursor_state: cursor::new_run_state(),
             opencode_state: opencode::new_run_state(),
             opencode_partial_idx: None,
+            kimi_state: kimi::new_run_state(),
+            kimi_partial_idx: None,
             dropped_event_types: Vec::new(),
         }
     }
@@ -448,6 +457,14 @@ impl StreamAccumulator {
                 PushOutcome::Finalized
             }
             Some("auth_status") => PushOutcome::NoOp,
+            // Resolved Codex/OpenCode user-input question — the sidecar
+            // emits this at answer time so the Q&A lands in the transcript
+            // at its natural stream position. Claude AskUserQuestion skips
+            // this path (its tool_use already lives in the assistant turn).
+            Some("user_question") => {
+                self.handle_user_question(value);
+                PushOutcome::Finalized
+            }
             Some("system") => {
                 self.handle_claude_system(raw_line, value);
                 PushOutcome::Finalized
@@ -561,6 +578,19 @@ impl StreamAccumulator {
             | Some("opencode/todo.updated")
             | Some("opencode/message.removed")
             | Some("opencode/message.part.removed") => PushOutcome::NoOp,
+
+            // ── kimi (ACP) events (namespaced by the sidecar manager) ─
+            // session_id already lifted by push_event; nothing to render.
+            Some("kimi/session_init") => PushOutcome::NoOp,
+            Some("kimi/agent_message_chunk") => kimi::handle_message_chunk(self, value),
+            Some("kimi/agent_thought_chunk") => kimi::handle_thought_chunk(self, value),
+            // tool_call + tool_call_update both merge by tool_call_id.
+            Some("kimi/tool_call") | Some("kimi/tool_call_update") => {
+                kimi::handle_tool_call(self, value)
+            }
+            Some("kimi/plan") => kimi::handle_plan(self, value),
+            // The sidecar's `session/prompt` response → finalize the turn.
+            Some("kimi/turn_complete") => kimi::handle_turn_complete(self, value),
 
             // ── Codex informational notifications (no render) ────────
             Some("thread/status/changed")
@@ -681,6 +711,20 @@ impl StreamAccumulator {
         })
     }
 
+    /// Streaming partial = clone of the last kimi `collected[]` snapshot.
+    pub fn build_kimi_partial(&mut self) -> Option<IntermediateMessage> {
+        let idx = self.kimi_partial_idx.take()?;
+        let entry = self.collected.get(idx)?;
+        Some(IntermediateMessage {
+            id: entry.id.clone(),
+            role: entry.role,
+            raw_json: entry.raw_json.clone(),
+            parsed: entry.parsed.clone(),
+            created_at: entry.created_at.clone(),
+            is_streaming: true,
+        })
+    }
+
     /// Whether the accumulator has an active streaming partial.
     pub fn has_active_partial(&self) -> bool {
         !self.blocks.is_empty()
@@ -688,6 +732,7 @@ impl StreamAccumulator {
             || !self.fallback_thinking.trim().is_empty()
             || self.codex_partial_idx.is_some()
             || self.opencode_partial_idx.is_some()
+            || self.kimi_partial_idx.is_some()
     }
 
     // ── Persistence accessors ───────────────────────────────────────
@@ -822,6 +867,12 @@ impl StreamAccumulator {
     /// Finalize the in-flight opencode message on abort. Idempotent.
     pub fn flush_opencode_in_progress(&mut self) {
         opencode::flush_in_progress(self);
+    }
+
+    /// Finalize the in-flight kimi message on abort or error termination
+    /// (in-flight tool parts settle to `failed`). Idempotent.
+    pub fn flush_kimi_in_progress(&mut self) {
+        kimi::flush_in_progress(self);
     }
 
     /// Convert any active streaming partial into a finalized assistant
@@ -1134,6 +1185,51 @@ impl StreamAccumulator {
 
     fn handle_error(&mut self, raw_line: &str, value: &Value) {
         self.collect_message(raw_line, value, MessageRole::Error, None);
+    }
+
+    /// Sidecar `user_question` event — a Codex/OpenCode question the user
+    /// just answered (or declined). Normalizes the provider-raw questions
+    /// into the canonical persisted shape and pushes a standalone turn so
+    /// the Q&A card sits at its natural position between stream items.
+    fn handle_user_question(&mut self, value: &Value) {
+        let questions = crate::pipeline::user_question::normalize_questions(
+            &self.provider,
+            value.get("questions").unwrap_or(&Value::Null),
+        );
+        if questions.is_empty() {
+            return;
+        }
+        let action = value
+            .get("action")
+            .and_then(Value::as_str)
+            .unwrap_or("submit");
+        let status = if action == "decline" {
+            "declined"
+        } else {
+            "answered"
+        };
+        let mut synthetic = serde_json::json!({
+            "type": "user_question",
+            "userInputId": value.get("userInputId").and_then(Value::as_str).unwrap_or_default(),
+            "source": value.get("source").and_then(Value::as_str).unwrap_or_default(),
+            "questions": questions,
+            "status": status,
+        });
+        if action == "submit" {
+            if let Some(answers) = value.get("answers").filter(|v| v.is_object()) {
+                synthetic["answers"] = answers.clone();
+            }
+        }
+        let s = serde_json::to_string(&synthetic).unwrap_or_default();
+
+        self.flush_assistant();
+        let turn_id = uuid::Uuid::new_v4().to_string();
+        self.turns.push(CollectedTurn {
+            id: turn_id.clone(),
+            role: MessageRole::Assistant,
+            content_json: s.clone(),
+        });
+        self.collect_message(&s, &synthetic, MessageRole::Assistant, Some(&turn_id));
     }
 
     fn handle_rate_limit_event(&mut self, raw_line: &str, value: &Value) {

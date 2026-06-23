@@ -11,28 +11,23 @@ import {
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import { AppUpdateButton } from "@/features/updater/app-update-button";
 import type { AppUpdateStatus } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { MiniModeToggleButton } from "./mini-mode-toggle-button";
 
 type Props = {
 	appUpdateStatus: AppUpdateStatus | null;
 	leftSidebarToggleShortcut: string | null;
-	miniModePending: boolean;
-	miniModeToggleShortcut: string | null;
 	showOnDesktop: boolean;
-	onToggleMiniMode: () => void;
 	onExpandSidebar: () => void;
 };
 
 export function WorkspaceHeaderLeading({
 	appUpdateStatus,
 	leftSidebarToggleShortcut,
-	miniModePending,
-	miniModeToggleShortcut,
 	showOnDesktop,
-	onToggleMiniMode,
 	onExpandSidebar,
 }: Props) {
+	const { t } = useI18n();
 	return (
 		<div
 			className={cn(
@@ -44,15 +39,10 @@ export function WorkspaceHeaderLeading({
 			<div className="w-[62px] shrink-0 max-[960px]:hidden" />
 			<div className="flex items-center gap-[2px]">
 				<AppUpdateButton status={showOnDesktop ? appUpdateStatus : null} />
-				<MiniModeToggleButton
-					pending={miniModePending}
-					shortcut={miniModeToggleShortcut}
-					onToggle={onToggleMiniMode}
-				/>
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<Button
-							aria-label="Expand left sidebar"
+							aria-label="expandLeftSidebar"
 							onClick={onExpandSidebar}
 							variant="ghost"
 							size="icon-xs"
@@ -65,7 +55,7 @@ export function WorkspaceHeaderLeading({
 						side="bottom"
 						className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 					>
-						<span>Expand left sidebar</span>
+						<span>{t("expandLeftSidebar")}</span>
 						{leftSidebarToggleShortcut ? (
 							<InlineShortcutDisplay
 								hotkey={leftSidebarToggleShortcut}

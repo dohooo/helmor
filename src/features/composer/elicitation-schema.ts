@@ -1,4 +1,5 @@
 import type { PendingUserInput } from "@/features/conversation/pending-user-input";
+import { translateSource } from "@/lib/i18n";
 
 type ElicitationEnumOption = {
 	value: string;
@@ -326,7 +327,7 @@ export function normalizeElicitation(
 			elicitationId,
 			serverName,
 			message,
-			reason: "Expected form or url payload.",
+			reason: translateSource("composerExpectedFormOrUrl"),
 		};
 	}
 
@@ -339,7 +340,7 @@ export function normalizeElicitation(
 			elicitationId,
 			serverName,
 			message,
-			reason: "Unsupported form schema.",
+			reason: translateSource("composerUnsupportedFormSchema"),
 		};
 	}
 
@@ -350,7 +351,7 @@ export function normalizeElicitation(
 			elicitationId,
 			serverName,
 			message,
-			reason: "Form user-input request is missing properties.",
+			reason: translateSource("composerFormMissingProperties"),
 		};
 	}
 
@@ -393,7 +394,7 @@ export function normalizeElicitation(
 			elicitationId,
 			serverName,
 			message,
-			reason: "Form schema contains unsupported required fields.",
+			reason: translateSource("composerFormUnsupportedRequired"),
 		};
 	}
 
@@ -403,7 +404,7 @@ export function normalizeElicitation(
 			elicitationId,
 			serverName,
 			message,
-			reason: "No supported fields were found in the form schema.",
+			reason: translateSource("composerFormNoSupportedFields"),
 		};
 	}
 

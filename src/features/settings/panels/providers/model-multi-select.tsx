@@ -15,6 +15,7 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "@/components/ui/popover";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 export type MultiSelectOption = { id: string; label: string };
@@ -62,6 +63,7 @@ export function ModelMultiSelect({
 	grouped?: boolean;
 	triggerClassName?: string;
 }) {
+	const { f } = useI18n();
 	// Render picks in user-saved order; popup list keeps catalog order.
 	const enabled = enabledIds.map(
 		(id) => available.find((m) => m.id === id) ?? { id, label: id },
@@ -82,22 +84,33 @@ export function ModelMultiSelect({
 		return [...map.entries()];
 	}, [available, grouped]);
 
-	const renderItem = (model: MultiSelectOption) => (
-		<CommandItem
-			key={model.id}
-			value={`${model.label} ${model.id}`}
-			data-checked={enabledSet.has(model.id)}
-			onSelect={() => onToggle(model.id)}
-			className="items-start"
-		>
-			<div className="flex min-w-0 flex-1 flex-col gap-0.5">
-				<span className="text-ui leading-tight">{model.label}</span>
-				<span className="font-mono text-micro leading-tight text-muted-foreground">
-					{model.id}
-				</span>
-			</div>
-		</CommandItem>
-	);
+	const renderItem = (model: MultiSelectOption) => {
+		// No real name → show just the id (avoid two identical lines).
+		const name = model.label.trim();
+		const hasName = name.length > 0 && name !== model.id;
+		return (
+			<CommandItem
+				key={model.id}
+				value={`${model.label} ${model.id}`}
+				data-checked={enabledSet.has(model.id)}
+				onSelect={() => onToggle(model.id)}
+				className="items-start"
+			>
+				<div className="flex min-w-0 flex-1 flex-col gap-0.5">
+					{hasName ? (
+						<>
+							<span className="text-ui leading-tight">{model.label}</span>
+							<span className="font-mono text-micro leading-tight text-muted-foreground">
+								{model.id}
+							</span>
+						</>
+					) : (
+						<span className="font-mono text-ui leading-tight">{model.id}</span>
+					)}
+				</div>
+			</CommandItem>
+		);
+	};
 
 	return (
 		<Popover>
@@ -114,7 +127,11 @@ export function ModelMultiSelect({
 					<span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
 						{enabled.length === 0 ? (
 							<span className="px-1 text-small text-muted-foreground">
-								{loading ? "Loading…" : "No models picked"}
+								{loading ? (
+									<I18nText source="loading2" />
+								) : (
+									<I18nText source="noModelsPicked" />
+								)}
 							</span>
 						) : (
 							<>
@@ -128,7 +145,7 @@ export function ModelMultiSelect({
 										<span className="truncate">{model.label}</span>
 										<button
 											type="button"
-											aria-label={`Remove ${model.label}`}
+											aria-label={f("removeLabel", { label: model.label })}
 											onClick={(event) => {
 												event.preventDefault();
 												event.stopPropagation();
@@ -142,7 +159,7 @@ export function ModelMultiSelect({
 								))}
 								{overflow > 0 ? (
 									<span className="px-1 text-mini text-muted-foreground">
-										+{overflow} more
+										{f("countMore", { count: overflow })}
 									</span>
 								) : null}
 							</>
@@ -156,24 +173,28 @@ export function ModelMultiSelect({
 			</PopoverTrigger>
 			<PopoverContent align="end" className="w-[440px] max-w-[90vw] p-1.5">
 				<Command filter={scoreModel}>
-					<CommandInput placeholder="Search models" />
+					<CommandInput placeholder="searchModels" />
 					{enabledIds.length > 0 ? (
 						<div className="flex items-center justify-between gap-2 px-2 pt-0.5 pb-1">
 							<span className="text-mini text-muted-foreground">
-								{enabledIds.length} selected
+								{f("countSelected", { count: enabledIds.length })}
 							</span>
 							<Button type="button" variant="ghost" size="xs" onClick={onClear}>
-								Unselect all
+								<I18nText source="unselectAll" />
 							</Button>
 						</div>
 					) : null}
 					<CommandList className="max-h-[min(60vh,420px)]">
 						<CommandEmpty>
-							{available.length === 0
-								? loading
-									? "Loading models…"
-									: "No cached models yet — click Refresh."
-								: "No models found."}
+							{available.length === 0 ? (
+								loading ? (
+									<I18nText source="loadingModels" />
+								) : (
+									<I18nText source="noCachedModelsYetClickRefresh" />
+								)
+							) : (
+								<I18nText source="noModelsFound" />
+							)}
 						</CommandEmpty>
 						{groups ? (
 							groups.map(([heading, models]) => (

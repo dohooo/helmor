@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/tooltip";
 import type { AppUpdateStatus } from "@/lib/api";
 import { installDownloadedAppUpdate } from "@/lib/api";
+import { I18nText, useI18n } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
 import { cn } from "@/lib/utils";
 
@@ -18,6 +19,7 @@ type AppUpdateButtonProps = {
 };
 
 export function AppUpdateButton({ status, className }: AppUpdateButtonProps) {
+	const { t, f } = useI18n();
 	const [installing, setInstalling] = useState(false);
 
 	if (status?.stage !== "downloaded" || !status.update) {
@@ -31,26 +33,27 @@ export function AppUpdateButton({ status, className }: AppUpdateButtonProps) {
 			<TooltipTrigger asChild>
 				<Button
 					type="button"
-					variant="ghost"
+					variant="default"
 					size="xs"
-					aria-label={`Update Helmor to ${update.version}`}
+					aria-label={f("miscUpdateHelmorToVersion", {
+						version: update.version,
+					})}
 					className={cn(
-						"h-6 gap-1 rounded-sm px-1.5 text-mini font-medium tracking-[0.01em] text-muted-foreground transition-[background-color,color,border-color,box-shadow] duration-200 hover:bg-accent/60 hover:text-foreground dark:hover:bg-muted/45",
-						"relative overflow-hidden shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--border)_36%,transparent)] hover:shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--foreground)_12%,transparent)]",
+						"h-6 gap-1 rounded-sm px-1.5 text-mini font-medium tracking-[0.01em] transition-[background-color,color,border-color,box-shadow] duration-200 hover:bg-primary/90",
 						className,
 					)}
 					onClick={() => {
 						setInstalling(true);
 						void installDownloadedAppUpdate()
 							.catch((error: unknown) => {
-								toast.error("Install failed", {
+								toast.error(t("installFailed"), {
 									description:
 										error instanceof Error
 											? error.message
-											: "Unable to install the downloaded update.",
+											: t("unableInstallDownloadedUpdate"),
 									action: update.releaseUrl
 										? {
-												label: "Change log",
+												label: t("changeLog"),
 												onClick: () => void openUrl(update.releaseUrl),
 											}
 										: undefined,
@@ -61,11 +64,13 @@ export function AppUpdateButton({ status, className }: AppUpdateButtonProps) {
 					disabled={installing}
 				>
 					{installing ? (
-						<Loader2 className="size-3 animate-spin text-foreground/70" />
+						<Loader2 className="size-3 animate-spin" />
 					) : (
-						<Download className="size-3 text-foreground/72" />
+						<Download className="size-3" />
 					)}
-					<span>Update</span>
+					<span>
+						<I18nText source="update" />
+					</span>
 				</Button>
 			</TooltipTrigger>
 			<TooltipContent

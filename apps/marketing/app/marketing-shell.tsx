@@ -239,6 +239,13 @@ export function MarketingShell({ data }: { data: RepoData }) {
 					<a href={`${data.repoUrl}/discussions`}>Discussions</a>
 				</div>
 				<div className="spacer" />
+				<a
+					className="rail-github"
+					href={data.repoUrl}
+					aria-label="View on GitHub"
+				>
+					<GithubIcon />
+				</a>
 				<div className="theme-toggle" role="tablist" aria-label="Theme">
 					<button
 						type="button"
@@ -310,9 +317,9 @@ export function MarketingShell({ data }: { data: RepoData }) {
 
 					<div className="cta">
 						<DownloadDropdown data={data} />
-						<a className="btn outline" href={data.repoUrl}>
-							<GithubIcon />
-							View on GitHub
+						<a className="btn primary" href={data.windowsSetupUrl}>
+							<WindowsIcon />
+							Download for Windows
 						</a>
 					</div>
 
@@ -392,6 +399,20 @@ function MoonIcon() {
 			aria-hidden="true"
 		>
 			<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+		</svg>
+	);
+}
+
+function WindowsIcon() {
+	return (
+		<svg
+			width="13"
+			height="13"
+			viewBox="0 0 24 24"
+			fill="currentColor"
+			aria-hidden="true"
+		>
+			<path d="M3 5.4 10.4 4.4v7.1H3V5.4zM10.4 12.5v7.1L3 18.6v-6.1h7.4zM11.3 4.3 21 3v8.5h-9.7V4.3zM21 12.5V21l-9.7-1.3v-7.2H21z" />
 		</svg>
 	);
 }

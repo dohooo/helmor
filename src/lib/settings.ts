@@ -1,4 +1,9 @@
 import { createContext, useContext } from "react";
+import {
+	type AppLanguage,
+	DEFAULT_APP_LANGUAGE,
+	isAppLanguage,
+} from "@/lib/i18n/types";
 import type { WorkspaceBranchIntent } from "./api";
 // Routed through the transport shim so settings load works in the mobile
 // browser companion too (not just the Tauri webview).
@@ -30,6 +35,12 @@ export type FollowUpBehavior = "steer" | "queue";
 export type ClaudeThinkingDisplay = "summarized" | "omitted";
 export type AppSurface = "workspace" | "workspace-start";
 export type WorkspaceRightSidebarMode = "inspector" | "context";
+/** A global model preference (default / review / action). Carries its
+ *  provider so a slug-based model (opencode / mimo) is never re-derived
+ *  ambiguously from the bare id. `provider` is null only for legacy rows
+ *  not yet re-saved. Persisted as JSON. */
+export type ModelRef = { provider: string | null; modelId: string };
+
 export type SidebarGrouping = "status" | "repo";
 export type SidebarSort = "custom" | "repoName" | "updatedAt" | "createdAt";
 
@@ -101,13 +112,6 @@ export type InboxKindDefaults = {
 	prLabels: string;
 };
 
-export type ClaudeCustomProviderSettings = {
-	builtinProviderApiKeys: Record<string, string>;
-	customBaseUrl: string;
-	customApiKey: string;
-	customModels: string;
-};
-
 /** Mirrors SDK `ModelParameterDefinition` shape. */
 export type CursorCachedModelParameterValue = {
 	value: string;
@@ -156,6 +160,16 @@ export type OpencodeProviderSettings = {
 	enabledModelIds: string[] | null;
 	// Older/absent → one-time refetch to backfill new per-model metadata.
 	cacheVersion?: number;
+};
+
+/** One Kimi model discovered via `kimi provider list`. `id` is the bare alias. */
+export type KimiCachedModel = { id: string; label: string };
+
+export type KimiProviderSettings = {
+	// `null` until the first sync; `[]` means "no Kimi providers configured".
+	cachedModels: KimiCachedModel[] | null;
+	// `null` = show all cached in the picker; explicit list = that subset.
+	enabledModelIds: string[] | null;
 };
 
 export type AgentProxySettings = {
@@ -245,9 +259,12 @@ export type StartSurfacePreferences = {
 	branchIntentByRepoId: Record<string, WorkspaceBranchIntent>;
 	/** Top-level "Just chat" toggle. Independent of the selected repo. */
 	chatModeActive: boolean;
+	/** Start-composer Terminal-Mode toggle. */
+	terminalModeActive: boolean;
 };
 
 export type AppSettings = {
+	language: AppLanguage;
 	/** Chat message body font size (px). Migrated from the legacy `fontSize`
 	 *  field, which only ever affected chat rendering. */
 	chatFontSize: number;
@@ -274,15 +291,18 @@ export type AppSettings = {
 	/** Shows the Terminal-Mode toggle in the composer; sending with it on
 	 *  opens the prompt in an agent TUI instead of a GUI session. */
 	enableTerminalMode: boolean;
+	/** When true, skip the heads-up dialog shown before sending a conversation
+	 *  with history to the terminal (new Terminal session + resume). */
+	suppressTerminalResumeWarning: boolean;
 	lastWorkspaceId: string | null;
 	lastSessionId: string | null;
 	lastSurface: AppSurface;
 	startContextPanelOpen: boolean;
 	workspaceRightSidebarMode: WorkspaceRightSidebarMode;
-	defaultModelId: string | null;
+	defaultModel: ModelRef | null;
 	/** Model used when the inspector "Review changes" helper creates a session.
-	 *  When null, falls back to `defaultModelId`. */
-	reviewModelId: string | null;
+	 *  When null, falls back to `defaultModel`. */
+	reviewModel: ModelRef | null;
 	/** Effort level for the Review helper. When null, falls back to
 	 *  `defaultEffort`. */
 	reviewEffort: string | null;
@@ -290,8 +310,8 @@ export type AppSettings = {
 	 *  `defaultFastMode`. */
 	reviewFastMode: boolean | null;
 	/** Model used by simple action sessions: create/reopen PR/MR and
-	 *  commit-and-push. When null, falls back to `defaultModelId`. */
-	prModelId: string | null;
+	 *  commit-and-push. When null, falls back to `defaultModel`. */
+	prModel: ModelRef | null;
 	/** Effort level for simple action sessions. When null, falls back to
 	 *  `defaultEffort`. */
 	prEffort: string | null;
@@ -318,9 +338,15 @@ export type AppSettings = {
 	autoArchiveOnMerge: boolean;
 	onboardingCompleted: boolean;
 	shortcuts: ShortcutOverrides;
-	claudeCustomProviders: ClaudeCustomProviderSettings;
+	/** Claude model ids in the picker. `null` = all (default), `[]` = none. */
+	claudeEnabledModelIds: string[] | null;
+	/** Codex model ids in the picker. Same `null`/`[]` semantics. */
+	codexEnabledModelIds: string[] | null;
 	cursorProvider: CursorProviderSettings;
 	opencodeProvider: OpencodeProviderSettings;
+	kimiProvider: KimiProviderSettings;
+	/** MiMo Code (opencode-protocol fork) — same settings shape. */
+	mimoProvider: OpencodeProviderSettings;
 	agentProxy: AgentProxySettings;
 	localLlm: LocalLlmSettings;
 	inboxSourceConfig: InboxSourceConfig;
@@ -343,6 +369,7 @@ export const DEFAULT_START_SURFACE_PREFERENCES: StartSurfacePreferences = {
 	modeByRepoId: {},
 	branchIntentByRepoId: {},
 	chatModeActive: false,
+	terminalModeActive: false,
 };
 
 /** Fallbacks for repos without a per-repo entry. */
@@ -377,6 +404,7 @@ export function writeRepoPreference<V>(
 export const CONTEXT_USAGE_AUTO_REVEAL_THRESHOLD = 70;
 
 export const DEFAULT_SETTINGS: AppSettings = {
+	language: DEFAULT_APP_LANGUAGE,
 	chatFontSize: 14,
 	uiFontFamily: null,
 	codeFontFamily: null,
@@ -389,16 +417,17 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	notificationSound: "off",
 	terminalHoverExpansion: true,
 	enableTerminalMode: false,
+	suppressTerminalResumeWarning: false,
 	lastWorkspaceId: null,
 	lastSessionId: null,
 	lastSurface: "workspace",
 	startContextPanelOpen: false,
 	workspaceRightSidebarMode: "inspector",
-	defaultModelId: null,
-	reviewModelId: null,
+	defaultModel: null,
+	reviewModel: null,
 	reviewEffort: null,
 	reviewFastMode: null,
-	prModelId: null,
+	prModel: null,
 	prEffort: null,
 	prFastMode: null,
 	defaultEffort: "high",
@@ -411,18 +440,24 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	autoArchiveOnMerge: false,
 	onboardingCompleted: false,
 	shortcuts: {},
-	claudeCustomProviders: {
-		builtinProviderApiKeys: {},
-		customBaseUrl: "",
-		customApiKey: "",
-		customModels: "",
-	},
+	claudeEnabledModelIds: null,
+	codexEnabledModelIds: null,
 	cursorProvider: {
 		apiKey: "",
 		enabledModelIds: null,
 		cachedModels: null,
 	},
 	opencodeProvider: {
+		status: "unavailable",
+		connected: [],
+		cachedModels: null,
+		enabledModelIds: null,
+	},
+	kimiProvider: {
+		cachedModels: null,
+		enabledModelIds: null,
+	},
+	mimoProvider: {
 		status: "unavailable",
 		connected: [],
 		cachedModels: null,
@@ -446,6 +481,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 };
 
 export const THEME_STORAGE_KEY = "helmor-theme";
+export const LANGUAGE_STORAGE_KEY = "helmor-language";
 export const LIGHT_THEME_STORAGE_KEY = "helmor-light-theme";
 export const DARK_THEME_STORAGE_KEY = "helmor-dark-theme";
 export const SIDEBAR_GROUPING_STORAGE_KEY = "helmor-sidebar-grouping";
@@ -459,6 +495,7 @@ export const TERMINAL_FONT_FAMILY_STORAGE_KEY = "helmor-terminal-font-family";
  *  Anything visible in the first paint must live here so we don't wait
  *  on the async SQLite round-trip. */
 const LOCALSTORAGE_KEYS = {
+	language: LANGUAGE_STORAGE_KEY,
 	theme: THEME_STORAGE_KEY,
 	lightTheme: LIGHT_THEME_STORAGE_KEY,
 	darkTheme: DARK_THEME_STORAGE_KEY,
@@ -504,6 +541,14 @@ export function getPreloadedTheme(): ThemeMode {
 	return (raw as ThemeMode | null) ?? DEFAULT_SETTINGS.theme;
 }
 
+export function getPreloadedLanguage(): AppLanguage {
+	if (typeof localStorage === "undefined") {
+		return DEFAULT_SETTINGS.language;
+	}
+	const raw = localStorage.getItem(LANGUAGE_STORAGE_KEY);
+	return isAppLanguage(raw) ? raw : DEFAULT_SETTINGS.language;
+}
+
 function readLocalStorageString(key: string): string | null {
 	if (typeof localStorage === "undefined") return null;
 	const v = localStorage.getItem(key);
@@ -540,6 +585,7 @@ export function getPreloadedSettings(): AppSettings {
 	})();
 	return {
 		...DEFAULT_SETTINGS,
+		language: getPreloadedLanguage(),
 		theme: getPreloadedTheme(),
 		lightTheme,
 		darkTheme,
@@ -568,16 +614,17 @@ const SETTINGS_KEY_MAP: Record<
 	notificationSound: "app.notification_sound",
 	terminalHoverExpansion: "app.terminal_hover_expansion",
 	enableTerminalMode: "app.enable_terminal_mode",
+	suppressTerminalResumeWarning: "app.suppress_terminal_resume_warning",
 	lastWorkspaceId: "app.last_workspace_id",
 	lastSessionId: "app.last_session_id",
 	lastSurface: "app.last_surface",
 	startContextPanelOpen: "app.start_context_panel_open",
 	workspaceRightSidebarMode: "app.workspace_right_sidebar_mode",
-	defaultModelId: "app.default_model_id",
-	reviewModelId: "app.review_model_id",
+	defaultModel: "app.default_model_id",
+	reviewModel: "app.review_model_id",
 	reviewEffort: "app.review_effort",
 	reviewFastMode: "app.review_fast_mode",
-	prModelId: "app.pr_model_id",
+	prModel: "app.pr_model_id",
 	prEffort: "app.pr_effort",
 	prFastMode: "app.pr_fast_mode",
 	defaultEffort: "app.default_effort",
@@ -590,9 +637,12 @@ const SETTINGS_KEY_MAP: Record<
 	autoArchiveOnMerge: "app.auto_archive_on_merge",
 	onboardingCompleted: "app.onboarding_completed",
 	shortcuts: "app.shortcuts",
-	claudeCustomProviders: "app.claude_custom_providers",
+	claudeEnabledModelIds: "app.claude_enabled_model_ids",
+	codexEnabledModelIds: "app.codex_enabled_model_ids",
 	cursorProvider: "app.cursor_provider",
 	opencodeProvider: "app.opencode_provider",
+	kimiProvider: "app.kimi_provider",
+	mimoProvider: "app.mimo_provider",
 	agentProxy: "app.agent_proxy",
 	localLlm: "app.local_llm",
 	inboxSourceConfig: "app.inbox_source_config",
@@ -938,6 +988,10 @@ function parseStartSurfacePreferences(
 			modeByRepoId,
 			branchIntentByRepoId,
 			chatModeActive,
+			terminalModeActive:
+				typeof o.terminalModeActive === "boolean"
+					? o.terminalModeActive
+					: false,
 		};
 	} catch {
 		return DEFAULT_START_SURFACE_PREFERENCES;
@@ -960,10 +1014,12 @@ function parseCursorProviderSettings(
 	}
 }
 
-function parseOpencodeProviderSettings(
+// Shared by opencodeProvider and mimoProvider — same persisted shape.
+function parseSlugProviderSettings(
 	raw: string | undefined,
+	fallback: OpencodeProviderSettings,
 ): OpencodeProviderSettings {
-	if (!raw) return DEFAULT_SETTINGS.opencodeProvider;
+	if (!raw) return fallback;
 	try {
 		const parsed = JSON.parse(raw) as Record<string, unknown>;
 		return {
@@ -975,13 +1031,43 @@ function parseOpencodeProviderSettings(
 				typeof parsed.cacheVersion === "number" ? parsed.cacheVersion : 0,
 		};
 	} catch {
-		return DEFAULT_SETTINGS.opencodeProvider;
+		return fallback;
 	}
 }
 
 function parseStringArray(value: unknown): string[] {
 	if (!Array.isArray(value)) return [];
 	return value.filter((item): item is string => typeof item === "string");
+}
+
+function parseKimiProviderSettings(
+	raw: string | undefined,
+): KimiProviderSettings {
+	if (!raw) return DEFAULT_SETTINGS.kimiProvider;
+	try {
+		const parsed = JSON.parse(raw) as Record<string, unknown>;
+		return {
+			cachedModels: parseKimiCachedModels(parsed.cachedModels),
+			enabledModelIds: parseEnabledModelIds(parsed.enabledModelIds),
+		};
+	} catch {
+		return DEFAULT_SETTINGS.kimiProvider;
+	}
+}
+
+function parseKimiCachedModels(value: unknown): KimiCachedModel[] | null {
+	if (!Array.isArray(value)) return null;
+	const models: KimiCachedModel[] = [];
+	for (const entry of value) {
+		if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+		const obj = entry as Record<string, unknown>;
+		if (typeof obj.id !== "string") continue;
+		models.push({
+			id: obj.id,
+			label: typeof obj.label === "string" ? obj.label : obj.id,
+		});
+	}
+	return models;
 }
 
 function parseOpencodeCachedModels(
@@ -1063,33 +1149,13 @@ function parseCachedModelParameters(
 	return out;
 }
 
-function parseClaudeCustomProviderSettings(
-	raw: string | undefined,
-): ClaudeCustomProviderSettings {
-	if (!raw) return DEFAULT_SETTINGS.claudeCustomProviders;
+// Absent → null (all enabled); JSON array → that subset.
+function parseEnabledModelIdsSetting(raw: string | undefined): string[] | null {
+	if (!raw) return null;
 	try {
-		const parsed = JSON.parse(raw) as Record<string, unknown>;
-		const builtinProviderApiKeys =
-			parsed.builtinProviderApiKeys &&
-			typeof parsed.builtinProviderApiKeys === "object" &&
-			!Array.isArray(parsed.builtinProviderApiKeys)
-				? Object.fromEntries(
-						Object.entries(parsed.builtinProviderApiKeys).filter(
-							([, value]) => typeof value === "string",
-						),
-					)
-				: {};
-		return {
-			builtinProviderApiKeys,
-			customBaseUrl:
-				typeof parsed.customBaseUrl === "string" ? parsed.customBaseUrl : "",
-			customApiKey:
-				typeof parsed.customApiKey === "string" ? parsed.customApiKey : "",
-			customModels:
-				typeof parsed.customModels === "string" ? parsed.customModels : "",
-		};
+		return parseEnabledModelIds(JSON.parse(raw) as unknown);
 	} catch {
-		return DEFAULT_SETTINGS.claudeCustomProviders;
+		return null;
 	}
 }
 
@@ -1158,19 +1224,43 @@ function readClampedInt(
 	return Math.min(max, Math.max(min, Math.round(n)));
 }
 
-function readModelId(value: string | undefined): string | null {
-	return value && value !== "" ? value : null;
+/** Parse a stored model preference. Accepts the new `{provider, modelId}` JSON
+ *  form and legacy bare ids (provider unknown → null until re-saved). */
+function parseModelRef(value: string | undefined): ModelRef | null {
+	const trimmed = value?.trim();
+	if (!trimmed) return null;
+	try {
+		const obj = JSON.parse(trimmed) as unknown;
+		if (
+			obj &&
+			typeof obj === "object" &&
+			typeof (obj as { modelId?: unknown }).modelId === "string"
+		) {
+			const o = obj as { provider?: unknown; modelId: string };
+			const modelId = o.modelId.trim();
+			if (modelId) {
+				const provider =
+					typeof o.provider === "string" && o.provider.trim()
+						? o.provider.trim()
+						: null;
+				return { provider, modelId };
+			}
+		}
+	} catch {
+		// Not JSON → legacy bare id below.
+	}
+	return { provider: null, modelId: trimmed };
 }
 
 export async function loadSettings(): Promise<AppSettings> {
 	try {
 		const rawFromDb = await invoke<Record<string, string>>("get_app_settings");
 		const raw = migrateLegacySettings(rawFromDb);
-		const rawDefaultModelId = raw[SETTINGS_KEY_MAP.defaultModelId];
-		const rawReviewModelId = raw[SETTINGS_KEY_MAP.reviewModelId];
+		const rawDefaultModelId = raw[SETTINGS_KEY_MAP.defaultModel];
+		const rawReviewModelId = raw[SETTINGS_KEY_MAP.reviewModel];
 		const rawReviewEffort = raw[SETTINGS_KEY_MAP.reviewEffort];
 		const rawReviewFastMode = raw[SETTINGS_KEY_MAP.reviewFastMode];
-		const rawPrModelId = raw[SETTINGS_KEY_MAP.prModelId];
+		const rawPrModelId = raw[SETTINGS_KEY_MAP.prModel];
 		const rawPrEffort = raw[SETTINGS_KEY_MAP.prEffort];
 		const rawPrFastMode = raw[SETTINGS_KEY_MAP.prFastMode];
 		// Migration: legacy `app.font_size` is the new chatFontSize. Read
@@ -1194,6 +1284,7 @@ export async function loadSettings(): Promise<AppSettings> {
 			theme:
 				(localStorage.getItem(THEME_STORAGE_KEY) as AppSettings["theme"]) ??
 				DEFAULT_SETTINGS.theme,
+			language: getPreloadedLanguage(),
 			lightTheme: readColorTheme(
 				LIGHT_THEME_STORAGE_KEY,
 				DEFAULT_SETTINGS.lightTheme,
@@ -1232,6 +1323,8 @@ export async function loadSettings(): Promise<AppSettings> {
 					? raw[SETTINGS_KEY_MAP.terminalHoverExpansion] === "true"
 					: DEFAULT_SETTINGS.terminalHoverExpansion,
 			enableTerminalMode: raw[SETTINGS_KEY_MAP.enableTerminalMode] === "true",
+			suppressTerminalResumeWarning:
+				raw[SETTINGS_KEY_MAP.suppressTerminalResumeWarning] === "true",
 			lastWorkspaceId: raw[SETTINGS_KEY_MAP.lastWorkspaceId] || null,
 			lastSessionId: raw[SETTINGS_KEY_MAP.lastSessionId] || null,
 			lastSurface:
@@ -1246,8 +1339,8 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.workspaceRightSidebarMode] === "context"
 					? "context"
 					: DEFAULT_SETTINGS.workspaceRightSidebarMode,
-			defaultModelId: readModelId(rawDefaultModelId),
-			reviewModelId: readModelId(rawReviewModelId),
+			defaultModel: parseModelRef(rawDefaultModelId),
+			reviewModel: parseModelRef(rawReviewModelId),
 			reviewEffort:
 				rawReviewEffort && rawReviewEffort !== ""
 					? rawReviewEffort
@@ -1258,7 +1351,7 @@ export async function loadSettings(): Promise<AppSettings> {
 					: rawReviewFastMode === "false"
 						? false
 						: DEFAULT_SETTINGS.reviewFastMode,
-			prModelId: readModelId(rawPrModelId),
+			prModel: parseModelRef(rawPrModelId),
 			prEffort:
 				rawPrEffort && rawPrEffort !== ""
 					? rawPrEffort
@@ -1307,14 +1400,25 @@ export async function loadSettings(): Promise<AppSettings> {
 					? raw[SETTINGS_KEY_MAP.onboardingCompleted] === "true"
 					: DEFAULT_SETTINGS.onboardingCompleted,
 			shortcuts: parseShortcutOverrides(raw[SETTINGS_KEY_MAP.shortcuts]),
-			claudeCustomProviders: parseClaudeCustomProviderSettings(
-				raw[SETTINGS_KEY_MAP.claudeCustomProviders],
+			claudeEnabledModelIds: parseEnabledModelIdsSetting(
+				raw[SETTINGS_KEY_MAP.claudeEnabledModelIds],
+			),
+			codexEnabledModelIds: parseEnabledModelIdsSetting(
+				raw[SETTINGS_KEY_MAP.codexEnabledModelIds],
 			),
 			cursorProvider: parseCursorProviderSettings(
 				raw[SETTINGS_KEY_MAP.cursorProvider],
 			),
-			opencodeProvider: parseOpencodeProviderSettings(
+			opencodeProvider: parseSlugProviderSettings(
 				raw[SETTINGS_KEY_MAP.opencodeProvider],
+				DEFAULT_SETTINGS.opencodeProvider,
+			),
+			mimoProvider: parseSlugProviderSettings(
+				raw[SETTINGS_KEY_MAP.mimoProvider],
+				DEFAULT_SETTINGS.mimoProvider,
+			),
+			kimiProvider: parseKimiProviderSettings(
+				raw[SETTINGS_KEY_MAP.kimiProvider],
 			),
 			agentProxy: parseAgentProxySettings(raw[SETTINGS_KEY_MAP.agentProxy]),
 			localLlm: parseLocalLlmSettings(raw[SETTINGS_KEY_MAP.localLlm]),
@@ -1359,19 +1463,25 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 	for (const [key, dbKey] of Object.entries(SETTINGS_KEY_MAP)) {
 		const value = patch[key as keyof Omit<AppSettings, LocalStorageKey>];
 		if (value !== undefined) {
-			settings[dbKey] =
+			const isJsonKey =
 				key === "shortcuts" ||
-				key === "claudeCustomProviders" ||
+				key === "claudeEnabledModelIds" ||
+				key === "codexEnabledModelIds" ||
 				key === "cursorProvider" ||
 				key === "opencodeProvider" ||
+				key === "kimiProvider" ||
+				key === "mimoProvider" ||
 				key === "agentProxy" ||
 				key === "localLlm" ||
 				key === "inboxSourceConfig" ||
-				key === "startSurfacePreferences"
-					? JSON.stringify(value)
-					: value === null
-						? ""
-						: String(value);
+				key === "startSurfacePreferences" ||
+				key === "defaultModel" ||
+				key === "reviewModel" ||
+				key === "prModel";
+			// null clears the row (falls back to default on next boot); JSON keys
+			// otherwise serialize the object, scalars stringify.
+			settings[dbKey] =
+				value === null ? "" : isJsonKey ? JSON.stringify(value) : String(value);
 		}
 	}
 	if (Object.keys(settings).length === 0) return;

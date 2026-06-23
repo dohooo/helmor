@@ -272,6 +272,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 		expect(apiMocks.createSession).toHaveBeenCalledWith("workspace-1", {
 			actionKind: "create-pr",
 			model: null,
+			agentType: null,
 			effortLevel: null,
 			fastMode: null,
 		});
@@ -777,13 +778,13 @@ describe("useWorkspaceCommitLifecycle", () => {
 		});
 		queryClient.setQueryData<ChangeRequestInfo | null>(
 			helmorQueryKeys.workspaceChangeRequest("workspace-1"),
-			{
+			() => ({
 				number: 53,
 				title: "Fix overflow",
 				url: "https://github.com/example/repo/pull/53",
 				state: "OPEN",
 				isMerged: false,
-			},
+			}),
 		);
 		queryClient.setQueryData<WorkspaceDetail | null>(
 			helmorQueryKeys.workspaceDetail("workspace-1"),
@@ -1280,6 +1281,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 		expect(apiMocks.createSession).toHaveBeenCalledWith("workspace-1", {
 			actionKind: "review",
 			model: "review-model",
+			agentType: null,
 			effortLevel: null,
 			fastMode: null,
 		});
@@ -1327,6 +1329,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 		expect(apiMocks.createSession).toHaveBeenCalledWith("workspace-1", {
 			actionKind: "review",
 			model: null,
+			agentType: null,
 			effortLevel: null,
 			fastMode: null,
 		});

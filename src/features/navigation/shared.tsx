@@ -38,11 +38,11 @@ export const STATUS_OPTIONS: ReadonlyArray<{
 	label: string;
 	tone: GroupTone;
 }> = [
-	{ value: "backlog", label: "Backlog", tone: "backlog" },
-	{ value: "in-progress", label: "In progress", tone: "progress" },
-	{ value: "review", label: "In review", tone: "review" },
-	{ value: "done", label: "Done", tone: "done" },
-	{ value: "canceled", label: "Canceled", tone: "canceled" },
+	{ value: "backlog", label: "backlog", tone: "backlog" },
+	{ value: "in-progress", label: "progress", tone: "progress" },
+	{ value: "review", label: "review", tone: "review" },
+	{ value: "done", label: "done", tone: "done" },
+	{ value: "canceled", label: "canceled", tone: "canceled" },
 ];
 
 export function humanizeBranch(branch: string): string {

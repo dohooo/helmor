@@ -1,6 +1,7 @@
-import { memo, useCallback, useEffect, useRef } from "react";
+import { memo } from "react";
 import { openWorkspaceInFinder } from "@/lib/api";
 import { extractError } from "@/lib/errors";
+import { translateSource } from "@/lib/i18n";
 import { useWorkspacesSidebarController } from "./hooks/use-controller";
 import { WorkspacesSidebar } from "./index";
 
@@ -44,8 +45,6 @@ export const WorkspacesSidebarContainer = memo(
 		onMoveLocalToWorktree,
 		pushWorkspaceToast,
 	}: WorkspacesSidebarContainerProps) {
-		const selectFrameRef = useRef<number | null>(null);
-		const selectTimeoutRef = useRef<number | null>(null);
 		const {
 			addingRepository,
 			archivingWorkspaceIds,
@@ -81,36 +80,6 @@ export const WorkspacesSidebarContainer = memo(
 			onAddRepositoryNeedsStart,
 			pushWorkspaceToast,
 		});
-		const cancelScheduledSelection = useCallback(() => {
-			if (selectFrameRef.current !== null) {
-				window.cancelAnimationFrame(selectFrameRef.current);
-				selectFrameRef.current = null;
-			}
-			if (selectTimeoutRef.current !== null) {
-				window.clearTimeout(selectTimeoutRef.current);
-				selectTimeoutRef.current = null;
-			}
-		}, []);
-		useEffect(() => cancelScheduledSelection, [cancelScheduledSelection]);
-		const handleDeferredSelectWorkspace = useCallback(
-			(workspaceId: string) => {
-				cancelScheduledSelection();
-				if (workspaceId === selectedWorkspaceId) {
-					handleSelectWorkspace(workspaceId);
-					return;
-				}
-				// Let the sidebar paint before the workspace pane does heavier work.
-				selectFrameRef.current = window.requestAnimationFrame(() => {
-					selectFrameRef.current = null;
-					selectTimeoutRef.current = window.setTimeout(() => {
-						selectTimeoutRef.current = null;
-						handleSelectWorkspace(workspaceId);
-					}, 0);
-				});
-			},
-			[cancelScheduledSelection, handleSelectWorkspace, selectedWorkspaceId],
-		);
-
 		return (
 			<WorkspacesSidebar
 				groups={groups}
@@ -145,7 +114,7 @@ export const WorkspacesSidebarContainer = memo(
 				onCloneDialogOpenChange={setIsCloneDialogOpen}
 				cloneDefaultDirectory={cloneDefaultDirectory}
 				onSubmitClone={handleCloneFromUrl}
-				onSelectWorkspace={handleDeferredSelectWorkspace}
+				onSelectWorkspace={handleSelectWorkspace}
 				onPrefetchWorkspace={prefetchWorkspace}
 				onOpenNewWorkspace={onOpenNewWorkspace}
 				onCreateWorkspaceForRepo={onAddRepositoryNeedsStart}
@@ -156,8 +125,9 @@ export const WorkspacesSidebarContainer = memo(
 				onDeleteWorkspace={handleDeleteWorkspace}
 				onOpenInFinder={(workspaceId) => {
 					void openWorkspaceInFinder(workspaceId).catch((error) => {
-						const { message } = extractError(error, "Failed to open Finder");
-						pushWorkspaceToast(message, "Failed to open Finder", "destructive");
+						const finderError = translateSource("navFailedToOpenFinder");
+						const { message } = extractError(error, finderError);
+						pushWorkspaceToast(message, finderError, "destructive");
 					});
 				}}
 				onTogglePin={(workspaceId, pinned) => {
