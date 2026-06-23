@@ -74,6 +74,9 @@ export type ActionKind =
 export type WorkspaceRow = {
 	id: string;
 	title: string;
+	/** User-set display name. When present it overrides the auto-derived
+	 *  title (including the branch-humanized fallback for worktrees). */
+	customName?: string | null;
 	avatar?: string;
 	directoryName?: string;
 	repoId?: string;
@@ -4015,6 +4018,15 @@ export async function renameWorkspaceBranch(
 	newBranch: string,
 ): Promise<void> {
 	await invoke("rename_workspace_branch", { workspaceId, newBranch });
+}
+
+/** Set the workspace's custom display name. A blank name clears the override
+ *  and restores the auto-derived title. */
+export async function renameWorkspace(
+	workspaceId: string,
+	name: string,
+): Promise<void> {
+	await invoke("rename_workspace", { workspaceId, name });
 }
 
 export type GenerateSessionTitleResponse = {

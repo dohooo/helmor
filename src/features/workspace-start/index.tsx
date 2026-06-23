@@ -95,15 +95,21 @@ function RepositoryPicker({
 	onSelect,
 	disabled,
 	showFullRepoName = true,
+	open: openProp,
+	onOpenChange,
 }: {
 	repositories: RepositoryCreateOption[];
 	selectedRepository: RepositoryCreateOption | null;
 	onSelect: (repo: RepositoryCreateOption) => void;
 	disabled?: boolean;
 	showFullRepoName?: boolean;
+	open?: boolean;
+	onOpenChange?: (open: boolean) => void;
 }) {
 	const { t } = useI18n();
-	const [open, setOpen] = useState(false);
+	const [openUncontrolled, setOpenUncontrolled] = useState(false);
+	const open = openProp ?? openUncontrolled;
+	const setOpen = onOpenChange ?? setOpenUncontrolled;
 
 	const handleSelect = useCallback(
 		(repoId: string) => {
@@ -111,9 +117,14 @@ function RepositoryPicker({
 			if (repo) {
 				onSelect(repo);
 				setOpen(false);
+				// After selecting, move focus into the composer once the popover
+				// closes — don't leave it on the picker trigger.
+				requestAnimationFrame(() => {
+					publishShellEvent({ type: "focus-composer" });
+				});
 			}
 		},
-		[repositories, onSelect],
+		[repositories, onSelect, setOpen],
 	);
 
 	// Keyboard handler for number keys 1-9
@@ -129,6 +140,15 @@ function RepositoryPicker({
 			}
 		},
 		[repositories, handleSelect],
+	);
+
+	// Plain case-insensitive substring match — cmdk defaults to fuzzy scoring.
+	// `value` carries both the short name and owner/repo, so every name shown
+	// in the row stays searchable.
+	const filterRepositories = useCallback(
+		(value: string, search: string) =>
+			value.toLowerCase().includes(search.trim().toLowerCase()) ? 1 : 0,
+		[],
 	);
 
 	return (
@@ -165,8 +185,14 @@ function RepositoryPicker({
 					)}
 				</Button>
 			</PopoverTrigger>
-			<PopoverContent align="center" className="w-96 p-0">
-				<Command onKeyDown={handleKeyDown}>
+			<PopoverContent
+				align="center"
+				className="w-fit min-w-[15rem] max-w-[20rem] p-0"
+				// Closing must not refocus the trigger — that flashes its
+				// tooltip. handleSelect moves focus into the composer instead.
+				onCloseAutoFocus={(event) => event.preventDefault()}
+			>
+				<Command filter={filterRepositories} onKeyDown={handleKeyDown}>
 					<CommandInput placeholder={t("searchRepositories")} className="h-9" />
 					<CommandList className="max-h-80">
 						<CommandEmpty>
@@ -272,6 +298,8 @@ export function WorkspaceStartPage({
 }: WorkspaceStartPageProps) {
 	const { t } = useI18n();
 	const [createBranchOpen, setCreateBranchOpen] = useState(false);
+	const [repoPickerOpen, setRepoPickerOpen] = useState(false);
+	const [repoTooltipOpen, setRepoTooltipOpen] = useState(false);
 	// Split the localized heading on the {repo} token so the repo picker keeps
 	// its place while word order follows each language (en: text→repo→"?",
 	// zh: "在 "→repo→" 里构建什么？").
@@ -294,6 +322,10 @@ export function WorkspaceStartPage({
 	const cycleRepositoryShortcut = getShortcut(
 		settings.shortcuts,
 		"startSurface.cycleRepository",
+	);
+	const openRepositoryPickerShortcut = getShortcut(
+		settings.shortcuts,
+		"startSurface.openRepositoryPicker",
 	);
 	const justChatShortcut = getShortcut(
 		settings.shortcuts,
@@ -326,6 +358,11 @@ export function WorkspaceStartPage({
 				id: "startSurface.cycleRepository",
 				callback: selectNextRepository,
 				enabled: repositories.length > 1,
+			},
+			{
+				id: "startSurface.openRepositoryPicker",
+				callback: () => setRepoPickerOpen(true),
+				enabled: repositories.length > 0,
 			},
 		],
 	});
@@ -477,7 +514,10 @@ export function WorkspaceStartPage({
 									>
 										{buildHeadingBefore}
 									</span>
-									<Tooltip>
+									<Tooltip
+										open={repoTooltipOpen && !repoPickerOpen}
+										onOpenChange={setRepoTooltipOpen}
+									>
 										<TooltipTrigger asChild>
 											<div>
 												<RepositoryPicker
@@ -486,19 +526,30 @@ export function WorkspaceStartPage({
 													onSelect={onSelectRepository}
 													disabled={repositories.length === 0}
 													showFullRepoName={true}
+													open={repoPickerOpen}
+													onOpenChange={setRepoPickerOpen}
 												/>
 											</div>
 										</TooltipTrigger>
 										<TooltipContent
 											side="top"
 											sideOffset={4}
-											className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
+											className="flex flex-col gap-1.5 rounded-md px-2 py-1.5 text-small leading-none"
 										>
-											<I18nText source="switchRepository" />
-											<InlineShortcutDisplay
-												hotkey={cycleRepositoryShortcut}
-												className="text-background/60"
-											/>
+											<span className="flex items-center gap-2">
+												<I18nText source="openRepositoryPicker" />
+												<InlineShortcutDisplay
+													hotkey={openRepositoryPickerShortcut}
+													className="text-background/60"
+												/>
+											</span>
+											<span className="flex items-center gap-2">
+												<I18nText source="switchRepository" />
+												<InlineShortcutDisplay
+													hotkey={cycleRepositoryShortcut}
+													className="text-background/60"
+												/>
+											</span>
 										</TooltipContent>
 									</Tooltip>
 									<span

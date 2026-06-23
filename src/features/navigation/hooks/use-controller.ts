@@ -17,6 +17,7 @@ import {
 	pinWorkspace,
 	prepareArchiveWorkspace,
 	prepareWorkspaceFromRepo,
+	renameWorkspace,
 	restoreWorkspace,
 	setWorkspaceStatus,
 	startArchiveWorkspace,
@@ -782,6 +783,20 @@ export function useWorkspacesSidebarController({
 			}
 		},
 		[pushWorkspaceToast, queryClient],
+	);
+
+	const handleRenameWorkspace = useCallback(
+		async (workspaceId: string, name: string) => {
+			try {
+				// Backend broadcasts WorkspaceChanged → sidebar reconciles.
+				await renameWorkspace(workspaceId, name);
+			} catch (error) {
+				pushWorkspaceToast(
+					describeUnknownError(error, translateSource("navRenameWorkspace")),
+				);
+			}
+		},
+		[pushWorkspaceToast],
 	);
 
 	const handleMoveRepositoryInSidebar = useCallback(
@@ -1805,6 +1820,7 @@ export function useWorkspacesSidebarController({
 		handleMoveWorkspaceInSidebar,
 		handleMoveRepositoryInSidebar,
 		handleSetWorkspaceStatus,
+		handleRenameWorkspace,
 		handleTogglePin,
 		isCloneDialogOpen,
 		prefetchWorkspace,

@@ -88,6 +88,9 @@ pub struct WorkspaceSidebarRow {
     /// Stacked PRs: `id` of the workspace one layer below this in a PR stack
     /// (its base). `None` for non-stacked rows. Drives sidebar stack grouping.
     pub parent_workspace_id: Option<String>,
+    /// User-set display name. When present the frontend shows it verbatim
+    /// instead of the branch-humanized fallback. `None` = derived title.
+    pub custom_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -342,6 +345,18 @@ pub fn mark_workspace_unread(workspace_id: &str) -> Result<()> {
     transaction
         .commit()
         .context("Failed to commit workspace unread transaction")
+}
+
+/// Set the workspace's custom display name. A blank name clears the override
+/// and restores the auto-derived title.
+pub fn rename_workspace(workspace_id: &str, name: &str) -> Result<()> {
+    let trimmed = name.trim();
+    let custom_name = if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    };
+    workspace_models::update_workspace_custom_name(workspace_id, custom_name)
 }
 
 /// Guard for status/pin operations: chat workspaces live in their own
@@ -1306,6 +1321,7 @@ pub fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
         triage_priming_unconsumed: record.kind == "ai_triage" && !record.ai_priming_consumed,
         triage_source_type: record.triage_source_type,
         parent_workspace_id: record.parent_workspace_id,
+        custom_name: record.custom_name,
         kind: record.kind,
     }
 }

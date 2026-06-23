@@ -857,6 +857,8 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         // Triage source provenance: `(source_type, source_ref)` dedups across ticks.
         add_column_if_missing(connection, "workspaces", "triage_source_type", "TEXT")?;
         add_column_if_missing(connection, "workspaces", "triage_source_ref", "TEXT")?;
+        // User-set display name. NULL = fall back to the auto-derived title.
+        add_column_if_missing(connection, "workspaces", "custom_name", "TEXT")?;
         // Index goes after the ALTER above — else old DBs would index a missing column.
         connection
             .execute_batch("CREATE INDEX IF NOT EXISTS idx_workspaces_kind ON workspaces(kind)")
@@ -1121,6 +1123,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
     triage_source_type TEXT,
     triage_source_ref TEXT,
     parent_workspace_id TEXT,
+    custom_name TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

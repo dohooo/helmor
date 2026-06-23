@@ -245,6 +245,10 @@ async fn dispatch(
             crate::commands::session_commands::rename_session(arg_string(&args, "sessionId")?, arg_string(&args, "title")?).await?;
             Ok(Value::Null)
         }
+        "rename_workspace" => {
+            crate::commands::workspace_commands::rename_workspace(app.clone(), arg_string(&args, "workspaceId")?, arg_string(&args, "name")?).await?;
+            Ok(Value::Null)
+        }
         "rename_workspace_branch" => {
             crate::commands::workspace_commands::rename_workspace_branch(app.clone(), arg_string(&args, "workspaceId")?, arg_string(&args, "newBranch")?).await?;
             Ok(Value::Null)

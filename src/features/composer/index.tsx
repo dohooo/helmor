@@ -1239,6 +1239,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										{supportsPlanMode ? (
 											<PlanModeButton
 												disabled={toolbarDisabled}
+												hotkey={togglePlanShortcut}
 												className={cn(
 													`size-7 justify-center px-0 ${composerToolbarTriggerClassName}`,
 													permissionMode === "plan"
@@ -1507,10 +1508,12 @@ function PlanModeButton({
 	disabled,
 	className,
 	onToggle,
+	hotkey,
 }: {
 	disabled: boolean;
 	className: string;
 	onToggle: () => void;
+	hotkey?: string | null;
 }) {
 	const { t } = useI18n();
 	const button = (
@@ -1529,9 +1532,15 @@ function PlanModeButton({
 			<TooltipContent
 				side="top"
 				sideOffset={4}
-				className="flex h-[24px] items-center rounded-md px-2 text-small leading-none"
+				className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 			>
 				<span>{t("plan")}</span>
+				{hotkey ? (
+					<InlineShortcutDisplay
+						hotkey={hotkey}
+						className="text-background/60"
+					/>
+				) : null}
 			</TooltipContent>
 		</Tooltip>
 	);
