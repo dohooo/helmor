@@ -161,6 +161,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onMoveWorkspaceInSidebar,
 	onMoveRepositoryInSidebar,
 	onSetWorkspaceStatus,
+	onRenameWorkspace,
 	archivingWorkspaceIds,
 	markingUnreadWorkspaceId,
 	restoringWorkspaceId,
@@ -214,6 +215,10 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		beforeRepoId: string | null,
 	) => void;
 	onSetWorkspaceStatus?: (workspaceId: string, status: WorkspaceStatus) => void;
+	onRenameWorkspace?: (
+		workspaceId: string,
+		name: string,
+	) => void | Promise<void>;
 	archivingWorkspaceIds?: Set<string>;
 	markingUnreadWorkspaceId?: string | null;
 	restoringWorkspaceId?: string | null;
@@ -1092,6 +1097,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						onOpenInFinder={onOpenInFinder}
 						onTogglePin={onTogglePin}
 						onSetWorkspaceStatus={onSetWorkspaceStatus}
+						onRenameWorkspace={onRenameWorkspace}
 						groupId={item.groupId}
 						onDragPointerDown={
 							// Stacked PRs move as a unit: only the tip (top row)
@@ -1142,6 +1148,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			onMoveWorkspaceInSidebar,
 			onMoveRepositoryInSidebar,
 			onSetWorkspaceStatus,
+			onRenameWorkspace,
 			startDragGesture,
 			startRepoDragGesture,
 			isAnyDragging,

@@ -87,6 +87,9 @@ pub struct WorkspaceRecord {
     /// `None` = bottom of stack (base is the repo default) or a non-stacked
     /// workspace. FK-by-convention; integrity enforced in the write layer.
     pub parent_workspace_id: Option<String>,
+    /// User-set display name. Wins over every auto-derived title when set.
+    /// `None` falls back to the derived title (branch / session / PR).
+    pub custom_name: Option<String>,
 }
 
 pub const WORKSPACE_RECORD_SQL: &str = r#"
@@ -199,7 +202,8 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
       COALESCE(w.kind, 'manual') AS kind,
       COALESCE(w.ai_priming_consumed, 0) AS ai_priming_consumed,
       w.triage_source_type,
-      w.parent_workspace_id
+      w.parent_workspace_id,
+      w.custom_name
     FROM workspaces w
     JOIN repos r ON r.id = w.repository_id
     LEFT JOIN sessions s ON s.id = w.active_session_id
@@ -742,6 +746,7 @@ fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRecord>
         ai_priming_consumed: row.get::<_, i64>(42)? != 0,
         triage_source_type: row.get(43)?,
         parent_workspace_id: row.get(44)?,
+        custom_name: row.get(45)?,
     })
 }
 
@@ -795,6 +800,25 @@ pub(crate) fn update_workspace_branch(workspace_id: &str, new_branch: &str) -> R
     .context("Failed to cascade branch rename to stacked children")?;
     tx.commit()
         .context("Failed to commit workspace branch update")?;
+    Ok(())
+}
+
+/// Set (or clear) the user's custom display name for a workspace. `Some(name)`
+/// overrides the auto-derived title; `None` clears it back to the derived one.
+pub(crate) fn update_workspace_custom_name(
+    workspace_id: &str,
+    custom_name: Option<&str>,
+) -> Result<()> {
+    let connection = db::write_conn()?;
+    let updated = connection
+        .execute(
+            "UPDATE workspaces SET custom_name = ?1, updated_at = datetime('now') WHERE id = ?2",
+            (custom_name, workspace_id),
+        )
+        .context("Failed to update workspace custom name")?;
+    if updated != 1 {
+        bail!("Cannot rename workspace {workspace_id}: row not found");
+    }
     Ok(())
 }
 

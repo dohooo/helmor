@@ -6,6 +6,7 @@ import {
 	GitBranch,
 	Laptop,
 	LoaderCircle,
+	Pencil,
 	Pin,
 	PinOff,
 	RotateCcw,
@@ -50,6 +51,7 @@ import { cn } from "@/lib/utils";
 import { getWorkspaceBranchTone } from "@/lib/workspace-helpers";
 import { WorkspaceAvatar } from "./avatar";
 import { MoveToWorktreeDialog } from "./move-to-worktree-dialog";
+import { RenameWorkspaceDialog } from "./rename-workspace-dialog";
 import {
 	branchToneClasses,
 	GroupIcon,
@@ -99,6 +101,10 @@ export type WorkspaceRowItemProps = {
 	onDeleteWorkspace?: (workspaceId: string) => void;
 	onTogglePin?: (workspaceId: string, currentlyPinned: boolean) => void;
 	onSetWorkspaceStatus?: (workspaceId: string, status: WorkspaceStatus) => void;
+	onRenameWorkspace?: (
+		workspaceId: string,
+		name: string,
+	) => void | Promise<void>;
 	/** Live group id — flows through props so no stale closure on grouping flip. */
 	groupId?: string;
 	onDragPointerDown?: (args: {
@@ -162,6 +168,7 @@ export const WorkspaceRowItem = memo(
 		onDeleteWorkspace,
 		onTogglePin,
 		onSetWorkspaceStatus,
+		onRenameWorkspace,
 		groupId,
 		onDragPointerDown,
 		disableHoverCard,
@@ -207,6 +214,7 @@ export const WorkspaceRowItem = memo(
 		]);
 		useEffect(() => cancelPendingPrefetch, [cancelPendingPrefetch]);
 		const [moveDialogOpen, setMoveDialogOpen] = useState(false);
+		const [renameDialogOpen, setRenameDialogOpen] = useState(false);
 		const [archiveConfirming, setArchiveConfirming] = useState(false);
 		const resetArchiveConfirm = useCallback(() => {
 			setArchiveConfirming(false);
@@ -299,8 +307,12 @@ export const WorkspaceRowItem = memo(
 		// Local & Chat workspaces don't carry a meaningful per-row branch
 		// label (locals share the repo's HEAD; chats have no branch at
 		// all), so always fall back to the auto-titled session title.
-		const displayTitle =
-			row.mode === "local" || row.mode === "chat"
+		// A user-set name wins over the branch-humanized fallback that
+		// worktree rows would otherwise show.
+		const customName = row.customName?.trim();
+		const displayTitle = customName
+			? customName
+			: row.mode === "local" || row.mode === "chat"
 				? row.title
 				: row.branch
 					? humanizeBranch(row.branch)
@@ -630,6 +642,16 @@ export const WorkspaceRowItem = memo(
 							</ContextMenuSubContent>
 						</ContextMenuSub>
 
+						{onRenameWorkspace && !isRestoreAction ? (
+							<ContextMenuItem
+								disabled={isBusy || Boolean(workspaceActionsDisabled)}
+								onClick={() => setRenameDialogOpen(true)}
+							>
+								<Pencil className="size-4 shrink-0" strokeWidth={1.6} />
+								<span>{t("navRenameWorkspace")}</span>
+							</ContextMenuItem>
+						) : null}
+
 						{_onMarkWorkspaceUnread ? (
 							<ContextMenuItem
 								disabled={
@@ -694,6 +716,14 @@ export const WorkspaceRowItem = memo(
 						onOpenChange={setMoveDialogOpen}
 						workspaceTitle={displayTitle}
 						onConfirm={() => onMoveLocalToWorktree(row.id)}
+					/>
+				) : null}
+				{onRenameWorkspace ? (
+					<RenameWorkspaceDialog
+						open={renameDialogOpen}
+						onOpenChange={setRenameDialogOpen}
+						currentTitle={displayTitle}
+						onConfirm={(name) => onRenameWorkspace(row.id, name)}
 					/>
 				) : null}
 			</>
