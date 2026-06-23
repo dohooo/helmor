@@ -756,6 +756,13 @@ function ProgressiveConversationViewport({
 					viewportHeight: nextViewportHeight,
 				};
 			});
+			// Commit measured-height corrections WITHIN the scroll frame instead of
+			// deferring every one to the 120ms post-stop idle. react-virtuoso and
+			// TanStack Virtual measure synchronously as rows render; committing per
+			// frame lets rows reach their real height while the motion still masks
+			// the reflow, so when the scroll stops there is nothing left to "pop".
+			// The idle flush in scheduleCommit stays as the final catch.
+			flushDeferredMeasuredHeights();
 		};
 
 		const scheduleCommit = () => {

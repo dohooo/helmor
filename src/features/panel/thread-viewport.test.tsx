@@ -523,6 +523,107 @@ describe("first-frame tail window", () => {
 		}
 	});
 
+	it("commits an in-view height correction within the scroll frame, not at the post-stop idle", () => {
+		// First-principles "no shake" lock: a row's measured height must commit
+		// WHILE the scroll is still moving (like react-virtuoso / TanStack Virtual
+		// measuring synchronously), so by the time the scroll STOPS there is
+		// nothing left to reflow. The old behavior deferred every correction to a
+		// 120ms post-stop idle flush — which is exactly the visible "pop".
+		const observed = new Map<Element, ResizeObserverCallback>();
+		class ControlledResizeObserver {
+			private readonly callback: ResizeObserverCallback;
+			constructor(callback: ResizeObserverCallback) {
+				this.callback = callback;
+			}
+			observe(element: Element) {
+				observed.set(element, this.callback);
+			}
+			unobserve(element: Element) {
+				observed.delete(element);
+			}
+			disconnect() {}
+		}
+		const originalResizeObserver = window.ResizeObserver;
+		window.ResizeObserver =
+			ControlledResizeObserver as unknown as typeof ResizeObserver;
+		globalThis.ResizeObserver = window.ResizeObserver;
+
+		try {
+			renderPane(makePane("s1", "m1", 100));
+			const scroller = document.querySelector(
+				".conversation-scroll-viewport",
+			) as HTMLElement;
+			Object.defineProperty(scroller, "scrollHeight", {
+				configurable: true,
+				get: () => 0,
+			});
+			Object.defineProperty(scroller, "clientHeight", {
+				configurable: true,
+				get: () => 900,
+			});
+
+			const commitScrollFrame = () => {
+				act(() => {
+					scroller.dispatchEvent(
+						new WheelEvent("wheel", { bubbles: true, deltaY: -200 }),
+					);
+					scroller.scrollTop = 7000;
+					scroller.dispatchEvent(new Event("scroll"));
+					for (const [id, callback] of [...frameCallbacks]) {
+						frameCallbacks.delete(id);
+						callback(performance.now());
+					}
+				});
+			};
+
+			commitScrollFrame();
+
+			const absRowFor = (id: string) =>
+				[...observed.keys()].find(
+					(el) =>
+						(el as HTMLElement).style.position === "absolute" &&
+						el.contains(screen.getByText(id)),
+				) as HTMLElement | undefined;
+
+			const reference = absRowFor("m1:78");
+			expect(reference).toBeDefined();
+			const refScreenTop = () =>
+				parseFloat((reference as HTMLElement).style.top) - scroller.scrollTop;
+
+			// Row m1:73 (above the reference, in view) measures taller than estimate.
+			const correctingRow = absRowFor("m1:73");
+			expect(correctingRow).toBeDefined();
+			act(() => {
+				observed.get(correctingRow as Element)?.(
+					[
+						{
+							borderBoxSize: [{ blockSize: 280, inlineSize: 600 }],
+							contentRect: { height: 280 },
+						} as unknown as ResizeObserverEntry,
+					],
+					{} as ResizeObserver,
+				);
+			});
+
+			// Another scroll frame fires while still moving: the correction must
+			// commit HERE so the reference row reaches its final place mid-motion.
+			commitScrollFrame();
+			const duringScroll = refScreenTop();
+
+			// The scroll stops: the idle flush must have nothing left to apply, so
+			// the reference row does NOT move after the motion ends.
+			act(() => {
+				vi.advanceTimersByTime(120);
+			});
+			const afterStop = refScreenTop();
+
+			expect(afterStop).toBe(duringScroll);
+		} finally {
+			window.ResizeObserver = originalResizeObserver;
+			globalThis.ResizeObserver = originalResizeObserver;
+		}
+	});
+
 	it("keeps the true bottom pinned through a measurement wave during the initial settle", () => {
 		// Regression lock for the post-switch region flashing: a late
 		// measurement wave grows the scroll height in its own commit; during
