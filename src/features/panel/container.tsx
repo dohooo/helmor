@@ -422,23 +422,10 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	const hasResolvedWorkspace = hasWorkspaceDetail && hasWorkspaceSessions;
 	const hasResolvedSessionMessages = messagesQuery.data !== undefined;
 
-	// Stale, empty session list: the cache reports zero sessions for this
-	// workspace while its detail says `sessionCount > 0`. That mismatch means the
-	// list cache is stale (e.g. it wasn't invalidated after an in-review
-	// transition) — without this the panel strands on the "No session selected"
-	// dead-end until a manual re-navigation remounts the query and refetches. We
-	// refetch once (effect below) and treat the in-flight refetch as loading so
-	// the EmptyState never shows for a workspace that actually has sessions.
-	const sessionsLikelyStaleEmpty =
-		hasWorkspaceSessions &&
-		sessions.length === 0 &&
-		(workspace?.sessionCount ?? 0) > 0;
-
 	const loadingWorkspace =
 		Boolean(displayedWorkspaceId) &&
-		((!hasResolvedWorkspace &&
-			(detailQuery.isPending || sessionsQuery.isPending)) ||
-			(sessionsLikelyStaleEmpty && sessionsQuery.isFetching));
+		!hasResolvedWorkspace &&
+		(detailQuery.isPending || sessionsQuery.isPending);
 	const refreshingWorkspace =
 		Boolean(displayedWorkspaceId) &&
 		!loadingWorkspace &&
@@ -463,28 +450,6 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		!refreshingWorkspace &&
 		(selectedSessionId !== threadSessionId ||
 			(hasResolvedSessionMessages && messagesQuery.isFetching));
-
-	// Self-heal the stale-empty session list detected above: refetch once per
-	// workspace so a stranded panel recovers in place (no re-navigation needed).
-	// Guarded by a ref so a genuinely session-less workspace (all sessions
-	// hidden) refetches at most once and then settles instead of looping.
-	const staleSessionsRefetchedRef = useRef<string | null>(null);
-	const refetchSessionsRef = useRef(sessionsQuery.refetch);
-	refetchSessionsRef.current = sessionsQuery.refetch;
-	useEffect(() => {
-		if (!displayedWorkspaceId || sessions.length > 0) {
-			staleSessionsRefetchedRef.current = null;
-			return;
-		}
-		if (
-			!sessionsLikelyStaleEmpty ||
-			staleSessionsRefetchedRef.current === displayedWorkspaceId
-		) {
-			return;
-		}
-		staleSessionsRefetchedRef.current = displayedWorkspaceId;
-		void refetchSessionsRef.current();
-	}, [displayedWorkspaceId, sessions.length, sessionsLikelyStaleEmpty]);
 
 	const invalidateWorkspaceQueries = useCallback(async () => {
 		if (!displayedWorkspaceId) {

@@ -164,14 +164,6 @@ function handleUiMutation(
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(event.workspaceId),
 			});
-			// Refresh the session list too: the in-progress -> in-review transition
-			// can change which sessions are visible/active (e.g. an action session
-			// gets auto-closed), and without this the panel can strand on a stale
-			// "No session selected" until a manual re-navigation refetches. Mirrors
-			// `sessionListChanged` / `terminalSessionIdle`, which already do this.
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceSessions(event.workspaceId),
-			});
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceChangeRequest(event.workspaceId),
 			});

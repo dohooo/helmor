@@ -419,33 +419,6 @@ describe("useUiSyncBridge", () => {
 			});
 		});
 
-		// FIX 2 (in-review empty): the in-progress -> in-review transition must
-		// refresh the session list, not just the detail — otherwise the panel can
-		// strand on a stale "No session selected" until a manual re-navigation.
-		it("workspaceChangeRequestChanged invalidates the workspace session list", () => {
-			const queryClient = makeClient();
-			const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
-
-			renderHook(() =>
-				useUiSyncBridge({
-					queryClient,
-					processPendingCliSends: vi.fn(),
-					reloadSettings: vi.fn(),
-				}),
-			);
-
-			act(() => {
-				capturedSubscription?.({
-					type: "workspaceChangeRequestChanged",
-					workspaceId: "workspace-1",
-				});
-			});
-
-			expect(invalidateQueries).toHaveBeenCalledWith({
-				queryKey: helmorQueryKeys.workspaceSessions("workspace-1"),
-			});
-		});
-
 		it("releasing the gate lets the next event reconcile sidebar lists", () => {
 			const queryClient = makeClient();
 			const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
