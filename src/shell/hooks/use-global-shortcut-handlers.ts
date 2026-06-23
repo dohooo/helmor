@@ -261,7 +261,8 @@ export function useGlobalShortcutHandlers({
 			{
 				id: "composer.openModelPicker" as const,
 				callback: handleOpenModelPicker,
-				enabled: workspaceViewMode === "conversation",
+				enabled:
+					workspaceViewMode === "conversation" || workspaceViewMode === "start",
 			},
 			{
 				id: "editor.edit" as const,
