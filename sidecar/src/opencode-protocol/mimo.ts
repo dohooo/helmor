@@ -2,7 +2,7 @@
 // (XiaomiMiMo/MiMo-Code, npm `@mimo-ai/cli`) is a whole-tree fork of opencode
 // that keeps the server/SDK protocol intact and renames the surface:
 // binary `mimo`, env vars MIMOCODE_*, basic-auth user `mimocode`, banner
-// "mimocode server listening". Verified against @mimo-ai/cli 0.1.0.
+// "mimocode server listening". Verified against @mimo-ai/cli 0.1.1.
 
 import type { ProtocolServerConfig } from "./server.js";
 import type { ProtocolManagerConfig } from "./session-manager.js";

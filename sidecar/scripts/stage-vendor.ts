@@ -941,8 +941,9 @@ function stageLlamaCppBinaries(target: TargetInfo): string {
 // Cursor's SDK can't run on Bun (its HTTP/2 client drops tool traffic in git
 // repos with NGHTTP2_FRAME_SIZE_ERROR), so it runs in a Node child process.
 // The built `cursor-worker.mjs` is copied in by `build.ts`; here we stage the
-// dependency tree it loads at runtime (@cursor/sdk + native sqlite3 + the
-// bundled rg/cursorsandbox in @cursor/sdk-<triple>).
+// dependency tree it loads at runtime (@cursor/sdk + the bundled
+// rg/cursorsandbox in @cursor/sdk-<triple>; the SQLite store now uses Node's
+// built-in `node:sqlite`).
 // ---------------------------------------------------------------------------
 
 // Stage the Node runtime that runs the cursor worker. Release-launched apps
@@ -995,11 +996,6 @@ function stageCursorWorkerDeps(target: TargetInfo): string {
 				name: "helmor-cursor-worker",
 				private: true,
 				dependencies: { "@cursor/sdk": version },
-				// Lets Bun run sqlite3's node-pre-gyp install (fetches the native
-				// addon). Bun trusts sqlite3 by default too, but pin it here so a
-				// future default-list change can't silently ship a worker that
-				// crashes on `require("sqlite3")`.
-				trustedDependencies: ["sqlite3"],
 			},
 			null,
 			2,
@@ -1008,10 +1004,9 @@ function stageCursorWorkerDeps(target: TargetInfo): string {
 
 	// Install for the BUNDLE target, not the build host. The macos-26 runner is
 	// arm64 and cross-builds the x86_64 bundle, so a plain `bun install` would
-	// drop arm64 @cursor/sdk-darwin-arm64 (rg/cursorsandbox) + arm64 sqlite3 into
-	// the x64 Node bundle and crash Cursor on Intel. `--cpu/--os` pick the right
-	// platform optional-dep; `npm_config_target_*` make node-pre-gyp fetch/build
-	// the matching sqlite3 native addon.
+	// drop the arm64 @cursor/sdk-darwin-arm64 (rg/cursorsandbox) into the x64
+	// Node bundle and crash Cursor on Intel. `--cpu/--os` (and the npm_config_*
+	// mirrors) select the right platform optional-dep for the bundle target.
 	const npmOs = target.os === "windows" ? "win32" : "darwin";
 	const npmArch = target.arch; // "x64" | "arm64"
 	console.log(
@@ -1039,11 +1034,11 @@ function stageCursorWorkerDeps(target: TargetInfo): string {
 	return dest;
 }
 
-/// The staged node_modules ships native Mach-O (node_sqlite3.node, rg,
-/// cursorsandbox) that arrive ad-hoc/linker-signed. Tauri's signing doesn't
-/// reach nested Resources, so re-sign each with our Developer ID + hardened
-/// runtime (no entitlements — none of them JIT) or notarization rejects the
-/// bundle. No-op when not signing (dev) and skips non-Mach-O (e.g. Windows PE).
+/// The staged node_modules ships native Mach-O (rg, cursorsandbox) that arrive
+/// ad-hoc/linker-signed. Tauri's signing doesn't reach nested Resources, so
+/// re-sign each with our Developer ID + hardened runtime (no entitlements —
+/// none of them JIT) or notarization rejects the bundle. No-op when not signing
+/// (dev) and skips non-Mach-O (e.g. Windows PE).
 function signCursorWorkerMachOs(dest: string): void {
 	if (!process.env.APPLE_SIGNING_IDENTITY?.trim()) return;
 	const root = join(dest, "node_modules");
@@ -1114,40 +1109,9 @@ function verifyCursorWorkerArch(
 			`[stage-vendor] cursor worker: unexpected wrong-arch platform package(s): ${stray.join(", ")}`,
 		);
 	}
-	// Darwin: confirm the native sqlite3 addon is the expected Mach-O arch.
-	if (npmOs === "darwin") {
-		const machO = npmArch === "x64" ? "x86_64" : "arm64";
-		const addon = findNodeAddon(join(dest, "node_modules", "sqlite3"));
-		if (!addon) {
-			throw new Error(
-				"[stage-vendor] cursor worker: sqlite3 native addon (.node) not found",
-			);
-		}
-		const info = execFileSync("file", [addon], { encoding: "utf8" });
-		if (!info.includes(machO)) {
-			throw new Error(
-				`[stage-vendor] cursor worker: sqlite3 addon arch mismatch — expected ${machO}, got ${info.trim()}`,
-			);
-		}
-	}
 	console.log(
 		`[stage-vendor] cursor worker deps verified (${npmOs}-${npmArch})`,
 	);
-}
-
-function findNodeAddon(dir: string): string | null {
-	if (!existsSync(dir)) return null;
-	const stack = [dir];
-	while (stack.length > 0) {
-		const cur = stack.pop();
-		if (!cur) break;
-		for (const entry of readdirSync(cur)) {
-			const p = join(cur, entry);
-			if (statSync(p).isDirectory()) stack.push(p);
-			else if (entry.endsWith(".node")) return p;
-		}
-	}
-	return null;
 }
 
 // ---------------------------------------------------------------------------
