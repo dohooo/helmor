@@ -117,6 +117,11 @@ function RepositoryPicker({
 			if (repo) {
 				onSelect(repo);
 				setOpen(false);
+				// After selecting, move focus into the composer once the popover
+				// closes — don't leave it on the picker trigger.
+				requestAnimationFrame(() => {
+					publishShellEvent({ type: "focus-composer" });
+				});
 			}
 		},
 		[repositories, onSelect, setOpen],
@@ -135,6 +140,15 @@ function RepositoryPicker({
 			}
 		},
 		[repositories, handleSelect],
+	);
+
+	// Plain case-insensitive substring match — cmdk defaults to fuzzy scoring.
+	// `value` carries both the short name and owner/repo, so every name shown
+	// in the row stays searchable.
+	const filterRepositories = useCallback(
+		(value: string, search: string) =>
+			value.toLowerCase().includes(search.trim().toLowerCase()) ? 1 : 0,
+		[],
 	);
 
 	return (
@@ -175,7 +189,7 @@ function RepositoryPicker({
 				align="center"
 				className="w-fit min-w-[15rem] max-w-[20rem] p-0"
 			>
-				<Command onKeyDown={handleKeyDown}>
+				<Command filter={filterRepositories} onKeyDown={handleKeyDown}>
 					<CommandInput placeholder={t("searchRepositories")} className="h-9" />
 					<CommandList className="max-h-80">
 						<CommandEmpty>
@@ -282,6 +296,7 @@ export function WorkspaceStartPage({
 	const { t } = useI18n();
 	const [createBranchOpen, setCreateBranchOpen] = useState(false);
 	const [repoPickerOpen, setRepoPickerOpen] = useState(false);
+	const [repoTooltipOpen, setRepoTooltipOpen] = useState(false);
 	// Split the localized heading on the {repo} token so the repo picker keeps
 	// its place while word order follows each language (en: text→repo→"?",
 	// zh: "在 "→repo→" 里构建什么？").
@@ -496,7 +511,10 @@ export function WorkspaceStartPage({
 									>
 										{buildHeadingBefore}
 									</span>
-									<Tooltip>
+									<Tooltip
+										open={repoTooltipOpen && !repoPickerOpen}
+										onOpenChange={setRepoTooltipOpen}
+									>
 										<TooltipTrigger asChild>
 											<div>
 												<RepositoryPicker
