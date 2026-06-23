@@ -88,8 +88,8 @@ fn normalize_question(provider: &str, raw: &Value, idx: usize) -> Option<UserQue
             }
             (false, is_other)
         }
-        // Both opencode-protocol providers share the `multiple` flag shape.
-        "opencode" | "mimo" => (
+        // OpenCode uses the `multiple` flag shape.
+        "opencode" => (
             obj.get("multiple")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
@@ -271,23 +271,6 @@ mod tests {
         assert!(items[0].multi_select);
         assert!(items[0].allow_free_text);
         assert_eq!(items[0].options[0].description, None);
-    }
-
-    #[test]
-    fn normalizes_mimo_multiple_flag_like_opencode() {
-        let raw = json!([{
-            "question": "Which files?",
-            "header": "Files",
-            "multiple": true,
-            "options": [{"label": "a.rs", "description": ""}]
-        }]);
-        let items = normalize_questions("mimo", &raw);
-        assert_eq!(items.len(), 1);
-        assert!(
-            items[0].multi_select,
-            "mimo shares opencode's multiple flag"
-        );
-        assert!(items[0].allow_free_text);
     }
 
     #[test]

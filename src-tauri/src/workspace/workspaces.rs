@@ -201,7 +201,6 @@ pub struct WorkspaceDetail {
 // ---- Sidebar groups ----
 
 pub fn list_workspace_groups() -> Result<Vec<WorkspaceSidebarGroup>> {
-    let mut ai_tasks = Vec::new();
     let mut pinned = Vec::new();
     let mut chats = Vec::new();
     let mut done = Vec::new();
@@ -215,18 +214,15 @@ pub fn list_workspace_groups() -> Result<Vec<WorkspaceSidebarGroup>> {
     // each group naturally inherits the same stable order, no per-group
     // re-sort needed.
     //
-    // Chat and AI-triage workspaces live in their own buckets, separate from status/pinned.
+    // Chat workspaces live in their own bucket, separate from status/pinned.
     for record in workspace_models::load_workspace_records()? {
         if record.state == WorkspaceState::Archived {
             continue;
         }
         let is_chat = record.mode == WorkspaceMode::Chat;
         let is_pinned = record.pinned_at.is_some();
-        let is_ai_triage = record.kind == "ai_triage";
         let row = record_to_sidebar_row(record);
-        if is_ai_triage {
-            ai_tasks.push(row);
-        } else if is_chat {
+        if is_chat {
             chats.push(row);
         } else if is_pinned {
             pinned.push(row);
@@ -242,12 +238,6 @@ pub fn list_workspace_groups() -> Result<Vec<WorkspaceSidebarGroup>> {
     }
 
     Ok(vec![
-        WorkspaceSidebarGroup {
-            id: "ai-tasks".to_string(),
-            label: "Proposed tasks".to_string(),
-            tone: "ai-tasks".to_string(),
-            rows: ai_tasks,
-        },
         WorkspaceSidebarGroup {
             id: "pinned".to_string(),
             label: "Pinned".to_string(),
@@ -1503,6 +1493,59 @@ pub fn purge_orphaned_workspaces() -> Result<usize> {
         }
     }
     Ok(count)
+}
+
+/// One-time reconcile for the retired Smart Triage feature: archive the
+/// auto-generated `ai_triage` workspaces the user never started, so their
+/// orphaned "proposed task" worktrees don't resurface as ordinary sidebar
+/// rows now that the dedicated triage group is gone.
+///
+/// "Never started" mirrors the old triage reaper's touched-guard: the priming
+/// message is still unconsumed AND no real (non-priming) message was ever
+/// sent. A workspace the user actually opened and messaged is left as a normal
+/// workspace. Each match goes through the full reversible archive
+/// ([`archive_workspace_impl`]) — worktree torn down, branch removed, chat
+/// history preserved in the archive list — exactly as dismissing a proposal
+/// did when triage was live.
+///
+/// Idempotent: archived rows are excluded, so repeat runs are no-ops.
+/// Best-effort per workspace; one failure is logged and never aborts the rest.
+pub fn archive_unstarted_triage_workspaces() -> Result<usize> {
+    let ids: Vec<String> = {
+        let connection = db::read_conn()?;
+        let mut stmt = connection.prepare(
+            "SELECT w.id
+             FROM workspaces w
+             WHERE w.kind = 'ai_triage'
+               AND w.state != 'archived'
+               AND COALESCE(w.ai_priming_consumed, 0) = 0
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM sessions s
+                   JOIN session_messages sm ON sm.session_id = s.id
+                   WHERE s.workspace_id = w.id
+                     AND COALESCE(sm.is_ai_priming, 0) = 0
+               )",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        // `stmt` + the read connection drop at the end of this block, before
+        // the archive path below takes a write connection — SQLite would
+        // otherwise deadlock on the open read.
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
+    let mut archived = 0usize;
+    for id in &ids {
+        match archive_workspace_impl(id) {
+            Ok(_) => archived += 1,
+            Err(error) => tracing::warn!(
+                workspace_id = %id,
+                error = %format!("{error:#}"),
+                "Triage cleanup: failed to archive unstarted workspace"
+            ),
+        }
+    }
+    Ok(archived)
 }
 
 /// Flip a single workspace row from its current operational state to

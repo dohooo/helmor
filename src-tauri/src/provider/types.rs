@@ -10,7 +10,6 @@ pub enum ProviderFamily {
     Claude,
     Codex,
     Opencode,
-    Mimo,
     Kimi,
 }
 
@@ -20,7 +19,6 @@ impl ProviderFamily {
             "claude" => Some(Self::Claude),
             "codex" => Some(Self::Codex),
             "opencode" => Some(Self::Opencode),
-            "mimo" => Some(Self::Mimo),
             "kimi" => Some(Self::Kimi),
             _ => None,
         }
@@ -52,7 +50,7 @@ pub struct CustomProvider {
     pub base_url: String,
     #[serde(default)]
     pub api_key: String,
-    /// OpenCode/MiMo only — "chat" | "responses".
+    /// OpenCode only — "chat" | "responses".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_style: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

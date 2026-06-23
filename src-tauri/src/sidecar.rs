@@ -81,8 +81,6 @@ pub struct BundledAgentPaths {
     pub claude_bin: Option<PathBuf>,
     pub codex_bin: Option<PathBuf>,
     pub opencode_bin: Option<PathBuf>,
-    /// MiMo Code (opencode fork) — `vendor/mimo/mimo`.
-    pub mimo_bin: Option<PathBuf>,
     /// Kimi Code CLI binary, spawned by the sidecar as `kimi acp`.
     pub kimi_bin: Option<PathBuf>,
     /// Node runtime that runs the cursor worker (Cursor's `@cursor/sdk` can't
@@ -140,7 +138,6 @@ fn resolve_bundled_agent_paths_for_exe(exe: &std::path::Path) -> Option<BundledA
     } else {
         "opencode"
     };
-    let mimo_bin_name = if cfg!(windows) { "mimo.exe" } else { "mimo" };
     let kimi_bin_name = if cfg!(windows) { "kimi.exe" } else { "kimi" };
     let node_bin_name = if cfg!(windows) { "node.exe" } else { "node" };
 
@@ -155,7 +152,6 @@ fn resolve_bundled_agent_paths_for_exe(exe: &std::path::Path) -> Option<BundledA
         claude_bin: find(format!("vendor/claude-code/{claude_bin_name}")),
         codex_bin: find(format!("vendor/codex/{codex_bin_name}")),
         opencode_bin: find(format!("vendor/opencode/{opencode_bin_name}")),
-        mimo_bin: find(format!("vendor/mimo/{mimo_bin_name}")),
         kimi_bin: find(format!("vendor/kimi/{kimi_bin_name}")),
         node_bin: find(format!("vendor/node/{node_bin_name}")),
         cursor_worker: find("vendor/cursor-worker/cursor-worker.mjs".to_string()),
@@ -214,7 +210,6 @@ impl SidecarProcess {
                 claude_bin = ?bundled_paths.claude_bin,
                 codex_bin = ?bundled_paths.codex_bin,
                 opencode_bin = ?bundled_paths.opencode_bin,
-                mimo_bin = ?bundled_paths.mimo_bin,
                 kimi_bin = ?bundled_paths.kimi_bin,
                 node_bin = ?bundled_paths.node_bin,
                 cursor_worker = ?bundled_paths.cursor_worker,
@@ -228,9 +223,6 @@ impl SidecarProcess {
             }
             if let Some(path) = bundled_paths.opencode_bin {
                 cmd.env("HELMOR_OPENCODE_BIN_PATH", &path);
-            }
-            if let Some(path) = bundled_paths.mimo_bin {
-                cmd.env("HELMOR_MIMO_BIN_PATH", &path);
             }
             if let Some(path) = bundled_paths.kimi_bin {
                 cmd.env("HELMOR_KIMI_BIN_PATH", &path);
@@ -381,23 +373,11 @@ impl Drop for SidecarProcess {
 
 type Listeners = Arc<Mutex<HashMap<String, mpsc::Sender<SidecarEvent>>>>;
 
-/// One `hostRequest` envelope routed from the reader thread to the host dispatcher.
-#[derive(Debug)]
-pub struct HostRequestEnvelope {
-    pub callback_id: String,
-    pub method: String,
-    pub params: serde_json::Value,
-}
-
-/// `Mutex<Option<Sender>>` (Sender is !Sync); reader looks up per event so install order doesn't matter.
-type HostRequestSenderSlot = Arc<Mutex<Option<mpsc::Sender<HostRequestEnvelope>>>>;
-
 pub struct ManagedSidecar {
     process: Mutex<Option<SidecarProcess>>,
     listeners: Listeners,
     /// Shared flag so the reader thread can signal its own exit.
     reader_running: Arc<Mutex<bool>>,
-    host_request_tx: HostRequestSenderSlot,
 }
 
 impl Default for ManagedSidecar {
@@ -412,36 +392,7 @@ impl ManagedSidecar {
             process: Mutex::new(None),
             listeners: Arc::new(Mutex::new(HashMap::new())),
             reader_running: Arc::new(Mutex::new(false)),
-            host_request_tx: Arc::new(Mutex::new(None)),
         }
-    }
-
-    // Called once from Tauri setup; later calls are no-ops.
-    pub fn install_host_dispatcher(&self) -> mpsc::Receiver<HostRequestEnvelope> {
-        let (tx, rx) = mpsc::channel();
-        if let Ok(mut slot) = self.host_request_tx.lock() {
-            *slot = Some(tx);
-        }
-        rx
-    }
-
-    // Shares the stdin lock with `send()` so request/response writes can't interleave.
-    pub fn send_host_response(&self, response: &crate::sidecar_host::HostResponse) -> Result<()> {
-        let guard = self
-            .process
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Sidecar lock poisoned"))?;
-        let Some(process) = guard.as_ref() else {
-            anyhow::bail!("Sidecar not running (hostResponse dropped)");
-        };
-        let mut stdin = process
-            .stdin
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Sidecar stdin lock poisoned"))?;
-        let json = serde_json::to_string(response).context("Failed to serialize hostResponse")?;
-        writeln!(stdin, "{json}").context("Failed to write hostResponse")?;
-        stdin.flush().context("Failed to flush hostResponse")?;
-        Ok(())
     }
 
     /// Register a listener for events matching `request_id`.
@@ -486,9 +437,8 @@ impl ManagedSidecar {
             let (process, reader) = SidecarProcess::start()?;
             *guard = Some(process);
 
-            // Start reader (always fresh). Pass an Arc so install ordering doesn't matter.
-            let host_tx_slot = Arc::clone(&self.host_request_tx);
-            if let Err(error) = self.start_reader_thread(reader, host_tx_slot) {
+            // Start reader (always fresh).
+            if let Err(error) = self.start_reader_thread(reader) {
                 tracing::error!(error = %error, "Failed to start sidecar reader thread");
                 if let Some(mut process) = guard.take() {
                     process.kill();
@@ -618,11 +568,7 @@ impl ManagedSidecar {
         dispatch_event(&self.listeners, event, raw)
     }
 
-    fn start_reader_thread(
-        &self,
-        reader: BufReader<std::process::ChildStdout>,
-        host_tx_slot: HostRequestSenderSlot,
-    ) -> Result<()> {
+    fn start_reader_thread(&self, reader: BufReader<std::process::ChildStdout>) -> Result<()> {
         // Reset flag — previous reader (if any) already exited or we killed its process.
         if let Ok(mut running) = self.reader_running.lock() {
             *running = false;
@@ -661,33 +607,6 @@ impl ManagedSidecar {
                                 tracing::error!(line = trimmed, "Invalid JSON from sidecar");
                                 continue;
                             };
-                            // Reverse channel: route `hostRequest` ahead of normal event dispatch.
-                            if raw.get("type").and_then(Value::as_str) == Some("hostRequest") {
-                                match parse_host_request(&raw) {
-                                    Ok(env) => {
-                                        let sender = host_tx_slot
-                                            .lock()
-                                            .ok()
-                                            .and_then(|g| g.as_ref().cloned());
-                                        if let Some(tx) = sender {
-                                            if let Err(error) = tx.send(env) {
-                                                tracing::warn!(
-                                                    error = %error,
-                                                    "hostRequest forward failed (receiver dropped)"
-                                                );
-                                            }
-                                        } else {
-                                            tracing::warn!(
-                                                "hostRequest received but dispatcher not installed"
-                                            );
-                                        }
-                                    }
-                                    Err(error) => {
-                                        tracing::warn!(error = %error, "invalid hostRequest");
-                                    }
-                                }
-                                continue;
-                            }
                             let event = SidecarEvent { raw };
                             if dispatch_event(&listeners, event, trimmed) {
                                 event_count += 1;
@@ -741,23 +660,6 @@ impl ManagedSidecar {
                 anyhow::anyhow!("Failed to spawn sidecar reader thread: {error}")
             })
     }
-}
-
-fn parse_host_request(raw: &Value) -> Result<HostRequestEnvelope> {
-    let callback_id = raw
-        .get("callbackId")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("hostRequest missing callbackId"))?;
-    let method = raw
-        .get("method")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("hostRequest missing method"))?;
-    let params = raw.get("params").cloned().unwrap_or(Value::Null);
-    Ok(HostRequestEnvelope {
-        callback_id: callback_id.to_string(),
-        method: method.to_string(),
-        params,
-    })
 }
 
 /// Dispatch one event. `true` when delivered to a listener; no-id
@@ -1028,7 +930,6 @@ mod tests {
         } else {
             "opencode"
         };
-        let mimo = if cfg!(windows) { "mimo.exe" } else { "mimo" };
 
         let root = tempfile::tempdir().unwrap();
         let exe = root.path().join("Helmor.app/Contents/MacOS/Helmor");
@@ -1036,11 +937,9 @@ mod tests {
         std::fs::create_dir_all(resources.join("claude-code")).unwrap();
         std::fs::create_dir_all(resources.join("codex")).unwrap();
         std::fs::create_dir_all(resources.join("opencode")).unwrap();
-        std::fs::create_dir_all(resources.join("mimo")).unwrap();
         std::fs::write(resources.join("claude-code").join(claude), "").unwrap();
         std::fs::write(resources.join("codex").join(codex), "").unwrap();
         std::fs::write(resources.join("opencode").join(opencode), "").unwrap();
-        std::fs::write(resources.join("mimo").join(mimo), "").unwrap();
 
         let paths = resolve_bundled_agent_paths_for_exe(&exe).unwrap();
 
@@ -1056,6 +955,5 @@ mod tests {
             paths.opencode_bin.unwrap(),
             resources.join("opencode").join(opencode)
         );
-        assert_eq!(paths.mimo_bin.unwrap(), resources.join("mimo").join(mimo));
     }
 }

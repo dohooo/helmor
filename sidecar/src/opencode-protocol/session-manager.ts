@@ -1,5 +1,5 @@
-// SessionManager over the opencode-protocol HTTP server (opencode itself, or
-// a protocol-compatible fork like MiMo Code). SSE `/event` is directory-scoped,
+// SessionManager over the opencode-protocol HTTP server (opencode, or any
+// protocol-compatible fork). SSE `/event` is directory-scoped,
 // so each session subscribes per-directory and we demux by `sessionID`.
 // Does NO normalization: forwards events verbatim (namespaced `opencode/<type>`
 // — the protocol-family namespace, shared by every fork) for the Rust

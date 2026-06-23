@@ -503,11 +503,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				continue;
 			}
 
-			// Chats + Triage have no drop-target role — hide when empty.
-			if (
-				(group.id === "chats" || group.id === "ai-tasks") &&
-				group.rows.length === 0
-			) {
+			// Chats have no drop-target role — hide when empty.
+			if (group.id === "chats" && group.rows.length === 0) {
 				continue;
 			}
 

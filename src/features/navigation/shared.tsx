@@ -3,7 +3,7 @@ import {
 	IssueDraftIcon,
 	XCircleFillIcon,
 } from "@primer/octicons-react";
-import { MessageCircle, Pin, Sparkles } from "lucide-react";
+import { MessageCircle, Pin } from "lucide-react";
 import type {
 	GroupTone,
 	WorkspaceGroup,
@@ -21,7 +21,6 @@ export const groupToneClasses: Record<GroupTone, string> = {
 	progress: "text-[var(--workspace-sidebar-status-progress)]",
 	backlog: "text-[var(--workspace-sidebar-status-backlog)]",
 	canceled: "text-[var(--workspace-sidebar-status-canceled)]",
-	"ai-tasks": "text-[var(--workspace-sidebar-status-triage)]",
 };
 
 export const branchToneClasses: Record<WorkspaceBranchTone, string> = {
@@ -128,8 +127,6 @@ export function GroupIcon({ tone }: { tone: GroupTone }) {
 			return (
 				<MessageCircle className={className} size={iconSize} strokeWidth={2} />
 			);
-		case "ai-tasks":
-			return <Sparkles className={className} size={iconSize} strokeWidth={2} />;
 	}
 }
 

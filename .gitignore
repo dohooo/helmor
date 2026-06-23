@@ -59,5 +59,3 @@ test-results/
 
 # Nix/direnv
 .direnv/
-
-.mimocode
