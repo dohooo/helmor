@@ -189,6 +189,14 @@ pub fn start_archive_workspace<R: Runtime>(
     let plan = manager.start_prepared(workspace_id)?;
     let app_handle = app.clone();
     let workspace_id = workspace_id.to_string();
+    // Snapshot the script process manager so the blocking archive task can stop
+    // this workspace's live run/terminal processes before the worktree is torn
+    // down. Without this, dev servers, watchers, and shell sessions outlive the
+    // archive as orphan process trees pointing at a deleted worktree.
+    let scripts = app
+        .state::<crate::workspace::scripts::ScriptProcessManager>()
+        .inner()
+        .clone();
 
     tauri::async_runtime::spawn(async move {
         let task_started = std::time::Instant::now();
@@ -203,8 +211,23 @@ pub fn start_archive_workspace<R: Runtime>(
             "Archive: git unwatch finished"
         );
 
-        let result =
-            tauri::async_runtime::spawn_blocking(move || execute_archive_plan(&plan)).await;
+        let kill_workspace_id = workspace_id.clone();
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            // Stop live run-action / terminal processes before tearing down the
+            // worktree. Runs here (not in `execute_archive_plan`) because only
+            // the GUI path owns the `ScriptProcessManager`; CLI/MCP archive is
+            // headless with no tracked processes.
+            let signaled = scripts.kill_workspace(&kill_workspace_id);
+            if signaled > 0 {
+                tracing::info!(
+                    workspace_id = %kill_workspace_id,
+                    signaled,
+                    "Archive: stopped live workspace processes before teardown"
+                );
+            }
+            execute_archive_plan(&plan)
+        })
+        .await;
 
         match result {
             Ok(Ok(_)) => {
