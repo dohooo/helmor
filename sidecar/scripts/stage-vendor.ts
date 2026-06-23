@@ -937,7 +937,14 @@ function stageCursorWorkerDeps(target: TargetInfo): string {
 			{
 				name: "helmor-cursor-worker",
 				private: true,
-				dependencies: { "@cursor/sdk": version },
+				dependencies: {
+					"@cursor/sdk": version,
+					// Phantom dep: @cursor/sdk 1.0.19 dynamically imports
+					// @connectrpc/connect-node but dropped it from its own deps.
+					// Range mirrors the SDK's @connectrpc/connect so they resolve
+					// in lockstep; without it the staged worker crashes at runtime.
+					"@connectrpc/connect-node": "^1.6.1",
+				},
 			},
 			null,
 			2,

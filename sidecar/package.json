@@ -16,6 +16,7 @@
 	"dependencies": {
 		"@anthropic-ai/claude-agent-sdk": "0.3.186",
 		"@anthropic-ai/claude-code": "2.1.186",
+		"@connectrpc/connect-node": "^1.6.1",
 		"@cursor/sdk": "1.0.19",
 		"@earendil-works/pi-agent-core": "^0.75.4",
 		"@earendil-works/pi-ai": "^0.75.4",
