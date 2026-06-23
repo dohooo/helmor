@@ -41,7 +41,7 @@ in one window. Everything lives locally under `~/helmor/`.
 - **Skills** — install from onboarding or **Settings → Helmor Components**; browse with `/` in the composer.
 - **Mobile companion** *(experimental)* — Cloudflare tunnel to your desktop; start tasks from your phone's browser.
 
-*More on the way — Smart Triage, Slack & GitHub context, plan mode, and agent-driven orchestration.*
+*More on the way — Slack & GitHub context, plan mode, and agent-driven orchestration.*
 
 ## How it works
 

@@ -576,6 +576,7 @@ pub fn run() {
             commands::forge_commands::merge_workspace_change_request,
             commands::forge_commands::close_workspace_change_request,
             commands::workspace_commands::get_workspace,
+            commands::workspace_commands::rename_workspace,
             commands::repository_commands::add_repository_from_local_path,
             commands::repository_commands::clone_repository_from_url,
             commands::workspace_commands::list_archived_workspaces,

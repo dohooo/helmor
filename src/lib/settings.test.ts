@@ -63,6 +63,43 @@ describe("settings", () => {
 			branchIntentByRepoId: { "repo-1": "use_branch" },
 			chatModeActive: false,
 			terminalModeActive: false,
+			composerModelByContextKey: {},
+			composerEffortByContextKey: {},
+			composerPermissionModeByContextKey: {},
+			composerFastModeByContextKey: {},
+		});
+	});
+
+	it("hydrates start-surface composer picks and drops malformed values", async () => {
+		invokeMock.mockResolvedValue({
+			"app.start_surface_preferences": JSON.stringify({
+				composerModelByContextKey: {
+					"start:chat": { provider: "anthropic", modelId: "claude-x" },
+					"start:repo:r1": { modelId: 42 },
+					"start:repo:r2": "claude-y",
+				},
+				composerEffortByContextKey: { "start:repo:r1": "high" },
+				composerPermissionModeByContextKey: { "start:chat": "plan" },
+				composerFastModeByContextKey: {
+					"start:repo:r1": true,
+					"start:chat": "nope",
+				},
+			}),
+		});
+
+		const settings = await loadSettings();
+		const prefs = settings.startSurfacePreferences;
+		expect(prefs.composerModelByContextKey).toEqual({
+			"start:chat": { provider: "anthropic", modelId: "claude-x" },
+		});
+		expect(prefs.composerEffortByContextKey).toEqual({
+			"start:repo:r1": "high",
+		});
+		expect(prefs.composerPermissionModeByContextKey).toEqual({
+			"start:chat": "plan",
+		});
+		expect(prefs.composerFastModeByContextKey).toEqual({
+			"start:repo:r1": true,
 		});
 	});
 
@@ -163,6 +200,10 @@ describe("settings", () => {
 			branchIntentByRepoId: { "repo-1": "use_branch" },
 			chatModeActive: false,
 			terminalModeActive: false,
+			composerModelByContextKey: {},
+			composerEffortByContextKey: {},
+			composerPermissionModeByContextKey: {},
+			composerFastModeByContextKey: {},
 		});
 
 		const writeCall = invokeMock.mock.calls.find(
