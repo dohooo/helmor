@@ -19,8 +19,6 @@
 //! swallowed by Helmor. Re-introduce them only after verifying the
 //! same beep.
 
-#![cfg(target_os = "macos")]
-
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
