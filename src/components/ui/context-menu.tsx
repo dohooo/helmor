@@ -3,6 +3,7 @@
 import * as ContextMenuPrimitive from "@radix-ui/react-context-menu";
 import { CheckIcon, ChevronRightIcon } from "lucide-react";
 import type * as React from "react";
+
 import { cn } from "@/lib/utils";
 
 function ContextMenu({
@@ -81,6 +82,7 @@ function ContextMenuItem({
 	className,
 	inset,
 	variant = "default",
+	children,
 	...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Item> & {
 	inset?: boolean;
@@ -96,7 +98,9 @@ function ContextMenuItem({
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{children}
+		</ContextMenuPrimitive.Item>
 	);
 }
 
@@ -201,6 +205,7 @@ function ContextMenuRadioItem({
 function ContextMenuLabel({
 	className,
 	inset,
+	children,
 	...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Label> & {
 	inset?: boolean;
@@ -214,7 +219,9 @@ function ContextMenuLabel({
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{children}
+		</ContextMenuPrimitive.Label>
 	);
 }
 
@@ -233,6 +240,7 @@ function ContextMenuSeparator({
 
 function ContextMenuShortcut({
 	className,
+	children,
 	...props
 }: React.ComponentProps<"span">) {
 	return (
@@ -243,7 +251,9 @@ function ContextMenuShortcut({
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{children}
+		</span>
 	);
 }
 

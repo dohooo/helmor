@@ -67,10 +67,6 @@ export function OpenCodeIcon(props: SVGProps<SVGSVGElement>) {
 	return <OpenCodeMono {...props} />;
 }
 
-export function MiMoCodeIcon(props: SVGProps<SVGSVGElement>) {
-	return <XiaomiMiMoMono {...props} />;
-}
-
 export function ClaudeColorIcon(props: SVGProps<SVGSVGElement>) {
 	return <ClaudeColor {...props} />;
 }

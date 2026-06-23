@@ -8,6 +8,7 @@ import {
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
+import { translateSource } from "@/lib/i18n";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { isNewSession } from "@/lib/workspace-helpers";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
@@ -165,7 +166,7 @@ export async function closeWorkspaceSession({
 		onSessionsChanged?.();
 		pushToast?.(
 			error instanceof Error ? error.message : String(error),
-			"Unable to close session",
+			translateSource("panelUnableCloseSession"),
 			"destructive",
 		);
 		return false;

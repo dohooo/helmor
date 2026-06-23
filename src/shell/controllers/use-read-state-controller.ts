@@ -12,6 +12,7 @@ import {
 	type WorkspaceGroup,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
+import { translateSource } from "@/lib/i18n";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import {
@@ -273,8 +274,11 @@ export function useReadStateController(
 			const name =
 				queryClient.getQueryData<WorkspaceDetail | null>(
 					helmorQueryKeys.workspaceDetail(workspaceId),
-				)?.title ?? "Workspace";
-			notifyRef.current({ title: "Session completed", body: name });
+				)?.title ?? translateSource("workspace");
+			notifyRef.current({
+				title: translateSource("sessionCompleted"),
+				body: name,
+			});
 		},
 		[queryClient],
 	);
@@ -314,8 +318,11 @@ export function useReadStateController(
 					const name =
 						queryClient.getQueryData<WorkspaceDetail | null>(
 							helmorQueryKeys.workspaceDetail(workspaceId),
-						)?.title ?? "Workspace";
-					notifyRef.current({ title: "Input needed", body: name });
+						)?.title ?? translateSource("workspace");
+					notifyRef.current({
+						title: translateSource("inputNeeded"),
+						body: name,
+					});
 				}
 			}
 			const nextCounts = new Map<string, number>();
@@ -374,7 +381,7 @@ export function useReadStateController(
 		} catch (error) {
 			pushToastRef.current(
 				error instanceof Error ? error.message : String(error),
-				"Unable to reopen session",
+				translateSource("miscUnableToReopenSession"),
 				"destructive",
 			);
 		}

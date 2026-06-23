@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import type { AgentLoginProvider } from "@/lib/api";
+import { I18nText } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { ConnectingStatus } from "./connecting-status";
 import { ReadyStatus } from "./ready-status";
@@ -35,7 +36,7 @@ export function AgentStatusAction({
 				waiting &&
 					"bg-muted-foreground/70 text-background hover:bg-primary hover:text-primary-foreground",
 			)}
-			title={waiting ? "Restart setup" : undefined}
+			title={waiting ? "miscRestartSetup" : undefined}
 			onMouseEnter={() => {
 				onPrimeLogin?.(provider);
 			}}
@@ -48,11 +49,15 @@ export function AgentStatusAction({
 		>
 			{waiting ? (
 				<>
-					<span className="group-hover:hidden">Waiting...</span>
-					<span className="hidden group-hover:inline">Restart</span>
+					<span className="group-hover:hidden">
+						<I18nText source="waiting" />
+					</span>
+					<span className="hidden group-hover:inline">
+						<I18nText source="restart" />
+					</span>
 				</>
 			) : (
-				"Log in"
+				<I18nText source="log" />
 			)}
 		</Button>
 	);

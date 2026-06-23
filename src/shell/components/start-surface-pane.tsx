@@ -34,6 +34,7 @@ type Props = {
 	startComposerContextKey: string;
 	startCreateContext: ComposerCreateContext | null;
 	startLinkedDirectoriesController: ConversationProps["composerLinkedDirectoriesController"];
+	startComposerSettingsController: ConversationProps["composerSettingsController"];
 	sidebarCollapsed: boolean;
 	contextPanelOpen: boolean;
 	startSurfaceActions: StartSurfaceActions;
@@ -69,6 +70,7 @@ export function StartSurfacePane({
 	startComposerContextKey,
 	startCreateContext,
 	startLinkedDirectoriesController,
+	startComposerSettingsController,
 	sidebarCollapsed,
 	contextPanelOpen,
 	startSurfaceActions,
@@ -152,7 +154,7 @@ export function StartSurfacePane({
 					Boolean(startRepository) || startMode === "chat"
 				}
 				composerContextKeyOverride={startComposerContextKey}
-				composerPlaceholder="Describe what you want to build"
+				composerPlaceholder="miscDescribeWhatYouWantToBuild"
 				composerCreateContext={startCreateContext}
 				composerFocusScope="start-composer"
 				composerTerminalModeAvailable={startMode !== "chat"}
@@ -160,6 +162,7 @@ export function StartSurfacePane({
 				onToggleContextPanel={contextPanelActions.toggleContextPanel}
 				composerStartSubmitMenu
 				composerLinkedDirectoriesController={startLinkedDirectoriesController}
+				composerSettingsController={startComposerSettingsController}
 			/>
 		</WorkspaceStartPage>
 	);

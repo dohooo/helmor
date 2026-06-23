@@ -1,4 +1,5 @@
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useI18n } from "@/lib/i18n";
 
 type RunningSessionCloseDialogProps = {
 	open: boolean;
@@ -15,13 +16,14 @@ export function RunningSessionCloseDialog({
 	onOpenChange,
 	onConfirm,
 }: RunningSessionCloseDialogProps) {
+	const { f } = useI18n();
 	return (
 		<ConfirmDialog
 			open={open}
 			onOpenChange={onOpenChange}
-			title="Close running chat?"
-			description={`This chat is currently running. Closing it will cancel ${agentLabel}.`}
-			confirmLabel="Close anyway"
+			title="closeRunningChat"
+			description={f("chatCurrentlyRunningClosingWillCancel", { agentLabel })}
+			confirmLabel="closeAnyway"
 			onConfirm={onConfirm}
 			loading={loading}
 		/>

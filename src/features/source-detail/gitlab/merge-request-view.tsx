@@ -22,7 +22,7 @@ export function GitLabMergeRequestView({
 			description={detail?.body ?? undefined}
 			error={detailQuery.error}
 			isLoading={detailQuery.isLoading}
-			kindLabel="merge request"
+			kindLabel="miscMergeRequest"
 			refresh={detailRef ? toRefreshControl(detailQuery) : undefined}
 		/>
 	);

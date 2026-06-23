@@ -1,6 +1,7 @@
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
 import { CheckIcon, ChevronRightIcon } from "lucide-react";
 import type * as React from "react";
+
 import { cn } from "@/lib/utils";
 
 // Shared classes for every interactive row inside DropdownMenu / ContextMenu.
@@ -67,6 +68,7 @@ function DropdownMenuItem({
 	className,
 	inset,
 	variant = "default",
+	children,
 	...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Item> & {
 	inset?: boolean;
@@ -83,7 +85,9 @@ function DropdownMenuItem({
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{children}
+		</DropdownMenuPrimitive.Item>
 	);
 }
 
@@ -167,6 +171,7 @@ function DropdownMenuRadioItem({
 function DropdownMenuLabel({
 	className,
 	inset,
+	children,
 	...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Label> & {
 	inset?: boolean;
@@ -180,7 +185,9 @@ function DropdownMenuLabel({
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{children}
+		</DropdownMenuPrimitive.Label>
 	);
 }
 
@@ -199,6 +206,7 @@ function DropdownMenuSeparator({
 
 function DropdownMenuShortcut({
 	className,
+	children,
 	...props
 }: React.ComponentProps<"span">) {
 	return (
@@ -209,7 +217,9 @@ function DropdownMenuShortcut({
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{children}
+		</span>
 	);
 }
 

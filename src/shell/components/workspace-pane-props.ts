@@ -54,6 +54,8 @@ export function buildWorkspacePaneProps({
 		startCreateContext: s.startCreateContext,
 		startLinkedDirectoriesController:
 			sel.startSurface.startLinkedDirectoriesController,
+		startComposerSettingsController:
+			sel.startSurface.startComposerSettingsController,
 		repoId: data.selectedWorkspaceDetailQuery.data?.repoId ?? null,
 		sessionSelectionHistory: s.sessionSelectionHistory,
 		workspaceChangeRequest: data.workspaceChangeRequest,

@@ -6,11 +6,11 @@ import {
 	ClaudeIcon,
 	CursorIcon,
 	KimiIcon,
-	MiMoCodeIcon,
 	OpenAIIcon,
 	OpenCodeIcon,
 } from "@/components/icons";
 import type { AgentLoginStatusResult } from "@/lib/api";
+import { formatSource, translateSource } from "@/lib/i18n";
 
 export function buildAgentLoginItems(
 	status?: AgentLoginStatusResult | null,
@@ -21,19 +21,8 @@ export function buildAgentLoginItems(
 	const checking = status === undefined;
 	const resolve = (ready: boolean | undefined): AgentLoginStatus =>
 		checking ? "checking" : ready ? "ready" : "needsSetup";
-	const CHECKING_COPY = "Checking sign-in…";
+	const CHECKING_COPY = translateSource("miscCheckingSignIn");
 	return [
-		{
-			icon: ClaudeIcon,
-			provider: "claude",
-			label: "Claude Code",
-			description: checking
-				? CHECKING_COPY
-				: status?.claude
-					? "Signed in and ready to run in local workspaces."
-					: "Sign in to Claude Code to use Anthropic models in Helmor.",
-			status: resolve(status?.claude),
-		},
 		{
 			icon: OpenCodeIcon,
 			provider: "opencode",
@@ -41,20 +30,20 @@ export function buildAgentLoginItems(
 			description: checking
 				? CHECKING_COPY
 				: status?.opencode
-					? "Connected and ready to run OpenCode models in Helmor."
-					: "Sign in with `opencode auth login` to use OpenCode models in Helmor.",
+					? translateSource("miscOpencodeConnectedReady")
+					: translateSource("miscOpencodeSignIn"),
 			status: resolve(status?.opencode),
 		},
 		{
-			icon: MiMoCodeIcon,
-			provider: "mimo",
-			label: "MiMo Code",
+			icon: ClaudeIcon,
+			provider: "claude",
+			label: "Claude Code",
 			description: checking
 				? CHECKING_COPY
-				: status?.mimo
-					? "Connected and ready to run MiMo Code models in Helmor."
-					: "Sign in with `mimo auth login` to use MiMo Code models in Helmor.",
-			status: resolve(status?.mimo),
+				: status?.claude
+					? translateSource("miscClaudeSignedInReady")
+					: translateSource("miscClaudeSignIn"),
+			status: resolve(status?.claude),
 		},
 		{
 			icon: OpenAIIcon,
@@ -66,12 +55,12 @@ export function buildAgentLoginItems(
 		{
 			icon: KimiIcon,
 			provider: "kimi",
-			label: "Kimi Code",
+			label: "Kimi",
 			description: checking
 				? CHECKING_COPY
 				: status?.kimi
-					? "Signed in and ready to run Kimi models in Helmor."
-					: "Sign in with `kimi login` to use Kimi models in Helmor.",
+					? translateSource("miscKimiSignedInReady")
+					: translateSource("miscKimiSignIn"),
 			status: resolve(status?.kimi),
 		},
 		{
@@ -81,8 +70,8 @@ export function buildAgentLoginItems(
 			description: checking
 				? CHECKING_COPY
 				: status?.cursor
-					? "API key saved and ready to run Cursor models in Helmor."
-					: "Add a Cursor API key to use Cursor models in Helmor.",
+					? translateSource("miscCursorApiKeySavedReady")
+					: translateSource("miscCursorAddApiKey"),
 			status: resolve(status?.cursor),
 		},
 	];
@@ -90,11 +79,12 @@ export function buildAgentLoginItems(
 
 function codexDescription(status?: AgentLoginStatusResult | null): string {
 	if (status?.codex && status.codexAuthMethod === "apiKey") {
-		const provider = status.codexProvider ?? "configured provider";
-		return `Using ${provider} from Codex config with its API key environment variable.`;
+		const provider =
+			status.codexProvider ?? translateSource("miscConfiguredProvider");
+		return formatSource("miscCodexUsingProvider", { provider });
 	}
 	if (status?.codex) {
-		return "Signed in and ready to run OpenAI models in Helmor.";
+		return translateSource("miscCodexSignedInReady");
 	}
-	return "Sign in to Codex or configure a Codex API-key provider to use Codex models in Helmor.";
+	return translateSource("miscCodexSignIn");
 }

@@ -15,6 +15,7 @@ import { getShortcut } from "@/features/shortcuts/registry";
 import type { WorkspaceStartPage } from "@/features/workspace-start";
 import type { ChangeRequestInfo, RepositoryCreateOption } from "@/lib/api";
 import type { EditorSessionState } from "@/lib/editor-session";
+import { useI18n } from "@/lib/i18n";
 import type { AppSettings } from "@/lib/settings";
 import type { ContextCard } from "@/lib/sources/types";
 import type { ContextPanelActions } from "@/shell/controllers/use-context-panel-controller";
@@ -77,6 +78,7 @@ type Props = {
 	startLinkedDirectoriesController: ConversationProps["composerLinkedDirectoriesController"];
 	/** Quick panel: composer pinned to the bottom of the start surface. */
 	startComposerAtBottom?: boolean;
+	startComposerSettingsController: ConversationProps["composerSettingsController"];
 	// Conversation (chat) only
 	repoId: string | null;
 	sessionSelectionHistory: string[];
@@ -126,6 +128,7 @@ export function WorkspacePaneSurface({
 	startCreateContext,
 	startLinkedDirectoriesController,
 	startComposerAtBottom,
+	startComposerSettingsController,
 	repoId,
 	sessionSelectionHistory,
 	workspaceChangeRequest,
@@ -137,9 +140,10 @@ export function WorkspacePaneSurface({
 	headerLeadingNode,
 	headerActionsNode,
 }: Props) {
+	const { t } = useI18n();
 	return (
 		<section
-			aria-label="Workspace panel"
+			aria-label={t("workspacePanel")}
 			className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background"
 			// Mirror the inspector's containment: keep style/layout invalidation
 			// from sidebar/inspector resize out of the workspace subtree (which
@@ -148,14 +152,14 @@ export function WorkspacePaneSurface({
 		>
 			{workspaceViewMode !== "editor" && (
 				<div
-					aria-label="Workspace panel drag region"
+					aria-label={t("workspacePanelDragRegion")}
 					className="absolute inset-x-0 top-0 z-10 h-9 bg-transparent"
 					data-tauri-drag-region
 				/>
 			)}
 
 			<div
-				aria-label="Workspace viewport"
+				aria-label={t("workspaceViewport")}
 				className="flex min-h-0 flex-1 flex-col bg-background"
 			>
 				{workspaceViewMode === "editor" && editorSession && (
@@ -212,6 +216,7 @@ export function WorkspacePaneSurface({
 							startLinkedDirectoriesController={
 								startLinkedDirectoriesController
 							}
+							startComposerSettingsController={startComposerSettingsController}
 							sidebarCollapsed={sidebarCollapsed}
 							contextPanelOpen={contextPanelOpen}
 							startSurfaceActions={startSurfaceActions}

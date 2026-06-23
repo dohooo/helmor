@@ -16,6 +16,10 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { isAbortError, isQueryClosedTransient } from "../abort.js";
 import { ActiveTurnRegistry } from "../active-turn-registry.js";
+import {
+	applyWindowsPathFromRegistry,
+	type WindowsPathEnvOptions,
+} from "../agent-path-env.js";
 import { buildAgentProxyEnv } from "../agent-proxy.js";
 import {
 	buildClaudeRichMeta,
@@ -126,14 +130,21 @@ const CLAUDE_BIN_PATH = resolveClaudeBinPath();
 // spawned claude-code child loses HOME / PATH / cached OAuth creds and
 // reports "Not logged in". Returns undefined when no overrides are
 // supplied so the SDK keeps its default-process.env path.
-function mergeQueryEnv(
+export function buildClaudeBaseEnv(
+	baseEnv: NodeJS.ProcessEnv = process.env,
+	options: WindowsPathEnvOptions = {},
+): { [key: string]: string | undefined } {
+	return applyWindowsPathFromRegistry({ ...baseEnv }, options);
+}
+
+export function mergeQueryEnv(
 	...overrides: (Record<string, string> | undefined)[]
 ): { [key: string]: string | undefined } | undefined {
 	const present = overrides.filter(
 		(o): o is Record<string, string> => o !== undefined,
 	);
-	if (present.length === 0) return undefined;
-	return Object.assign({}, process.env, ...present);
+	if (present.length === 0 && process.platform !== "win32") return undefined;
+	return Object.assign(buildClaudeBaseEnv(), ...present);
 }
 
 // claude-agent-sdk v0.3.142 changed MCP servers to connect in the

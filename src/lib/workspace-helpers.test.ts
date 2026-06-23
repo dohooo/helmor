@@ -805,8 +805,8 @@ describe("findModelOption", () => {
 		expect(findModelOption(MODEL_SECTIONS, null)).toBeNull();
 	});
 
-	it("disambiguates a slug shared by opencode and mimo via provider", () => {
-		// Same `anthropic/x` slug configured under both forks — id alone is
+	it("disambiguates a slug shared by two providers via provider", () => {
+		// Same `anthropic/x` id configured under two providers — id alone is
 		// ambiguous; the provider picks the right section.
 		const sections: AgentModelSection[] = [
 			{
@@ -822,20 +822,20 @@ describe("findModelOption", () => {
 				],
 			},
 			{
-				id: "mimo",
-				label: "MiMo Code",
+				id: "kimi",
+				label: "Kimi",
 				options: [
 					{
 						id: "anthropic/x",
-						provider: "mimo",
-						label: "MiMo",
+						provider: "kimi",
+						label: "Kimi",
 						cliModel: "anthropic/x",
 					},
 				],
 			},
 		];
-		expect(findModelOption(sections, "anthropic/x", "mimo")?.provider).toBe(
-			"mimo",
+		expect(findModelOption(sections, "anthropic/x", "kimi")?.provider).toBe(
+			"kimi",
 		);
 		expect(findModelOption(sections, "anthropic/x", "opencode")?.provider).toBe(
 			"opencode",
@@ -1016,23 +1016,6 @@ describe("resolveSessionDisplayProvider", () => {
 				modelSections: MODEL_SECTIONS,
 			}),
 		).toBe("opencode");
-	});
-
-	it("keeps the mimo icon regardless of the selected sub-provider model", () => {
-		expect(
-			resolveSessionDisplayProvider({
-				session: {
-					id: "session-2",
-					agentType: "mimo",
-					model: null,
-					lastUserMessageAt: null,
-				},
-				modelSelections: {
-					"session:session-2": { provider: "codex", modelId: "gpt-4o" },
-				},
-				modelSections: MODEL_SECTIONS,
-			}),
-		).toBe("mimo");
 	});
 
 	it("falls back to the selected model's provider when the session has no agent", () => {

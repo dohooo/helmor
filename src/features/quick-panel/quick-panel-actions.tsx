@@ -6,6 +6,7 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { hideQuickPanel, revealWorkspaceInMainWindow } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 
 function ActionButton({
 	label,
@@ -16,6 +17,7 @@ function ActionButton({
 	onClick: () => void;
 	children: React.ReactNode;
 }) {
+	const { t } = useI18n();
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>
@@ -24,7 +26,7 @@ function ActionButton({
 					variant="ghost"
 					size="sm"
 					onClick={onClick}
-					aria-label={label}
+					aria-label={t(label)}
 					className="px-2 text-muted-foreground hover:text-foreground"
 				>
 					{children}
@@ -35,7 +37,7 @@ function ActionButton({
 				sideOffset={4}
 				className="flex h-[24px] items-center rounded-md px-2 text-small leading-none"
 			>
-				<span>{label}</span>
+				<span>{t(label)}</span>
 			</TooltipContent>
 		</Tooltip>
 	);
@@ -43,7 +45,7 @@ function ActionButton({
 
 export function QuickPanelCloseButton() {
 	return (
-		<ActionButton label="Close" onClick={() => void hideQuickPanel()}>
+		<ActionButton label="close" onClick={() => void hideQuickPanel()}>
 			<X className="size-3.5" strokeWidth={1.8} />
 		</ActionButton>
 	);
@@ -64,12 +66,12 @@ export function QuickPanelActions({
 }) {
 	return (
 		<>
-			<ActionButton label="New Workspace" onClick={onNewTask}>
+			<ActionButton label="newWorkspace" onClick={onNewTask}>
 				<Plus className="size-3.5" strokeWidth={1.8} />
 			</ActionButton>
 			{selectedWorkspaceId ? (
 				<ActionButton
-					label="Open in Helmor"
+					label="openHelmor"
 					onClick={() =>
 						void revealWorkspaceInMainWindow(
 							selectedWorkspaceId,

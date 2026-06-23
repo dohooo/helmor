@@ -765,7 +765,6 @@ function agentTypeToProvider(agentType?: string | null): AgentProvider | null {
 		case "cursor":
 		case "opencode":
 		case "kimi":
-		case "mimo":
 			return agentType;
 		default:
 			// Custom Codex providers persist as `codex:<id>`.
@@ -918,9 +917,9 @@ export function findModelOption(
 	}
 
 	const options = modelSections.flatMap((section) => section.options);
-	// opencode and mimo share the `provider/model` slug namespace, so id alone
-	// is ambiguous when the same model is configured under both. When the
-	// provider is known, match it exactly; otherwise fall back to first-by-id.
+	// Slug-based providers share the `provider/model` namespace, so id alone can
+	// be ambiguous when the same model is configured under more than one. When
+	// the provider is known, match it exactly; otherwise fall back to first-by-id.
 	if (provider) {
 		const exact = options.find(
 			(option) => option.id === modelId && option.provider === provider,

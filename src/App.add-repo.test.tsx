@@ -257,6 +257,7 @@ describe("App add repository flow", () => {
 		await waitFor(() => {
 			expect(apiMocks.addRepositoryFromLocalPath).toHaveBeenCalledWith(
 				"/tmp/test-repos/added-repo",
+				{ allowNonGitDirectory: false },
 			);
 		});
 		// The new repo shows up in the sidebar's repository list.
@@ -308,6 +309,7 @@ describe("App add repository flow", () => {
 		await waitFor(() => {
 			expect(apiMocks.addRepositoryFromLocalPath).toHaveBeenCalledWith(
 				"/tmp/test-repos/added-repo",
+				{ allowNonGitDirectory: false },
 			);
 		});
 

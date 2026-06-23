@@ -4,6 +4,7 @@ import type {
 	ThreadMessageLike,
 	ToolCallPart,
 } from "@/lib/api";
+import { formatSource, translateSource } from "@/lib/i18n";
 
 type ToolCategory = "search" | "read" | "shell" | "other";
 type CollapseCategory = "search" | "read" | "shell" | "mixed";
@@ -287,6 +288,28 @@ function collapseAssistantParts(
 			result.push(part);
 			continue;
 		}
+		if (part.type === "text") {
+			// A streaming turn exposes the same assistant text twice when this
+			// run is merged: the stable base snapshot carries it (the backend
+			// Full includes the in-flight partial) AND the pending partial
+			// re-sends it. Text parts have no shared id to dedupe on (unlike
+			// reasoning / tool-call), so collapse an adjacent text part when one
+			// side is a prefix of the other — keep the longer (newer) copy.
+			flushGroup();
+			const prev = result[result.length - 1];
+			if (prev?.type === "text") {
+				const prevText = prev.text ?? "";
+				const curText = part.text ?? "";
+				if (curText.startsWith(prevText) || prevText.startsWith(curText)) {
+					if (curText.length >= prevText.length) {
+						result[result.length - 1] = part;
+					}
+					continue;
+				}
+			}
+			result.push(part);
+			continue;
+		}
 		// Flush so the group stays BEFORE this part — letting reads straddle
 		// a reasoning/text block reorders the thread.
 		flushGroup();
@@ -391,17 +414,24 @@ function buildGroupSummary(tools: ToolCallPart[], active: boolean): string {
 		}
 
 		if (patterns.length === 1) {
-			const verb = active ? "Searching for" : "Searched for";
+			const verb = active
+				? translateSource("composerSearchingFor")
+				: translateSource("composerSearchedFor");
 			const suffix = searchTools.length > 1 ? ` (${searchTools.length}×)` : "";
 			parts.push(`${verb} '${patterns[0]}'${suffix}`);
 		} else if (patterns.length > 1) {
 			parts.push(
-				`${active ? "Searching" : "Searched"} ${searchTools.length} patterns`,
+				formatSource(
+					active ? "composerSearchingPatterns" : "composerSearchedPatterns",
+					{ count: searchTools.length },
+				),
 			);
 		} else {
-			const plural = searchTools.length > 1 ? "s" : "";
 			parts.push(
-				`${active ? "Searching" : "Searched"} ${searchTools.length} time${plural}`,
+				formatSource(
+					active ? "composerSearchingTimes" : "composerSearchedTimes",
+					{ count: searchTools.length },
+				),
 			);
 		}
 	}
@@ -413,33 +443,33 @@ function buildGroupSummary(tools: ToolCallPart[], active: boolean): string {
 			if (filePath) paths.add(filePath);
 		}
 		const count = paths.size > 0 ? paths.size : readTools.length;
-		const verb =
+		const key =
 			parts.length === 0
 				? active
-					? "Reading"
-					: "Read"
+					? "composerReadingFiles"
+					: "composerReadFiles"
 				: active
-					? "reading"
-					: "read";
-		const plural = count > 1 ? "s" : "";
-		parts.push(`${verb} ${count} file${plural}`);
+					? "composerReadingFilesLower"
+					: "composerReadFilesLower";
+		parts.push(formatSource(key, { count }));
 	}
 
 	if (shellTools.length > 0) {
-		const verb =
+		const key =
 			parts.length === 0
 				? active
-					? "Running"
-					: "Ran"
+					? "composerRunningCommands"
+					: "composerRanCommands"
 				: active
-					? "running"
-					: "ran";
-		const plural = shellTools.length > 1 ? "s" : "";
-		parts.push(`${verb} ${shellTools.length} read-only command${plural}`);
+					? "composerRunningCommandsLower"
+					: "composerRanCommandsLower";
+		parts.push(formatSource(key, { count: shellTools.length }));
 	}
 
 	if (parts.length === 0) {
-		return active ? "Working..." : "Done";
+		return active
+			? translateSource("composerWorking")
+			: translateSource("done");
 	}
 	return active ? `${parts.join(", ")}...` : parts.join(", ");
 }

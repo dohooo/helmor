@@ -1,4 +1,9 @@
 import { createContext, useContext } from "react";
+import {
+	type AppLanguage,
+	DEFAULT_APP_LANGUAGE,
+	isAppLanguage,
+} from "@/lib/i18n/types";
 import type { WorkspaceBranchIntent } from "./api";
 // Routed through the transport shim so settings load works in the mobile
 // browser companion too (not just the Tauri webview).
@@ -31,7 +36,7 @@ export type ClaudeThinkingDisplay = "summarized" | "omitted";
 export type AppSurface = "workspace" | "workspace-start";
 export type WorkspaceRightSidebarMode = "inspector" | "context";
 /** A global model preference (default / review / action). Carries its
- *  provider so a slug-based model (opencode / mimo) is never re-derived
+ *  provider so a slug-based model (opencode) is never re-derived
  *  ambiguously from the bare id. `provider` is null only for legacy rows
  *  not yet re-saved. Persisted as JSON. */
 export type ModelRef = { provider: string | null; modelId: string };
@@ -256,9 +261,18 @@ export type StartSurfacePreferences = {
 	chatModeActive: boolean;
 	/** Start-composer Terminal-Mode toggle. */
 	terminalModeActive: boolean;
+	/** Composer picks (model / effort / permission / fast) keyed by the start
+	 *  context key (`start:chat`, `start:repo:<id>`). The start surface has no
+	 *  session row to persist against, so without these the picks reset when
+	 *  the user navigates away and the start subtree unmounts. */
+	composerModelByContextKey: Record<string, ModelRef>;
+	composerEffortByContextKey: Record<string, string>;
+	composerPermissionModeByContextKey: Record<string, string>;
+	composerFastModeByContextKey: Record<string, boolean>;
 };
 
 export type AppSettings = {
+	language: AppLanguage;
 	/** Chat message body font size (px). Migrated from the legacy `fontSize`
 	 *  field, which only ever affected chat rendering. */
 	chatFontSize: number;
@@ -330,6 +344,10 @@ export type AppSettings = {
 	 *  exactly once at the merged-edge; skipped if the workspace has an
 	 *  active agent session or fails archive validation. */
 	autoArchiveOnMerge: boolean;
+	/** Opt-in: allow adding plain local directories that are not git
+	 *  repositories. These run as local-mode sessions with no branch/worktree
+	 *  actions. */
+	allowNonGitDirectories: boolean;
 	onboardingCompleted: boolean;
 	shortcuts: ShortcutOverrides;
 	/** Claude model ids in the picker. `null` = all (default), `[]` = none. */
@@ -339,8 +357,6 @@ export type AppSettings = {
 	cursorProvider: CursorProviderSettings;
 	opencodeProvider: OpencodeProviderSettings;
 	kimiProvider: KimiProviderSettings;
-	/** MiMo Code (opencode-protocol fork) — same settings shape. */
-	mimoProvider: OpencodeProviderSettings;
 	agentProxy: AgentProxySettings;
 	localLlm: LocalLlmSettings;
 	inboxSourceConfig: InboxSourceConfig;
@@ -364,6 +380,10 @@ export const DEFAULT_START_SURFACE_PREFERENCES: StartSurfacePreferences = {
 	branchIntentByRepoId: {},
 	chatModeActive: false,
 	terminalModeActive: false,
+	composerModelByContextKey: {},
+	composerEffortByContextKey: {},
+	composerPermissionModeByContextKey: {},
+	composerFastModeByContextKey: {},
 };
 
 /** Fallbacks for repos without a per-repo entry. */
@@ -398,6 +418,7 @@ export function writeRepoPreference<V>(
 export const CONTEXT_USAGE_AUTO_REVEAL_THRESHOLD = 70;
 
 export const DEFAULT_SETTINGS: AppSettings = {
+	language: DEFAULT_APP_LANGUAGE,
 	chatFontSize: 14,
 	uiFontFamily: null,
 	codeFontFamily: null,
@@ -431,6 +452,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	alwaysShowContextUsage: true,
 	showUsageStats: true,
 	autoArchiveOnMerge: false,
+	allowNonGitDirectories: false,
 	onboardingCompleted: false,
 	shortcuts: {},
 	claudeEnabledModelIds: null,
@@ -447,12 +469,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		enabledModelIds: null,
 	},
 	kimiProvider: {
-		cachedModels: null,
-		enabledModelIds: null,
-	},
-	mimoProvider: {
-		status: "unavailable",
-		connected: [],
 		cachedModels: null,
 		enabledModelIds: null,
 	},
@@ -474,6 +490,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 };
 
 export const THEME_STORAGE_KEY = "helmor-theme";
+export const LANGUAGE_STORAGE_KEY = "helmor-language";
 export const LIGHT_THEME_STORAGE_KEY = "helmor-light-theme";
 export const DARK_THEME_STORAGE_KEY = "helmor-dark-theme";
 export const SIDEBAR_GROUPING_STORAGE_KEY = "helmor-sidebar-grouping";
@@ -487,6 +504,7 @@ export const TERMINAL_FONT_FAMILY_STORAGE_KEY = "helmor-terminal-font-family";
  *  Anything visible in the first paint must live here so we don't wait
  *  on the async SQLite round-trip. */
 const LOCALSTORAGE_KEYS = {
+	language: LANGUAGE_STORAGE_KEY,
 	theme: THEME_STORAGE_KEY,
 	lightTheme: LIGHT_THEME_STORAGE_KEY,
 	darkTheme: DARK_THEME_STORAGE_KEY,
@@ -532,6 +550,14 @@ export function getPreloadedTheme(): ThemeMode {
 	return (raw as ThemeMode | null) ?? DEFAULT_SETTINGS.theme;
 }
 
+export function getPreloadedLanguage(): AppLanguage {
+	if (typeof localStorage === "undefined") {
+		return DEFAULT_SETTINGS.language;
+	}
+	const raw = localStorage.getItem(LANGUAGE_STORAGE_KEY);
+	return isAppLanguage(raw) ? raw : DEFAULT_SETTINGS.language;
+}
+
 function readLocalStorageString(key: string): string | null {
 	if (typeof localStorage === "undefined") return null;
 	const v = localStorage.getItem(key);
@@ -568,6 +594,7 @@ export function getPreloadedSettings(): AppSettings {
 	})();
 	return {
 		...DEFAULT_SETTINGS,
+		language: getPreloadedLanguage(),
 		theme: getPreloadedTheme(),
 		lightTheme,
 		darkTheme,
@@ -617,6 +644,7 @@ const SETTINGS_KEY_MAP: Record<
 	alwaysShowContextUsage: "app.always_show_context_usage",
 	showUsageStats: "app.show_usage_stats",
 	autoArchiveOnMerge: "app.auto_archive_on_merge",
+	allowNonGitDirectories: "app.allow_non_git_directories",
 	onboardingCompleted: "app.onboarding_completed",
 	shortcuts: "app.shortcuts",
 	claudeEnabledModelIds: "app.claude_enabled_model_ids",
@@ -624,7 +652,6 @@ const SETTINGS_KEY_MAP: Record<
 	cursorProvider: "app.cursor_provider",
 	opencodeProvider: "app.opencode_provider",
 	kimiProvider: "app.kimi_provider",
-	mimoProvider: "app.mimo_provider",
 	agentProxy: "app.agent_proxy",
 	localLlm: "app.local_llm",
 	inboxSourceConfig: "app.inbox_source_config",
@@ -889,6 +916,39 @@ function parseStringRecord(value: unknown): Record<string, string> {
 	);
 }
 
+function parseBooleanRecord(value: unknown): Record<string, boolean> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return {};
+	}
+	return Object.fromEntries(
+		Object.entries(value).filter(
+			([key, entry]) => key.length > 0 && typeof entry === "boolean",
+		),
+	) as Record<string, boolean>;
+}
+
+/** Validates an already-parsed record of `ModelRef` objects, dropping
+ *  malformed entries. Values are nested objects (not serialized strings), so
+ *  unlike `parseModelRef` this never JSON-parses. */
+function parseModelRefRecord(value: unknown): Record<string, ModelRef> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return {};
+	}
+	const out: Record<string, ModelRef> = {};
+	for (const [key, entry] of Object.entries(value)) {
+		if (key.length === 0 || !entry || typeof entry !== "object") continue;
+		const modelId = (entry as { modelId?: unknown }).modelId;
+		if (typeof modelId !== "string" || !modelId.trim()) continue;
+		const rawProvider = (entry as { provider?: unknown }).provider;
+		const provider =
+			typeof rawProvider === "string" && rawProvider.trim()
+				? rawProvider.trim()
+				: null;
+		out[key] = { provider, modelId: modelId.trim() };
+	}
+	return out;
+}
+
 /** Like `parseStringRecord`, with each value constrained to `allowed`. */
 function parseEnumRecord<V extends string>(
 	value: unknown,
@@ -974,6 +1034,18 @@ function parseStartSurfacePreferences(
 				typeof o.terminalModeActive === "boolean"
 					? o.terminalModeActive
 					: false,
+			composerModelByContextKey: parseModelRefRecord(
+				o.composerModelByContextKey,
+			),
+			composerEffortByContextKey: parseStringRecord(
+				o.composerEffortByContextKey,
+			),
+			composerPermissionModeByContextKey: parseStringRecord(
+				o.composerPermissionModeByContextKey,
+			),
+			composerFastModeByContextKey: parseBooleanRecord(
+				o.composerFastModeByContextKey,
+			),
 		};
 	} catch {
 		return DEFAULT_START_SURFACE_PREFERENCES;
@@ -996,7 +1068,7 @@ function parseCursorProviderSettings(
 	}
 }
 
-// Shared by opencodeProvider and mimoProvider — same persisted shape.
+// Parses the slug-provider (opencode) persisted shape.
 function parseSlugProviderSettings(
 	raw: string | undefined,
 	fallback: OpencodeProviderSettings,
@@ -1266,6 +1338,7 @@ export async function loadSettings(): Promise<AppSettings> {
 			theme:
 				(localStorage.getItem(THEME_STORAGE_KEY) as AppSettings["theme"]) ??
 				DEFAULT_SETTINGS.theme,
+			language: getPreloadedLanguage(),
 			lightTheme: readColorTheme(
 				LIGHT_THEME_STORAGE_KEY,
 				DEFAULT_SETTINGS.lightTheme,
@@ -1376,6 +1449,10 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.autoArchiveOnMerge] !== undefined
 					? raw[SETTINGS_KEY_MAP.autoArchiveOnMerge] === "true"
 					: DEFAULT_SETTINGS.autoArchiveOnMerge,
+			allowNonGitDirectories:
+				raw[SETTINGS_KEY_MAP.allowNonGitDirectories] !== undefined
+					? raw[SETTINGS_KEY_MAP.allowNonGitDirectories] === "true"
+					: DEFAULT_SETTINGS.allowNonGitDirectories,
 			onboardingCompleted:
 				raw[SETTINGS_KEY_MAP.onboardingCompleted] !== undefined
 					? raw[SETTINGS_KEY_MAP.onboardingCompleted] === "true"
@@ -1393,10 +1470,6 @@ export async function loadSettings(): Promise<AppSettings> {
 			opencodeProvider: parseSlugProviderSettings(
 				raw[SETTINGS_KEY_MAP.opencodeProvider],
 				DEFAULT_SETTINGS.opencodeProvider,
-			),
-			mimoProvider: parseSlugProviderSettings(
-				raw[SETTINGS_KEY_MAP.mimoProvider],
-				DEFAULT_SETTINGS.mimoProvider,
 			),
 			kimiProvider: parseKimiProviderSettings(
 				raw[SETTINGS_KEY_MAP.kimiProvider],
@@ -1451,7 +1524,6 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 				key === "cursorProvider" ||
 				key === "opencodeProvider" ||
 				key === "kimiProvider" ||
-				key === "mimoProvider" ||
 				key === "agentProxy" ||
 				key === "localLlm" ||
 				key === "inboxSourceConfig" ||

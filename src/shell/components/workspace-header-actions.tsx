@@ -30,6 +30,7 @@ import {
 	openWorkspaceInEditor,
 	openWorkspaceInFinder,
 } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
 import { EditorIcon } from "@/shell/editor-icon";
 import { PREFERRED_EDITOR_STORAGE_KEY } from "@/shell/layout";
@@ -63,6 +64,7 @@ export function WorkspaceHeaderActions({
 	onPickEditor,
 	pushWorkspaceToast,
 }: Props) {
+	const { t, f } = useI18n();
 	const hasEditorActions =
 		!isChatMode && installedEditors.length > 0 && preferredEditor !== null;
 
@@ -75,7 +77,9 @@ export function WorkspaceHeaderActions({
 							<Button
 								variant="ghost"
 								size="xs"
-								aria-label={`Open in ${preferredEditor.name}`}
+								aria-label={f("miscOpenInEditor", {
+									editor: preferredEditor.name,
+								})}
 								onClick={onOpenPreferredEditor}
 								className="px-0.5 text-muted-foreground hover:text-foreground"
 							>
@@ -91,7 +95,9 @@ export function WorkspaceHeaderActions({
 							sideOffset={4}
 							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 						>
-							<span>{`Open in ${preferredEditor.name}`}</span>
+							<span>
+								{f("miscOpenInEditor", { editor: preferredEditor.name })}
+							</span>
 							{openPreferredEditorShortcut ? (
 								<InlineShortcutDisplay
 									hotkey={openPreferredEditorShortcut}
@@ -119,12 +125,12 @@ export function WorkspaceHeaderActions({
 							<DropdownMenuItem
 								onClick={() => {
 									void openWorkspaceInFinder(workspaceId).catch((e) =>
-										pushWorkspaceToast(String(e), "Failed to open Finder"),
+										pushWorkspaceToast(String(e), t("miscFailedToOpenFinder")),
 									);
 								}}
 							>
 								<FolderOpen className="shrink-0" strokeWidth={1.8} />
-								<span className="flex-1">Finder</span>
+								<span className="flex-1">{t("finder")}</span>
 							</DropdownMenuItem>
 							{installedEditors.map((editor) => (
 								<DropdownMenuItem
@@ -139,7 +145,7 @@ export function WorkspaceHeaderActions({
 											(e) =>
 												pushWorkspaceToast(
 													String(e),
-													`Failed to open ${editor.name}`,
+													f("failedOpenEditor", { editor: editor.name }),
 												),
 										);
 									}}
@@ -160,7 +166,7 @@ export function WorkspaceHeaderActions({
 					<DropdownMenu>
 						<DropdownMenuTrigger asChild>
 							<Button
-								aria-label="More workspace actions"
+								aria-label="moreWorkspaceActions"
 								variant="ghost"
 								size="icon-xs"
 								className="hidden text-muted-foreground hover:text-foreground max-[640px]:inline-flex"
@@ -180,18 +186,21 @@ export function WorkspaceHeaderActions({
 										editorId={preferredEditor.id}
 										className="shrink-0"
 									/>
-									<span className="flex-1">Open</span>
+									<span className="flex-1">{t("open")}</span>
 								</DropdownMenuSubTrigger>
 								<DropdownMenuSubContent className="min-w-[11rem]">
 									<DropdownMenuItem
 										onClick={() => {
 											void openWorkspaceInFinder(workspaceId).catch((e) =>
-												pushWorkspaceToast(String(e), "Failed to open Finder"),
+												pushWorkspaceToast(
+													String(e),
+													t("miscFailedToOpenFinder"),
+												),
 											);
 										}}
 									>
 										<FolderOpen className="shrink-0" strokeWidth={1.8} />
-										<span className="flex-1">Finder</span>
+										<span className="flex-1">{t("finder")}</span>
 									</DropdownMenuItem>
 									{installedEditors.map((editor) => (
 										<DropdownMenuItem
@@ -208,7 +217,7 @@ export function WorkspaceHeaderActions({
 												).catch((e) =>
 													pushWorkspaceToast(
 														String(e),
-														`Failed to open ${editor.name}`,
+														f("failedOpenEditor", { editor: editor.name }),
 													),
 												);
 											}}
@@ -233,8 +242,8 @@ export function WorkspaceHeaderActions({
 							<Button
 								aria-label={
 									inspectorCollapsed
-										? "Expand right sidebar"
-										: "Collapse right sidebar"
+										? "miscExpandRightSidebar"
+										: "miscCollapseRightSidebar"
 								}
 								onClick={onToggleInspector}
 								variant="ghost"
@@ -254,8 +263,8 @@ export function WorkspaceHeaderActions({
 						>
 							<span>
 								{inspectorCollapsed
-									? "Expand right sidebar"
-									: "Collapse right sidebar"}
+									? t("miscExpandRightSidebar")
+									: t("miscCollapseRightSidebar")}
 							</span>
 							{rightSidebarToggleShortcut ? (
 								<InlineShortcutDisplay

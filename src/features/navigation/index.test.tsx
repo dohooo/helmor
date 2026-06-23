@@ -391,11 +391,19 @@ describe("WorkspacesSidebar", () => {
 
 		fireEvent.pointerDown(repoHandle!, {
 			button: 0,
+			buttons: 1,
 			clientX: 10,
 			clientY: 10,
 			pointerId: 1,
 		});
-		fireEvent.pointerMove(window, { clientX: 10, clientY: 30, pointerId: 1 });
+		// buttons: 1 keeps the primary button held so the tap-vs-click guard
+		// treats this as a real press-drag instead of a trackpad tap.
+		fireEvent.pointerMove(window, {
+			clientX: 10,
+			clientY: 30,
+			buttons: 1,
+			pointerId: 1,
+		});
 		fireEvent.pointerUp(window, { clientX: 10, clientY: 30, pointerId: 1 });
 
 		expect(onMoveRepositoryInSidebar).toHaveBeenCalledWith("repo-beta", null);
@@ -700,7 +708,7 @@ describe("WorkspacesSidebar", () => {
 		).toBeInTheDocument();
 
 		// Collapse the group
-		await user.click(screen.getByRole("button", { name: /^In Progress/ }));
+		await user.click(screen.getByRole("button", { name: /^In progress/i }));
 		expect(
 			screen.queryByRole("button", { name: "Workspace 1" }),
 		).not.toBeInTheDocument();

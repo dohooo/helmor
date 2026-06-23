@@ -56,17 +56,27 @@ function EmptyMedia({
 	);
 }
 
-function EmptyTitle({ className, ...props }: React.ComponentProps<"div">) {
+function EmptyTitle({
+	className,
+	children,
+	...props
+}: React.ComponentProps<"div">) {
 	return (
 		<div
 			data-slot="empty-title"
 			className={cn("font-heading text-title font-medium", className)}
 			{...props}
-		/>
+		>
+			{children}
+		</div>
 	);
 }
 
-function EmptyDescription({ className, ...props }: React.ComponentProps<"p">) {
+function EmptyDescription({
+	className,
+	children,
+	...props
+}: React.ComponentProps<"p">) {
 	return (
 		<div
 			data-slot="empty-description"
@@ -75,11 +85,17 @@ function EmptyDescription({ className, ...props }: React.ComponentProps<"p">) {
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{children}
+		</div>
 	);
 }
 
-function EmptyContent({ className, ...props }: React.ComponentProps<"div">) {
+function EmptyContent({
+	className,
+	children,
+	...props
+}: React.ComponentProps<"div">) {
 	return (
 		<div
 			data-slot="empty-content"
@@ -88,7 +104,9 @@ function EmptyContent({ className, ...props }: React.ComponentProps<"div">) {
 				className,
 			)}
 			{...props}
-		/>
+		>
+			{children}
+		</div>
 	);
 }
 

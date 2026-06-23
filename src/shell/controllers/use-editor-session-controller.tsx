@@ -11,6 +11,7 @@ import {
 	isMarkdownPath,
 	isPathWithinRoot,
 } from "@/lib/editor-session";
+import { translateSource, useI18n } from "@/lib/i18n";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
 import {
 	useLatestRef,
@@ -57,6 +58,7 @@ export function useEditorSessionController(
 		enterEditorMode,
 		exitEditorMode,
 	} = deps;
+	const { t } = useI18n();
 	const [editorSession, setEditorSession] = useState<EditorSessionState | null>(
 		null,
 	);
@@ -101,7 +103,10 @@ export function useEditorSessionController(
 	);
 
 	const reportError = useCallback(
-		(description: string, title = "Editor action failed") => {
+		(
+			description: string,
+			title = translateSource("miscEditorActionFailed"),
+		) => {
 			pushToastRef.current(description, title);
 		},
 		[],
@@ -111,8 +116,8 @@ export function useEditorSessionController(
 		(path: string, options?: DiffOpenOptions) => {
 			if (!workspaceRootPath) {
 				pushToastRef.current(
-					"Open a workspace with a resolved root path before using the in-app editor.",
-					"Editor unavailable",
+					translateSource("miscEditorRootPathRequired"),
+					translateSource("miscEditorUnavailable"),
 				);
 				return;
 			}
@@ -184,7 +189,9 @@ export function useEditorSessionController(
 				});
 			};
 			if (editorSession?.dirty && editorSession.path !== path) {
-				const confirmed = confirmDiscardEditorChanges("open another file");
+				const confirmed = confirmDiscardEditorChanges(
+					"miscDiscardActionOpenAnotherFile",
+				);
 				if (confirmed === true) {
 					open();
 					return;
@@ -212,15 +219,15 @@ export function useEditorSessionController(
 		(path: string, line?: number, column?: number) => {
 			if (!workspaceRootPath) {
 				pushToastRef.current(
-					"Open a workspace with a resolved root path before using the in-app editor.",
-					"Editor unavailable",
+					translateSource("miscEditorRootPathRequired"),
+					translateSource("miscEditorUnavailable"),
 				);
 				return;
 			}
 			if (!isPathWithinRoot(path, workspaceRootPath)) {
 				pushToastRef.current(
-					"Only files inside the current workspace can be opened in the in-app editor.",
-					"File unavailable",
+					translateSource("miscEditorFileOutsideWorkspace"),
+					translateSource("miscFileUnavailable"),
 				);
 				return;
 			}
@@ -261,7 +268,9 @@ export function useEditorSessionController(
 				});
 			};
 			if (editorSession?.dirty && editorSession.path !== path) {
-				const confirmed = confirmDiscardEditorChanges("open another file");
+				const confirmed = confirmDiscardEditorChanges(
+					"miscDiscardActionOpenAnotherFile",
+				);
 				if (confirmed === true) {
 					open();
 					return;
@@ -291,7 +300,9 @@ export function useEditorSessionController(
 			exitEditorModeRef.current();
 			setEditorSession(null);
 		};
-		const confirmed = confirmDiscardEditorChanges("return to chat");
+		const confirmed = confirmDiscardEditorChanges(
+			"miscDiscardActionReturnToChat",
+		);
 		if (confirmed === true) {
 			close();
 			return;
@@ -318,16 +329,17 @@ export function useEditorSessionController(
 				onOpenChange={(open) => {
 					if (!open) resolveDiscardConfirmation(false);
 				}}
-				title="Discard unsaved changes?"
+				title="discardUnsavedChanges"
 				description={
 					<span className="block">
-						<span className="block">You have unsaved changes.</span>
+						<span className="block">{t("haveUnsavedChanges")}</span>
 						<span className="mt-2 block">
-							Discard them and {discardConfirmation?.action ?? "continue"}?
+							{t("discardThem")}{" "}
+							{t(discardConfirmation?.action ?? "miscDiscardActionContinue")}?
 						</span>
 					</span>
 				}
-				confirmLabel="Discard"
+				confirmLabel="discard"
 				onConfirm={() => resolveDiscardConfirmation(true)}
 			/>
 		),

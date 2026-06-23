@@ -7,6 +7,7 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { I18nText } from "@/lib/i18n";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { type KimiProviderSettings, useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
@@ -85,7 +86,7 @@ export function KimiModels() {
 						type="button"
 						variant="outline"
 						size="icon-sm"
-						aria-label="Sync models"
+						aria-label="syncModels"
 						disabled={isSyncing}
 						onClick={() => void sync().catch(() => {})}
 					>
@@ -94,7 +95,9 @@ export function KimiModels() {
 						/>
 					</Button>
 				</TooltipTrigger>
-				<TooltipContent>Sync models — re-reads ~/.kimi-code</TooltipContent>
+				<TooltipContent>
+					<I18nText source="syncModelsReReadsKimiCode" />
+				</TooltipContent>
 			</Tooltip>
 		</div>
 	);

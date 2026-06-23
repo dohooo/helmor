@@ -1,7 +1,7 @@
 {
 	"$schema": "https://schema.tauri.app/config/2",
 	"productName": "Helmor",
-	"version": "0.39.1",
+	"version": "0.42.0",
 	"identifier": "ai.helmor.desktop",
 	"build": {
 		"beforeDevCommand": "bun x vite",
@@ -55,10 +55,7 @@
 		"active": true,
 		"createUpdaterArtifacts": true,
 		"targets": "all",
-		"externalBin": [
-			"../sidecar/dist/helmor-sidecar",
-			"./target/bundled/helmor-cli"
-		],
+		"externalBin": ["../sidecar/dist/helmor-sidecar"],
 		"resources": {
 			"../sidecar/dist/vendor/": "vendor"
 		},

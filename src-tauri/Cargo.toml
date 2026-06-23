@@ -1,6 +1,6 @@
 [package]
 name = "helmor"
-version = "0.39.1"
+version = "0.42.0"
 description = "The local-first IDE for coding agent orchestration."
 authors = ["Caspian Zhao", "Nathan Lian"]
 edition = "2021"
@@ -117,6 +117,9 @@ libc = "0.2"
 core-foundation = "0.10"
 security-framework = "3"
 security-framework-sys = "2"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSEvent", "NSResponder", "block2"] }
+block2 = "0.6"
 
 [target.'cfg(windows)'.dependencies]
 uds_windows = "1"

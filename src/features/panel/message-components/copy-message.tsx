@@ -132,7 +132,7 @@ export function serializeMessageForClipboard(
 export function CopyMessageButton({
 	message,
 	className,
-	ariaLabel = "Copy message",
+	ariaLabel = "panelCopyMessage",
 }: {
 	message: Pick<ThreadMessageLike, "content">;
 	className?: string;

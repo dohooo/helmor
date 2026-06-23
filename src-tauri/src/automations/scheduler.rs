@@ -1,7 +1,7 @@
 //! Stateless poll-loop scheduler for automations.
 //!
-//! Same shape as `triage::fetcher::spawn_scheduler`: a dedicated std::thread
-//! that ticks every 30s. All durable state lives in SQLite — a tick reads due
+//! A dedicated std::thread that ticks every 30s. All durable state lives in
+//! SQLite — a tick reads due
 //! rows, CAS-claims each slot (advancing `next_run_at` computed from *now*),
 //! and only then dispatches. Consequences, by construction:
 //!

@@ -11,6 +11,7 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { I18nText } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { CustomProviderCard } from "./custom-provider-card";
 import type { ProviderConfigAdapter, ProviderPreset } from "./provider-config";
@@ -98,12 +99,12 @@ function AddProviderMenu({
 	// Claude endpoints speak Anthropic's API; every other family is OpenAI-style.
 	const customLabel =
 		adapter.family === "claude"
-			? "Custom (Anthropic-compatible)"
-			: "Custom (OpenAI-compatible)";
+			? "customAnthropicCompatible"
+			: "customOpenaiCompatible";
 	const customItem = (
 		<DropdownMenuItem onClick={onAddCustom} className="flex items-center gap-2">
 			<SlidersHorizontal className="size-4 text-muted-foreground" />
-			{customLabel}
+			<I18nText source={customLabel} />
 		</DropdownMenuItem>
 	);
 
@@ -117,7 +118,7 @@ function AddProviderMenu({
 				onClick={onAddCustom}
 			>
 				<Plus className="size-3.5" />
-				Add provider
+				<I18nText source="addProvider" />
 			</Button>
 		);
 	}
@@ -131,7 +132,7 @@ function AddProviderMenu({
 					className="h-8 w-fit gap-1.5 text-[13px]"
 				>
 					<Plus className="size-3.5" />
-					Add provider
+					<I18nText source="addProvider" />
 					<ChevronDown className="size-3 opacity-50" />
 				</Button>
 			</DropdownMenuTrigger>

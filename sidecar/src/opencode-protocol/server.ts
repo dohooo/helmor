@@ -1,5 +1,5 @@
 // Owns ONE long-lived `<bin> serve` child + its SDK client (HTTP/SSE) for an
-// opencode-protocol provider (opencode itself, or a fork like MiMo Code that
+// opencode-protocol provider (opencode, or any protocol-compatible fork that
 // keeps the same server/SDK protocol). Shared across all of that provider's
 // sessions; the global SSE stream is demuxed by `sessionID` in the manager.
 // Spawned ourselves (not the SDK helper) so we own the process group for tree
@@ -14,6 +14,10 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2";
+import {
+	applyWindowsPathFromRegistry,
+	type WindowsPathEnvOptions,
+} from "../agent-path-env.js";
 import { errorDetails, logger } from "../logger.js";
 
 const execFileAsync = promisify(execFile);
@@ -22,7 +26,7 @@ const STARTUP_TIMEOUT_MS = 20_000;
 const HOSTNAME = "127.0.0.1";
 
 /** Everything that differs between opencode and a protocol-compatible fork
- *  at the server-process layer. See `opencode.ts` / `mimo.ts` for instances. */
+ *  at the server-process layer. See `opencode.ts` for the instance. */
 export interface ProtocolServerConfig {
 	/** Provider id — log prefix and session-DB subdir (`<id>/<id>.db`). */
 	readonly id: string;
@@ -41,8 +45,7 @@ export interface ProtocolServerConfig {
 	readonly passwordEnvVar: string;
 	/** Env var overriding the server's session-DB path. */
 	readonly dbEnvVar: string;
-	/** Basic-auth username the server expects
-	 *  (opencode: "opencode", mimo: "mimocode"). */
+	/** Basic-auth username the server expects (e.g. opencode: "opencode"). */
 	readonly authUsername: string;
 }
 
@@ -212,6 +215,14 @@ export interface ProtocolServerHandle {
 	readonly url: string;
 }
 
+export function buildOpencodeEnv(
+	env: NodeJS.ProcessEnv,
+	options: WindowsPathEnvOptions = {},
+): NodeJS.ProcessEnv {
+	const effectiveEnv = applyWindowsPathFromRegistry({ ...env }, options);
+	return effectiveEnv;
+}
+
 /** One `<bin> serve` process + its SDK client. Memoized start. */
 export class OpencodeProtocolServer {
 	/** Resolved once per instance; release env override wins. */
@@ -240,7 +251,12 @@ export class OpencodeProtocolServer {
 	/** Idempotent. Restarts if the proxy in `env` changed. Only called at turn
 	 *  start, so it never interrupts an in-flight stream. */
 	start(env: NodeJS.ProcessEnv): Promise<ProtocolServerHandle> {
-		const proxyUrl = env.HTTPS_PROXY ?? env.HTTP_PROXY ?? env.ALL_PROXY ?? null;
+		const effectiveEnv = buildOpencodeEnv(env);
+		const proxyUrl =
+			effectiveEnv.HTTPS_PROXY ??
+			effectiveEnv.HTTP_PROXY ??
+			effectiveEnv.ALL_PROXY ??
+			null;
 		if (this.handle && proxyUrl !== this.proxyUrl) {
 			logger.info(`${this.config.id} proxy changed — restarting server`, {
 				proxy: proxyUrl ?? "(none)",
@@ -249,7 +265,7 @@ export class OpencodeProtocolServer {
 		}
 		if (this.handle) return this.handle;
 		this.proxyUrl = proxyUrl;
-		this.handle = this.spawnAndConnect(env).catch((err) => {
+		this.handle = this.spawnAndConnect(effectiveEnv).catch((err) => {
 			// Allow a later sendMessage to retry from scratch.
 			this.handle = null;
 			throw err;

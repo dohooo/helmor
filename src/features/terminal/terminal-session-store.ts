@@ -6,6 +6,7 @@ import {
 	stopTerminal,
 	writeTerminalStdin,
 } from "@/lib/api";
+import { formatSource, translateSource } from "@/lib/i18n";
 
 // Module-level store for Terminal Mode (message-area) sessions. Keyed by
 // sessionId — each Terminal session owns exactly one PTY. In-memory only;
@@ -39,8 +40,9 @@ type Listener = {
 /** ~2 MB ≈ 20k lines, well beyond xterm's 5000-line scrollback. */
 const MAX_CHUNK_BYTES = 2 * 1024 * 1024;
 
-export const TRUNCATION_NOTICE =
-	"\r\n\x1b[2m… earlier output truncated (buffer limit reached) …\x1b[0m\r\n";
+export function truncationNotice(): string {
+	return `\r\n\x1b[2m… ${translateSource("miscEarlierOutputTruncated")} …\x1b[0m\r\n`;
+}
 
 /** sessionId → instance */
 const instances = new Map<string, Instance>();
@@ -188,9 +190,9 @@ export function ensureTerminal(
 					).catch(() => {});
 					current.status = "exited";
 					current.exitCode = event.code;
-					const tail = `\r\n\x1b[2m[Process exited with code ${
-						event.code ?? "?"
-					}]\x1b[0m\r\n`;
+					const tail = `\r\n\x1b[2m${formatSource("miscProcessExitedWithCode", {
+						code: event.code ?? "?",
+					})}\x1b[0m\r\n`;
 					appendChunk(current, tail);
 					listeners.get(sessionId)?.onChunk(tail);
 					listeners.get(sessionId)?.onStatusChange("exited", event.code);
@@ -221,7 +223,9 @@ export function ensureTerminal(
 	).catch((err) => {
 		const current = instances.get(sessionId);
 		if (!current) return;
-		const msg = `\r\n\x1b[31mFailed to start terminal: ${err}\x1b[0m\r\n`;
+		const msg = `\r\n\x1b[31m${formatSource("miscFailedStartTerminal", {
+			error: String(err),
+		})}\x1b[0m\r\n`;
 		appendChunk(current, msg);
 		current.status = "exited";
 		current.exitCode = current.exitCode ?? 1;
