@@ -1,4 +1,4 @@
-import { waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHelmorQueryClient, helmorQueryKeys } from "@/lib/query-client";
@@ -1101,5 +1101,147 @@ describe("WorkspacePanelContainer loading semantics", () => {
 		).find((entry) => entry.sessionId === "session-1");
 
 		expect(pane?.messages).toHaveLength(1);
+	});
+
+	// FIX 1 (container self-heal) — "in-review empty on first open"
+	// (branch: in-review-empty-initial-load).
+	//
+	// The in-progress -> in-review transition can leave the workspace's session
+	// LIST cache stale-empty while detail still reports sessionCount > 0. With the
+	// observer already mounted (the workspace stayed selected) nothing forced a
+	// refetch, so the panel stranded on EmptyState ("No session selected") and the
+	// user could only recover by clicking another workspace and back.
+	// The fix: the container detects the mismatch (sessionCount > 0 but the loaded
+	// list is []) and refetches the list once, recovering IN PLACE.
+	it("self-heals when the session list cache goes stale-empty while the workspace stays selected", async () => {
+		// This file has no global afterEach(cleanup); a prior test's container can
+		// linger and re-render into the shared panelRenderSpy. Unmount leaked trees
+		// so the assertions read only this test's container.
+		cleanup();
+		const queryClient = createHelmorQueryClient();
+
+		// Workspace open with a session: observer mounted, content on screen.
+		queryClient.setQueryData(helmorQueryKeys.workspaceDetail("workspace-1"), {
+			...createWorkspaceDetail("workspace-1", null),
+			sessionCount: 2,
+		});
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			createWorkspaceSessions("workspace-1"),
+		);
+		queryClient.setQueryData(
+			[...helmorQueryKeys.sessionMessages("session-1"), "thread"],
+			createMessages("session-1"),
+		);
+		// The backend still HAS the sessions; the self-heal refetch returns them.
+		apiMocks.loadWorkspaceDetail.mockResolvedValue({
+			...createWorkspaceDetail("workspace-1", null),
+			sessionCount: 2,
+		});
+		apiMocks.loadWorkspaceSessions.mockResolvedValue(
+			createWorkspaceSessions("workspace-1"),
+		);
+
+		renderWithProviders(
+			<WorkspacePanelContainer
+				selectedWorkspaceId="workspace-1"
+				displayedWorkspaceId="workspace-1"
+				selectedSessionId={null}
+				displayedSessionId={null}
+				sending={false}
+				onSelectSession={vi.fn()}
+				onResolveDisplayedSession={vi.fn()}
+			/>,
+			{ queryClient },
+		);
+
+		await waitFor(() => {
+			expect(getSessionPaneIds()).toContain("session-1");
+		});
+
+		// The list cache goes stale-empty WITHOUT a remount (no re-navigation) —
+		// the exact condition that used to strand the panel. setQueryData does NOT
+		// trigger a refetch on its own, so any recovery must come from the fix.
+		apiMocks.loadWorkspaceSessions.mockClear();
+		act(() => {
+			queryClient.setQueryData(
+				helmorQueryKeys.workspaceSessions("workspace-1"),
+				[],
+			);
+		});
+
+		// Fix 1: the container detects the mismatch and refetches in place ...
+		await waitFor(() => {
+			expect(apiMocks.loadWorkspaceSessions).toHaveBeenCalledWith(
+				"workspace-1",
+			);
+		});
+		// ... and recovers without any re-navigation or reselect.
+		await waitFor(() => {
+			expect(
+				(getLatestPanelProps().sessions as Array<{ id: string }>).length,
+			).toBeGreaterThan(0);
+		});
+		expect(apiMocks.createSession).not.toHaveBeenCalled();
+	});
+
+	// FIX 2 (bridge invalidation) — invalidating `workspaceSessions` (which
+	// `workspaceChangeRequestChanged` now does) heals the stranded panel IN PLACE,
+	// with no workspace re-navigation. Pairs with the bridge test asserting the
+	// in-review transition fires that invalidation.
+	it("recovers the stranded in-review panel in place once workspaceSessions is invalidated (no re-navigation)", async () => {
+		cleanup();
+		const queryClient = createHelmorQueryClient();
+
+		queryClient.setQueryData(helmorQueryKeys.workspaceDetail("workspace-1"), {
+			...createWorkspaceDetail("workspace-1", null),
+			sessionCount: 2,
+		});
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceSessions("workspace-1"),
+			[],
+		);
+		apiMocks.loadWorkspaceDetail.mockResolvedValue({
+			...createWorkspaceDetail("workspace-1", null),
+			sessionCount: 2,
+		});
+		apiMocks.loadWorkspaceSessions.mockResolvedValue([]);
+
+		renderWithProviders(
+			<WorkspacePanelContainer
+				selectedWorkspaceId="workspace-1"
+				displayedWorkspaceId="workspace-1"
+				selectedSessionId={null}
+				displayedSessionId={null}
+				sending={false}
+				onSelectSession={vi.fn()}
+				onResolveDisplayedSession={vi.fn()}
+			/>,
+			{ queryClient },
+		);
+
+		await waitFor(() => {
+			expect(apiMocks.loadWorkspaceSessions).toHaveBeenCalledWith(
+				"workspace-1",
+			);
+		});
+		expect(getSessionPaneIds()).toEqual([]);
+
+		// Backend list is fine; simulate the fix: the transition invalidates the
+		// sessions query → the still-mounted observer refetches in place.
+		apiMocks.loadWorkspaceSessions.mockResolvedValue(
+			createWorkspaceSessions("workspace-1"),
+		);
+		await queryClient.invalidateQueries({
+			queryKey: helmorQueryKeys.workspaceSessions("workspace-1"),
+		});
+
+		// No re-navigation: displayedWorkspaceId never changed, yet the panel
+		// recovers because the active observer refetched.
+		await waitFor(() => {
+			expect(
+				(getLatestPanelProps().sessions as Array<{ id: string }>).length,
+			).toBeGreaterThan(0);
+		});
 	});
 });

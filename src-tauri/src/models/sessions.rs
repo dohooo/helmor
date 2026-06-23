@@ -38,6 +38,13 @@ pub struct WorkspaceSessionSummary {
 
 pub fn list_workspace_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessionSummary>> {
     let connection = db::read_conn()?;
+    list_workspace_sessions_with_connection(&connection, workspace_id)
+}
+
+pub fn list_workspace_sessions_with_connection(
+    connection: &Connection,
+    workspace_id: &str,
+) -> Result<Vec<WorkspaceSessionSummary>> {
     let active_session_id: Option<String> = connection.query_row(
         "SELECT active_session_id FROM workspaces WHERE id = ?1",
         [workspace_id],
@@ -65,7 +72,27 @@ pub fn list_workspace_sessions(workspace_id: &str) -> Result<Vec<WorkspaceSessio
               s.action_kind,
               s.session_kind
             FROM sessions s
-            WHERE s.workspace_id = ?1 AND COALESCE(s.is_hidden, 0) = 0
+            WHERE s.workspace_id = ?1
+              AND (
+                COALESCE(s.is_hidden, 0) = 0
+                -- Fallback: when the workspace has NO visible sessions left
+                -- (e.g. all were auto-closed after an in-review transition),
+                -- still surface the single most-recent session — even though
+                -- it is hidden — so the panel shows that conversation instead
+                -- of stranding on the "No session selected" dead-end.
+                OR (
+                  NOT EXISTS (
+                    SELECT 1 FROM sessions v
+                    WHERE v.workspace_id = ?1 AND COALESCE(v.is_hidden, 0) = 0
+                  )
+                  AND s.id = (
+                    SELECT s3.id FROM sessions s3
+                    WHERE s3.workspace_id = ?1
+                    ORDER BY datetime(s3.created_at) DESC, s3.id DESC
+                    LIMIT 1
+                  )
+                )
+              )
             ORDER BY
               datetime(s.created_at) ASC
             "#,
@@ -1207,6 +1234,71 @@ mod tests {
         ).unwrap();
 
         assert_eq!(get_active_session_id(&conn, "w1"), Some("s2".to_string()));
+    }
+
+    #[test]
+    fn list_workspace_sessions_excludes_hidden_when_a_visible_one_remains() {
+        let (conn, _dir) = test_db();
+        seed_two_sessions(&conn); // s1 (older), s2 (newer)
+        conn.execute(
+            "UPDATE sessions SET is_hidden = 0 WHERE workspace_id = 'w1'",
+            [],
+        )
+        .unwrap();
+        conn.execute("UPDATE sessions SET is_hidden = 1 WHERE id = 's2'", [])
+            .unwrap();
+
+        let sessions = list_workspace_sessions_with_connection(&conn, "w1").unwrap();
+        assert_eq!(
+            sessions.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["s1"],
+            "hidden sessions stay excluded while a visible one remains",
+        );
+    }
+
+    #[test]
+    fn list_workspace_sessions_falls_back_to_latest_when_all_hidden() {
+        let (conn, _dir) = test_db();
+        seed_two_sessions(&conn); // s1 (2026-01-01), s2 (2026-01-02)
+                                  // No visible sessions left — both hidden, active cleared (the exact
+                                  // "in-review empty" state the panel used to strand on).
+        conn.execute(
+            "UPDATE sessions SET is_hidden = 1 WHERE workspace_id = 'w1'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE workspaces SET active_session_id = NULL WHERE id = 'w1'",
+            [],
+        )
+        .unwrap();
+
+        let sessions = list_workspace_sessions_with_connection(&conn, "w1").unwrap();
+        // Surfaces ONLY the most-recent session (s2), even though hidden, so the
+        // panel shows that conversation instead of "No session selected".
+        assert_eq!(
+            sessions.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["s2"],
+            "with zero visible sessions, fall back to the single latest one",
+        );
+        assert!(
+            sessions[0].is_hidden,
+            "the fallback is the hidden latest session",
+        );
+    }
+
+    #[test]
+    fn list_workspace_sessions_empty_when_workspace_has_no_sessions() {
+        let (conn, _dir) = test_db();
+        seed(&conn);
+        conn.execute("DELETE FROM sessions WHERE workspace_id = 'w1'", [])
+            .unwrap();
+
+        let sessions = list_workspace_sessions_with_connection(&conn, "w1").unwrap();
+        assert!(
+            sessions.is_empty(),
+            "no fallback when the workspace genuinely has no sessions (auto-create owns that case)",
+        );
     }
 
     #[test]
