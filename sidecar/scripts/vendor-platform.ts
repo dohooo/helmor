@@ -21,10 +21,6 @@ export interface TargetInfo {
 	opencodePkg: string;
 	/** opencode npm tarball suffix: `darwin-arm64` / `darwin-x64`. */
 	opencodeNpmSuffix: string;
-	/** `@mimo-ai/mimocode-darwin-<arch>` is the npm optional-dep package. */
-	mimoPkg: string;
-	/** mimo npm tarball suffix: `darwin-arm64` / `darwin-x64` / `windows-x64`. */
-	mimoNpmSuffix: string;
 	/** `gh` release naming: `arm64` / `amd64`. */
 	ghArch: ReleaseArch;
 	/** `glab` release naming: `arm64` / `amd64`. */
@@ -109,23 +105,6 @@ export const OPENCODE_SHA256: Readonly<
 	},
 };
 
-// Keyed by npm tarball suffix (not bare arch) because the windows tarball is
-// a distinct artifact from darwin-x64. Bumping: recompute via
-// `shasum -a 256 mimocode-<suffix>-<ver>.tgz` on the registry tarballs at
-// https://registry.npmjs.org/@mimo-ai/mimocode-<suffix>/-/mimocode-<suffix>-<ver>.tgz
-export const MIMO_SHA256: Readonly<
-	Record<string, Readonly<Record<string, string>>>
-> = {
-	"0.1.0": {
-		"darwin-arm64":
-			"b5309bddb9e4f19a07d30c1b6aa5b558852b1313b7d27237fab58b6e859680f4",
-		"darwin-x64":
-			"5596a9f04f5b216891696fb119f455597f2285b8fb932a07f5e29be0ea659d5b",
-		"windows-x64":
-			"071b0463806a28de00d2a685a53316be55a5860460ded02e262b1aade82d4aa9",
-	},
-};
-
 // Kimi Code CLI ships per-platform native binaries (Node SEA) as zip release
 // assets on GitHub — NOT npm sub-packages — so it's staged like gh/glab from a
 // release URL rather than from node_modules. Bumping: pull each platform's
@@ -195,8 +174,6 @@ const TARGETS: Readonly<Record<DarwinArch, TargetInfo>> = {
 		codexNpmSuffix: "darwin-arm64",
 		opencodePkg: "opencode-darwin-arm64",
 		opencodeNpmSuffix: "darwin-arm64",
-		mimoPkg: "@mimo-ai/mimocode-darwin-arm64",
-		mimoNpmSuffix: "darwin-arm64",
 		ghArch: "arm64",
 		glabArch: "arm64",
 		cloudflaredArch: "arm64",
@@ -211,8 +188,6 @@ const TARGETS: Readonly<Record<DarwinArch, TargetInfo>> = {
 		codexNpmSuffix: "darwin-x64",
 		opencodePkg: "opencode-darwin-x64",
 		opencodeNpmSuffix: "darwin-x64",
-		mimoPkg: "@mimo-ai/mimocode-darwin-x64",
-		mimoNpmSuffix: "darwin-x64",
 		ghArch: "amd64",
 		glabArch: "amd64",
 		cloudflaredArch: "amd64",
@@ -233,8 +208,6 @@ const WINDOWS_X64_TARGET: TargetInfo = {
 	codexNpmSuffix: "win32-x64",
 	opencodePkg: "opencode-windows-x64",
 	opencodeNpmSuffix: "windows-x64",
-	mimoPkg: "@mimo-ai/mimocode-windows-x64",
-	mimoNpmSuffix: "windows-x64",
 	ghArch: "amd64",
 	glabArch: "amd64",
 	cloudflaredArch: "amd64",
@@ -406,26 +379,6 @@ export function opencodeArchivePlan(
 		archiveName: `${slug}.tgz`,
 		url: `https://registry.npmjs.org/${target.opencodePkg}/-/opencode-${target.opencodeNpmSuffix}-${version}.tgz`,
 		sha256: shaTable[target.arch],
-	};
-}
-
-export function mimoArchivePlan(
-	target: TargetInfo,
-	version: string,
-): ArchivePlan {
-	const shaTable = MIMO_SHA256[version];
-	const sha256 = shaTable?.[target.mimoNpmSuffix];
-	if (!sha256) {
-		throw new Error(
-			`[stage-vendor] no pinned SHA256 for mimo ${version} (${target.mimoNpmSuffix}) — add it to MIMO_SHA256 in vendor-platform.ts`,
-		);
-	}
-	const slug = `mimocode-${target.mimoNpmSuffix}-${version}`;
-	return {
-		slug,
-		archiveName: `${slug}.tgz`,
-		url: `https://registry.npmjs.org/${target.mimoPkg}/-/${slug}.tgz`,
-		sha256,
 	};
 }
 

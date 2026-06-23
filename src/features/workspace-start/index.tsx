@@ -18,12 +18,24 @@ import {
 import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
 import { Button } from "@/components/ui/button";
 import {
+	Command,
+	CommandEmpty,
+	CommandInput,
+	CommandItem,
+	CommandList,
+} from "@/components/ui/command";
+import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "@/components/ui/popover";
 import {
 	Tooltip,
 	TooltipContent,
@@ -66,6 +78,145 @@ function defaultBranchPrefix(repo: RepositoryCreateOption | null): string {
 		default:
 			return repo.forgeLogin ? `${repo.forgeLogin}/` : "";
 	}
+}
+
+/** Helper to extract "owner/repo" from remote URL */
+function extractRepoName(remoteUrl?: string | null): string | null {
+	if (!remoteUrl) return null;
+
+	// Match github.com/owner/repo or gitlab.com/owner/repo patterns
+	const match = remoteUrl.match(/[:/]([^/]+\/[^/.]+)(?:\.git)?$/);
+	return match ? match[1] : null;
+}
+
+function RepositoryPicker({
+	repositories,
+	selectedRepository,
+	onSelect,
+	disabled,
+	showFullRepoName = true,
+}: {
+	repositories: RepositoryCreateOption[];
+	selectedRepository: RepositoryCreateOption | null;
+	onSelect: (repo: RepositoryCreateOption) => void;
+	disabled?: boolean;
+	showFullRepoName?: boolean;
+}) {
+	const { t } = useI18n();
+	const [open, setOpen] = useState(false);
+
+	const handleSelect = useCallback(
+		(repoId: string) => {
+			const repo = repositories.find((r) => r.id === repoId);
+			if (repo) {
+				onSelect(repo);
+				setOpen(false);
+			}
+		},
+		[repositories, onSelect],
+	);
+
+	// Keyboard handler for number keys 1-9
+	const handleKeyDown = useCallback(
+		(event: React.KeyboardEvent) => {
+			const key = event.key;
+			if (/^[1-9]$/.test(key) && !event.metaKey && !event.ctrlKey) {
+				event.preventDefault();
+				const index = Number.parseInt(key, 10) - 1;
+				if (index < repositories.length) {
+					handleSelect(repositories[index].id);
+				}
+			}
+		},
+		[repositories, handleSelect],
+	);
+
+	return (
+		<Popover open={open} onOpenChange={setOpen}>
+			<PopoverTrigger asChild>
+				<Button
+					type="button"
+					variant="ghost"
+					disabled={disabled}
+					className="h-9 max-w-[18rem] gap-1.5 px-2 text-[24px] font-semibold leading-none tracking-normal transition-[height,max-width,padding,font-size,gap] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
+				>
+					{selectedRepository ? (
+						<>
+							<WorkspaceAvatar
+								repoIconSrc={selectedRepository.repoIconSrc}
+								repoInitials={selectedRepository.repoInitials}
+								repoName={selectedRepository.name}
+								title={selectedRepository.name}
+								className="size-6 rounded-md transition-[width,height] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
+								fallbackClassName="text-nano"
+							/>
+							<span className="min-w-0 truncate">
+								{selectedRepository.name}
+							</span>
+							<ChevronDown
+								className="size-4 shrink-0 text-muted-foreground transition-[width,height] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
+								strokeWidth={2}
+							/>
+						</>
+					) : (
+						<span className="text-muted-foreground">
+							<I18nText source="repository2" />
+						</span>
+					)}
+				</Button>
+			</PopoverTrigger>
+			<PopoverContent align="center" className="w-96 p-0">
+				<Command onKeyDown={handleKeyDown}>
+					<CommandInput placeholder={t("searchRepositories")} className="h-9" />
+					<CommandList className="max-h-80">
+						<CommandEmpty>
+							<I18nText source="noRepositoriesFound" />
+						</CommandEmpty>
+						{repositories.slice(0, 9).map((repository, index) => {
+							const repoName = extractRepoName(repository.remoteUrl);
+							return (
+								<CommandItem
+									key={repository.id}
+									value={`${repository.name} ${repoName || ""}`}
+									onSelect={() => handleSelect(repository.id)}
+									className="gap-2"
+								>
+									{/* Number badge for first 9 repos */}
+									<kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground opacity-100">
+										{index + 1}
+									</kbd>
+									<WorkspaceAvatar
+										repoIconSrc={repository.repoIconSrc}
+										repoInitials={repository.repoInitials}
+										repoName={repository.name}
+										title={repository.name}
+										className="size-5 rounded-md"
+										fallbackClassName="text-nano"
+									/>
+									<div className="flex min-w-0 flex-1 flex-col">
+										{showFullRepoName && repoName ? (
+											<>
+												<span className="truncate text-[13px] font-medium">
+													{repoName}
+												</span>
+												<span className="truncate text-[11px] text-muted-foreground">
+													{repository.name}
+												</span>
+											</>
+										) : (
+											<span className="truncate text-[13px]">
+												{repository.name}
+											</span>
+										)}
+									</div>
+								</CommandItem>
+							);
+						})}
+					</CommandList>
+				</Command>
+			</PopoverContent>
+		</Popover>
+	);
 }
 
 type WorkspaceStartPageProps = {
@@ -326,90 +477,30 @@ export function WorkspaceStartPage({
 									>
 										{buildHeadingBefore}
 									</span>
-									<DropdownMenu>
-										<Tooltip>
-											<TooltipTrigger asChild>
-												<DropdownMenuTrigger asChild>
-													<Button
-														type="button"
-														variant="ghost"
-														disabled={repositories.length === 0}
-														className={cn(
-															"font-semibold leading-none tracking-normal transition-[height,max-width,padding,font-size,gap] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-															"h-9 max-w-[18rem] gap-1.5 px-2 text-[24px]",
-														)}
-													>
-														{selectedRepository ? (
-															<>
-																<WorkspaceAvatar
-																	repoIconSrc={selectedRepository.repoIconSrc}
-																	repoInitials={selectedRepository.repoInitials}
-																	repoName={selectedRepository.name}
-																	title={selectedRepository.name}
-																	className={cn(
-																		"rounded-md transition-[width,height] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-																		"size-6",
-																	)}
-																	fallbackClassName="text-nano"
-																/>
-																<span className="min-w-0 truncate">
-																	{selectedRepository.name}
-																</span>
-																<ChevronDown
-																	className={cn(
-																		"shrink-0 text-muted-foreground transition-[width,height] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-																		"size-4",
-																	)}
-																	strokeWidth={2}
-																/>
-															</>
-														) : (
-															<span className="text-muted-foreground">
-																<I18nText source="repository2" />
-															</span>
-														)}
-													</Button>
-												</DropdownMenuTrigger>
-											</TooltipTrigger>
-											<TooltipContent
-												side="top"
-												sideOffset={4}
-												className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
-											>
-												<I18nText source="switchRepository" />
-												<InlineShortcutDisplay
-													hotkey={cycleRepositoryShortcut}
-													className="text-background/60"
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<div>
+												<RepositoryPicker
+													repositories={repositories}
+													selectedRepository={selectedRepository}
+													onSelect={onSelectRepository}
+													disabled={repositories.length === 0}
+													showFullRepoName={true}
 												/>
-											</TooltipContent>
-										</Tooltip>
-										{/* Skip focus return so the wrapping Tooltip doesn't re-open via onFocus after selection. */}
-										<DropdownMenuContent
-											align="center"
-											className="min-w-56"
-											onCloseAutoFocus={(event) => event.preventDefault()}
+											</div>
+										</TooltipTrigger>
+										<TooltipContent
+											side="top"
+											sideOffset={4}
+											className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 										>
-											{repositories.map((repository) => (
-												<DropdownMenuItem
-													key={repository.id}
-													onClick={() => onSelectRepository(repository)}
-													className="gap-2"
-												>
-													<WorkspaceAvatar
-														repoIconSrc={repository.repoIconSrc}
-														repoInitials={repository.repoInitials}
-														repoName={repository.name}
-														title={repository.name}
-														className="size-5 rounded-md"
-														fallbackClassName="text-nano"
-													/>
-													<span className="min-w-0 flex-1 truncate">
-														{repository.name}
-													</span>
-												</DropdownMenuItem>
-											))}
-										</DropdownMenuContent>
-									</DropdownMenu>
+											<I18nText source="switchRepository" />
+											<InlineShortcutDisplay
+												hotkey={cycleRepositoryShortcut}
+												className="text-background/60"
+											/>
+										</TooltipContent>
+									</Tooltip>
 									<span
 										className={cn(
 											"inline-block overflow-hidden transition-[max-width,opacity,transform] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
@@ -435,8 +526,8 @@ export function WorkspaceStartPage({
 					>
 						{/* Preview-mode repo selector: hidden in chat mode (no repo). */}
 						{previewCard && mode !== "chat" ? (
-							<DropdownMenu>
-								<DropdownMenuTrigger asChild>
+							<Popover>
+								<PopoverTrigger asChild>
 									<button
 										type="button"
 										disabled={repositories.length === 0}
@@ -466,29 +557,75 @@ export function WorkspaceStartPage({
 											</span>
 										)}
 									</button>
-								</DropdownMenuTrigger>
-								<DropdownMenuContent align="start" className="min-w-56">
-									{repositories.map((repository) => (
-										<DropdownMenuItem
-											key={repository.id}
-											onClick={() => onSelectRepository(repository)}
-											className="gap-2"
-										>
-											<WorkspaceAvatar
-												repoIconSrc={repository.repoIconSrc}
-												repoInitials={repository.repoInitials}
-												repoName={repository.name}
-												title={repository.name}
-												className="size-5 rounded-md"
-												fallbackClassName="text-nano"
-											/>
-											<span className="min-w-0 flex-1 truncate">
-												{repository.name}
-											</span>
-										</DropdownMenuItem>
-									))}
-								</DropdownMenuContent>
-							</DropdownMenu>
+								</PopoverTrigger>
+								<PopoverContent align="start" className="w-96 p-0">
+									<Command
+										onKeyDown={(event: React.KeyboardEvent) => {
+											const key = event.key;
+											if (
+												/^[1-9]$/.test(key) &&
+												!event.metaKey &&
+												!event.ctrlKey
+											) {
+												event.preventDefault();
+												const index = Number.parseInt(key, 10) - 1;
+												if (index < repositories.length) {
+													onSelectRepository(repositories[index]);
+												}
+											}
+										}}
+									>
+										<CommandInput
+											placeholder={t("searchRepositories")}
+											className="h-9"
+										/>
+										<CommandList className="max-h-80">
+											<CommandEmpty>
+												<I18nText source="noRepositoriesFound" />
+											</CommandEmpty>
+											{repositories.slice(0, 9).map((repository, index) => {
+												const repoName = extractRepoName(repository.remoteUrl);
+												return (
+													<CommandItem
+														key={repository.id}
+														value={`${repository.name} ${repoName || ""}`}
+														onSelect={() => onSelectRepository(repository)}
+														className="gap-2"
+													>
+														<kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground opacity-100">
+															{index + 1}
+														</kbd>
+														<WorkspaceAvatar
+															repoIconSrc={repository.repoIconSrc}
+															repoInitials={repository.repoInitials}
+															repoName={repository.name}
+															title={repository.name}
+															className="size-5 rounded-md"
+															fallbackClassName="text-nano"
+														/>
+														<div className="flex min-w-0 flex-1 flex-col">
+															{repoName ? (
+																<>
+																	<span className="truncate text-[13px] font-medium">
+																		{repoName}
+																	</span>
+																	<span className="truncate text-[11px] text-muted-foreground">
+																		{repository.name}
+																	</span>
+																</>
+															) : (
+																<span className="truncate text-[13px]">
+																	{repository.name}
+																</span>
+															)}
+														</div>
+													</CommandItem>
+												);
+											})}
+										</CommandList>
+									</Command>
+								</PopoverContent>
+							</Popover>
 						) : null}
 						<DropdownMenu>
 							<Tooltip>

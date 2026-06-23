@@ -19,7 +19,6 @@
 		"@cursor/sdk": "1.0.18",
 		"@earendil-works/pi-agent-core": "^0.75.4",
 		"@earendil-works/pi-ai": "^0.75.4",
-		"@mimo-ai/cli": "0.1.0",
 		"@openai/codex": "0.139.0",
 		"@opencode-ai/sdk": "1.17.3",
 		"opencode-ai": "1.17.3"

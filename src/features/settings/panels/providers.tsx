@@ -5,7 +5,6 @@ import {
 	type ClaudeIcon,
 	CursorIcon,
 	KimiIcon,
-	MiMoCodeIcon,
 	OpenAIIcon,
 	OpenCodeIcon,
 } from "@/components/icons";
@@ -18,7 +17,6 @@ import {
 	CLAUDE_ADAPTER,
 	CODEX_ADAPTER,
 	KIMI_CONFIG_ADAPTER,
-	MIMO_CONFIG_ADAPTER,
 	OPENCODE_CONFIG_ADAPTER,
 } from "./providers/adapters";
 import { CursorCardBody } from "./providers/cursor-card-body";
@@ -33,7 +31,6 @@ import type { ProviderConfigAdapter } from "./providers/provider-config";
 import { ProviderConfigRow, ProviderRow } from "./providers/provider-row";
 import { ProviderConfigSection } from "./providers/provider-section";
 import {
-	MIMO_ADAPTER,
 	OPENCODE_ADAPTER,
 	type SlugProviderAdapter,
 } from "./providers/slug-provider-adapter";
@@ -77,15 +74,6 @@ export function ProvidersPanel() {
 					icon={OpenCodeIcon}
 					version={versions?.opencode}
 					ready={Boolean(status?.opencode)}
-					statusLoading={statusLoading}
-					onRefetchStatus={refetchStatus}
-				/>
-				<SlugProviderRow
-					adapter={MIMO_ADAPTER}
-					configAdapter={MIMO_CONFIG_ADAPTER}
-					icon={MiMoCodeIcon}
-					version={versions?.mimo}
-					ready={Boolean(status?.mimo)}
 					statusLoading={statusLoading}
 					onRefetchStatus={refetchStatus}
 				/>
@@ -162,7 +150,7 @@ export function ProvidersPanel() {
 	);
 }
 
-// Row for an opencode-protocol provider (OpenCode / MiMo Code): Models picker
+// Row for an opencode-protocol provider (OpenCode): Models picker
 // + Custom Providers editor, wired through the provider's adapter.
 function SlugProviderRow({
 	adapter,

@@ -1297,7 +1297,7 @@ describe("WorkspaceComposerContainer", () => {
 				name: "compact",
 				description: "Compact this conversation's context",
 				source: "builtin",
-				providers: ["opencode", "mimo"],
+				providers: ["opencode"],
 			});
 		});
 

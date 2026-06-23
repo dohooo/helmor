@@ -10,7 +10,6 @@
         "@cursor/sdk": "1.0.18",
         "@earendil-works/pi-agent-core": "^0.75.4",
         "@earendil-works/pi-ai": "^0.75.4",
-        "@mimo-ai/cli": "0.1.0",
         "@openai/codex": "0.139.0",
         "@opencode-ai/sdk": "1.17.3",
         "opencode-ai": "1.17.3",
@@ -145,32 +144,6 @@
     "@google/genai": ["@google/genai@1.52.0", "", { "dependencies": { "google-auth-library": "^10.3.0", "p-retry": "^4.6.2", "protobufjs": "^7.5.4", "ws": "^8.18.0" }, "peerDependencies": { "@modelcontextprotocol/sdk": "^1.25.2" }, "optionalPeers": ["@modelcontextprotocol/sdk"] }, "sha512-gwSvbpiN/17O9TbsqSsE/OzZcpv5Fo4RQjdngGgogtuB9RsyJ8ZHhX5KjHj1bp5N9snN2eK8LDGXSaWW2hof8Q=="],
 
     "@hono/node-server": ["@hono/node-server@1.19.12", "", { "peerDependencies": { "hono": "^4" } }, "sha512-txsUW4SQ1iilgE0l9/e9VQWmELXifEFvmdA1j6WFh/aFPj99hIntrSsq/if0UWyGVkmrRPKA1wCeP+UCr1B9Uw=="],
-
-    "@mimo-ai/cli": ["@mimo-ai/cli@0.1.0", "", { "optionalDependencies": { "@mimo-ai/mimocode-darwin-arm64": "0.1.0", "@mimo-ai/mimocode-darwin-x64": "0.1.0", "@mimo-ai/mimocode-darwin-x64-baseline": "0.1.0", "@mimo-ai/mimocode-linux-arm64": "0.1.0", "@mimo-ai/mimocode-linux-arm64-musl": "0.1.0", "@mimo-ai/mimocode-linux-x64": "0.1.0", "@mimo-ai/mimocode-linux-x64-baseline": "0.1.0", "@mimo-ai/mimocode-linux-x64-baseline-musl": "0.1.0", "@mimo-ai/mimocode-linux-x64-musl": "0.1.0", "@mimo-ai/mimocode-windows-arm64": "0.1.0", "@mimo-ai/mimocode-windows-x64": "0.1.0", "@mimo-ai/mimocode-windows-x64-baseline": "0.1.0" }, "bin": { "mimo": "bin/mimo" } }, "sha512-FCN6V0yxf6jcpsAQhI7HgpS59v+L7qZqrhgEja5VPKc05Ezpb2p8YNbN5rHIIFs1ZJkQgUOEV1R91Kd/TsXXWg=="],
-
-    "@mimo-ai/mimocode-darwin-arm64": ["@mimo-ai/mimocode-darwin-arm64@0.1.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-KEBGY+mJojJ8dN0csgj0z2E99/IogEj/jzSVa03Wh5Un0+u2E+706ZzEwq46HSnbTNVCXtOq1IMeohq2GPX91g=="],
-
-    "@mimo-ai/mimocode-darwin-x64": ["@mimo-ai/mimocode-darwin-x64@0.1.0", "", { "os": "darwin", "cpu": "x64" }, "sha512-EmFux+J5C7hrWQ/OQZ5oBhIAksQDewhUt8/najX56fdWcufSX8Z0TnjMLd1YIZ1h3IInyK5+ItSiSHPIPLStog=="],
-
-    "@mimo-ai/mimocode-darwin-x64-baseline": ["@mimo-ai/mimocode-darwin-x64-baseline@0.1.0", "", { "os": "darwin", "cpu": "x64" }, "sha512-anJ4XCEYjRC8xwd4zn+a/6uhfIRsBI80UhHhwHfesRULSIPf4PaW69593NM2hZ6GThwILv2hkzW7lkUi1VMDgg=="],
-
-    "@mimo-ai/mimocode-linux-arm64": ["@mimo-ai/mimocode-linux-arm64@0.1.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-txJGKgscBEe08LINlq4QNIeejuuxONEZQc7XiB7+baUDKM9vDUWvSB0DvOTvVt60sMb/q2LK7kIhSx963oZeIg=="],
-
-    "@mimo-ai/mimocode-linux-arm64-musl": ["@mimo-ai/mimocode-linux-arm64-musl@0.1.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-AOEjW+BkQ3N4OX0o3WMGKasa06OwO55utVAhta0p4F5ShpMLbiwsPnKekeSchd+jm3UJQZ1VPyftfkKR8i7p0A=="],
-
-    "@mimo-ai/mimocode-linux-x64": ["@mimo-ai/mimocode-linux-x64@0.1.0", "", { "os": "linux", "cpu": "x64" }, "sha512-WwUcxjUza62AiMgeKs8Yhl59n5pT7Oq1UB5nYz0jdXAxD/Gy0kOju5TT6V8zb8v5hJSGo+wWurj8aqZKM9CaNQ=="],
-
-    "@mimo-ai/mimocode-linux-x64-baseline": ["@mimo-ai/mimocode-linux-x64-baseline@0.1.0", "", { "os": "linux", "cpu": "x64" }, "sha512-r7M9LnCDs10ZvuQGwRHwLtAy5la0XT36MNGKSwxIpS2iIY7PfQ2T2QPFKLBaJcsb5J+utjkH59FiQQ33AgRVdA=="],
-
-    "@mimo-ai/mimocode-linux-x64-baseline-musl": ["@mimo-ai/mimocode-linux-x64-baseline-musl@0.1.0", "", { "os": "linux", "cpu": "x64" }, "sha512-+gfVR4mz8uOFKofxdspP5LSkP/K4LGbcUeTTQg9UWC1VDEljJwO8GYOndW6BvZuPz6TtMmyde54jXLgkE1uCPA=="],
-
-    "@mimo-ai/mimocode-linux-x64-musl": ["@mimo-ai/mimocode-linux-x64-musl@0.1.0", "", { "os": "linux", "cpu": "x64" }, "sha512-Fs3OY8VYNxFNlvtcZfeeHYgg5AlaTDNLE0TCm9Iv5153Sd8cAozehDnOxy9j47blXlpSAXRLozjWuP+IKtkQuA=="],
-
-    "@mimo-ai/mimocode-windows-arm64": ["@mimo-ai/mimocode-windows-arm64@0.1.0", "", { "os": "win32", "cpu": "arm64" }, "sha512-tVzou1WGtUadHZsAWZBRyCj5IZxvPd8jHum3S+ROwagvb/Vt0VYyOjszKGDcMjw5BFIExNAoHGmlaA3DJ5Q4MA=="],
-
-    "@mimo-ai/mimocode-windows-x64": ["@mimo-ai/mimocode-windows-x64@0.1.0", "", { "os": "win32", "cpu": "x64" }, "sha512-Ozb6M0IccPSTfci3oAt3UinLCKprE/4qnkh2isGWUQOTDBBL7OC92y3rhD9RoJbmL/JzoFeWT4P/7eBR/OJBjQ=="],
-
-    "@mimo-ai/mimocode-windows-x64-baseline": ["@mimo-ai/mimocode-windows-x64-baseline@0.1.0", "", { "os": "win32", "cpu": "x64" }, "sha512-AqdgaeOI4k2iVBnAdiVghL3Rt6vDp0Diq++6fpooqT4OCP18vpZeMozjmgfk3xWYRzv5e/lflBKGez1xUq+8Bg=="],
 
     "@mistralai/mistralai": ["@mistralai/mistralai@2.2.1", "", { "dependencies": { "ws": "^8.18.0", "zod": "^3.25.0 || ^4.0.0", "zod-to-json-schema": "^3.25.0" } }, "sha512-uKU8CZmL2RzYKmplsU01hii4p3pe4HqJefpWNRWXm1Tcm0Sm4xXfwSLIy4k7ZCPlbETCGcp69E7hZs+WOJ5itQ=="],
 

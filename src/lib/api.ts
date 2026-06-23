@@ -21,8 +21,7 @@ export type GroupTone =
 	| "review"
 	| "progress"
 	| "backlog"
-	| "canceled"
-	| "ai-tasks";
+	| "canceled";
 
 /**
  * Mirror of the Rust `WorkspaceState` enum (`src-tauri/src/workspace/state.rs`).
@@ -174,7 +173,6 @@ export type AgentProvider =
 	| "codex"
 	| "cursor"
 	| "opencode"
-	| "mimo"
 	| "kimi"
 	// Custom Codex providers: `codex:<id>` per instance.
 	| `codex:${string}`;
@@ -976,7 +974,6 @@ export type AgentLoginProvider =
 	| "codex"
 	| "cursor"
 	| "opencode"
-	| "mimo"
 	| "kimi";
 
 export type AgentLoginStatusResult = {
@@ -984,7 +981,6 @@ export type AgentLoginStatusResult = {
 	codex: boolean;
 	cursor: boolean;
 	opencode: boolean;
-	mimo: boolean;
 	kimi: boolean;
 	codexProvider?: string | null;
 	codexAuthMethod?: "login" | "apiKey" | string | null;
@@ -999,7 +995,6 @@ export type AgentVersionsResult = {
 	claude: string | null;
 	codex: string | null;
 	opencode: string | null;
-	mimo: string | null;
 	kimi: string | null;
 };
 
@@ -1304,17 +1299,6 @@ export const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities[] = [
 		supportsSlashCommands: true,
 		requiresApiKey: false,
 	},
-	// MiMo Code is an opencode-protocol fork — identical capability surface.
-	{
-		provider: "mimo",
-		displayName: "MiMo Code",
-		supportsPlanMode: true,
-		supportsActiveGoal: false,
-		supportsContextUsage: true,
-		supportsSteer: true,
-		supportsSlashCommands: true,
-		requiresApiKey: false,
-	},
 	{
 		provider: "kimi",
 		displayName: "Kimi",
@@ -1394,23 +1378,6 @@ export async function listOpencodeModels(
 		throw new Error(
 			describeInvokeError(error, "Unable to list opencode models."),
 		);
-	}
-}
-
-// ---------------------------------------------------------------------------
-// MiMo Code (opencode-protocol fork) — server-side model listing.
-// ---------------------------------------------------------------------------
-
-// `forceReload` restarts the mimo server to pick up config changes.
-export async function listMimoModels(
-	forceReload = false,
-): Promise<OpencodeModelEntry[]> {
-	try {
-		return await invoke<OpencodeModelEntry[]>("list_mimo_models", {
-			forceReload,
-		});
-	} catch (error) {
-		throw new Error(describeInvokeError(error, "Unable to list mimo models."));
 	}
 }
 
@@ -2351,9 +2318,6 @@ export type UiMutationEvent =
 	| { type: "activeStreamsChanged" }
 	| { type: "slackWorkspacesChanged" }
 	| { type: "slackTokenInvalidated"; teamId: string }
-	| { type: "triageConfigChanged" }
-	| { type: "triageActiveStatusChanged" }
-	| { type: "triageWorkspaceCreated"; workspaceId: string }
 	| { type: "fastModeUnavailable"; sessionId: string; reason: string }
 	| { type: "pairedDevicesChanged" }
 	| { type: "terminalSessionIdle"; sessionId: string; workspaceId: string }
@@ -2368,253 +2332,6 @@ export type UiMutationEvent =
 			workspaceId: string;
 			sessionId: string | null;
 	  };
-
-export type TriageConfig = {
-	enabled: boolean;
-	/** False = scheduler doesn't auto-fire; Run-now still works. */
-	autoRun: boolean;
-	systemPrompt: string;
-	maxPerTick: number;
-};
-
-export type TriageCandidateRow = {
-	id: string;
-	source: string;
-	sourceKind: string;
-	sourceRef: string;
-	sourceParent: string | null;
-	sourceTime: string;
-	sender: string | null;
-	title: string | null;
-	preview: string | null;
-	externalUrl: string | null;
-	payloadPath: string;
-	payloadBytes: number;
-	decision: string | null;
-};
-
-export async function listOpenTriageCandidates(
-	limit = 20,
-): Promise<TriageCandidateRow[]> {
-	try {
-		return await invoke<TriageCandidateRow[]>("list_open_triage_candidates", {
-			limit,
-		});
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to load triage candidates."),
-		);
-	}
-}
-
-export async function countOpenTriageCandidates(): Promise<number> {
-	try {
-		return await invoke<number>("count_open_triage_candidates");
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to count triage candidates."),
-		);
-	}
-}
-
-export async function readTriageCandidate(
-	candidateId: string,
-	grep?: string,
-): Promise<string> {
-	try {
-		return await invoke<string>("read_triage_candidate", {
-			candidateId,
-			grep,
-		});
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to read triage candidate."),
-		);
-	}
-}
-
-export async function recordTriageDecision(
-	candidateId: string,
-	decision: string,
-	reason?: string,
-): Promise<void> {
-	try {
-		await invoke<void>("record_triage_decision", {
-			candidateId,
-			decision,
-			reason,
-		});
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to record triage decision."),
-		);
-	}
-}
-
-export type TriageSourceHealthState =
-	| "ok"
-	| "notInstalled"
-	| "notAuthed"
-	| "notConfigured"
-	| "degraded";
-
-export type TriageSourceHealth = {
-	source: string;
-	displayName: string;
-	state: TriageSourceHealthState;
-	detail: string;
-};
-
-export async function getTriageSourceHealth(): Promise<TriageSourceHealth[]> {
-	try {
-		return await invoke<TriageSourceHealth[]>("get_triage_source_health");
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to load triage source health."),
-		);
-	}
-}
-
-export type LarkAuthAction = "install" | "signIn";
-
-export async function spawnLarkCliAuthTerminal(
-	action: LarkAuthAction,
-	instanceId: string,
-	onEvent: (event: ScriptEvent) => void,
-): Promise<void> {
-	const channel = new Channel<ScriptEvent>();
-	channel.onmessage = onEvent;
-	await invoke("spawn_lark_cli_auth_terminal", {
-		action,
-		instanceId,
-		channel,
-	});
-}
-
-export async function stopLarkCliAuthTerminal(
-	action: LarkAuthAction,
-	instanceId: string,
-): Promise<boolean> {
-	return invoke<boolean>("stop_lark_cli_auth_terminal", {
-		action,
-		instanceId,
-	});
-}
-
-export async function writeLarkCliAuthTerminalStdin(
-	action: LarkAuthAction,
-	instanceId: string,
-	data: string,
-): Promise<boolean> {
-	return invoke<boolean>("write_lark_cli_auth_terminal_stdin", {
-		action,
-		instanceId,
-		data,
-	});
-}
-
-export async function resizeLarkCliAuthTerminal(
-	action: LarkAuthAction,
-	instanceId: string,
-	cols: number,
-	rows: number,
-): Promise<boolean> {
-	return invoke<boolean>("resize_lark_cli_auth_terminal", {
-		action,
-		instanceId,
-		cols,
-		rows,
-	});
-}
-
-export type TriageToolCallRecord = {
-	at: string;
-	tool: string;
-	argsPreview: string;
-};
-
-export type TriageActiveStatus = {
-	tickId: string;
-	startedAt: string;
-	turnCount: number;
-	toolCount: number;
-	lastToolName: string | null;
-	lastUpdateAt: string;
-	recentToolCalls: TriageToolCallRecord[];
-	/** 1-indexed current batch; 0 = haven't started a batch yet. */
-	batchIndex: number;
-	/** Upper bound on batches this tick will run. */
-	batchTotal: number;
-};
-
-export type TickOutcome =
-	| { kind: "createdWorkspaces"; count: number }
-	| { kind: "noActionableItems" }
-	| { kind: "cancelled" }
-	| { kind: "failed"; message: string };
-
-export type LastTickOutcome = {
-	at: string;
-	tickId: string;
-	outcome: TickOutcome;
-	/** Agent's final assistant text, when present. */
-	summary: string | null;
-};
-
-export type TriageStatus = {
-	active: TriageActiveStatus | null;
-	lastOutcome: LastTickOutcome | null;
-};
-
-export async function getTriageConfig(): Promise<TriageConfig> {
-	try {
-		return await invoke<TriageConfig>("get_triage_config");
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to load triage settings."),
-		);
-	}
-}
-
-export async function updateTriageConfig(config: TriageConfig): Promise<void> {
-	try {
-		await invoke<void>("update_triage_config", { config });
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to save triage settings."),
-		);
-	}
-}
-
-export async function getTriageActiveStatus(): Promise<TriageStatus> {
-	try {
-		return await invoke<TriageStatus>("get_triage_active_status");
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to load triage status."),
-		);
-	}
-}
-
-export async function triggerTriageTickNow(): Promise<string> {
-	try {
-		return await invoke<string>("trigger_triage_tick_now");
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to trigger triage tick."),
-		);
-	}
-}
-
-export async function cancelTriageTick(): Promise<boolean> {
-	try {
-		return await invoke<boolean>("cancel_triage_tick");
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to cancel triage tick."),
-		);
-	}
-}
 
 export async function listenGitBranchChanged(
 	callback: (payload: GitBranchChangedPayload) => void,

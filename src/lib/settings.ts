@@ -36,7 +36,7 @@ export type ClaudeThinkingDisplay = "summarized" | "omitted";
 export type AppSurface = "workspace" | "workspace-start";
 export type WorkspaceRightSidebarMode = "inspector" | "context";
 /** A global model preference (default / review / action). Carries its
- *  provider so a slug-based model (opencode / mimo) is never re-derived
+ *  provider so a slug-based model (opencode) is never re-derived
  *  ambiguously from the bare id. `provider` is null only for legacy rows
  *  not yet re-saved. Persisted as JSON. */
 export type ModelRef = { provider: string | null; modelId: string };
@@ -345,8 +345,6 @@ export type AppSettings = {
 	cursorProvider: CursorProviderSettings;
 	opencodeProvider: OpencodeProviderSettings;
 	kimiProvider: KimiProviderSettings;
-	/** MiMo Code (opencode-protocol fork) — same settings shape. */
-	mimoProvider: OpencodeProviderSettings;
 	agentProxy: AgentProxySettings;
 	localLlm: LocalLlmSettings;
 	inboxSourceConfig: InboxSourceConfig;
@@ -454,12 +452,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		enabledModelIds: null,
 	},
 	kimiProvider: {
-		cachedModels: null,
-		enabledModelIds: null,
-	},
-	mimoProvider: {
-		status: "unavailable",
-		connected: [],
 		cachedModels: null,
 		enabledModelIds: null,
 	},
@@ -642,7 +634,6 @@ const SETTINGS_KEY_MAP: Record<
 	cursorProvider: "app.cursor_provider",
 	opencodeProvider: "app.opencode_provider",
 	kimiProvider: "app.kimi_provider",
-	mimoProvider: "app.mimo_provider",
 	agentProxy: "app.agent_proxy",
 	localLlm: "app.local_llm",
 	inboxSourceConfig: "app.inbox_source_config",
@@ -1014,7 +1005,7 @@ function parseCursorProviderSettings(
 	}
 }
 
-// Shared by opencodeProvider and mimoProvider — same persisted shape.
+// Parses the slug-provider (opencode) persisted shape.
 function parseSlugProviderSettings(
 	raw: string | undefined,
 	fallback: OpencodeProviderSettings,
@@ -1413,10 +1404,6 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.opencodeProvider],
 				DEFAULT_SETTINGS.opencodeProvider,
 			),
-			mimoProvider: parseSlugProviderSettings(
-				raw[SETTINGS_KEY_MAP.mimoProvider],
-				DEFAULT_SETTINGS.mimoProvider,
-			),
 			kimiProvider: parseKimiProviderSettings(
 				raw[SETTINGS_KEY_MAP.kimiProvider],
 			),
@@ -1470,7 +1457,6 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 				key === "cursorProvider" ||
 				key === "opencodeProvider" ||
 				key === "kimiProvider" ||
-				key === "mimoProvider" ||
 				key === "agentProxy" ||
 				key === "localLlm" ||
 				key === "inboxSourceConfig" ||

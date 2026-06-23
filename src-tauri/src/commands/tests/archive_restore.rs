@@ -183,6 +183,104 @@ fn archive_workspace_rejects_unborn_head_for_manual_workspace() {
 }
 
 #[test]
+fn sweep_archives_unstarted_ai_triage_workspace() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = ArchiveTestHarness::new();
+
+    // An auto-generated triage workspace the user never opened: priming
+    // unconsumed, no real (non-priming) messages.
+    let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+    connection
+        .execute(
+            "UPDATE workspaces SET kind = 'ai_triage', ai_priming_consumed = 0 WHERE id = ?1",
+            [&harness.workspace_id],
+        )
+        .unwrap();
+    drop(connection);
+
+    let archived = workspaces::archive_unstarted_triage_workspaces().unwrap();
+
+    assert_eq!(archived, 1);
+    assert!(!harness.workspace_dir().exists());
+
+    let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+    let state: String = connection
+        .query_row(
+            "SELECT state FROM workspaces WHERE id = ?1",
+            [&harness.workspace_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(state, "archived");
+}
+
+#[test]
+fn sweep_keeps_started_ai_triage_workspace() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = ArchiveTestHarness::new();
+
+    // Consumed priming = the user sent the first message → started → keep.
+    let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+    connection
+        .execute(
+            "UPDATE workspaces SET kind = 'ai_triage', ai_priming_consumed = 1 WHERE id = ?1",
+            [&harness.workspace_id],
+        )
+        .unwrap();
+    drop(connection);
+
+    let archived = workspaces::archive_unstarted_triage_workspaces().unwrap();
+
+    assert_eq!(archived, 0);
+    assert!(harness.workspace_dir().exists());
+
+    let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+    let state: String = connection
+        .query_row(
+            "SELECT state FROM workspaces WHERE id = ?1",
+            [&harness.workspace_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(state, "ready");
+}
+
+#[test]
+fn sweep_keeps_ai_triage_workspace_with_a_real_message() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = ArchiveTestHarness::new();
+
+    // Priming still unconsumed, but a real (non-priming) message exists —
+    // the user engaged, so the touched-guard must keep it.
+    let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+    connection
+        .execute(
+            "UPDATE workspaces SET kind = 'ai_triage', ai_priming_consumed = 0 WHERE id = ?1",
+            [&harness.workspace_id],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO session_messages (id, session_id, role, content, sent_at, is_ai_priming)
+             VALUES ('msg-real', ?1, 'user', '{}', datetime('now'), 0)",
+            [&harness.session_id],
+        )
+        .unwrap();
+    drop(connection);
+
+    let archived = workspaces::archive_unstarted_triage_workspaces().unwrap();
+
+    assert_eq!(archived, 0);
+    assert!(harness.workspace_dir().exists());
+}
+
+#[test]
 fn archive_workspace_fails_cleanly_when_repo_root_is_missing() {
     let _guard = TEST_LOCK
         .lock()

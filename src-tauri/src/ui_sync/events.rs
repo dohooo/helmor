@@ -116,14 +116,6 @@ pub enum UiMutationEvent {
     SlackTokenInvalidated {
         team_id: String,
     },
-    /// AI-triage config changed.
-    TriageConfigChanged,
-    /// Active tick status changed (begin / progress / end).
-    TriageActiveStatusChanged,
-    /// An AI-triage workspace was created. Frontend invalidates sidebar.
-    TriageWorkspaceCreated {
-        workspace_id: String,
-    },
     /// Fast mode was requested but didn't engage; the composer flips its
     /// fast-mode toggle off for this session.
     FastModeUnavailable {
@@ -238,11 +230,6 @@ mod tests {
             },
             UiMutationEvent::SlackTokenInvalidated {
                 team_id: "T1".into(),
-            },
-            UiMutationEvent::TriageConfigChanged,
-            UiMutationEvent::TriageActiveStatusChanged,
-            UiMutationEvent::TriageWorkspaceCreated {
-                workspace_id: "w".into(),
             },
             UiMutationEvent::FastModeUnavailable {
                 session_id: "s".into(),
