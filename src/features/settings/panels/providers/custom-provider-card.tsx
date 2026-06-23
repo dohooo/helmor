@@ -34,7 +34,7 @@ import type {
 
 type FetchState = { loading: boolean; error: string | null };
 
-// Default wire-protocol options (OpenCode/MiMo). Adapters override via
+// Default wire-protocol options (OpenCode). Adapters override via
 // `styleOptions` — e.g. Kimi supplies openai/anthropic/… .
 const DEFAULT_STYLE_OPTIONS: StyleOption[] = [
 	{

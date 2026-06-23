@@ -116,6 +116,15 @@ const DEAD_TABLES: &[(&str, &[&str])] = &[
     // decided not to ship cross-restart history; this drop cleans up dev DBs
     // that ran the intermediate code so they don't carry an orphan table.
     ("terminal_history", &["idx_terminal_history_workspace"]),
+    // Smart Triage ("ai-tasks") was removed. Its two owned tables are dropped
+    // from legacy DBs; the workspaces.kind / triage_source_* and
+    // session_messages.is_ai_priming columns are intentionally retained as
+    // inert because their archive/import plumbing is shared.
+    (
+        "triage_candidate",
+        &["idx_triage_candidate_open", "idx_triage_candidate_source"],
+    ),
+    ("triage_fetch_cursor", &[]),
 ];
 
 fn drop_dead_schema(connection: &Connection) -> Result<()> {
@@ -878,13 +887,6 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             "TEXT NOT NULL DEFAULT 'gui'",
         )?;
     }
-    if has_table(connection, "triage_candidate") {
-        // Why an item surfaced for the user (review_requested / assigned /
-        // mentioned / author / owned_issue). Nullable — older rows + sources
-        // that don't stamp a reason stay NULL.
-        add_column_if_missing(connection, "triage_candidate", "involvement_reason", "TEXT")?;
-    }
-
     // Per-session "active plan" projection. Provider plan/todo events
     // (Codex `turn/plan/updated`, Claude `ExitPlanMode`) are normalised
     // by `agents::session_plan` into a typed plan and upserted here so
@@ -1203,37 +1205,6 @@ CREATE TABLE IF NOT EXISTS slack_workspaces (
     added_at INTEGER NOT NULL
 );
 
--- AI triage fetcher: pre-computed candidate index.
--- Background fetchers write rows here. The local-LLM Layer-2 tick reads
--- `decision IS NULL` rows in batches. Heavy payloads live on disk under
--- `cache/triage/`, only `payload_path` is stored here.
-CREATE TABLE IF NOT EXISTS triage_candidate (
-    id TEXT PRIMARY KEY,
-    source TEXT NOT NULL,
-    source_kind TEXT NOT NULL,
-    source_ref TEXT NOT NULL,
-    source_time TEXT NOT NULL,
-    sender TEXT,
-    title TEXT,
-    preview TEXT,
-    external_url TEXT,
-    involvement_reason TEXT,
-    payload_path TEXT NOT NULL,
-    payload_bytes INTEGER NOT NULL DEFAULT 0,
-    decision TEXT,
-    UNIQUE(source, source_ref)
-);
-
--- Per-(source, source_parent) fetch checkpoint. Only IM-class fetchers
--- write rows here; forge fetchers don't use the cursor (gh/glab inbox
--- APIs do their own "what's new" filtering server-side).
-CREATE TABLE IF NOT EXISTS triage_fetch_cursor (
-    source TEXT NOT NULL,
-    source_parent TEXT NOT NULL,
-    last_source_time TEXT,
-    PRIMARY KEY (source, source_parent)
-);
-
 -- Mobile browser companion: paired phones. Stores only a SHA-256 of the PAT,
 -- never the plaintext. Survives desktop restarts so a phone never re-scans.
 CREATE TABLE IF NOT EXISTS paired_devices (
@@ -1250,8 +1221,6 @@ CREATE INDEX IF NOT EXISTS idx_session_messages_sent_at ON session_messages(sess
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace_id ON sessions(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_workspaces_repository_id ON workspaces(repository_id);
 CREATE INDEX IF NOT EXISTS idx_runtime_processes_ended_at ON runtime_processes(ended_at);
-CREATE INDEX IF NOT EXISTS idx_triage_candidate_open ON triage_candidate(source_time DESC) WHERE decision IS NULL;
-CREATE INDEX IF NOT EXISTS idx_triage_candidate_source ON triage_candidate(source, source_time DESC);
 -- idx_workspaces_kind + idx_workspaces_triage_source are created in
 -- `run_migrations` (after the ALTERs on upgraded DBs).
 

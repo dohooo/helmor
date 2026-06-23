@@ -1,6 +1,6 @@
-//! Read/write custom providers in an opencode-protocol family's global config
-//! (opencode or the MiMo fork). Writes go through the jsonc CST to preserve
-//! comments/formatting outside the edited `provider.<id>` block.
+//! Read/write custom providers in an opencode-protocol family's global config.
+//! Writes go through the jsonc CST to preserve comments/formatting outside the
+//! edited `provider.<id>` block.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -10,7 +10,6 @@ use jsonc_parser::cst::{CstInputValue, CstObject, CstRootNode};
 use jsonc_parser::ParseOptions;
 use serde::{Deserialize, Serialize};
 
-// MiMo Code declares opencode's schema URL too, so both families share it.
 const SCHEMA_URL: &str = "https://opencode.ai/config.json";
 const DEFAULT_NPM: &str = "@ai-sdk/openai-compatible";
 
@@ -24,12 +23,6 @@ struct FamilyConfig {
 const OPENCODE_FAMILY: FamilyConfig = FamilyConfig {
     xdg_dir: "opencode",
     file_candidates: ["opencode.jsonc", "opencode.json", "config.json"],
-};
-
-// mimo checks `mimocode.json` BEFORE `mimocode.jsonc`; mirror that order.
-const MIMO_FAMILY: FamilyConfig = FamilyConfig {
-    xdg_dir: "mimocode",
-    file_candidates: ["mimocode.json", "mimocode.jsonc", "config.json"],
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -95,18 +88,6 @@ pub fn upsert_custom_provider(provider: &OpencodeCustomProvider, preset: bool) -
 
 pub fn delete_custom_provider(id: &str) -> Result<()> {
     delete_custom_provider_at(&config_file_path(&OPENCODE_FAMILY)?, id)
-}
-
-pub fn read_mimo_custom_providers() -> Result<Vec<OpencodeCustomProvider>> {
-    read_custom_providers_at(&config_file_path(&MIMO_FAMILY)?)
-}
-
-pub fn upsert_mimo_custom_provider(provider: &OpencodeCustomProvider, preset: bool) -> Result<()> {
-    upsert_for_family(&MIMO_FAMILY, provider, preset)
-}
-
-pub fn delete_mimo_custom_provider(id: &str) -> Result<()> {
-    delete_custom_provider_at(&config_file_path(&MIMO_FAMILY)?, id)
 }
 
 fn upsert_for_family(

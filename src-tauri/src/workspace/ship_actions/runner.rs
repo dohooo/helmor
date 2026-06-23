@@ -92,7 +92,7 @@ fn action_session_overrides(action: WorkspaceShipActionKind) -> Result<OwnedSess
     }
 
     // The model pref carries its provider (new `{provider, modelId}` form);
-    // pin it as the session's agent_type so a non-default provider (e.g. mimo)
+    // pin it as the session's agent_type so a non-default provider (e.g. opencode)
     // isn't misresolved from the bare slug. Legacy bare ids leave it None.
     let model_pref =
         load_model_pref("app.pr_model_id")?.or(load_model_pref("app.default_model_id")?);

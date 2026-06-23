@@ -201,7 +201,6 @@ pub struct WorkspaceDetail {
 // ---- Sidebar groups ----
 
 pub fn list_workspace_groups() -> Result<Vec<WorkspaceSidebarGroup>> {
-    let mut ai_tasks = Vec::new();
     let mut pinned = Vec::new();
     let mut chats = Vec::new();
     let mut done = Vec::new();
@@ -215,18 +214,15 @@ pub fn list_workspace_groups() -> Result<Vec<WorkspaceSidebarGroup>> {
     // each group naturally inherits the same stable order, no per-group
     // re-sort needed.
     //
-    // Chat and AI-triage workspaces live in their own buckets, separate from status/pinned.
+    // Chat workspaces live in their own bucket, separate from status/pinned.
     for record in workspace_models::load_workspace_records()? {
         if record.state == WorkspaceState::Archived {
             continue;
         }
         let is_chat = record.mode == WorkspaceMode::Chat;
         let is_pinned = record.pinned_at.is_some();
-        let is_ai_triage = record.kind == "ai_triage";
         let row = record_to_sidebar_row(record);
-        if is_ai_triage {
-            ai_tasks.push(row);
-        } else if is_chat {
+        if is_chat {
             chats.push(row);
         } else if is_pinned {
             pinned.push(row);
@@ -242,12 +238,6 @@ pub fn list_workspace_groups() -> Result<Vec<WorkspaceSidebarGroup>> {
     }
 
     Ok(vec![
-        WorkspaceSidebarGroup {
-            id: "ai-tasks".to_string(),
-            label: "Proposed tasks".to_string(),
-            tone: "ai-tasks".to_string(),
-            rows: ai_tasks,
-        },
         WorkspaceSidebarGroup {
             id: "pinned".to_string(),
             label: "Pinned".to_string(),

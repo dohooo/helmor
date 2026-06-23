@@ -1,4 +1,4 @@
-// Custom-provider CRUD for file-backed families (OpenCode / MiMo). After a write,
+// Custom-provider CRUD for the file-backed OpenCode family. After a write,
 // debounce a server sync to refresh models — skipped while a turn is running.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -11,15 +11,14 @@ import {
 } from "@/lib/api";
 import { activeStreamsQueryOptions, helmorQueryKeys } from "@/lib/query-client";
 import type { CustomProvidersController } from "../provider-config";
-import { MIMO_ADAPTER, OPENCODE_ADAPTER } from "../slug-provider-adapter";
+import { OPENCODE_ADAPTER } from "../slug-provider-adapter";
 import { useSlugProviderModelSync } from "../use-opencode-model-sync";
 
 export function useSlugBackedProviders(
-	family: "opencode" | "mimo",
+	family: "opencode",
 ): CustomProvidersController {
 	const queryClient = useQueryClient();
-	const slugAdapter = family === "mimo" ? MIMO_ADAPTER : OPENCODE_ADAPTER;
-	const { sync } = useSlugProviderModelSync(slugAdapter);
+	const { sync } = useSlugProviderModelSync(OPENCODE_ADAPTER);
 	const activeStreamsQuery = useQuery(activeStreamsQueryOptions());
 	const query = useQuery({
 		queryKey: helmorQueryKeys.customProviders(family),

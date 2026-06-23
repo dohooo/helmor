@@ -12,7 +12,6 @@ pub mod git;
 pub mod global_hotkey;
 pub mod image_store;
 mod import;
-pub mod lark;
 pub mod local_llm;
 pub mod logging;
 pub mod maintenance;
@@ -29,11 +28,9 @@ pub mod schema;
 pub mod service;
 mod shell_env;
 pub mod sidecar;
-pub mod sidecar_host;
 pub mod slack;
 mod system_limits;
 pub mod terminal;
-pub mod triage;
 pub mod ui_sync;
 pub mod updater;
 pub mod workspace;
@@ -67,24 +64,6 @@ fn empty_404() -> tauri::http::Response<Vec<u8>> {
         .status(404)
         .body(Vec::new())
         .expect("404 response builder is infallible")
-}
-
-/// Extension-based MIME sniff for the `helmor-attachment` protocol.
-fn mime_for_path(path: &std::path::Path) -> &'static str {
-    match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("png") => "image/png",
-        Some("jpg" | "jpeg") => "image/jpeg",
-        Some("gif") => "image/gif",
-        Some("webp") => "image/webp",
-        Some("bmp") => "image/bmp",
-        Some("svg") => "image/svg+xml",
-        _ => "application/octet-stream",
-    }
 }
 
 /// Initialise the database schema (call once at startup).
@@ -138,49 +117,7 @@ pub fn run() {
                 };
                 responder.respond(response);
             });
-        })
-        // Triage priming attachments. Custom scheme so rehype-sanitize can opt it in.
-        .register_asynchronous_uri_scheme_protocol(
-            "helmor-attachment",
-            |_app, request, responder| {
-                let uri = request.uri().to_string();
-                std::thread::spawn(move || {
-                    let response = match triage::attachments::resolve_attachment_url(&uri) {
-                        Ok(Some(path)) => match std::fs::read(&path) {
-                            Ok(bytes) => {
-                                let content_type = mime_for_path(&path);
-                                tauri::http::Response::builder()
-                                    .header("Content-Type", content_type)
-                                    // Attachment files are content-stable
-                                    // (uuid-named, never rewritten); cache
-                                    // hard so re-renders don't pay disk IO.
-                                    .header("Cache-Control", "public, max-age=2592000, immutable")
-                                    .body(bytes)
-                                    .unwrap_or_else(|_| empty_404())
-                            }
-                            Err(error) => {
-                                tracing::warn!(
-                                    uri = %uri,
-                                    error = %error,
-                                    "helmor-attachment read failed",
-                                );
-                                empty_404()
-                            }
-                        },
-                        Ok(None) => empty_404(),
-                        Err(error) => {
-                            tracing::warn!(
-                                uri = %uri,
-                                error = %format!("{error:#}"),
-                                "helmor-attachment resolve failed",
-                            );
-                            empty_404()
-                        }
-                    };
-                    responder.respond(response);
-                });
-            },
-        );
+        });
 
     #[cfg(debug_assertions)]
     let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
@@ -201,7 +138,6 @@ pub fn run() {
         .manage(git_watcher::GitWatcherManager::new())
         .manage(workspace::scripts::ScriptProcessManager::new())
         .manage(ui_sync::UiSyncManager::new())
-        .manage(triage::ActiveStatusStore::new())
         .manage(global_hotkey::GlobalHotkeyState::default())
         .manage(commands::forge_commands::ForgeAuthEdgeStore::default())
         .manage(companion::CompanionState::new())
@@ -373,47 +309,6 @@ pub fn run() {
             updater::spawn_startup_check(app.handle().clone());
             updater::spawn_interval_worker(app.handle().clone());
 
-            // Install reverse-IPC dispatcher early to skip early-boot warnings; ordering isn't load-bearing.
-            let host_rx = app
-                .state::<sidecar::ManagedSidecar>()
-                .install_host_dispatcher();
-            let dispatcher_handle = app.handle().clone();
-            std::thread::Builder::new()
-                .name("sidecar-host-dispatcher".into())
-                .spawn(move || {
-                    while let Ok(env) = host_rx.recv() {
-                        let app_clone = dispatcher_handle.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let response = match sidecar_host::dispatch(
-                                app_clone.clone(),
-                                &env.method,
-                                env.params,
-                            )
-                            .await
-                            {
-                                Ok(value) => sidecar_host::HostResponse::success(
-                                    env.callback_id.clone(),
-                                    value,
-                                ),
-                                Err(error) => sidecar_host::HostResponse::failure(
-                                    env.callback_id.clone(),
-                                    format!("{error:#}"),
-                                ),
-                            };
-                            let sidecar_state = app_clone.state::<sidecar::ManagedSidecar>();
-                            if let Err(error) = sidecar_state.send_host_response(&response) {
-                                tracing::warn!(
-                                    error = %format!("{error:#}"),
-                                    method = %env.method,
-                                    "hostResponse write failed"
-                                );
-                            }
-                        });
-                    }
-                    tracing::debug!("host dispatcher channel closed");
-                })
-                .ok();
-
             // Per-version silent re-check of the Helmor CLI symlink and
             // the Helmor Skills package. Runs once per app version
             // (cached by version string in app_settings); a clean pass
@@ -485,9 +380,6 @@ pub fn run() {
             if let Err(error) = ui_sync::start_listener(app.handle().clone()) {
                 tracing::error!(error = %error, "Failed to start UI sync listener");
             }
-
-            // Triage: fetcher + auto-fire tick on the same 5-min thread.
-            triage::fetcher::spawn_scheduler(app.handle().clone());
 
             // Mobile browser companion (experimental, opt-in via env). Starts a
             // loopback-bound HTTP/SSE server that mirrors the IPC surface so the
@@ -581,7 +473,6 @@ pub fn run() {
             commands::provider_commands::fetch_provider_models,
             agents::list_cursor_models,
             agents::list_opencode_models,
-            agents::list_mimo_models,
             agents::list_provider_capabilities,
             agents::send_agent_message_stream,
             agents::subscribe_session_stream,
@@ -700,20 +591,6 @@ pub fn run() {
             commands::terminal_commands::resize_terminal,
             commands::terminal_commands::set_terminal_session_busy,
             commands::terminal_commands::convert_session_to_terminal,
-            commands::triage_commands::get_triage_config,
-            commands::triage_commands::update_triage_config,
-            commands::triage_commands::get_triage_active_status,
-            commands::triage_commands::trigger_triage_tick_now,
-            commands::triage_commands::cancel_triage_tick,
-            commands::triage_commands::list_open_triage_candidates,
-            commands::triage_commands::count_open_triage_candidates,
-            commands::triage_commands::read_triage_candidate,
-            commands::triage_commands::record_triage_decision,
-            commands::triage_commands::get_triage_source_health,
-            commands::triage_lark_cli_commands::spawn_lark_cli_auth_terminal,
-            commands::triage_lark_cli_commands::stop_lark_cli_auth_terminal,
-            commands::triage_lark_cli_commands::write_lark_cli_auth_terminal_stdin,
-            commands::triage_lark_cli_commands::resize_lark_cli_auth_terminal,
             commands::session_commands::list_session_thread_messages,
             commands::workspace_commands::list_workspace_groups,
             commands::session_commands::list_workspace_sessions,

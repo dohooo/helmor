@@ -172,7 +172,6 @@ async fn dispatch(
         "list_inbox_items" => to_value(crate::commands::forge_commands::list_inbox_items(arg_json(&args, "provider")?, arg_json(&args, "kind")?, arg_string(&args, "login")?, arg_opt_string(&args, "host"), arg_opt_string(&args, "cursor"), arg_opt_int(&args, "limit"), arg_opt_string(&args, "repo"), arg_opt_json(&args, "filters")?).await?),
         "list_inbox_kind_labels" => to_value(crate::commands::forge_commands::list_inbox_kind_labels(arg_json(&args, "provider")?).await?),
         "list_opencode_models" => to_value(crate::agents::list_opencode_models(app.state::<crate::sidecar::ManagedSidecar>(), None).await?),
-        "list_mimo_models" => to_value(crate::agents::list_mimo_models(app.state::<crate::sidecar::ManagedSidecar>(), None).await?),
         "list_provider_capabilities" => to_value(crate::agents::list_provider_capabilities().await?),
         "list_remote_branches" => to_value(crate::commands::workspace_commands::list_remote_branches(arg_opt_string(&args, "workspaceId"), arg_opt_string(&args, "repoId")).await?),
         "list_repo_remotes" => to_value(crate::commands::repository_commands::list_repo_remotes(arg_string(&args, "repoId")?).await?),
@@ -397,24 +396,19 @@ async fn dispatch(
             Ok(Value::Null)
         }
 
-        // ============ data domains: triage / slack / local-llm / feedback / conductor ============
+        // ============ data domains: slack / local-llm / feedback / conductor ============
         "activate_local_llm_model" => to_value(crate::commands::local_llm_commands::activate_local_llm_model(app.clone(), arg_string(&args, "entryId")?).await?),
         "cancel_local_llm_download" => {
             crate::commands::local_llm_commands::cancel_local_llm_download(app.state::<crate::downloads::DownloadsManager>(), arg_string(&args, "entryId")?).await?;
             Ok(Value::Null)
         }
-        "cancel_triage_tick" => to_value(crate::commands::triage_commands::cancel_triage_tick(app.clone()).await?),
         "conductor_source_available" => to_value(crate::commands::conductor_commands::conductor_source_available()),
-        "count_open_triage_candidates" => to_value(crate::commands::triage_commands::count_open_triage_candidates().await?),
         "create_helmor_issue" => to_value(crate::commands::feedback_commands::create_helmor_issue(arg_string(&args, "title")?, arg_string(&args, "body")?).await?),
         "detect_local_llm_hardware" => to_value(crate::commands::local_llm_commands::detect_local_llm_hardware().await?),
         "find_existing_helmor_repo" => to_value(crate::commands::feedback_commands::find_existing_helmor_repo().await?),
         "fork_helmor_upstream" => to_value(crate::commands::feedback_commands::fork_helmor_upstream().await?),
         "get_local_llm_endpoint" => to_value(crate::commands::local_llm_commands::get_local_llm_endpoint(app.state::<crate::local_llm::Manager>()).await?),
         "get_local_llm_status" => to_value(crate::commands::local_llm_commands::get_local_llm_status(app.state::<crate::local_llm::Manager>()).await?),
-        "get_triage_active_status" => to_value(crate::commands::triage_commands::get_triage_active_status(app.state::<crate::triage::ActiveStatusStore>()).await?),
-        "get_triage_config" => to_value(crate::commands::triage_commands::get_triage_config().await?),
-        "get_triage_source_health" => to_value(crate::commands::triage_commands::get_triage_source_health().await?),
         "import_conductor_workspaces" => to_value(crate::commands::conductor_commands::import_conductor_workspaces(app.clone(), arg_json(&args, "workspaceIds")?).await?),
         "inspect_local_llm_catalog_entry" => to_value(crate::commands::local_llm_commands::inspect_local_llm_catalog_entry(arg_string(&args, "entryId")?).await?),
         "inspect_local_llm_model" => to_value(crate::commands::local_llm_commands::inspect_local_llm_model(arg_string(&args, "path")?).await?),
@@ -422,14 +416,8 @@ async fn dispatch(
         "list_conductor_workspaces" => to_value(crate::commands::conductor_commands::list_conductor_workspaces(arg_string(&args, "repoId")?).await?),
         "list_local_llm_catalog" => to_value(crate::commands::local_llm_commands::list_local_llm_catalog().await?),
         "list_local_llm_downloads" => to_value(crate::commands::local_llm_commands::list_local_llm_downloads(app.state::<crate::downloads::DownloadsManager>()).await?),
-        "list_open_triage_candidates" => to_value(crate::commands::triage_commands::list_open_triage_candidates(arg_int(&args, "limit")?).await?),
         "pause_local_llm_download" => {
             crate::commands::local_llm_commands::pause_local_llm_download(app.state::<crate::downloads::DownloadsManager>(), arg_string(&args, "entryId")?).await?;
-            Ok(Value::Null)
-        }
-        "read_triage_candidate" => to_value(crate::commands::triage_commands::read_triage_candidate(arg_string(&args, "candidateId")?, arg_opt_string(&args, "grep")).await?),
-        "record_triage_decision" => {
-            crate::commands::triage_commands::record_triage_decision(arg_string(&args, "candidateId")?, arg_string(&args, "decision")?, arg_opt_string(&args, "reason")).await?;
             Ok(Value::Null)
         }
         "set_local_llm_context_override" => to_value(crate::commands::local_llm_commands::set_local_llm_context_override(app.clone(), arg_string(&args, "entryId")?, arg_int(&args, "contextTokens")?).await?),
@@ -451,11 +439,6 @@ async fn dispatch(
             crate::commands::local_llm_commands::stop_local_llm(app.clone()).await?;
             Ok(Value::Null)
         }
-        "trigger_triage_tick_now" => to_value(crate::commands::triage_commands::trigger_triage_tick_now(app.clone()).await?),
-        "update_triage_config" => {
-            crate::commands::triage_commands::update_triage_config(app.clone(), arg_json(&args, "config")?).await?;
-            Ok(Value::Null)
-        }
 
         // ============ desktop-only / destructive: no-op for a phone ============
         // Companion self-management: a paired browser does not administer the
@@ -471,11 +454,8 @@ async fn dispatch(
         |         "companion_status"
         // PTY control over HTTP is meaningless (no terminal on the phone); the
         // matching spawn_* commands carry a Channel and route to /rpc-stream.
-        |         "resize_lark_cli_auth_terminal"
         |         "resize_terminal"
-        |         "stop_lark_cli_auth_terminal"
         |         "stop_terminal"
-        |         "write_lark_cli_auth_terminal_stdin"
         |         "write_terminal_stdin"
         // SSE drop already auto-unsubscribes; the explicit call is a redundant
         // best-effort cleanup.

@@ -30,7 +30,6 @@ import {
 	ClaudeIcon,
 	CursorIcon,
 	KimiIcon,
-	MiMoCodeIcon,
 	OpenAIIcon,
 	OpenCodeIcon,
 } from "@/components/icons";
@@ -880,9 +879,6 @@ function SessionProviderIcon({
 	}
 	if (agentType === "kimi") {
 		return <KimiIcon className="size-3 shrink-0 text-muted-foreground" />;
-	}
-	if (agentType === "mimo") {
-		return <MiMoCodeIcon className="size-3 shrink-0 text-muted-foreground" />;
 	}
 	return <ClaudeIcon className="size-3 shrink-0 text-muted-foreground" />;
 }
