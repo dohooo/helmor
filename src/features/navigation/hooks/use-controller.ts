@@ -59,7 +59,6 @@ import {
 	summaryToArchivedRow,
 	workspaceGroupIdFromStatus,
 } from "@/lib/workspace-helpers";
-import { useShellEvent } from "@/shell/event-bus";
 import {
 	type PendingArchiveEntry,
 	type PendingCreationEntry,
@@ -1733,11 +1732,6 @@ export function useWorkspacesSidebarController({
 			queryClient,
 		],
 	);
-
-	// Bridge for surfaces outside the controller (e.g. composer triage Dismiss).
-	useShellEvent("request-archive-workspace", (event) => {
-		handleArchiveWorkspace(event.workspaceId);
-	});
 
 	const handleRestoreWorkspace = useCallback(
 		(workspaceId: string) => {

@@ -77,14 +77,9 @@ pub struct WorkspaceSidebarRow {
     pub created_at: String,
     pub updated_at: String,
     pub last_user_message_at: Option<String>,
-    /// "manual" or "ai_triage" — routes ai_triage rows into the Triage group.
+    /// "manual" (legacy "ai_triage" rows are archived on upgrade). Retained
+    /// inert after Smart Triage removal.
     pub kind: String,
-    /// True while an ai_triage row still needs the user's first send.
-    pub triage_priming_unconsumed: bool,
-    /// Originating triage platform for ai_triage rows ("github", "gitlab",
-    /// "slack", "lark"). `None` for manual workspaces. Drives the sidebar
-    /// source-logo badge on AI-proposed rows.
-    pub triage_source_type: Option<String>,
     /// Stacked PRs: `id` of the workspace one layer below this in a PR stack
     /// (its base). `None` for non-stacked rows. Drives sidebar stack grouping.
     pub parent_workspace_id: Option<String>,
@@ -192,8 +187,6 @@ pub struct WorkspaceDetail {
     /// (either fresh or because the previously-active id no longer
     /// exists; the frontend re-renders against the first item).
     pub active_run_action_id: Option<String>,
-    /// Drives the composer's Start/Dismiss row; flips on first user send via `mark_consumed_for_session`.
-    pub triage_priming_unconsumed: bool,
 }
 
 // Workspace persistence lives in `crate::models::workspaces`.
@@ -1303,8 +1296,6 @@ pub fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
         created_at: record.created_at,
         updated_at: record.updated_at,
         last_user_message_at: record.last_user_message_at,
-        triage_priming_unconsumed: record.kind == "ai_triage" && !record.ai_priming_consumed,
-        triage_source_type: record.triage_source_type,
         parent_workspace_id: record.parent_workspace_id,
         kind: record.kind,
     }
@@ -1409,7 +1400,6 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         forge_login: record.forge_login,
         setup_completed_at: record.setup_completed_at,
         active_run_action_id: record.active_run_action_id,
-        triage_priming_unconsumed: record.kind == "ai_triage" && !record.ai_priming_consumed,
     }
 }
 

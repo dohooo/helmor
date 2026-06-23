@@ -76,13 +76,12 @@ pub struct WorkspaceRecord {
     /// fresh workspaces and for ones whose previously-active action was
     /// deleted (the loader auto-clears stale ids).
     pub active_run_action_id: Option<String>,
-    /// "manual" or "ai_triage".
+    /// "manual" (legacy "ai_triage" rows are archived on upgrade). Retained
+    /// inert after Smart Triage removal.
     pub kind: String,
-    /// False until the user sends the first message in an ai_triage workspace.
+    /// Retained inert after Smart Triage removal; still read by the one-time
+    /// upgrade reaper (`archive_unstarted_triage_workspaces`).
     pub ai_priming_consumed: bool,
-    /// Originating triage platform for ai_triage workspaces ("github",
-    /// "gitlab", "slack", "lark"). `None` for manual workspaces.
-    pub triage_source_type: Option<String>,
     /// Stacked PRs: `workspaces.id` of the layer below this one (its base).
     /// `None` = bottom of stack (base is the repo default) or a non-stacked
     /// workspace. FK-by-convention; integrity enforced in the write layer.
@@ -198,7 +197,6 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
       w.active_run_action_id,
       COALESCE(w.kind, 'manual') AS kind,
       COALESCE(w.ai_priming_consumed, 0) AS ai_priming_consumed,
-      w.triage_source_type,
       w.parent_workspace_id
     FROM workspaces w
     JOIN repos r ON r.id = w.repository_id
@@ -740,8 +738,7 @@ fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRecord>
         active_run_action_id: row.get(40)?,
         kind: row.get(41)?,
         ai_priming_consumed: row.get::<_, i64>(42)? != 0,
-        triage_source_type: row.get(43)?,
-        parent_workspace_id: row.get(44)?,
+        parent_workspace_id: row.get(43)?,
     })
 }
 

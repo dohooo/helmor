@@ -118,14 +118,8 @@ export type WorkspaceRow = {
 	/** ISO-8601 timestamp — most recent user message across all sessions
 	 * in this workspace. Null when the workspace has no user messages yet. */
 	lastUserMessageAt?: string | null;
-	/** "manual" or "ai_triage". */
+	/** "manual" (legacy "ai_triage" rows are archived on upgrade). */
 	kind?: string;
-	/** True for an ai_triage row still awaiting the user's first send. */
-	triagePrimingUnconsumed?: boolean;
-	/** Originating triage platform for ai_triage rows: "github" | "gitlab" |
-	 *  "slack" | "lark". Absent/null for manual workspaces. Drives the
-	 *  source-logo badge shown on AI-proposed sidebar rows. */
-	triageSourceType?: string | null;
 	/** Stacked PRs: `id` of the workspace one layer below this in a PR stack
 	 *  (its base). Absent/null for non-stacked rows. Drives sidebar stack
 	 *  grouping — the sidebar nests a stack's members under their tip. */
@@ -438,10 +432,6 @@ export type WorkspaceDetail = {
 	 * this workspace. NULL means "use the first action" — either fresh,
 	 * or because the previously-active action was deleted. */
 	activeRunActionId?: string | null;
-	/** True when this workspace was auto-spawned by triage and the user
-	 * hasn't sent their first message yet. Drives the composer's
-	 * Start / Dismiss quick-action row. */
-	triagePrimingUnconsumed?: boolean;
 };
 
 export type WorkspaceSessionSummary = {
