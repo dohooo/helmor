@@ -36,7 +36,7 @@ export type ClaudeThinkingDisplay = "summarized" | "omitted";
 export type AppSurface = "workspace" | "workspace-start";
 export type WorkspaceRightSidebarMode = "inspector" | "context";
 /** A global model preference (default / review / action). Carries its
- *  provider so a slug-based model (opencode / mimo) is never re-derived
+ *  provider so a slug-based model (opencode) is never re-derived
  *  ambiguously from the bare id. `provider` is null only for legacy rows
  *  not yet re-saved. Persisted as JSON. */
 export type ModelRef = { provider: string | null; modelId: string };
@@ -261,6 +261,14 @@ export type StartSurfacePreferences = {
 	chatModeActive: boolean;
 	/** Start-composer Terminal-Mode toggle. */
 	terminalModeActive: boolean;
+	/** Composer picks (model / effort / permission / fast) keyed by the start
+	 *  context key (`start:chat`, `start:repo:<id>`). The start surface has no
+	 *  session row to persist against, so without these the picks reset when
+	 *  the user navigates away and the start subtree unmounts. */
+	composerModelByContextKey: Record<string, ModelRef>;
+	composerEffortByContextKey: Record<string, string>;
+	composerPermissionModeByContextKey: Record<string, string>;
+	composerFastModeByContextKey: Record<string, boolean>;
 };
 
 export type AppSettings = {
@@ -349,8 +357,6 @@ export type AppSettings = {
 	cursorProvider: CursorProviderSettings;
 	opencodeProvider: OpencodeProviderSettings;
 	kimiProvider: KimiProviderSettings;
-	/** MiMo Code (opencode-protocol fork) — same settings shape. */
-	mimoProvider: OpencodeProviderSettings;
 	agentProxy: AgentProxySettings;
 	localLlm: LocalLlmSettings;
 	inboxSourceConfig: InboxSourceConfig;
@@ -374,6 +380,10 @@ export const DEFAULT_START_SURFACE_PREFERENCES: StartSurfacePreferences = {
 	branchIntentByRepoId: {},
 	chatModeActive: false,
 	terminalModeActive: false,
+	composerModelByContextKey: {},
+	composerEffortByContextKey: {},
+	composerPermissionModeByContextKey: {},
+	composerFastModeByContextKey: {},
 };
 
 /** Fallbacks for repos without a per-repo entry. */
@@ -459,12 +469,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		enabledModelIds: null,
 	},
 	kimiProvider: {
-		cachedModels: null,
-		enabledModelIds: null,
-	},
-	mimoProvider: {
-		status: "unavailable",
-		connected: [],
 		cachedModels: null,
 		enabledModelIds: null,
 	},
@@ -648,7 +652,6 @@ const SETTINGS_KEY_MAP: Record<
 	cursorProvider: "app.cursor_provider",
 	opencodeProvider: "app.opencode_provider",
 	kimiProvider: "app.kimi_provider",
-	mimoProvider: "app.mimo_provider",
 	agentProxy: "app.agent_proxy",
 	localLlm: "app.local_llm",
 	inboxSourceConfig: "app.inbox_source_config",
@@ -913,6 +916,39 @@ function parseStringRecord(value: unknown): Record<string, string> {
 	);
 }
 
+function parseBooleanRecord(value: unknown): Record<string, boolean> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return {};
+	}
+	return Object.fromEntries(
+		Object.entries(value).filter(
+			([key, entry]) => key.length > 0 && typeof entry === "boolean",
+		),
+	) as Record<string, boolean>;
+}
+
+/** Validates an already-parsed record of `ModelRef` objects, dropping
+ *  malformed entries. Values are nested objects (not serialized strings), so
+ *  unlike `parseModelRef` this never JSON-parses. */
+function parseModelRefRecord(value: unknown): Record<string, ModelRef> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return {};
+	}
+	const out: Record<string, ModelRef> = {};
+	for (const [key, entry] of Object.entries(value)) {
+		if (key.length === 0 || !entry || typeof entry !== "object") continue;
+		const modelId = (entry as { modelId?: unknown }).modelId;
+		if (typeof modelId !== "string" || !modelId.trim()) continue;
+		const rawProvider = (entry as { provider?: unknown }).provider;
+		const provider =
+			typeof rawProvider === "string" && rawProvider.trim()
+				? rawProvider.trim()
+				: null;
+		out[key] = { provider, modelId: modelId.trim() };
+	}
+	return out;
+}
+
 /** Like `parseStringRecord`, with each value constrained to `allowed`. */
 function parseEnumRecord<V extends string>(
 	value: unknown,
@@ -998,6 +1034,18 @@ function parseStartSurfacePreferences(
 				typeof o.terminalModeActive === "boolean"
 					? o.terminalModeActive
 					: false,
+			composerModelByContextKey: parseModelRefRecord(
+				o.composerModelByContextKey,
+			),
+			composerEffortByContextKey: parseStringRecord(
+				o.composerEffortByContextKey,
+			),
+			composerPermissionModeByContextKey: parseStringRecord(
+				o.composerPermissionModeByContextKey,
+			),
+			composerFastModeByContextKey: parseBooleanRecord(
+				o.composerFastModeByContextKey,
+			),
 		};
 	} catch {
 		return DEFAULT_START_SURFACE_PREFERENCES;
@@ -1020,7 +1068,7 @@ function parseCursorProviderSettings(
 	}
 }
 
-// Shared by opencodeProvider and mimoProvider — same persisted shape.
+// Parses the slug-provider (opencode) persisted shape.
 function parseSlugProviderSettings(
 	raw: string | undefined,
 	fallback: OpencodeProviderSettings,
@@ -1423,10 +1471,6 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.opencodeProvider],
 				DEFAULT_SETTINGS.opencodeProvider,
 			),
-			mimoProvider: parseSlugProviderSettings(
-				raw[SETTINGS_KEY_MAP.mimoProvider],
-				DEFAULT_SETTINGS.mimoProvider,
-			),
 			kimiProvider: parseKimiProviderSettings(
 				raw[SETTINGS_KEY_MAP.kimiProvider],
 			),
@@ -1480,7 +1524,6 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 				key === "cursorProvider" ||
 				key === "opencodeProvider" ||
 				key === "kimiProvider" ||
-				key === "mimoProvider" ||
 				key === "agentProxy" ||
 				key === "localLlm" ||
 				key === "inboxSourceConfig" ||

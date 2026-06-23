@@ -3,17 +3,12 @@ import { PROVIDER_BRAND_ICONS } from "@/components/icons";
 import type { OpencodeCachedModel } from "@/lib/settings";
 import catalog from "@/shared/provider-catalog.json";
 import {
-	findMimoPreset,
-	MIMO_PROVIDER_PRESETS,
-} from "./builtin-mimo-providers";
-import {
 	findOpencodePreset,
 	OPENCODE_PROVIDER_PRESETS,
 } from "./builtin-opencode-providers";
 import { groupHeading } from "./model-multi-select";
 import {
 	defaultEnabledSlugs,
-	isMimoBuiltinProvider,
 	reconcileEnabledModelIds,
 } from "./opencode-model-defaults";
 
@@ -128,51 +123,6 @@ describe("reconcileEnabledModelIds", () => {
 	});
 });
 
-describe("mimo model defaults (isMimoBuiltinProvider)", () => {
-	const models = (slugs: string[]): OpencodeCachedModel[] =>
-		slugs.map((slug) => ({ slug, label: slug }));
-
-	it("treats xiaomi, mimo, and xiaomi-token-plan* as intentional built-ins", () => {
-		expect(isMimoBuiltinProvider("xiaomi")).toBe(true);
-		expect(isMimoBuiltinProvider("mimo")).toBe(true);
-		expect(isMimoBuiltinProvider("xiaomi-token-plan")).toBe(true);
-		expect(isMimoBuiltinProvider("xiaomi-token-plan-pro")).toBe(true);
-		expect(isMimoBuiltinProvider("opencode")).toBe(false);
-		expect(isMimoBuiltinProvider("openai")).toBe(false);
-	});
-
-	it("keeps mimo built-ins (+ configured providers) in a large catalog", () => {
-		const big = models([
-			...Array.from({ length: 15 }, (_, i) => `vendor/m${i}`), // env bulk → trimmed
-			"xiaomi/mimo-1",
-			"xiaomi-token-plan-pro/mimo-2",
-			"hundun/deepseek",
-		]);
-		expect(
-			defaultEnabledSlugs(big, new Set(["hundun"]), isMimoBuiltinProvider),
-		).toEqual([
-			"xiaomi/mimo-1",
-			"xiaomi-token-plan-pro/mimo-2",
-			"hundun/deepseek",
-		]);
-	});
-
-	it("auto-enables newly-appeared xiaomi models on refresh", () => {
-		const prev = ["xiaomi/mimo-1"];
-		const prevCache = models(["xiaomi/mimo-1"]);
-		const cached = models(["xiaomi/mimo-1", "xiaomi/mimo-2", "openai/gpt-x"]);
-		expect(
-			reconcileEnabledModelIds(
-				prev,
-				cached,
-				prevCache,
-				new Set(),
-				isMimoBuiltinProvider,
-			),
-		).toEqual(["xiaomi/mimo-1", "xiaomi/mimo-2"]);
-	});
-});
-
 describe("groupHeading", () => {
 	it("uses the label prefix before ' · ' as the sub-provider heading", () => {
 		expect(
@@ -195,7 +145,6 @@ describe("provider catalog", () => {
 	const groups: Array<{ key: string; icon: string }>[] = [
 		catalog.claude as Array<{ key: string; icon: string }>,
 		catalog.opencode as Array<{ key: string; icon: string }>,
-		catalog.mimo as Array<{ key: string; icon: string }>,
 	];
 
 	it("every catalog icon resolves to a registered brand icon (no silent Box fallback)", () => {
@@ -220,28 +169,6 @@ describe("provider catalog", () => {
 		for (const preset of OPENCODE_PROVIDER_PRESETS) {
 			expect(findOpencodePreset(preset.key)).toBe(preset);
 		}
-	});
-
-	it("composes the mimo presets as Xiaomi first, then every opencode preset", () => {
-		expect(MIMO_PROVIDER_PRESETS[0]?.key).toBe("xiaomi");
-		const mimoSpecific = MIMO_PROVIDER_PRESETS.slice(
-			0,
-			MIMO_PROVIDER_PRESETS.length - OPENCODE_PROVIDER_PRESETS.length,
-		);
-		expect(mimoSpecific).toEqual(catalog.mimo);
-		expect(MIMO_PROVIDER_PRESETS.slice(mimoSpecific.length)).toEqual([
-			...OPENCODE_PROVIDER_PRESETS,
-		]);
-		// Composition must not introduce duplicate keys.
-		const keys = MIMO_PROVIDER_PRESETS.map((p) => p.key);
-		expect(new Set(keys).size).toBe(keys.length);
-	});
-
-	it("every mimo preset is discoverable via findMimoPreset", () => {
-		for (const preset of MIMO_PROVIDER_PRESETS) {
-			expect(findMimoPreset(preset.key)).toBe(preset);
-		}
-		expect(findMimoPreset("not-a-provider")).toBeUndefined();
 	});
 
 	// Dropdown renders catalog order directly: same-icon presets must stay contiguous, generic-icon ones last.

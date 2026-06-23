@@ -299,7 +299,7 @@ export function useWorkspaceCommitLifecycle({
 			overrides?: {
 				modelId?: string | null;
 				/** Provider of the override model — pinned as agent_type so a
-				 *  slug-based model (mimo / opencode) routes correctly. */
+				 *  slug-based model (e.g. opencode) routes correctly. */
 				provider?: string | null;
 				effort?: string | null;
 				fastMode?: boolean | null;

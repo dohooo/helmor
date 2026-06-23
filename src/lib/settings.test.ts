@@ -63,6 +63,43 @@ describe("settings", () => {
 			branchIntentByRepoId: { "repo-1": "use_branch" },
 			chatModeActive: false,
 			terminalModeActive: false,
+			composerModelByContextKey: {},
+			composerEffortByContextKey: {},
+			composerPermissionModeByContextKey: {},
+			composerFastModeByContextKey: {},
+		});
+	});
+
+	it("hydrates start-surface composer picks and drops malformed values", async () => {
+		invokeMock.mockResolvedValue({
+			"app.start_surface_preferences": JSON.stringify({
+				composerModelByContextKey: {
+					"start:chat": { provider: "anthropic", modelId: "claude-x" },
+					"start:repo:r1": { modelId: 42 },
+					"start:repo:r2": "claude-y",
+				},
+				composerEffortByContextKey: { "start:repo:r1": "high" },
+				composerPermissionModeByContextKey: { "start:chat": "plan" },
+				composerFastModeByContextKey: {
+					"start:repo:r1": true,
+					"start:chat": "nope",
+				},
+			}),
+		});
+
+		const settings = await loadSettings();
+		const prefs = settings.startSurfacePreferences;
+		expect(prefs.composerModelByContextKey).toEqual({
+			"start:chat": { provider: "anthropic", modelId: "claude-x" },
+		});
+		expect(prefs.composerEffortByContextKey).toEqual({
+			"start:repo:r1": "high",
+		});
+		expect(prefs.composerPermissionModeByContextKey).toEqual({
+			"start:chat": "plan",
+		});
+		expect(prefs.composerFastModeByContextKey).toEqual({
+			"start:repo:r1": true,
 		});
 	});
 
@@ -163,6 +200,10 @@ describe("settings", () => {
 			branchIntentByRepoId: { "repo-1": "use_branch" },
 			chatModeActive: false,
 			terminalModeActive: false,
+			composerModelByContextKey: {},
+			composerEffortByContextKey: {},
+			composerPermissionModeByContextKey: {},
+			composerFastModeByContextKey: {},
 		});
 
 		const writeCall = invokeMock.mock.calls.find(
@@ -398,16 +439,16 @@ describe("settings", () => {
 	it("parses the JSON {provider, modelId} form", async () => {
 		invokeMock.mockResolvedValue({
 			"app.default_model_id": JSON.stringify({
-				provider: "mimo",
-				modelId: "xiaomi/mimo-v2.5-pro",
+				provider: "opencode",
+				modelId: "opencode/grok-code",
 			}),
 		});
 
 		const settings = await loadSettings();
 
 		expect(settings.defaultModel).toEqual({
-			provider: "mimo",
-			modelId: "xiaomi/mimo-v2.5-pro",
+			provider: "opencode",
+			modelId: "opencode/grok-code",
 		});
 		expect(settings.reviewModel).toBeNull();
 	});
@@ -416,7 +457,7 @@ describe("settings", () => {
 		invokeMock.mockResolvedValue({});
 
 		await saveSettings({
-			defaultModel: { provider: "mimo", modelId: "xiaomi/mimo-v2.5-pro" },
+			defaultModel: { provider: "opencode", modelId: "opencode/grok-code" },
 			reviewModel: null,
 		});
 
@@ -427,7 +468,7 @@ describe("settings", () => {
 			writeCall?.[1] as { settingsMap: Record<string, string> } | undefined
 		)?.settingsMap;
 		expect(writtenMap?.["app.default_model_id"]).toBe(
-			JSON.stringify({ provider: "mimo", modelId: "xiaomi/mimo-v2.5-pro" }),
+			JSON.stringify({ provider: "opencode", modelId: "opencode/grok-code" }),
 		);
 		expect(writtenMap?.["app.review_model_id"]).toBe("");
 	});
@@ -497,36 +538,6 @@ describe("settings", () => {
 			"medium",
 			"high",
 			"xhigh",
-		]);
-	});
-
-	it("round-trips mimoProvider the same way as opencodeProvider", async () => {
-		invokeMock.mockResolvedValue({
-			"app.mimo_provider": JSON.stringify({
-				status: "ready",
-				connected: ["xiaomi"],
-				cachedModels: [
-					{
-						slug: "xiaomi/mimo-1",
-						label: "Xiaomi · MiMo 1",
-						effortLevels: ["low", "medium", "high"],
-					},
-				],
-				enabledModelIds: ["xiaomi/mimo-1"],
-				cacheVersion: 1,
-			}),
-		});
-
-		const settings = await loadSettings();
-
-		expect(settings.mimoProvider.status).toBe("ready");
-		expect(settings.mimoProvider.connected).toEqual(["xiaomi"]);
-		expect(settings.mimoProvider.enabledModelIds).toEqual(["xiaomi/mimo-1"]);
-		expect(settings.mimoProvider.cacheVersion).toBe(1);
-		expect(settings.mimoProvider.cachedModels?.[0]?.effortLevels).toEqual([
-			"low",
-			"medium",
-			"high",
 		]);
 	});
 });

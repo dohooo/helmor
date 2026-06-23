@@ -98,6 +98,27 @@ export type PendingCreatedWorkspaceSubmit = {
 	finalized: boolean;
 };
 
+/** External owner of the composer's per-context picks (model / effort /
+ *  permission / fast). When supplied, the container reads from these records
+ *  and writes through the setters instead of its internal `useState`. The
+ *  start surface passes one backed by persisted settings so its picks survive
+ *  the start-subtree unmount; the workspace surface omits it and relies on the
+ *  internal cache + `sessions` row persistence. */
+export type ComposerSettingsController = {
+	modelSelections: Record<string, ModelRef>;
+	effortLevels: Record<string, string>;
+	permissionModes: Record<string, string>;
+	fastModes: Record<string, boolean>;
+	onSelectModel: (
+		contextKey: string,
+		modelId: string,
+		provider: string | null,
+	) => void;
+	onSelectEffort: (contextKey: string, level: string) => void;
+	onChangePermissionMode: (contextKey: string, mode: string) => void;
+	onChangeFastMode: (contextKey: string, enabled: boolean) => void;
+};
+
 export type WorkspaceConversationContainerProps = {
 	selectedWorkspaceId: string | null;
 	displayedWorkspaceId: string | null;
@@ -194,6 +215,9 @@ export type WorkspaceConversationContainerProps = {
 		directories: readonly string[];
 		onChange: (next: readonly string[]) => void;
 	} | null;
+	/** External, persisted store for the composer's model/effort/permission/fast
+	 *  picks. See `ComposerSettingsController`. */
+	composerSettingsController?: ComposerSettingsController | null;
 };
 
 export const WorkspaceConversationContainer = memo(
@@ -243,6 +267,7 @@ export const WorkspaceConversationContainer = memo(
 		composerFocusScope = "workspace-composer",
 		composerTerminalModeAvailable = true,
 		composerLinkedDirectoriesController = null,
+		composerSettingsController = null,
 	}: WorkspaceConversationContainerProps) {
 		const [composerModelSelections, setComposerModelSelections] = useState<
 			Record<string, ModelRef>
@@ -256,6 +281,16 @@ export const WorkspaceConversationContainer = memo(
 		const [composerFastModes, setComposerFastModes] = useState<
 			Record<string, boolean>
 		>({});
+		// Effective composer-pick records: the external (persisted) controller
+		// wins when present (start surface), else the internal optimistic cache.
+		const effectiveModelSelections =
+			composerSettingsController?.modelSelections ?? composerModelSelections;
+		const effectiveEffortLevels =
+			composerSettingsController?.effortLevels ?? composerEffortLevels;
+		const effectivePermissionModes =
+			composerSettingsController?.permissionModes ?? composerPermissionModes;
+		const effectiveFastModes =
+			composerSettingsController?.fastModes ?? composerFastModes;
 		// P0-B: this file is `"use no memo"` (intentional render-phase ref
 		// mutation near the top), so the React Compiler will NOT memoize the
 		// FileLink context value for us. An inline object literal would change
@@ -269,7 +304,7 @@ export const WorkspaceConversationContainer = memo(
 			composerContextKeyOverride ??
 			getComposerContextKey(displayedWorkspaceId, displayedSessionId);
 		const displayedSelectedModelId =
-			composerModelSelections[composerContextKey]?.modelId ?? null;
+			effectiveModelSelections[composerContextKey]?.modelId ?? null;
 		// Pending ONLY for a session-level hold within the same workspace
 		// (selectSession's hold-until-ready). A workspace-level divergence (the
 		// one-frame display-flip window) keeps the composer bound to the
@@ -560,6 +595,14 @@ export const WorkspaceConversationContainer = memo(
 
 		const handleSelectModel = useCallback(
 			(contextKey: string, modelId: string, provider: string | null) => {
+				if (composerSettingsController) {
+					composerSettingsController.onSelectModel(
+						contextKey,
+						modelId,
+						provider,
+					);
+					return;
+				}
 				setComposerModelSelections((current) => ({
 					...current,
 					[contextKey]: { provider, modelId },
@@ -568,40 +611,52 @@ export const WorkspaceConversationContainer = memo(
 				// is re-pinned from agent_type once the turn runs.
 				persistSessionSetting(contextKey, { model: modelId });
 			},
-			[persistSessionSetting],
+			[persistSessionSetting, composerSettingsController],
 		);
 
 		const handleSelectEffort = useCallback(
 			(contextKey: string, level: string) => {
+				if (composerSettingsController) {
+					composerSettingsController.onSelectEffort(contextKey, level);
+					return;
+				}
 				setComposerEffortLevels((current) => ({
 					...current,
 					[contextKey]: level,
 				}));
 				persistSessionSetting(contextKey, { effortLevel: level });
 			},
-			[persistSessionSetting],
+			[persistSessionSetting, composerSettingsController],
 		);
 
 		const handleChangePermissionMode = useCallback(
 			(contextKey: string, mode: string) => {
+				if (composerSettingsController) {
+					composerSettingsController.onChangePermissionMode(contextKey, mode);
+					return;
+				}
 				setComposerPermissionModes((current) => ({
 					...current,
 					[contextKey]: mode,
 				}));
 				persistSessionSetting(contextKey, { permissionMode: mode });
 			},
-			[persistSessionSetting],
+			[persistSessionSetting, composerSettingsController],
 		);
 
 		const handleChangeFastMode = useCallback(
 			(contextKey: string, enabled: boolean) => {
+				if (composerSettingsController) {
+					composerSettingsController.onChangeFastMode(contextKey, enabled);
+					return;
+				}
 				setComposerFastModes((current) => ({
 					...current,
 					[contextKey]: enabled,
 				}));
 				persistSessionSetting(contextKey, { fastMode: enabled });
 			},
-			[persistSessionSetting],
+			[persistSessionSetting, composerSettingsController],
 		);
 
 		// Fast mode didn't engage: flip the toggle off and clear the prelude
@@ -748,7 +803,7 @@ export const WorkspaceConversationContainer = memo(
 						sending={sendingForPanel}
 						busySessionIds={panelBusySessionIds}
 						interactionRequiredSessionIds={interactionRequiredSessionIds}
-						modelSelections={composerModelSelections}
+						modelSelections={effectiveModelSelections}
 						workspaceChangeRequest={workspaceChangeRequest}
 						onSelectSession={onSelectSession}
 						onSelectWorkspace={onSelectWorkspace}
@@ -803,10 +858,10 @@ export const WorkspaceConversationContainer = memo(
 						pendingPermission={headPendingPermission}
 						onPermissionResponse={handlePermissionResponse}
 						hasPlanReview={hasPlanReview}
-						modelSelections={composerModelSelections}
-						effortLevels={composerEffortLevels}
-						permissionModes={composerPermissionModes}
-						fastModes={composerFastModes}
+						modelSelections={effectiveModelSelections}
+						effortLevels={effectiveEffortLevels}
+						permissionModes={effectivePermissionModes}
+						fastModes={effectiveFastModes}
 						activeFastPreludes={activeFastPreludes}
 						onSelectModel={handleSelectModel}
 						onSelectEffort={handleSelectEffort}

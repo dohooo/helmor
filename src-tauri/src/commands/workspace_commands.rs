@@ -364,6 +364,17 @@ pub async fn list_remote_branches(
 }
 
 #[tauri::command]
+pub async fn rename_workspace(app: AppHandle, workspace_id: String, name: String) -> CmdResult<()> {
+    let ws_id = workspace_id.clone();
+    run_blocking(move || workspaces::rename_workspace(&ws_id, &name)).await?;
+    crate::ui_sync::publish(
+        &app,
+        crate::ui_sync::UiMutationEvent::WorkspaceChanged { workspace_id },
+    );
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn rename_workspace_branch(
     app: AppHandle,
     workspace_id: String,
