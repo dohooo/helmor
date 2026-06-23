@@ -77,17 +77,15 @@ pub struct WorkspaceSidebarRow {
     pub created_at: String,
     pub updated_at: String,
     pub last_user_message_at: Option<String>,
-    /// "manual" or "ai_triage" — routes ai_triage rows into the Triage group.
+    /// "manual" (legacy "ai_triage" rows are archived on upgrade). Retained
+    /// inert after Smart Triage removal.
     pub kind: String,
-    /// True while an ai_triage row still needs the user's first send.
-    pub triage_priming_unconsumed: bool,
-    /// Originating triage platform for ai_triage rows ("github", "gitlab",
-    /// "slack", "lark"). `None` for manual workspaces. Drives the sidebar
-    /// source-logo badge on AI-proposed rows.
-    pub triage_source_type: Option<String>,
     /// Stacked PRs: `id` of the workspace one layer below this in a PR stack
     /// (its base). `None` for non-stacked rows. Drives sidebar stack grouping.
     pub parent_workspace_id: Option<String>,
+    /// User-set display name. When present the frontend shows it verbatim
+    /// instead of the branch-humanized fallback. `None` = derived title.
+    pub custom_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -192,8 +190,6 @@ pub struct WorkspaceDetail {
     /// (either fresh or because the previously-active id no longer
     /// exists; the frontend re-renders against the first item).
     pub active_run_action_id: Option<String>,
-    /// Drives the composer's Start/Dismiss row; flips on first user send via `mark_consumed_for_session`.
-    pub triage_priming_unconsumed: bool,
 }
 
 // Workspace persistence lives in `crate::models::workspaces`.
@@ -201,7 +197,6 @@ pub struct WorkspaceDetail {
 // ---- Sidebar groups ----
 
 pub fn list_workspace_groups() -> Result<Vec<WorkspaceSidebarGroup>> {
-    let mut ai_tasks = Vec::new();
     let mut pinned = Vec::new();
     let mut chats = Vec::new();
     let mut done = Vec::new();
@@ -215,18 +210,15 @@ pub fn list_workspace_groups() -> Result<Vec<WorkspaceSidebarGroup>> {
     // each group naturally inherits the same stable order, no per-group
     // re-sort needed.
     //
-    // Chat and AI-triage workspaces live in their own buckets, separate from status/pinned.
+    // Chat workspaces live in their own bucket, separate from status/pinned.
     for record in workspace_models::load_workspace_records()? {
         if record.state == WorkspaceState::Archived {
             continue;
         }
         let is_chat = record.mode == WorkspaceMode::Chat;
         let is_pinned = record.pinned_at.is_some();
-        let is_ai_triage = record.kind == "ai_triage";
         let row = record_to_sidebar_row(record);
-        if is_ai_triage {
-            ai_tasks.push(row);
-        } else if is_chat {
+        if is_chat {
             chats.push(row);
         } else if is_pinned {
             pinned.push(row);
@@ -242,12 +234,6 @@ pub fn list_workspace_groups() -> Result<Vec<WorkspaceSidebarGroup>> {
     }
 
     Ok(vec![
-        WorkspaceSidebarGroup {
-            id: "ai-tasks".to_string(),
-            label: "Proposed tasks".to_string(),
-            tone: "ai-tasks".to_string(),
-            rows: ai_tasks,
-        },
         WorkspaceSidebarGroup {
             id: "pinned".to_string(),
             label: "Pinned".to_string(),
@@ -352,6 +338,18 @@ pub fn mark_workspace_unread(workspace_id: &str) -> Result<()> {
     transaction
         .commit()
         .context("Failed to commit workspace unread transaction")
+}
+
+/// Set the workspace's custom display name. A blank name clears the override
+/// and restores the auto-derived title.
+pub fn rename_workspace(workspace_id: &str, name: &str) -> Result<()> {
+    let trimmed = name.trim();
+    let custom_name = if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    };
+    workspace_models::update_workspace_custom_name(workspace_id, custom_name)
 }
 
 /// Guard for status/pin operations: chat workspaces live in their own
@@ -1313,9 +1311,8 @@ pub fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
         created_at: record.created_at,
         updated_at: record.updated_at,
         last_user_message_at: record.last_user_message_at,
-        triage_priming_unconsumed: record.kind == "ai_triage" && !record.ai_priming_consumed,
-        triage_source_type: record.triage_source_type,
         parent_workspace_id: record.parent_workspace_id,
+        custom_name: record.custom_name,
         kind: record.kind,
     }
 }
@@ -1419,7 +1416,6 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         forge_login: record.forge_login,
         setup_completed_at: record.setup_completed_at,
         active_run_action_id: record.active_run_action_id,
-        triage_priming_unconsumed: record.kind == "ai_triage" && !record.ai_priming_consumed,
     }
 }
 
@@ -1509,6 +1505,59 @@ pub fn purge_orphaned_workspaces() -> Result<usize> {
         }
     }
     Ok(count)
+}
+
+/// One-time reconcile for the retired Smart Triage feature: archive the
+/// auto-generated `ai_triage` workspaces the user never started, so their
+/// orphaned "proposed task" worktrees don't resurface as ordinary sidebar
+/// rows now that the dedicated triage group is gone.
+///
+/// "Never started" mirrors the old triage reaper's touched-guard: the priming
+/// message is still unconsumed AND no real (non-priming) message was ever
+/// sent. A workspace the user actually opened and messaged is left as a normal
+/// workspace. Each match goes through the full reversible archive
+/// ([`archive_workspace_impl`]) — worktree torn down, branch removed, chat
+/// history preserved in the archive list — exactly as dismissing a proposal
+/// did when triage was live.
+///
+/// Idempotent: archived rows are excluded, so repeat runs are no-ops.
+/// Best-effort per workspace; one failure is logged and never aborts the rest.
+pub fn archive_unstarted_triage_workspaces() -> Result<usize> {
+    let ids: Vec<String> = {
+        let connection = db::read_conn()?;
+        let mut stmt = connection.prepare(
+            "SELECT w.id
+             FROM workspaces w
+             WHERE w.kind = 'ai_triage'
+               AND w.state != 'archived'
+               AND COALESCE(w.ai_priming_consumed, 0) = 0
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM sessions s
+                   JOIN session_messages sm ON sm.session_id = s.id
+                   WHERE s.workspace_id = w.id
+                     AND COALESCE(sm.is_ai_priming, 0) = 0
+               )",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        // `stmt` + the read connection drop at the end of this block, before
+        // the archive path below takes a write connection — SQLite would
+        // otherwise deadlock on the open read.
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
+    let mut archived = 0usize;
+    for id in &ids {
+        match archive_workspace_impl(id) {
+            Ok(_) => archived += 1,
+            Err(error) => tracing::warn!(
+                workspace_id = %id,
+                error = %format!("{error:#}"),
+                "Triage cleanup: failed to archive unstarted workspace"
+            ),
+        }
+    }
+    Ok(archived)
 }
 
 /// Flip a single workspace row from its current operational state to

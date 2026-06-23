@@ -80,7 +80,6 @@ fn build_title_attempts() -> Vec<Value> {
         .into_iter()
         .next();
     let opencode_custom = first_opencode_custom_model();
-    let mimo_custom = first_mimo_custom_model();
     let kimi_custom = first_kimi_custom_model();
     let mut attempts: Vec<Value> = Vec::new();
     for provider in detect_title_providers() {
@@ -125,14 +124,6 @@ fn build_title_attempts() -> Vec<Value> {
                     }));
                 }
             }
-            "mimo" => {
-                if let Some(slug) = &mimo_custom {
-                    attempts.push(serde_json::json!({
-                        "provider": "mimo",
-                        "model": slug,
-                    }));
-                }
-            }
             "kimi" => {
                 if let Some(model) = &kimi_custom {
                     attempts.push(serde_json::json!({
@@ -155,11 +146,6 @@ fn build_title_attempts() -> Vec<Value> {
 /// custom opencode provider is set up.
 fn first_opencode_custom_model() -> Option<String> {
     first_slug_custom_model(crate::provider::opencode_config::read_custom_providers().ok()?)
-}
-
-/// Same, for MiMo Code's `mimocode.json`.
-fn first_mimo_custom_model() -> Option<String> {
-    first_slug_custom_model(crate::provider::opencode_config::read_mimo_custom_providers().ok()?)
 }
 
 fn first_slug_custom_model(
@@ -1361,7 +1347,7 @@ fn parse_cursor_parameters(arr: &[Value]) -> Vec<CursorModelParameter> {
         .collect()
 }
 
-// opencode-protocol model list (opencode + mimo) — proxied to the sidecar's
+// opencode-protocol model list — proxied to the sidecar's
 // `client.provider.list()`
 
 #[derive(Debug, Clone, Serialize)]
@@ -1382,13 +1368,6 @@ pub fn fetch_opencode_models(
     force_reload: bool,
 ) -> CmdResult<Vec<OpencodeModelEntry>> {
     fetch_slug_models(sidecar, "opencode", force_reload)
-}
-
-pub fn fetch_mimo_models(
-    sidecar: &crate::sidecar::ManagedSidecar,
-    force_reload: bool,
-) -> CmdResult<Vec<OpencodeModelEntry>> {
-    fetch_slug_models(sidecar, "mimo", force_reload)
 }
 
 fn fetch_slug_models(
@@ -1734,14 +1713,14 @@ mod tests {
         std::env::set_var("HELMOR_DATA_DIR", dir.path());
         setup_test_db(dir.path());
 
-        // New JSON form pins the provider → a mimo slug resolves to mimo, NOT
-        // opencode (the bare-slug heuristic would have misrouted it).
+        // New JSON form pins the provider → a `/`-slug stored as codex resolves
+        // to codex, NOT opencode (the bare-slug heuristic would have misrouted it).
         crate::settings::upsert_setting_value(
             "app.default_model_id",
-            r#"{"provider":"mimo","modelId":"xiaomi/mimo-v2.5-pro"}"#,
+            r#"{"provider":"codex","modelId":"openai/gpt-5-codex"}"#,
         )
         .unwrap();
-        assert_eq!(detect_title_providers(), vec!["mimo".to_string()]);
+        assert_eq!(detect_title_providers(), vec!["codex".to_string()]);
 
         // Legacy bare slug still falls back to the heuristic (opencode).
         crate::settings::upsert_setting_value("app.default_model_id", "anthropic/claude-opus-4-5")
@@ -1783,7 +1762,7 @@ mod tests {
         setup_test_db(dir.path());
 
         // Custom kimi provider lives in `$KIMI_CODE_HOME/config.toml`, exactly
-        // like opencode/mimo read theirs from their config — NOT from settings.
+        // like opencode reads theirs from their config — NOT from settings.
         let kimi_home = dir.path().join("kimi-home");
         std::fs::create_dir_all(&kimi_home).unwrap();
         std::fs::write(
@@ -1800,7 +1779,7 @@ mod tests {
         )
         .unwrap();
 
-        // Consistent with claude/opencode/mimo: the custom model (config key, no
+        // Consistent with claude/opencode: the custom model (config key, no
         // `kimi:` prefix) is tried first, then kimi's session default.
         let attempts = build_title_attempts();
         let chain: Vec<(&str, Option<&str>)> = attempts

@@ -1,6 +1,5 @@
 //! Shared, failure-aware "what's relevant to me right now" discovery for
-//! Slack. Both the inbox feed (`slack::inbox`) and the triage fetcher
-//! (`triage::fetcher::im::slack`) compose these primitives so the
+//! Slack. The inbox feed (`slack::inbox`) composes these primitives so the
 //! failure-handling policy + degradation reporting live in ONE place.
 //!
 //! The contract that fixes the original bug: a flaky underlying signal
@@ -15,9 +14,8 @@
 //! not on `search.messages`.
 
 use anyhow::Result;
-use chrono::{Duration, Utc};
 
-use super::api::{self, ConversationRow, RawMessage, SearchMessagesPage, SearchSort};
+use super::api::{self, ConversationRow, SearchMessagesPage, SearchSort};
 use super::credentials::SlackCreds;
 
 /// A discovery result that may be partial. `value` is always usable
@@ -63,9 +61,8 @@ fn classify<T>(empty: T, error: anyhow::Error, what: &str) -> Result<Outcome<T>>
 }
 
 /// Mentions of `@me`, one page, caller-chosen sort. The inbox renders
-/// these as feed items; triage reads the channel envelopes to learn which
-/// channels mentioned it. Transient failure → empty page + degraded
-/// reason so a flaky search index never blanks the whole feed/queue;
+/// these as feed items. Transient failure → empty page + degraded
+/// reason so a flaky search index never blanks the whole feed;
 /// auth failure → `Err` for the caller to propagate.
 pub fn mentions(
     creds: &SlackCreds,
@@ -87,79 +84,8 @@ pub fn mentions(
     }
 }
 
-/// One involvement hit from `search.messages`. `is_mention` distinguishes the
-/// `<@me>` query (a real mention of me — an anchor candidate) from the
-/// `from:<@me>` query (my own post — context, not an anchor).
-#[derive(Debug, Clone)]
-pub struct MentionHit {
-    pub channel_id: String,
-    pub ts: String,
-    pub thread_ts: Option<String>,
-    pub text: String,
-    pub is_mention: bool,
-}
-
-/// Like [`involved_channels`] but returns the matched hits (ts / thread_ts /
-/// text), not just channel ids — so triage can expand the exact thread and
-/// guarantee the mention surfaces, instead of discarding the hits and
-/// re-fetching the channel timeline (which omits thread replies). Same two
-/// queries, same degraded/auth contract.
-pub fn involved_channel_hits(
-    creds: &SlackCreds,
-    my_user_id: &str,
-    cold_start_days: i64,
-) -> Result<Outcome<Vec<MentionHit>>> {
-    let after = (Utc::now() - Duration::days(cold_start_days))
-        .format("%Y-%m-%d")
-        .to_string();
-    let mut hits: Vec<MentionHit> = Vec::new();
-    let mut failures: Vec<String> = Vec::new();
-    for (label, query, is_mention) in [
-        ("mention", format!("<@{my_user_id}> after:{after}"), true),
-        (
-            "from-me",
-            format!("from:<@{my_user_id}> after:{after}"),
-            false,
-        ),
-    ] {
-        match api::search_messages(creds, &query, 1, SearchSort::Timestamp) {
-            Ok(page) => collect_hits(&page.matches, is_mention, &mut hits),
-            Err(error) => {
-                if api::is_invalid_auth(&error) {
-                    return Err(error);
-                }
-                failures.push(format!("{label}: {error:#}"));
-            }
-        }
-    }
-    if failures.is_empty() {
-        Ok(Outcome::ok(hits))
-    } else {
-        Ok(Outcome::degraded(
-            hits,
-            format!("channel discovery degraded ({})", failures.join("; ")),
-        ))
-    }
-}
-
-/// All conversations I'm a member of, filtered to `types` (Slack-side
-/// comma list: `im,mpim,public_channel,private_channel`). Unlike the old
-/// triage path, a failure is reported as degraded (empty) rather than
-/// silently skipping the whole workspace.
-pub fn member_conversations(
-    creds: &SlackCreds,
-    types: &str,
-    limit: u32,
-) -> Result<Outcome<Vec<ConversationRow>>> {
-    match api::users_conversations(creds, types, limit) {
-        Ok(rows) => Ok(Outcome::ok(rows)),
-        Err(error) => classify(Vec::new(), error, "users.conversations"),
-    }
-}
-
 /// Unread DM/MPIM conversations (`unread_count_display > 0`), for the
-/// inbox feed. Triage treats all DMs/MPIMs as candidates regardless of
-/// unread, so it uses [`member_conversations`] directly.
+/// inbox feed.
 pub fn unread_dms(creds: &SlackCreds) -> Result<Outcome<Vec<ConversationRow>>> {
     match api::users_conversations_dms(creds) {
         Ok(rows) => Ok(Outcome::ok(
@@ -171,46 +97,9 @@ pub fn unread_dms(creds: &SlackCreds) -> Result<Outcome<Vec<ConversationRow>>> {
     }
 }
 
-fn collect_hits(matches: &[RawMessage], is_mention: bool, into: &mut Vec<MentionHit>) {
-    for hit in matches {
-        let Some(channel) = hit.channel.as_ref() else {
-            continue;
-        };
-        if channel.id.is_empty() || hit.ts.is_empty() {
-            continue;
-        }
-        into.push(MentionHit {
-            channel_id: channel.id.clone(),
-            ts: hit.ts.clone(),
-            thread_ts: hit.thread_ts.clone(),
-            text: api::extract_display_text(hit),
-            is_mention,
-        });
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn collect_hits_captures_ts_thread_and_mention_flag() {
-        let raw: RawMessage = serde_json::from_value(json!({
-            "ts": "1700000000.000500",
-            "thread_ts": "1700000000.000100",
-            "text": "hi <@U_me>",
-            "channel": { "id": "C9", "name": "eng" },
-        }))
-        .expect("valid RawMessage");
-        let mut into = Vec::new();
-        collect_hits(&[raw], true, &mut into);
-        assert_eq!(into.len(), 1);
-        assert_eq!(into[0].channel_id, "C9");
-        assert_eq!(into[0].ts, "1700000000.000500");
-        assert_eq!(into[0].thread_ts.as_deref(), Some("1700000000.000100"));
-        assert!(into[0].is_mention);
-    }
 
     #[test]
     fn outcome_degraded_carries_reason_with_usable_value() {

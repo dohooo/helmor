@@ -10,12 +10,6 @@ const providerOf = (slug: string): string => slug.split("/")[0] ?? "";
 export const isOpencodeBuiltinProvider = (providerId: string): boolean =>
 	providerId === "opencode";
 
-/** MiMo Code's built-in providers (Xiaomi platform + token plans). */
-export const isMimoBuiltinProvider = (providerId: string): boolean =>
-	providerId === "xiaomi" ||
-	providerId === "mimo" ||
-	providerId.startsWith("xiaomi-token-plan");
-
 /** A model is "intentional" if it's a built-in provider's model (e.g. a free
  *  OpenCode Zen model) or comes from a provider the user configured in their
  *  config (custom / preset). */

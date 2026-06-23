@@ -6,7 +6,6 @@ import {
 	ghArchivePlan,
 	glabArchivePlan,
 	llamaArchivePlan,
-	mimoArchivePlan,
 	opencodeArchivePlan,
 	resolveVendorTarget,
 	targetInfoForArch,
@@ -24,8 +23,6 @@ describe("vendor platform boundary", () => {
 			codexNpmSuffix: "darwin-arm64",
 			opencodePkg: "opencode-darwin-arm64",
 			opencodeNpmSuffix: "darwin-arm64",
-			mimoPkg: "@mimo-ai/mimocode-darwin-arm64",
-			mimoNpmSuffix: "darwin-arm64",
 			ghArch: "arm64",
 			glabArch: "arm64",
 			cloudflaredArch: "arm64",
@@ -40,8 +37,6 @@ describe("vendor platform boundary", () => {
 			codexNpmSuffix: "darwin-x64",
 			opencodePkg: "opencode-darwin-x64",
 			opencodeNpmSuffix: "darwin-x64",
-			mimoPkg: "@mimo-ai/mimocode-darwin-x64",
-			mimoNpmSuffix: "darwin-x64",
 			ghArch: "amd64",
 			glabArch: "amd64",
 			cloudflaredArch: "amd64",
@@ -90,10 +85,6 @@ describe("vendor platform boundary", () => {
 		expect(target.codexPkg).toBe("@openai/codex-win32-x64");
 		expect(target.codexTriple).toBe("x86_64-pc-windows-msvc");
 		expect(target.opencodePkg).toBe("opencode-windows-x64");
-		expect(target.mimoPkg).toBe("@mimo-ai/mimocode-windows-x64");
-		expect(mimoArchivePlan(target, "0.1.0").archiveName).toBe(
-			"mimocode-windows-x64-0.1.0.tgz",
-		);
 		expect(ghArchivePlan(target).archiveName).toBe(
 			"gh_2.94.0_windows_amd64.zip",
 		);
@@ -166,16 +157,6 @@ describe("vendor platform boundary", () => {
 			sha256:
 				"f1eff7bb49590d80706b84e82e973a21f0bedb49560fbabfea2654756aa59dca",
 		});
-		expect(mimoArchivePlan(target, "0.1.0")).toEqual({
-			slug: "mimocode-darwin-arm64-0.1.0",
-			archiveName: "mimocode-darwin-arm64-0.1.0.tgz",
-			url: "https://registry.npmjs.org/@mimo-ai/mimocode-darwin-arm64/-/mimocode-darwin-arm64-0.1.0.tgz",
-			sha256:
-				"b5309bddb9e4f19a07d30c1b6aa5b558852b1313b7d27237fab58b6e859680f4",
-		});
-		expect(() => mimoArchivePlan(target, "9.9.9")).toThrow(
-			"no pinned SHA256 for mimo",
-		);
 	});
 
 	test("keeps current x64 vendor archive plans unchanged", () => {
@@ -195,9 +176,6 @@ describe("vendor platform boundary", () => {
 		);
 		expect(opencodeArchivePlan(target, "1.16.2").archiveName).toBe(
 			"opencode-darwin-x64-1.16.2.tgz",
-		);
-		expect(mimoArchivePlan(target, "0.1.0").archiveName).toBe(
-			"mimocode-darwin-x64-0.1.0.tgz",
 		);
 		expect(llamaArchivePlan(target).archiveName).toBe(
 			"llama-b9496-bin-macos-x64.tar.gz",

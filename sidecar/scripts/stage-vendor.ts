@@ -1,4 +1,4 @@
-// Stage claude-code + codex + opencode + mimo + gh + glab + cloudflared into
+// Stage claude-code + codex + opencode + gh + glab + cloudflared into
 // `sidecar/dist/vendor/` for Tauri to ship as bundle resources. macOS host only.
 //
 // Cross-arch staging: in CI the host is always Apple Silicon (macos-26
@@ -41,7 +41,6 @@ import {
 	KIMI_VERSION,
 	kimiArchivePlan,
 	llamaArchivePlan,
-	mimoArchivePlan,
 	nodeArchivePlan,
 	opencodeArchivePlan,
 	resolveVendorTarget,
@@ -122,8 +121,6 @@ function mainWorktreeRoot(): string | null {
 //                github.com/cloudflare/cloudflared/releases/download/$VER/cloudflared-darwin-{arm64,amd64}.tgz
 //   opencode:    shasum -a 256 of the npm tarball at
 //                registry.npmjs.org/opencode-darwin-{arm64,x64}/-/opencode-darwin-{arm64,x64}-$VER.tgz
-//   mimo:        shasum -a 256 of the npm tarball at
-//                registry.npmjs.org/@mimo-ai/mimocode-{darwin-arm64,darwin-x64,windows-x64}/-/mimocode-<suffix>-$VER.tgz
 
 // Version pins, SHA256 tables, target mapping, and archive URL rules live in
 // `vendor-platform.ts` so platform-specific build support can grow there
@@ -653,61 +650,6 @@ function stageOpencodeBinary(target: TargetInfo): string {
 }
 
 // ---------------------------------------------------------------------------
-// mimo (MiMo Code, opencode fork) — stage the NATIVE binary
-// `@mimo-ai/mimocode-<suffix>/bin/mimo`, NOT the `@mimo-ai/cli` Node shim.
-// Same bun-compiled shape as opencode → codesign needs JIT entitlements.
-// ---------------------------------------------------------------------------
-
-function readMimoVersion(): string {
-	const pkgJsonPath = join(NODE_MODULES, "@mimo-ai", "cli", "package.json");
-	ensureExists(pkgJsonPath, "@mimo-ai/cli package.json");
-	const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf8")) as {
-		version?: string;
-	};
-	if (!pkg.version) {
-		throw new Error(`[stage-vendor] @mimo-ai/cli has no version field`);
-	}
-	return pkg.version;
-}
-
-function copyMimoBin(src: string): string {
-	const dest = join(DIST_VENDOR, "mimo", `mimo${EXE}`);
-	copyFile(src, dest);
-	chmodSync(dest, 0o755);
-	maybeSignMacBinary(dest, true);
-	return dest;
-}
-
-function stageMimoBinary(target: TargetInfo): string {
-	const installed = join(NODE_MODULES, target.mimoPkg, "bin", `mimo${EXE}`);
-	if (existsSync(installed)) {
-		return copyMimoBin(installed);
-	}
-
-	// Cross-arch: download the platform tarball from npm.
-	const version = readMimoVersion();
-	const plan = mimoArchivePlan(target, version);
-	ensureCacheDir();
-	const archive = join(ARCHIVE_CACHE, plan.archiveName);
-	downloadAndVerify(plan.url, archive, plan.sha256);
-
-	const extractDir = join(BUNDLE_CACHE, plan.slug);
-	freshExtractDir(extractDir);
-	execFileSync(TAR_BIN, ["-xzf", archive, "-C", extractDir], {
-		stdio: "inherit",
-	});
-
-	// npm tarballs nest everything under `package/`.
-	const binSrc = join(extractDir, "package", "bin", `mimo${EXE}`);
-	if (!existsSync(binSrc)) {
-		throw new Error(
-			`[stage-vendor] mimo binary missing after extract: ${binSrc}`,
-		);
-	}
-	return copyMimoBin(binSrc);
-}
-
-// ---------------------------------------------------------------------------
 // kimi — Kimi Code CLI. Per-platform native binary (Node SEA), shipped as a
 // GitHub release `.zip` holding a single `kimi[.exe]` at the archive root.
 // codesign needs JIT entitlements (true flag) because V8's JIT hits the same
@@ -720,7 +662,7 @@ function stageKimiBinary(target: TargetInfo): string {
 	// Shared cross-worktree archive cache (like every other vendor) so a new
 	// worktree reuses the downloaded zip (~43 MB) instead of re-fetching it.
 	// kimi ships no npm package, so it ALWAYS hits this download path — unlike
-	// mimo/codex/claude, which come from node_modules on a native-arch host.
+	// codex/claude, which come from node_modules on a native-arch host.
 	const archive = join(ARCHIVE_CACHE, plan.archiveName);
 	downloadAndVerify(plan.url, archive, plan.sha256);
 
@@ -1190,9 +1132,6 @@ stageCodexBinary(target);
 // ----- opencode -----
 stageOptional("opencode", () => stageOpencodeBinary(target));
 
-// ----- mimo -----
-stageOptional("mimo", () => stageMimoBinary(target));
-
 // ----- kimi (Kimi Code CLI, ACP provider) -----
 stageOptional("kimi", () => stageKimiBinary(target));
 
@@ -1221,7 +1160,6 @@ console.log(`[stage-vendor] ✓ staged → ${DIST_VENDOR}`);
 console.log(`  claude-code ${humanSize(join(DIST_VENDOR, "claude-code"))}`);
 console.log(`  codex       ${humanSize(join(DIST_VENDOR, "codex"))}`);
 console.log(`  opencode    ${humanSize(join(DIST_VENDOR, "opencode"))}`);
-console.log(`  mimo        ${humanSize(join(DIST_VENDOR, "mimo"))}`);
 console.log(`  kimi        ${humanSize(join(DIST_VENDOR, "kimi"))}`);
 console.log(`  gh          ${humanSize(join(DIST_VENDOR, "gh"))}`);
 console.log(`  glab        ${humanSize(join(DIST_VENDOR, "glab"))}`);

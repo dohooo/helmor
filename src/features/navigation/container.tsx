@@ -65,6 +65,7 @@ export const WorkspacesSidebarContainer = memo(
 			handleMoveRepositoryInSidebar,
 			handleMoveWorkspaceInSidebar,
 			handleOpenCloneDialog,
+			handleRenameWorkspace,
 			handleRestoreWorkspace,
 			handleSelectWorkspace,
 			handleSetWorkspaceStatus,
@@ -149,6 +150,9 @@ export const WorkspacesSidebarContainer = memo(
 				}}
 				onSetWorkspaceStatus={(workspaceId, status) => {
 					void handleSetWorkspaceStatus(workspaceId, status);
+				}}
+				onRenameWorkspace={(workspaceId, name) => {
+					void handleRenameWorkspace(workspaceId, name);
 				}}
 			/>
 		);

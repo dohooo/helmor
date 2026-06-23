@@ -1,5 +1,5 @@
 // Owns ONE long-lived `<bin> serve` child + its SDK client (HTTP/SSE) for an
-// opencode-protocol provider (opencode itself, or a fork like MiMo Code that
+// opencode-protocol provider (opencode, or any protocol-compatible fork that
 // keeps the same server/SDK protocol). Shared across all of that provider's
 // sessions; the global SSE stream is demuxed by `sessionID` in the manager.
 // Spawned ourselves (not the SDK helper) so we own the process group for tree
@@ -22,7 +22,7 @@ const STARTUP_TIMEOUT_MS = 20_000;
 const HOSTNAME = "127.0.0.1";
 
 /** Everything that differs between opencode and a protocol-compatible fork
- *  at the server-process layer. See `opencode.ts` / `mimo.ts` for instances. */
+ *  at the server-process layer. See `opencode.ts` for the instance. */
 export interface ProtocolServerConfig {
 	/** Provider id — log prefix and session-DB subdir (`<id>/<id>.db`). */
 	readonly id: string;
@@ -41,8 +41,7 @@ export interface ProtocolServerConfig {
 	readonly passwordEnvVar: string;
 	/** Env var overriding the server's session-DB path. */
 	readonly dbEnvVar: string;
-	/** Basic-auth username the server expects
-	 *  (opencode: "opencode", mimo: "mimocode"). */
+	/** Basic-auth username the server expects (e.g. opencode: "opencode"). */
 	readonly authUsername: string;
 }
 

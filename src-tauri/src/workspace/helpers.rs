@@ -81,6 +81,11 @@ pub fn worktree_workspace_dir(
 // ---- Display / naming helpers ----
 
 pub fn display_title(record: &WorkspaceRecord) -> String {
+    // A user-set name overrides every auto-derived title.
+    if let Some(custom_name) = non_empty(&record.custom_name) {
+        return custom_name.to_string();
+    }
+
     if let Some(pr_title) = non_empty(&record.pr_title) {
         return pr_title.to_string();
     }
@@ -970,8 +975,8 @@ mod tests {
             active_run_action_id: None,
             kind: "manual".to_string(),
             ai_priming_consumed: false,
-            triage_source_type: None,
             parent_workspace_id: None,
+            custom_name: None,
         }
     }
 

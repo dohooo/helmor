@@ -54,7 +54,7 @@ export type CustomProvidersController = {
 
 export type ProviderCaps = {
 	baseUrlEditable: boolean;
-	/** Show the wire-protocol / API-style selector (OpenCode/MiMo/Kimi). */
+	/** Show the wire-protocol / API-style selector (OpenCode/Kimi). */
 	apiStyleSelectable: boolean;
 };
 
@@ -76,6 +76,6 @@ export type ProviderConfigAdapter = {
 	styleLabel?: string;
 	useCustomProviders: () => CustomProvidersController;
 	fetchModels: (provider: CustomProvider) => Promise<CustomProviderModel[]>;
-	/** Omitted by families that render their own Models row (OpenCode/MiMo). */
+	/** Omitted by families that render their own Models row (OpenCode). */
 	useSectionModels?: () => SectionModelsController;
 };
