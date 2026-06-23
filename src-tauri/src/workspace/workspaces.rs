@@ -1458,13 +1458,7 @@ pub fn purge_orphaned_workspaces() -> Result<usize> {
         })?
         .filter_map(|r| r.ok())
         .filter(|(_, repo_name, dir_name, _, worktree_parent_path)| {
-            super::helpers::worktree_workspace_dir(
-                repo_name,
-                dir_name,
-                worktree_parent_path.as_deref(),
-            )
-            .map(|p| !p.is_dir())
-            .unwrap_or(false)
+            should_degrade_missing_worktree(repo_name, dir_name, worktree_parent_path.as_deref())
         })
         .map(|(id, repo_name, dir_name, state, _)| (id, repo_name, dir_name, state))
         .collect();
@@ -1505,6 +1499,38 @@ pub fn purge_orphaned_workspaces() -> Result<usize> {
         }
     }
     Ok(count)
+}
+
+fn should_degrade_missing_worktree(
+    repo_name: &str,
+    dir_name: &str,
+    worktree_parent_path: Option<&str>,
+) -> bool {
+    let custom_parent = worktree_parent_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    if let Some(parent) = custom_parent {
+        let parent_path = std::path::Path::new(parent);
+        let workspace_path = parent_path.join(dir_name);
+        if workspace_path.is_dir() {
+            return false;
+        }
+        if !parent_path.is_dir() {
+            tracing::warn!(
+                repo_name,
+                dir_name,
+                parent = %parent_path.display(),
+                "Skipping orphan reconcile for custom worktree parent that is unavailable",
+            );
+            return false;
+        }
+        return true;
+    }
+
+    super::helpers::worktree_workspace_dir(repo_name, dir_name, None)
+        .map(|path| !path.is_dir())
+        .unwrap_or(false)
 }
 
 /// One-time reconcile for the retired Smart Triage feature: archive the
@@ -1956,6 +1982,73 @@ mod tests {
             count_session_messages(&env, "w-ready"),
             1,
             "chat history must survive the degrade",
+        );
+    }
+
+    #[test]
+    fn purge_skips_custom_worktree_when_parent_dir_is_unavailable() {
+        let env = TestEnv::new("purge-custom-parent-missing");
+        let conn = env.db_connection();
+        insert_repo(&conn, "r1", "demo", None);
+        insert_workspace(
+            &conn,
+            &WorkspaceFixture {
+                id: "w-custom",
+                repo_id: "r1",
+                directory_name: "epsilon",
+                state: WorkspaceState::Ready.as_str(),
+                branch: Some("feature/epsilon"),
+                intended_target_branch: None,
+            },
+        );
+        let custom_parent = env.root.join("external-drive").join("demo-workspaces");
+        conn.execute(
+            "UPDATE workspaces SET worktree_parent_path = ?1 WHERE id = 'w-custom'",
+            [custom_parent.display().to_string()],
+        )
+        .unwrap();
+        assert!(!custom_parent.exists());
+
+        let degraded = purge_orphaned_workspaces().unwrap();
+
+        assert_eq!(
+            degraded, 0,
+            "missing custom parent may be a temporarily unavailable volume"
+        );
+        assert_eq!(workspace_state(&env, "w-custom").as_deref(), Some("ready"));
+    }
+
+    #[test]
+    fn purge_degrades_custom_worktree_when_parent_exists_but_workspace_dir_is_missing() {
+        let env = TestEnv::new("purge-custom-child-missing");
+        let conn = env.db_connection();
+        insert_repo(&conn, "r1", "demo", None);
+        insert_workspace(
+            &conn,
+            &WorkspaceFixture {
+                id: "w-custom",
+                repo_id: "r1",
+                directory_name: "zeta",
+                state: WorkspaceState::Ready.as_str(),
+                branch: Some("feature/zeta"),
+                intended_target_branch: None,
+            },
+        );
+        let custom_parent = env.root.join("mounted-drive").join("demo-workspaces");
+        fs::create_dir_all(&custom_parent).unwrap();
+        conn.execute(
+            "UPDATE workspaces SET worktree_parent_path = ?1 WHERE id = 'w-custom'",
+            [custom_parent.display().to_string()],
+        )
+        .unwrap();
+        assert!(!custom_parent.join("zeta").exists());
+
+        let degraded = purge_orphaned_workspaces().unwrap();
+
+        assert_eq!(degraded, 1);
+        assert_eq!(
+            workspace_state(&env, "w-custom").as_deref(),
+            Some("archived")
         );
     }
 
