@@ -261,6 +261,14 @@ export type StartSurfacePreferences = {
 	chatModeActive: boolean;
 	/** Start-composer Terminal-Mode toggle. */
 	terminalModeActive: boolean;
+	/** Composer picks (model / effort / permission / fast) keyed by the start
+	 *  context key (`start:chat`, `start:repo:<id>`). The start surface has no
+	 *  session row to persist against, so without these the picks reset when
+	 *  the user navigates away and the start subtree unmounts. */
+	composerModelByContextKey: Record<string, ModelRef>;
+	composerEffortByContextKey: Record<string, string>;
+	composerPermissionModeByContextKey: Record<string, string>;
+	composerFastModeByContextKey: Record<string, boolean>;
 };
 
 export type AppSettings = {
@@ -368,6 +376,10 @@ export const DEFAULT_START_SURFACE_PREFERENCES: StartSurfacePreferences = {
 	branchIntentByRepoId: {},
 	chatModeActive: false,
 	terminalModeActive: false,
+	composerModelByContextKey: {},
+	composerEffortByContextKey: {},
+	composerPermissionModeByContextKey: {},
+	composerFastModeByContextKey: {},
 };
 
 /** Fallbacks for repos without a per-repo entry. */
@@ -898,6 +910,39 @@ function parseStringRecord(value: unknown): Record<string, string> {
 	);
 }
 
+function parseBooleanRecord(value: unknown): Record<string, boolean> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return {};
+	}
+	return Object.fromEntries(
+		Object.entries(value).filter(
+			([key, entry]) => key.length > 0 && typeof entry === "boolean",
+		),
+	) as Record<string, boolean>;
+}
+
+/** Validates an already-parsed record of `ModelRef` objects, dropping
+ *  malformed entries. Values are nested objects (not serialized strings), so
+ *  unlike `parseModelRef` this never JSON-parses. */
+function parseModelRefRecord(value: unknown): Record<string, ModelRef> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return {};
+	}
+	const out: Record<string, ModelRef> = {};
+	for (const [key, entry] of Object.entries(value)) {
+		if (key.length === 0 || !entry || typeof entry !== "object") continue;
+		const modelId = (entry as { modelId?: unknown }).modelId;
+		if (typeof modelId !== "string" || !modelId.trim()) continue;
+		const rawProvider = (entry as { provider?: unknown }).provider;
+		const provider =
+			typeof rawProvider === "string" && rawProvider.trim()
+				? rawProvider.trim()
+				: null;
+		out[key] = { provider, modelId: modelId.trim() };
+	}
+	return out;
+}
+
 /** Like `parseStringRecord`, with each value constrained to `allowed`. */
 function parseEnumRecord<V extends string>(
 	value: unknown,
@@ -983,6 +1028,18 @@ function parseStartSurfacePreferences(
 				typeof o.terminalModeActive === "boolean"
 					? o.terminalModeActive
 					: false,
+			composerModelByContextKey: parseModelRefRecord(
+				o.composerModelByContextKey,
+			),
+			composerEffortByContextKey: parseStringRecord(
+				o.composerEffortByContextKey,
+			),
+			composerPermissionModeByContextKey: parseStringRecord(
+				o.composerPermissionModeByContextKey,
+			),
+			composerFastModeByContextKey: parseBooleanRecord(
+				o.composerFastModeByContextKey,
+			),
 		};
 	} catch {
 		return DEFAULT_START_SURFACE_PREFERENCES;

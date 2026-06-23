@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { StartSubmitMode } from "@/features/composer/start-submit-mode";
 import type {
 	ComposerCreatePrepareOutcome,
+	ComposerSettingsController,
 	ComposerSubmitPayload,
 	PendingCreatedWorkspaceSubmit,
 } from "@/features/conversation";
@@ -75,6 +76,9 @@ export type StartSurfaceState = {
 		directories: readonly string[];
 		onChange: (next: readonly string[]) => void;
 	};
+	/** Persisted composer picks for the start surface, so model/effort/
+	 *  permission/fast survive the start-subtree unmount on navigation. */
+	startComposerSettingsController: ComposerSettingsController;
 };
 
 export type StartSurfaceActions = {
@@ -774,6 +778,68 @@ export function useStartSurfaceController(
 		[startPendingLinkedDirectories],
 	);
 
+	// Persisted composer picks for the start surface. Writes merge into
+	// `startSurfacePreferences`; only `start:*` context keys are persisted so a
+	// stray `session:*` key (e.g. from the fast-mode-unavailable subscription on
+	// the start container) can't pollute the blob.
+	const startComposerSettingsController = useMemo<ComposerSettingsController>(
+		() => ({
+			modelSelections: prefs.composerModelByContextKey,
+			effortLevels: prefs.composerEffortByContextKey,
+			permissionModes: prefs.composerPermissionModeByContextKey,
+			fastModes: prefs.composerFastModeByContextKey,
+			onSelectModel: (contextKey, modelId, provider) => {
+				if (!contextKey.startsWith("start:")) return;
+				void updateSettings({
+					startSurfacePreferences: {
+						...prefs,
+						composerModelByContextKey: {
+							...prefs.composerModelByContextKey,
+							[contextKey]: { provider, modelId },
+						},
+					},
+				});
+			},
+			onSelectEffort: (contextKey, level) => {
+				if (!contextKey.startsWith("start:")) return;
+				void updateSettings({
+					startSurfacePreferences: {
+						...prefs,
+						composerEffortByContextKey: {
+							...prefs.composerEffortByContextKey,
+							[contextKey]: level,
+						},
+					},
+				});
+			},
+			onChangePermissionMode: (contextKey, mode) => {
+				if (!contextKey.startsWith("start:")) return;
+				void updateSettings({
+					startSurfacePreferences: {
+						...prefs,
+						composerPermissionModeByContextKey: {
+							...prefs.composerPermissionModeByContextKey,
+							[contextKey]: mode,
+						},
+					},
+				});
+			},
+			onChangeFastMode: (contextKey, enabled) => {
+				if (!contextKey.startsWith("start:")) return;
+				void updateSettings({
+					startSurfacePreferences: {
+						...prefs,
+						composerFastModeByContextKey: {
+							...prefs.composerFastModeByContextKey,
+							[contextKey]: enabled,
+						},
+					},
+				});
+			},
+		}),
+		[prefs, updateSettings],
+	);
+
 	const startBranches = startBranchesQuery.data ?? EMPTY_BRANCH_LIST;
 
 	const resetScratchOnReentry = useCallback(() => {
@@ -814,6 +880,7 @@ export function useStartSurfaceController(
 			startComposerContextKey,
 			startComposerInsertTarget,
 			startLinkedDirectoriesController,
+			startComposerSettingsController,
 		}),
 		[
 			startBranchIntent,
@@ -821,6 +888,7 @@ export function useStartSurfaceController(
 			startBranchesQuery.isFetching,
 			startComposerContextKey,
 			startComposerInsertTarget,
+			startComposerSettingsController,
 			startInboxProviderSourceTab,
 			startInboxProviderTab,
 			startInboxStateFilterBySource,
