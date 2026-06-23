@@ -135,6 +135,7 @@ function ReleaseAnnouncementToast({
 	onOpenChangelog: () => void;
 	onRunAction: (action: ReleaseAnnouncementAction) => void;
 }) {
+	const { f } = useI18n();
 	const [collapsed, setCollapsed] = useState(false);
 
 	return (
@@ -147,8 +148,9 @@ function ReleaseAnnouncementToast({
 						className="shrink-0 opacity-90"
 					/>
 					<div className="truncate text-ui font-semibold leading-none text-foreground">
-						<I18nText source="newV" />
-						{announcement.version}
+						{f("newVersionAnnouncementTitle", {
+							version: announcement.version,
+						})}
 					</div>
 				</div>
 				<div className="-mr-1 flex items-center gap-1">
