@@ -422,6 +422,107 @@ describe("first-frame tail window", () => {
 		}
 	});
 
+	it("compensates deferred height corrections after a wheel scroll-up settles (no drift)", () => {
+		// Regression lock for the scroll-up drift: while the user actively scrolls
+		// up (hasUserScrolledRef=true via wheel, isUserScrollingRef=true), the rows
+		// that mount above the viewport report their measured height through the
+		// DEFERRED path, and that correction is flushed 120ms AFTER the scroll
+		// settles. The flush must compensate scrollTop for the above-viewport
+		// height delta — otherwise every row below shifts and the reading position
+		// drifts the moment the scroll ends.
+		const observed = new Map<Element, ResizeObserverCallback>();
+		class ControlledResizeObserver {
+			private readonly callback: ResizeObserverCallback;
+			constructor(callback: ResizeObserverCallback) {
+				this.callback = callback;
+			}
+			observe(element: Element) {
+				observed.set(element, this.callback);
+			}
+			unobserve(element: Element) {
+				observed.delete(element);
+			}
+			disconnect() {}
+		}
+		const originalResizeObserver = window.ResizeObserver;
+		window.ResizeObserver =
+			ControlledResizeObserver as unknown as typeof ResizeObserver;
+		globalThis.ResizeObserver = window.ResizeObserver;
+
+		try {
+			renderPane(makePane("s1", "m1", 100));
+			const scroller = document.querySelector(
+				".conversation-scroll-viewport",
+			) as HTMLElement;
+			// scrollHeight 0 keeps the settle pin inert; clientHeight 900 drives the
+			// window math (same trick as the scroll-up union test).
+			Object.defineProperty(scroller, "scrollHeight", {
+				configurable: true,
+				get: () => 0,
+			});
+			Object.defineProperty(scroller, "clientHeight", {
+				configurable: true,
+				get: () => 900,
+			});
+
+			// Wheel scroll-up to mid-thread: the wheel escapes the bottom lock
+			// (hasUserScrolledRef=true) and the scroll event marks the viewport as
+			// actively scrolling (isUserScrollingRef=true), so the next height
+			// report is DEFERRED rather than applied inline.
+			act(() => {
+				scroller.dispatchEvent(
+					new WheelEvent("wheel", { bubbles: true, deltaY: -200 }),
+				);
+				scroller.scrollTop = 7000;
+				scroller.dispatchEvent(new Event("scroll"));
+				for (const [id, callback] of [...frameCallbacks]) {
+					frameCallbacks.delete(id);
+					callback(performance.now());
+				}
+			});
+
+			// Row 65 (top 6500) sits above the viewport top (7000) and mounts under
+			// the scroll-up union. Its real height (300) is taller than its 100px
+			// estimate — the exact estimate→measured gap that shifts the rows below.
+			const messageText = screen.getByText("m1:65");
+			const rowEl = [...observed.keys()].find(
+				(el) =>
+					(el as HTMLElement).style.position === "absolute" &&
+					el.contains(messageText),
+			);
+			expect(rowEl).toBeDefined();
+			const fireRowResize = (height: number) => {
+				const callback = observed.get(rowEl as Element);
+				act(() => {
+					callback?.(
+						[
+							{
+								borderBoxSize: [{ blockSize: height, inlineSize: 600 }],
+								contentRect: { height },
+							} as unknown as ResizeObserverEntry,
+						],
+						{} as ResizeObserver,
+					);
+				});
+			};
+
+			// Deferred while actively scrolling: the correction must NOT apply yet.
+			fireRowResize(300);
+			expect(scroller.scrollTop).toBe(7000);
+
+			// Scroll settles: the 120ms idle timer flushes the deferred height. The
+			// above-viewport row grew by 200px, so scrollTop must grow by 200 to
+			// hold the reading position — otherwise the content drifts down 200px.
+			act(() => {
+				vi.advanceTimersByTime(120);
+			});
+			expect(scroller.scrollTop).toBe(7200);
+		} finally {
+			window.ResizeObserver = originalResizeObserver;
+			globalThis.ResizeObserver = originalResizeObserver;
+		}
+	});
+
 	it("keeps the true bottom pinned through a measurement wave during the initial settle", () => {
 		// Regression lock for the post-switch region flashing: a late
 		// measurement wave grows the scroll height in its own commit; during
