@@ -565,6 +565,10 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
         .map(ToOwned::to_owned)
         .with_context(|| format!("Workspace {workspace_id} is missing branch"))?;
     let workspace_dir = helpers::workspace_path(&record)?;
+    if let Some(parent) = workspace_dir.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create workspace parent {}", parent.display()))?;
+    }
     let timestamp = db::current_timestamp()?;
     let mut created_worktree = false;
 
@@ -738,7 +742,17 @@ pub fn move_local_workspace_to_worktree_impl(
     let directory_name = helpers::allocate_directory_name_for_repo(&record.repo_id)?;
     let branch_settings = repos::load_repo_branch_prefix_settings(&record.repo_id)?;
     let new_branch = helpers::branch_name_for_directory(&directory_name, &branch_settings);
-    let workspace_dir = crate::data_dir::workspace_dir(&repository.name, &directory_name)?;
+    let worktree_parent_path = helpers::repo_worktree_parent_dir(
+        &repository.name,
+        repository.workspace_root_path.as_deref(),
+    )?;
+    fs::create_dir_all(&worktree_parent_path).with_context(|| {
+        format!(
+            "Failed to create workspace parent {}",
+            worktree_parent_path.display()
+        )
+    })?;
+    let workspace_dir = worktree_parent_path.join(&directory_name);
 
     if workspace_dir.exists() {
         bail!(
@@ -818,6 +832,7 @@ pub fn move_local_workspace_to_worktree_impl(
         // target = source (matches the existing "branch from X, PR back to X" default).
         &head_branch,
         &head_branch,
+        &worktree_parent_path.display().to_string(),
         &timestamp,
     )?;
 

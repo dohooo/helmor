@@ -66,18 +66,19 @@ pub fn ensure_agent_contexts_in_worktree(workspace_dir: &Path) -> Result<()> {
 pub fn ensure_existing_worktree_contexts() -> Result<usize> {
     let connection = db::read_conn()?;
     let mut stmt = connection.prepare(&format!(
-        "SELECT w.id, r.name, w.directory_name
+        "SELECT w.id, r.name, w.directory_name, w.worktree_parent_path
          FROM workspaces w
          JOIN repos r ON r.id = w.repository_id
          WHERE w.state {} AND COALESCE(w.mode, 'worktree') = 'worktree'",
         crate::workspace_state::OPERATIONAL_FILTER
     ))?;
-    let workspaces: Vec<(String, String, String)> = stmt
+    let workspaces: Vec<(String, String, String, Option<String>)> = stmt
         .query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
             ))
         })?
         .filter_map(|row| row.ok())
@@ -86,8 +87,12 @@ pub fn ensure_existing_worktree_contexts() -> Result<usize> {
     drop(connection);
 
     let mut ensured = 0;
-    for (workspace_id, repo_name, directory_name) in workspaces {
-        let workspace_dir = match crate::data_dir::workspace_dir(&repo_name, &directory_name) {
+    for (workspace_id, repo_name, directory_name, worktree_parent_path) in workspaces {
+        let workspace_dir = match crate::workspace::helpers::worktree_workspace_dir(
+            &repo_name,
+            &directory_name,
+            worktree_parent_path.as_deref(),
+        ) {
             Ok(path) => path,
             Err(error) => {
                 tracing::warn!(

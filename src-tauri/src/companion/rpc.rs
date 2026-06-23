@@ -384,6 +384,10 @@ async fn dispatch(
             crate::commands::repository_commands::update_repository_default_branch(app.clone(), arg_string(&args, "repoId")?, arg_string(&args, "defaultBranch")?).await?;
             Ok(Value::Null)
         }
+        "update_repository_workspace_root" => {
+            crate::commands::repository_commands::update_repository_workspace_root(app.clone(), arg_string(&args, "repoId")?, arg_opt_string(&args, "workspaceRootPath")).await?;
+            Ok(Value::Null)
+        }
         "update_repository_remote" => to_value(crate::commands::repository_commands::update_repository_remote(app.clone(), arg_string(&args, "repoId")?, arg_string(&args, "remote")?).await?),
         "update_session_settings" => {
             crate::commands::session_commands::update_session_settings(arg_string(&args, "sessionId")?, arg_opt_string(&args, "model"), arg_opt_string(&args, "effortLevel"), arg_opt_string(&args, "permissionMode"), arg_opt_bool(&args, "fastMode")).await?;

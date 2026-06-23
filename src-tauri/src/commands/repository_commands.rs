@@ -65,6 +65,20 @@ pub async fn update_repository_branch_prefix(
 }
 
 #[tauri::command]
+pub async fn update_repository_workspace_root(
+    app: AppHandle,
+    repo_id: String,
+    workspace_root_path: Option<String>,
+) -> CmdResult<()> {
+    run_blocking(move || {
+        repos::update_repository_workspace_root(&repo_id, workspace_root_path.as_deref())
+    })
+    .await?;
+    git_watcher::notify_workspace_changed(&app);
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn update_repository_remote(
     app: AppHandle,
     repo_id: String,

@@ -337,13 +337,24 @@ pub(super) fn query_workspace_target_by_id(
     workspace_id: &str,
     workspace_root: &Path,
 ) -> Option<(String, String)> {
+    struct WorkspaceTargetRow {
+        remote: Option<String>,
+        target: Option<String>,
+        repo_name: String,
+        dir_name: String,
+        mode: String,
+        root_path: Option<String>,
+        worktree_parent_path: Option<String>,
+    }
+
     let sql = format!(
         "SELECT r.remote,
-		        COALESCE(w.intended_target_branch, r.default_branch),
+			        COALESCE(w.intended_target_branch, r.default_branch),
 		        r.name,
 		        w.directory_name,
 		        COALESCE(w.mode, 'worktree'),
-		        r.root_path
+		        r.root_path,
+		        w.worktree_parent_path
 		 FROM workspaces w
 		 JOIN repos r ON r.id = w.repository_id
 		 WHERE w.id = ?1 AND w.state {}",
@@ -351,39 +362,39 @@ pub(super) fn query_workspace_target_by_id(
     );
     let mut stmt = conn.prepare(&sql).ok()?;
 
-    let (remote, target, repo_name, dir_name, mode, root_path): (
-        Option<String>,
-        Option<String>,
-        String,
-        String,
-        String,
-        Option<String>,
-    ) = stmt
+    let row = stmt
         .query_row(rusqlite::params![workspace_id], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-            ))
+            Ok(WorkspaceTargetRow {
+                remote: row.get(0)?,
+                target: row.get(1)?,
+                repo_name: row.get(2)?,
+                dir_name: row.get(3)?,
+                mode: row.get(4)?,
+                root_path: row.get(5)?,
+                worktree_parent_path: row.get(6)?,
+            })
         })
         .ok()?;
 
-    let matches_root = match mode.as_str() {
-        "local" => root_path
+    let matches_root = match row.mode.as_str() {
+        "local" => row
+            .root_path
             .as_deref()
             .is_some_and(|path| path_matches(workspace_root, path)),
-        "worktree" => parse_workspace_path(workspace_root)
-            .is_some_and(|(root_repo, root_dir)| root_repo == repo_name && root_dir == dir_name),
+        "worktree" => crate::workspace::helpers::worktree_workspace_dir(
+            &row.repo_name,
+            &row.dir_name,
+            row.worktree_parent_path.as_deref(),
+        )
+        .ok()
+        .is_some_and(|path| path_matches(workspace_root, path.to_string_lossy().as_ref())),
         _ => false,
     };
     if !matches_root {
         return None;
     }
 
-    Some((remote.unwrap_or_else(|| "origin".into()), target?))
+    Some((row.remote.unwrap_or_else(|| "origin".into()), row.target?))
 }
 
 pub(super) fn query_local_workspace_target(
@@ -427,6 +438,56 @@ fn query_local_workspace_target_by_root_path(
     Some((remote.unwrap_or_else(|| "origin".into()), target?))
 }
 
+fn query_worktree_workspace_target_by_path(
+    conn: &Connection,
+    workspace_root: &Path,
+) -> Option<(String, String)> {
+    let sql = format!(
+        "SELECT r.remote,
+		        COALESCE(w.intended_target_branch, r.default_branch),
+		        r.name,
+		        w.directory_name,
+		        w.worktree_parent_path
+		 FROM workspaces w
+		 JOIN repos r ON r.id = w.repository_id
+		 WHERE COALESCE(w.mode, 'worktree') = 'worktree'
+		   AND w.state {}",
+        workspace_state::OPERATIONAL_FILTER,
+    );
+    let mut stmt = conn.prepare(&sql).ok()?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        })
+        .ok()?;
+
+    let mut matched: Option<(String, String)> = None;
+    for row in rows.flatten() {
+        let (remote, target, repo_name, dir_name, worktree_parent_path) = row;
+        let Ok(path) = crate::workspace::helpers::worktree_workspace_dir(
+            &repo_name,
+            &dir_name,
+            worktree_parent_path.as_deref(),
+        ) else {
+            continue;
+        };
+        if !path_matches(workspace_root, path.to_string_lossy().as_ref()) {
+            continue;
+        }
+        if matched.is_some() {
+            return None;
+        }
+        matched = Some((remote.unwrap_or_else(|| "origin".into()), target?));
+    }
+    matched
+}
+
 fn path_matches(path: &Path, stored: &str) -> bool {
     if path.to_string_lossy() == stored {
         return true;
@@ -450,6 +511,9 @@ fn lookup_workspace_target(
         return query_workspace_target_by_id(&conn, workspace_id, workspace_root);
     }
     if let Some(target) = query_local_workspace_target(&conn, workspace_root) {
+        return Some(target);
+    }
+    if let Some(target) = query_worktree_workspace_target_by_path(&conn, workspace_root) {
         return Some(target);
     }
     let (repo_name, dir_name) = parse_workspace_path(workspace_root)?;

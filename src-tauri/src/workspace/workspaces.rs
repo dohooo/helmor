@@ -1444,7 +1444,7 @@ pub fn purge_orphaned_workspaces() -> Result<usize> {
     // missing (the user might be on a removable drive). Filter them out
     // server-side via `w.mode = 'worktree'`.
     let mut stmt = connection.prepare(&format!(
-        "SELECT w.id, r.name, w.directory_name, w.state
+        "SELECT w.id, r.name, w.directory_name, w.state, w.worktree_parent_path
          FROM workspaces w
          JOIN repos r ON r.id = w.repository_id
          WHERE w.state {} AND COALESCE(w.mode, 'worktree') = 'worktree'",
@@ -1457,14 +1457,20 @@ pub fn purge_orphaned_workspaces() -> Result<usize> {
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, WorkspaceState>(3)?,
+                row.get::<_, Option<String>>(4)?,
             ))
         })?
         .filter_map(|r| r.ok())
-        .filter(|(_, repo_name, dir_name, _)| {
-            crate::data_dir::workspace_dir(repo_name, dir_name)
-                .map(|p| !p.is_dir())
-                .unwrap_or(false)
+        .filter(|(_, repo_name, dir_name, _, worktree_parent_path)| {
+            super::helpers::worktree_workspace_dir(
+                repo_name,
+                dir_name,
+                worktree_parent_path.as_deref(),
+            )
+            .map(|p| !p.is_dir())
+            .unwrap_or(false)
         })
+        .map(|(id, repo_name, dir_name, state, _)| (id, repo_name, dir_name, state))
         .collect();
     // Release the read connection so `degrade_workspace_to_archived`
     // (which takes a write conn) doesn't deadlock on SQLite.
@@ -1573,12 +1579,13 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
         String,
         WorkspaceState,
         crate::workspace_state::WorkspaceMode,
+        Option<String>,
     )> = connection
         .query_row(
-            "SELECT r.name, w.directory_name, w.state, COALESCE(w.mode, 'worktree')
+            "SELECT r.name, w.directory_name, w.state, COALESCE(w.mode, 'worktree'), w.worktree_parent_path
                  FROM workspaces w JOIN repos r ON r.id = w.repository_id WHERE w.id = ?1",
             [workspace_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         )
         .ok();
 
@@ -1643,10 +1650,14 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
     //   Local: it's the user's repo, never delete it.
     //   Chat: own scratch dir under <data_dir>/chats/<date>/<name>,
     //         safe to wipe.
-    if let Some((repo_name, directory_name, _state, mode)) = record {
+    if let Some((repo_name, directory_name, _state, mode, worktree_parent_path)) = record {
         match mode {
             crate::workspace_state::WorkspaceMode::Worktree => {
-                if let Ok(ws_dir) = crate::data_dir::workspace_dir(&repo_name, &directory_name) {
+                if let Ok(ws_dir) = super::helpers::worktree_workspace_dir(
+                    &repo_name,
+                    &directory_name,
+                    worktree_parent_path.as_deref(),
+                ) {
                     if ws_dir.is_dir() {
                         std::fs::remove_dir_all(&ws_dir).ok();
                     }

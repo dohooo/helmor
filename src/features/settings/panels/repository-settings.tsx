@@ -1,4 +1,11 @@
-import { Check, ChevronDown, GitBranch, LoaderCircle } from "lucide-react";
+import { open } from "@tauri-apps/plugin-dialog";
+import {
+	Check,
+	ChevronDown,
+	FolderOpen,
+	GitBranch,
+	LoaderCircle,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BranchPickerPopover } from "@/components/branch-picker";
 import { GithubBrandIcon, GitlabBrandIcon } from "@/components/brand-icon";
@@ -25,6 +32,7 @@ import {
 	type RepositoryCreateOption,
 	updateRepositoryDefaultBranch,
 	updateRepositoryRemote,
+	updateRepositoryWorkspaceRoot,
 } from "@/lib/api";
 import { I18nText, useI18n } from "@/lib/i18n";
 import { initialsFor } from "@/lib/initials";
@@ -249,6 +257,8 @@ export function RepositorySettingsPanel({
 				onChanged={onRepoSettingsChanged}
 			/>
 
+			<WorkspaceLocationSection repo={repo} onChanged={onRepoSettingsChanged} />
+
 			<div ref={scriptsAnchorRef}>
 				<ScriptsSection repoId={repo.id} workspaceId={workspaceId} />
 			</div>
@@ -256,6 +266,90 @@ export function RepositorySettingsPanel({
 
 			<DeleteRepoSection repo={repo} onDeleted={onRepoDeleted} />
 		</SettingsGroup>
+	);
+}
+
+function WorkspaceLocationSection({
+	repo,
+	onChanged,
+}: {
+	repo: RepositoryCreateOption;
+	onChanged: () => void;
+}) {
+	const { t } = useI18n();
+	const [saving, setSaving] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const currentPath = repo.workspaceRootPath?.trim() || null;
+
+	const save = useCallback(
+		(path: string | null) => {
+			setSaving(true);
+			setError(null);
+			void updateRepositoryWorkspaceRoot(repo.id, path)
+				.then(
+					() => {
+						onChanged();
+					},
+					(err: unknown) => {
+						setError(err instanceof Error ? err.message : String(err));
+						onChanged();
+					},
+				)
+				.finally(() => setSaving(false));
+		},
+		[repo.id, onChanged],
+	);
+
+	const handleBrowse = useCallback(() => {
+		void open({
+			directory: true,
+			multiple: false,
+			defaultPath: currentPath ?? undefined,
+		}).then((selected) => {
+			if (typeof selected === "string") {
+				save(selected);
+			}
+		});
+	}, [currentPath, save]);
+
+	return (
+		<div className="py-5">
+			<div className="text-ui font-medium leading-snug text-foreground">
+				<I18nText source="workspaceLocation" />
+			</div>
+			<div className="mt-1 text-small leading-snug text-muted-foreground">
+				<I18nText source="newWorkspacesCreatedUnderThisFolder" />
+			</div>
+			<div className="mt-3 flex flex-col gap-3">
+				<div className="rounded-md border border-app-border/40 bg-app-base/30 px-3 py-2 font-mono text-small text-app-foreground">
+					{currentPath ?? t("defaultHelmorWorkspaceFolder")}
+				</div>
+				<div className="flex flex-wrap items-center gap-2">
+					<Button
+						type="button"
+						size="sm"
+						variant="outline"
+						disabled={saving}
+						onClick={handleBrowse}
+					>
+						<FolderOpen className="size-3.5" strokeWidth={1.8} />
+						<span>
+							<I18nText source="browseFolder" />
+						</span>
+					</Button>
+					<Button
+						type="button"
+						size="sm"
+						variant="ghost"
+						disabled={saving || !currentPath}
+						onClick={() => save(null)}
+					>
+						<I18nText source="resetDefault" />
+					</Button>
+				</div>
+				{error && <p className="text-small text-red-400/90">{error}</p>}
+			</div>
+		</div>
 	);
 }
 
