@@ -14,6 +14,10 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2";
+import {
+	applyWindowsPathFromRegistry,
+	type WindowsPathEnvOptions,
+} from "../agent-path-env.js";
 import { errorDetails, logger } from "../logger.js";
 
 const execFileAsync = promisify(execFile);
@@ -211,6 +215,14 @@ export interface ProtocolServerHandle {
 	readonly url: string;
 }
 
+export function buildOpencodeEnv(
+	env: NodeJS.ProcessEnv,
+	options: WindowsPathEnvOptions = {},
+): NodeJS.ProcessEnv {
+	const effectiveEnv = applyWindowsPathFromRegistry({ ...env }, options);
+	return effectiveEnv;
+}
+
 /** One `<bin> serve` process + its SDK client. Memoized start. */
 export class OpencodeProtocolServer {
 	/** Resolved once per instance; release env override wins. */
@@ -239,7 +251,12 @@ export class OpencodeProtocolServer {
 	/** Idempotent. Restarts if the proxy in `env` changed. Only called at turn
 	 *  start, so it never interrupts an in-flight stream. */
 	start(env: NodeJS.ProcessEnv): Promise<ProtocolServerHandle> {
-		const proxyUrl = env.HTTPS_PROXY ?? env.HTTP_PROXY ?? env.ALL_PROXY ?? null;
+		const effectiveEnv = buildOpencodeEnv(env);
+		const proxyUrl =
+			effectiveEnv.HTTPS_PROXY ??
+			effectiveEnv.HTTP_PROXY ??
+			effectiveEnv.ALL_PROXY ??
+			null;
 		if (this.handle && proxyUrl !== this.proxyUrl) {
 			logger.info(`${this.config.id} proxy changed — restarting server`, {
 				proxy: proxyUrl ?? "(none)",
@@ -248,7 +265,7 @@ export class OpencodeProtocolServer {
 		}
 		if (this.handle) return this.handle;
 		this.proxyUrl = proxyUrl;
-		this.handle = this.spawnAndConnect(env).catch((err) => {
+		this.handle = this.spawnAndConnect(effectiveEnv).catch((err) => {
 			// Allow a later sendMessage to retry from scratch.
 			this.handle = null;
 			throw err;

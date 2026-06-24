@@ -17,6 +17,7 @@ import {
 	loadAddRepositoryDefaults,
 } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useSettings } from "@/lib/settings";
 import { describeUnknownError } from "@/lib/workspace-helpers";
 import { buildAgentLoginItems } from "./agent-login-state";
 import { IntroPreview } from "./components/intro-preview";
@@ -41,6 +42,7 @@ function queueWindowMode(run: () => Promise<unknown>): Promise<unknown> {
 }
 
 export function AppOnboarding({ onComplete }: AppOnboardingProps) {
+	const { settings } = useSettings();
 	const { t } = useI18n();
 	const [step, setStep] = useState<OnboardingStep>("intro");
 	const [loginItems, setLoginItems] = useState(() => buildAgentLoginItems());
@@ -183,7 +185,9 @@ export function AppOnboarding({ onComplete }: AppOnboardingProps) {
 			if (!selectedPath) {
 				return;
 			}
-			const response = await addRepositoryFromLocalPath(selectedPath);
+			const response = await addRepositoryFromLocalPath(selectedPath, {
+				allowNonGitDirectory: settings.allowNonGitDirectories,
+			});
 			rememberImportedRepository({
 				id: response.repositoryId,
 				name: basename(selectedPath),
@@ -197,7 +201,12 @@ export function AppOnboarding({ onComplete }: AppOnboardingProps) {
 		} finally {
 			setIsAddingLocalRepository(false);
 		}
-	}, [isAddingLocalRepository, rememberImportedRepository, t]);
+	}, [
+		isAddingLocalRepository,
+		rememberImportedRepository,
+		settings.allowNonGitDirectories,
+		t,
+	]);
 
 	const openCloneDialog = useCallback(() => {
 		setCloneDialogOpen(true);

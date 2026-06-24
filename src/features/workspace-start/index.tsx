@@ -298,6 +298,9 @@ export function WorkspaceStartPage({
 }: WorkspaceStartPageProps) {
 	const { t } = useI18n();
 	const [createBranchOpen, setCreateBranchOpen] = useState(false);
+	const selectedRepositoryIsPlainDirectory = Boolean(
+		selectedRepository && !selectedRepository.defaultBranch,
+	);
 	const [repoPickerOpen, setRepoPickerOpen] = useState(false);
 	const [repoTooltipOpen, setRepoTooltipOpen] = useState(false);
 	// Split the localized heading on the {repo} token so the repo picker keeps
@@ -763,6 +766,15 @@ export function WorkspaceStartPage({
 											) : null}
 										</DropdownMenuItem>
 									</>
+								) : selectedRepositoryIsPlainDirectory ? (
+									<DropdownMenuItem
+										onClick={() => onModeChange("local")}
+										className="gap-2 pr-3"
+										data-checked="true"
+									>
+										<Laptop className="size-3.5" strokeWidth={1.8} />
+										<span>Work locally</span>
+									</DropdownMenuItem>
 								) : (
 									<>
 										<DropdownMenuItem
@@ -800,7 +812,7 @@ export function WorkspaceStartPage({
 							</DropdownMenuContent>
 						</DropdownMenu>
 						{/* Branch intent picker. Worktree mode only. */}
-						{mode === "worktree" ? (
+						{mode === "worktree" && !selectedRepositoryIsPlainDirectory ? (
 							<DropdownMenu>
 								<Tooltip>
 									<TooltipTrigger asChild>
@@ -883,7 +895,7 @@ export function WorkspaceStartPage({
 							</DropdownMenu>
 						) : null}
 						{/* Branch picker: hidden in chat mode (no branches). */}
-						{mode !== "chat" ? (
+						{mode !== "chat" && !selectedRepositoryIsPlainDirectory ? (
 							<>
 								<Tooltip>
 									<BranchPickerPopover

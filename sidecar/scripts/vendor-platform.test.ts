@@ -86,16 +86,16 @@ describe("vendor platform boundary", () => {
 		expect(target.codexTriple).toBe("x86_64-pc-windows-msvc");
 		expect(target.opencodePkg).toBe("opencode-windows-x64");
 		expect(ghArchivePlan(target).archiveName).toBe(
-			"gh_2.94.0_windows_amd64.zip",
+			"gh_2.95.0_windows_amd64.zip",
 		);
 		expect(glabArchivePlan(target).archiveName).toBe(
-			"glab_1.102.0_windows_amd64.zip",
+			"glab_1.103.0_windows_amd64.zip",
 		);
 		expect(cloudflaredArchivePlan(target).archiveName).toBe(
-			"cloudflared-2026.6.0-windows-amd64.exe",
+			"cloudflared-2026.6.1-windows-amd64.exe",
 		);
 		expect(llamaArchivePlan(target).archiveName).toBe(
-			"llama-b9496-bin-win-cpu-x64.zip",
+			"llama-b9763-bin-win-cpu-x64.zip",
 		);
 		expect(() =>
 			resolveVendorTarget({
@@ -109,25 +109,25 @@ describe("vendor platform boundary", () => {
 	test("keeps current arm64 vendor archive plans unchanged", () => {
 		const target = targetInfoForArch("arm64");
 		expect(ghArchivePlan(target)).toEqual({
-			slug: "gh_2.94.0_macOS_arm64",
-			archiveName: "gh_2.94.0_macOS_arm64.zip",
-			url: "https://github.com/cli/cli/releases/download/v2.94.0/gh_2.94.0_macOS_arm64.zip",
+			slug: "gh_2.95.0_macOS_arm64",
+			archiveName: "gh_2.95.0_macOS_arm64.zip",
+			url: "https://github.com/cli/cli/releases/download/v2.95.0/gh_2.95.0_macOS_arm64.zip",
 			sha256:
-				"4f9bc1a5e77500737290a307b40b4c396a4d23729f55340f2a83f414410165a1",
+				"3677f9c27965825f9c7d50395473c134edaea4b484373ef6b25de653570a0489",
 		});
 		expect(glabArchivePlan(target)).toEqual({
-			slug: "glab_1.102.0_darwin_arm64",
-			archiveName: "glab_1.102.0_darwin_arm64.tar.gz",
-			url: "https://gitlab.com/gitlab-org/cli/-/releases/v1.102.0/downloads/glab_1.102.0_darwin_arm64.tar.gz",
+			slug: "glab_1.103.0_darwin_arm64",
+			archiveName: "glab_1.103.0_darwin_arm64.tar.gz",
+			url: "https://gitlab.com/gitlab-org/cli/-/releases/v1.103.0/downloads/glab_1.103.0_darwin_arm64.tar.gz",
 			sha256:
-				"24638bda18b6f3b1433ea9909f71df3787866ef525f34aaf2c4a25c53f6ff651",
+				"fea5a07e6b41dfd04585c1ba08deaf95cd7e9b320a86d056f65415e254732fe3",
 		});
 		expect(cloudflaredArchivePlan(target)).toEqual({
 			slug: "cloudflared-darwin-arm64",
-			archiveName: "cloudflared-2026.6.0-darwin-arm64.tgz",
-			url: "https://github.com/cloudflare/cloudflared/releases/download/2026.6.0/cloudflared-darwin-arm64.tgz",
+			archiveName: "cloudflared-2026.6.1-darwin-arm64.tgz",
+			url: "https://github.com/cloudflare/cloudflared/releases/download/2026.6.1/cloudflared-darwin-arm64.tgz",
 			sha256:
-				"88e17987423d3fd49167305f8bda14d83a80ab9f2097ff9c82b317a39e342119",
+				"f6d4c439c6c782b83264951d327989ce5e23373acc5942b872411601fedb020d",
 		});
 		expect(claudeCodeArchivePlan(target, "2.1.154")).toEqual({
 			slug: "claude-code-darwin-arm64-2.1.154",
@@ -151,22 +151,22 @@ describe("vendor platform boundary", () => {
 				"2103383d7562c1783cb66d63d31630ff90448d1ade90f8a187778d18c4b9ee5f",
 		});
 		expect(llamaArchivePlan(target)).toEqual({
-			slug: "llama-b9496-bin-macos-arm64",
-			archiveName: "llama-b9496-bin-macos-arm64.tar.gz",
-			url: "https://github.com/ggml-org/llama.cpp/releases/download/b9496/llama-b9496-bin-macos-arm64.tar.gz",
+			slug: "llama-b9763-bin-macos-arm64",
+			archiveName: "llama-b9763-bin-macos-arm64.tar.gz",
+			url: "https://github.com/ggml-org/llama.cpp/releases/download/b9763/llama-b9763-bin-macos-arm64.tar.gz",
 			sha256:
-				"f1eff7bb49590d80706b84e82e973a21f0bedb49560fbabfea2654756aa59dca",
+				"7706d1a7630218a3665d8c2d680bb54ab7f101896e9c45caaf5676ef4ce2e2d0",
 		});
 	});
 
 	test("keeps current x64 vendor archive plans unchanged", () => {
 		const target = targetInfoForArch("x64");
-		expect(ghArchivePlan(target).archiveName).toBe("gh_2.94.0_macOS_amd64.zip");
+		expect(ghArchivePlan(target).archiveName).toBe("gh_2.95.0_macOS_amd64.zip");
 		expect(glabArchivePlan(target).archiveName).toBe(
-			"glab_1.102.0_darwin_amd64.tar.gz",
+			"glab_1.103.0_darwin_amd64.tar.gz",
 		);
 		expect(cloudflaredArchivePlan(target).archiveName).toBe(
-			"cloudflared-2026.6.0-darwin-amd64.tgz",
+			"cloudflared-2026.6.1-darwin-amd64.tgz",
 		);
 		expect(claudeCodeArchivePlan(target, "2.1.154").archiveName).toBe(
 			"claude-code-darwin-x64-2.1.154.tgz",
@@ -178,7 +178,7 @@ describe("vendor platform boundary", () => {
 			"opencode-darwin-x64-1.16.2.tgz",
 		);
 		expect(llamaArchivePlan(target).archiveName).toBe(
-			"llama-b9496-bin-macos-x64.tar.gz",
+			"llama-b9763-bin-macos-x64.tar.gz",
 		);
 	});
 });

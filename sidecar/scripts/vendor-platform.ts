@@ -36,22 +36,22 @@ export interface ArchivePlan {
 	sha256: string;
 }
 
-export const GH_VERSION = "2.94.0";
+export const GH_VERSION = "2.95.0";
 export const GH_SHA256 = {
-	arm64: "4f9bc1a5e77500737290a307b40b4c396a4d23729f55340f2a83f414410165a1",
-	amd64: "733ee8fa49247d27cd94a6c7384455bdecaa82172a3bcfad63ac1ecc2867251d",
+	arm64: "3677f9c27965825f9c7d50395473c134edaea4b484373ef6b25de653570a0489",
+	amd64: "985707e9ac60c95ed51cddd808c338b481abe69fffa77e9d6547c3750045f77e",
 } as const;
 
-export const GLAB_VERSION = "1.102.0";
+export const GLAB_VERSION = "1.103.0";
 export const GLAB_SHA256 = {
-	arm64: "24638bda18b6f3b1433ea9909f71df3787866ef525f34aaf2c4a25c53f6ff651",
-	amd64: "5744d5fdd19d6cdd8bc35052fbafdc284c8c4c34142e1e1ffa10cc68aa904fae",
+	arm64: "fea5a07e6b41dfd04585c1ba08deaf95cd7e9b320a86d056f65415e254732fe3",
+	amd64: "c32fb1df724bc3cee2da828b24e19a3f518f4b4d382410984eb4a415498284da",
 } as const;
 
-export const CLOUDFLARED_VERSION = "2026.6.0";
+export const CLOUDFLARED_VERSION = "2026.6.1";
 export const CLOUDFLARED_SHA256 = {
-	arm64: "88e17987423d3fd49167305f8bda14d83a80ab9f2097ff9c82b317a39e342119",
-	amd64: "f6eaa91260ee327994331ac5ac2f7cec7925c4b6e15296b63fe0916992a06bdc",
+	arm64: "f6d4c439c6c782b83264951d327989ce5e23373acc5942b872411601fedb020d",
+	amd64: "d7a66b525fe76820da6e5406611b61e48b40de682368ac00454d9158f085be4b",
 } as const;
 
 export const CODEX_SHA256: Readonly<
@@ -68,6 +68,10 @@ export const CODEX_SHA256: Readonly<
 	"0.139.0": {
 		arm64: "ef8fc3766c3930b52ca95e54ee5486569e24327d71bc10e796fad3ace4920fab",
 		x64: "b70305a6b03113e48e73d37a1653123d30d20d1287ecebd1ecb75993c22ea78c",
+	},
+	"0.142.0": {
+		arm64: "775a564ea8a15a2959cd2bd5c5540ded68e35af2aa246f7d7e3e87b7a530aaae",
+		x64: "34a6e122ce6ce810f3f4dda43592d8f294f0722aa836809f2ed320b7b19b04a6",
 	},
 };
 
@@ -90,6 +94,10 @@ export const CLAUDE_CODE_SHA256: Readonly<
 		arm64: "f9fbce58073a202963872c78a69ade5dae679ff4318b7b1c0bccea8b42df1953",
 		x64: "cd44b111c2d767c8fc01e2af7a44f5ca54219c115e3533d0e7e2d19397e8cf9a",
 	},
+	"2.1.186": {
+		arm64: "80468642f9984690294d45bb1bdf9e7c6d99c57a1a0fdda42a306fb3b4ce83b4",
+		x64: "26b0043739a2fad6ad042f6aaabd8a878167e4bf7c7a7e2ab28af20cc9532570",
+	},
 };
 
 export const OPENCODE_SHA256: Readonly<
@@ -103,6 +111,10 @@ export const OPENCODE_SHA256: Readonly<
 		arm64: "773317f1225f8918d819dbaf3d1125a3b3cc585ab1e982b3fdd7881844a212ca",
 		x64: "16a79dc881910fe6769a074b458e2a809ba94547f437506be2daabdcad9e1317",
 	},
+	"1.17.9": {
+		arm64: "26dd73a727e3f1a4d090f07b61e5d2a5e43049f68fa71092ec529e77367dc9ad",
+		x64: "9e3370d2de5d424f5223d964b41a71905b6f2f19e6c68f9574dc373674ac2c53",
+	},
 };
 
 // Kimi Code CLI ships per-platform native binaries (Node SEA) as zip release
@@ -110,7 +122,7 @@ export const OPENCODE_SHA256: Readonly<
 // release URL rather than from node_modules. Bumping: pull each platform's
 // SHA256 from the release's `*.zip.sha256` sidecar (or the GitHub asset
 // `digest`) and wipe sidecar/.bundle-cache. Keyed `version → platformSlug`.
-export const KIMI_VERSION = "0.14.3";
+export const KIMI_VERSION = "0.19.1";
 export const KIMI_SHA256: Readonly<Record<string, Record<string, string>>> = {
 	"0.14.3": {
 		"darwin-arm64":
@@ -122,32 +134,43 @@ export const KIMI_SHA256: Readonly<Record<string, Record<string, string>>> = {
 		"win32-x64":
 			"d54aa0007039a03a3efb47abe6421401faf6818cf0593d81cec3fc4a3d554189",
 	},
+	"0.19.1": {
+		"darwin-arm64":
+			"8661832e04cd7dbfb81ed8dff02bb39c35cf38378cc8aedb0a912903b99bfae0",
+		"darwin-x64":
+			"eb967963d080b4744873517e9348f59ecc2db44eabc98c7a5fc3b3ed46a1e669",
+		"win32-arm64":
+			"28cf285e41c8131458accdcf85928dc7ae4e0b1bcfb3d721d038de878ab8fc48",
+		"win32-x64":
+			"ab494beb5f168bcdc0f66552ad4d6fef68566a655452262ac7800fef550319fe",
+	},
 };
 
-export const LLAMA_VERSION = "b9496";
+export const LLAMA_VERSION = "b9763";
 export const LLAMA_SHA256: Readonly<{ arm64: string; x64: string }> = {
-	arm64: "f1eff7bb49590d80706b84e82e973a21f0bedb49560fbabfea2654756aa59dca",
-	x64: "0b415c8d366eabe9ab69fe7d8e79f29b63cc1baa33714967ca8a0c123ae75797",
+	arm64: "7706d1a7630218a3665d8c2d680bb54ab7f101896e9c45caaf5676ef4ce2e2d0",
+	x64: "8ce3ef62326d1359958352e56c4926d57ef4345b87b44b16fba263a4f66ef4e3",
 };
 
-// Node runtime that runs the cursor worker. Node 24 to match Conductor's
-// bundled runtime. sqlite3 (the only native addon) is built as an N-API addon
-// (`napi_versions` in its package.json), so the prebuilt `.node` is ABI-stable
-// across Node majors and Bun — no Node↔addon ABI pinning needed; verified the
-// worker loads it on both Node 22 and 24. Bumping: pull SHA256 from
-// https://nodejs.org/dist/v$VER/SHASUMS256.txt and wipe sidecar/.bundle-cache.
-export const NODE_VERSION = "24.16.0";
+// Node runtime that runs the cursor worker. Pinned to the Node 24 line to match
+// Conductor's bundled runtime and to satisfy @cursor/sdk's engines floor
+// (>=22.13). Since @cursor/sdk 1.0.19 the SDK's SQLite store uses Node's
+// built-in `node:sqlite` (stable + unflagged on Node 24) instead of a native
+// sqlite3 addon, so there is no Node↔native-addon ABI concern. Bumping: pull
+// SHA256 from https://nodejs.org/dist/v$VER/SHASUMS256.txt and wipe
+// sidecar/.bundle-cache.
+export const NODE_VERSION = "24.17.0";
 export const NODE_SHA256: Readonly<{
 	darwin: Record<DarwinArch, string>;
 	windows: Record<DarwinArch, string>;
 }> = {
 	darwin: {
-		arm64: "39189dab4eeb15706c424af0ac08a3044c9e48f7db12a7d77f6b7aafc7dd5df6",
-		x64: "298b4c7b3cb80765c8703e42b90324a4ece3b6634947b89e769c3c980ab55185",
+		arm64: "4fc3266a3702eebc39cc37661cf4eeceeade307e242ab64e4d7ce7949197e11f",
+		x64: "80da552fe037290cb130e9dea590f5eeeb7aa450636f0c89ab41415511c1ec27",
 	},
 	windows: {
-		arm64: "14834611d4c6b3c06054e7007732b90474c16e0b32f395e05b55a571ef71c6d2",
-		x64: "edaca9bd58ec8e92037dac4e877d52f6b8f430b81c18b57e264b4e2fb111cd56",
+		arm64: "4957712f67fce55779cc794d9b4df9e0e802a18c841ad5a4e42f17be490e634d",
+		x64: "f2aa33b35b75aca5f3f7b85675a6f6423201053e9381911e64961f3bda2528ab",
 	},
 } as const;
 
