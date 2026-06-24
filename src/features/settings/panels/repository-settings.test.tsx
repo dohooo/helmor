@@ -211,5 +211,10 @@ describe("RepositorySettingsPanel branch prefix", () => {
 		expect(screen.queryByRole("button", { name: /^Connect$/i })).toBeNull();
 		expect(screen.queryByText("GitHub not connected")).toBeNull();
 		expect(screen.queryByText("Remote origin")).toBeNull();
+		expect(screen.queryByText("Scripts")).toBeNull();
+		// Only the every-new-chat "General preferences" applies; git/PR
+		// preference items are hidden.
+		expect(screen.getByText("General preferences")).toBeInTheDocument();
+		expect(screen.queryByText("Create PR preferences")).toBeNull();
 	});
 });

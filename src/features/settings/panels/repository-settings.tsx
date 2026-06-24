@@ -269,10 +269,12 @@ export function RepositorySettingsPanel({
 				</>
 			)}
 
-			<div ref={scriptsAnchorRef}>
-				<ScriptsSection repoId={repo.id} workspaceId={workspaceId} />
-			</div>
-			<RepositoryPreferencesSection repoId={repo.id} />
+			{!isNonGit && (
+				<div ref={scriptsAnchorRef}>
+					<ScriptsSection repoId={repo.id} workspaceId={workspaceId} />
+				</div>
+			)}
+			<RepositoryPreferencesSection repoId={repo.id} nonGit={isNonGit} />
 
 			<DeleteRepoSection repo={repo} onDeleted={onRepoDeleted} />
 		</SettingsGroup>
