@@ -121,8 +121,6 @@ export type WorkspaceRow = {
 	/** ISO-8601 timestamp — most recent user message across all sessions
 	 * in this workspace. Null when the workspace has no user messages yet. */
 	lastUserMessageAt?: string | null;
-	/** "manual" (legacy "ai_triage" rows are archived on upgrade). */
-	kind?: string;
 	/** Stacked PRs: `id` of the workspace one layer below this in a PR stack
 	 *  (its base). Absent/null for non-stacked rows. Drives sidebar stack
 	 *  grouping — the sidebar nests a stack's members under their tip. */
@@ -1885,8 +1883,21 @@ export async function moveLocalWorkspaceToWorktree(
  * - `local`: operates directly on the source repo's root path.
  * - `chat`: a scratch dir under `<data_dir>/chats/<YYYY-MM-DD>/<name>`
  *   with no git context. "Just Chat" mode from the start page.
+ * - `nonGit`: a user-picked plain directory that isn't a git repo.
+ *   Operates in place like `local` but has no git context like `chat`.
  */
-export type WorkspaceMode = "worktree" | "local" | "chat";
+export type WorkspaceMode = "worktree" | "local" | "chat" | "non_git";
+
+/** True for git-backed modes (branch / diff / inspector apply). `chat`
+ *  and `non_git` are the "no git context" modes — gate git-only UI
+ *  (3rd-column inspector, branch pickers) on this, not on `mode === "chat"`.
+ *  Unknown/loading mode defaults to git-backed (matches the prior
+ *  `!== "chat"` gate); only the explicit no-git modes return false. */
+export function workspaceModeHasGitContext(
+	mode: WorkspaceMode | null | undefined,
+): boolean {
+	return mode !== "chat" && mode !== "non_git";
+}
 
 /** `from_branch`: fork off the picked base. `use_branch`: attach to it. */
 export type WorkspaceBranchIntent = "from_branch" | "use_branch";
@@ -3124,11 +3135,9 @@ export async function completeWorkspaceSetup(
 
 export async function addRepositoryFromLocalPath(
 	folderPath: string,
-	options?: { allowNonGitDirectory?: boolean },
 ): Promise<AddRepositoryResponse> {
 	return invoke<AddRepositoryResponse>("add_repository_from_local_path", {
 		folderPath,
-		allowNonGitDirectory: options?.allowNonGitDirectory ?? false,
 	});
 }
 

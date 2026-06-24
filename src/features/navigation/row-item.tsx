@@ -299,11 +299,11 @@ export const WorkspaceRowItem = memo(
 		const customName = row.customName?.trim();
 		const displayTitle = customName
 			? customName
-			: row.mode === "local" || row.mode === "chat"
-				? row.title
-				: row.branch
+			: row.mode === "worktree"
+				? row.branch
 					? humanizeBranch(row.branch)
-					: row.title;
+					: row.title
+				: row.title;
 
 		const rowBody = (
 			<div

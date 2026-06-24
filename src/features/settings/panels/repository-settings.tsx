@@ -1,4 +1,10 @@
-import { Check, ChevronDown, GitBranch, LoaderCircle } from "lucide-react";
+import {
+	Check,
+	ChevronDown,
+	GitBranch,
+	Laptop,
+	LoaderCircle,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BranchPickerPopover } from "@/components/branch-picker";
 import { GithubBrandIcon, GitlabBrandIcon } from "@/components/brand-icon";
@@ -51,6 +57,9 @@ export function RepositorySettingsPanel({
 	// The bound gh/glab account login lives on the repo row now;
 	// no more global OAuth identity.
 	const { f } = useI18n();
+	// A repo added as a plain folder has no default branch — git config
+	// (remote, branch, prefix) and forge accounts don't apply to it.
+	const isNonGit = !repo.defaultBranch;
 	const githubLogin = repo.forgeLogin ?? null;
 	const [branches, setBranches] = useState<string[]>([]);
 	const [loading, setLoading] = useState(false);
@@ -146,113 +155,126 @@ export function RepositorySettingsPanel({
 		<SettingsGroup>
 			<ForgeAccountHeader repo={repo} workspaceId={workspaceId} />
 
-			<div className="py-5">
-				<div className="text-ui font-medium leading-snug text-foreground">
-					<I18nText source="remoteOrigin" />
-				</div>
-				<div className="mt-1 text-small leading-snug text-muted-foreground">
-					<I18nText source="whereShouldWePushPullCreate" />
-				</div>
-				<div className="mt-3">
-					<Popover
-						open={remoteOpen}
-						onOpenChange={(next: boolean) => {
-							setRemoteOpen(next);
-							if (next) fetchRemotes();
-						}}
-					>
-						<PopoverTrigger className="inline-flex cursor-interactive items-center gap-1 rounded-lg border border-app-border/40 bg-app-base/30 px-3 py-2 text-ui font-medium text-app-foreground transition-colors hover:border-app-border-strong">
-							<span className="truncate">{currentRemote}</span>
-							<ChevronDown
-								className="size-3 shrink-0 text-app-muted"
-								strokeWidth={2}
-							/>
-						</PopoverTrigger>
-						<PopoverContent align="start" className="w-[220px] p-0">
-							<Command className="rounded-lg! p-0.5">
-								<CommandList className="max-h-52">
-									<CommandEmpty>
-										<I18nText source="noRemotesFound" />
-									</CommandEmpty>
-									{remotes.map((remote) => (
-										<CommandItem
-											key={remote}
-											value={remote}
-											onSelect={() => handleRemoteSelect(remote)}
-											className="flex items-center justify-between gap-2 px-1.5 py-1 text-small"
-										>
-											<span
-												className={cn(
-													"truncate",
-													remote === currentRemote && "font-semibold",
-												)}
-											>
-												{remote}
-											</span>
-											{remote === currentRemote && (
-												<Check className="size-3.5 shrink-0" strokeWidth={2} />
-											)}
-										</CommandItem>
-									))}
-								</CommandList>
-							</Command>
-						</PopoverContent>
-					</Popover>
-					{remoteError && (
-						<p className="mt-2 text-small text-red-400/90">{remoteError}</p>
-					)}
-					{remoteNotice && (
-						<p className="mt-2 text-small text-amber-400/90">{remoteNotice}</p>
-					)}
-				</div>
-			</div>
+			{!isNonGit && (
+				<>
+					<div className="py-5">
+						<div className="text-ui font-medium leading-snug text-foreground">
+							<I18nText source="remoteOrigin" />
+						</div>
+						<div className="mt-1 text-small leading-snug text-muted-foreground">
+							<I18nText source="whereShouldWePushPullCreate" />
+						</div>
+						<div className="mt-3">
+							<Popover
+								open={remoteOpen}
+								onOpenChange={(next: boolean) => {
+									setRemoteOpen(next);
+									if (next) fetchRemotes();
+								}}
+							>
+								<PopoverTrigger className="inline-flex cursor-interactive items-center gap-1 rounded-lg border border-app-border/40 bg-app-base/30 px-3 py-2 text-ui font-medium text-app-foreground transition-colors hover:border-app-border-strong">
+									<span className="truncate">{currentRemote}</span>
+									<ChevronDown
+										className="size-3 shrink-0 text-app-muted"
+										strokeWidth={2}
+									/>
+								</PopoverTrigger>
+								<PopoverContent align="start" className="w-[220px] p-0">
+									<Command className="rounded-lg! p-0.5">
+										<CommandList className="max-h-52">
+											<CommandEmpty>
+												<I18nText source="noRemotesFound" />
+											</CommandEmpty>
+											{remotes.map((remote) => (
+												<CommandItem
+													key={remote}
+													value={remote}
+													onSelect={() => handleRemoteSelect(remote)}
+													className="flex items-center justify-between gap-2 px-1.5 py-1 text-small"
+												>
+													<span
+														className={cn(
+															"truncate",
+															remote === currentRemote && "font-semibold",
+														)}
+													>
+														{remote}
+													</span>
+													{remote === currentRemote && (
+														<Check
+															className="size-3.5 shrink-0"
+															strokeWidth={2}
+														/>
+													)}
+												</CommandItem>
+											))}
+										</CommandList>
+									</Command>
+								</PopoverContent>
+							</Popover>
+							{remoteError && (
+								<p className="mt-2 text-small text-red-400/90">{remoteError}</p>
+							)}
+							{remoteNotice && (
+								<p className="mt-2 text-small text-amber-400/90">
+									{remoteNotice}
+								</p>
+							)}
+						</div>
+					</div>
 
-			<div className="py-5">
-				<div className="text-ui font-medium leading-snug text-foreground">
-					<I18nText source="branchNewWorkspacesFrom" />
-				</div>
-				<div className="mt-1 text-small leading-snug text-muted-foreground">
-					<I18nText source="eachWorkspaceIsolatedCopyCodebase" />
-				</div>
-				<div className="mt-3">
-					<BranchPickerPopover
-						currentBranch={currentBranch}
-						branches={branches}
-						loading={loading}
-						onOpen={handleOpen}
-						onSelect={handleSelect}
-					>
-						<button
-							type="button"
-							className="inline-flex cursor-interactive items-center gap-1 rounded-lg border border-app-border/40 bg-app-base/30 px-3 py-2 text-ui font-medium text-app-foreground transition-colors hover:border-app-border-strong"
-						>
-							<GitBranch
-								className="size-3.5 text-app-foreground-soft"
-								strokeWidth={1.8}
-							/>
-							<span className="truncate">
-								{repo.remote ?? "origin"}/{currentBranch}
-							</span>
-							<ChevronDown
-								className="size-3 shrink-0 text-app-muted"
-								strokeWidth={2}
-							/>
-						</button>
-					</BranchPickerPopover>
-					{error && <p className="mt-2 text-small text-red-400/90">{error}</p>}
-				</div>
-			</div>
+					<div className="py-5">
+						<div className="text-ui font-medium leading-snug text-foreground">
+							<I18nText source="branchNewWorkspacesFrom" />
+						</div>
+						<div className="mt-1 text-small leading-snug text-muted-foreground">
+							<I18nText source="eachWorkspaceIsolatedCopyCodebase" />
+						</div>
+						<div className="mt-3">
+							<BranchPickerPopover
+								currentBranch={currentBranch}
+								branches={branches}
+								loading={loading}
+								onOpen={handleOpen}
+								onSelect={handleSelect}
+							>
+								<button
+									type="button"
+									className="inline-flex cursor-interactive items-center gap-1 rounded-lg border border-app-border/40 bg-app-base/30 px-3 py-2 text-ui font-medium text-app-foreground transition-colors hover:border-app-border-strong"
+								>
+									<GitBranch
+										className="size-3.5 text-app-foreground-soft"
+										strokeWidth={1.8}
+									/>
+									<span className="truncate">
+										{repo.remote ?? "origin"}/{currentBranch}
+									</span>
+									<ChevronDown
+										className="size-3 shrink-0 text-app-muted"
+										strokeWidth={2}
+									/>
+								</button>
+							</BranchPickerPopover>
+							{error && (
+								<p className="mt-2 text-small text-red-400/90">{error}</p>
+							)}
+						</div>
+					</div>
 
-			<BranchPrefixSection
-				repo={repo}
-				githubLogin={githubLogin}
-				onChanged={onRepoSettingsChanged}
-			/>
+					<BranchPrefixSection
+						repo={repo}
+						githubLogin={githubLogin}
+						onChanged={onRepoSettingsChanged}
+					/>
+				</>
+			)}
 
-			<div ref={scriptsAnchorRef}>
-				<ScriptsSection repoId={repo.id} workspaceId={workspaceId} />
-			</div>
-			<RepositoryPreferencesSection repoId={repo.id} />
+			{!isNonGit && (
+				<div ref={scriptsAnchorRef}>
+					<ScriptsSection repoId={repo.id} workspaceId={workspaceId} />
+				</div>
+			)}
+			<RepositoryPreferencesSection repoId={repo.id} nonGit={isNonGit} />
 
 			<DeleteRepoSection repo={repo} onDeleted={onRepoDeleted} />
 		</SettingsGroup>
@@ -313,6 +335,29 @@ function ForgeAccountHeader({
 			) ?? null
 		);
 	}, [accounts, effectiveLogin, repo.remoteUrl]);
+
+	// Non-git folder: no remote, no forge account — just say so instead of
+	// showing account info or a Connect CTA that can never apply.
+	if (!repo.defaultBranch) {
+		return (
+			<div className="flex items-center gap-3 py-5">
+				<div className="min-w-0 flex-1">
+					<div className="flex items-center gap-1.5 text-ui font-medium text-foreground">
+						<Laptop
+							className="size-3.5 text-muted-foreground"
+							strokeWidth={1.8}
+						/>
+						<span>
+							<I18nText source="nonGitRepository" />
+						</span>
+					</div>
+					<div className="mt-0.5 text-small text-muted-foreground">
+						<I18nText source="nonGitRepositoryDescription" />
+					</div>
+				</div>
+			</div>
+		);
+	}
 
 	if (!effectiveLogin) {
 		return (

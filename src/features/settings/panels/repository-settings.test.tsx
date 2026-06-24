@@ -195,4 +195,26 @@ describe("RepositorySettingsPanel branch prefix", () => {
 			screen.getByRole("button", { name: /^Connect$/i }),
 		).toBeInTheDocument();
 	});
+
+	it("shows a non-git notice and hides forge account + git config for a non-git repo", () => {
+		renderPanel(
+			repo({
+				defaultBranch: null,
+				remote: null,
+				forgeProvider: "unknown",
+				forgeLogin: null,
+			}),
+		);
+
+		expect(screen.getByText("Non-git repository")).toBeInTheDocument();
+		// No account/connect CTA, and no git-only config sections.
+		expect(screen.queryByRole("button", { name: /^Connect$/i })).toBeNull();
+		expect(screen.queryByText("GitHub not connected")).toBeNull();
+		expect(screen.queryByText("Remote origin")).toBeNull();
+		expect(screen.queryByText("Scripts")).toBeNull();
+		// Only the every-new-chat "General preferences" applies; git/PR
+		// preference items are hidden.
+		expect(screen.getByText("General preferences")).toBeInTheDocument();
+		expect(screen.queryByText("Create PR preferences")).toBeNull();
+	});
 });

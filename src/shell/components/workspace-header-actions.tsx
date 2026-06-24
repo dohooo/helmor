@@ -42,9 +42,9 @@ type Props = {
 	openPreferredEditorShortcut: string | null;
 	rightSidebarToggleShortcut: string | null;
 	inspectorCollapsed: boolean;
-	/** Chat-mode workspaces hide the editor/finder picker and the
-	 *  inspector toggle (the inspector is hidden entirely in chat). */
-	isChatMode?: boolean;
+	/** No-git workspaces (chat + non-git) hide the editor/finder picker
+	 *  and the inspector toggle (the inspector pane is hidden entirely). */
+	noGitContext?: boolean;
 	onOpenPreferredEditor: () => void;
 	onToggleInspector: () => void;
 	onPickEditor: (editorId: string) => void;
@@ -58,7 +58,7 @@ export function WorkspaceHeaderActions({
 	openPreferredEditorShortcut,
 	rightSidebarToggleShortcut,
 	inspectorCollapsed,
-	isChatMode = false,
+	noGitContext = false,
 	onOpenPreferredEditor,
 	onToggleInspector,
 	onPickEditor,
@@ -66,7 +66,7 @@ export function WorkspaceHeaderActions({
 }: Props) {
 	const { t, f } = useI18n();
 	const hasEditorActions =
-		!isChatMode && installedEditors.length > 0 && preferredEditor !== null;
+		!noGitContext && installedEditors.length > 0 && preferredEditor !== null;
 
 	return (
 		<div className="flex items-center gap-1">
@@ -234,9 +234,9 @@ export function WorkspaceHeaderActions({
 						</DropdownMenuContent>
 					</DropdownMenu>
 				) : null}
-				{/* Inspector toggle hidden in chat mode — the inspector pane
-				 *  itself is hidden, so the button has nothing to toggle. */}
-				{!isChatMode ? (
+				{/* Inspector toggle hidden for no-git workspaces — the inspector
+				 *  pane itself is hidden, so the button has nothing to toggle. */}
+				{!noGitContext ? (
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<Button

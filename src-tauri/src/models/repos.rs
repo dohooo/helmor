@@ -1520,21 +1520,13 @@ fn infer_repo_name_from_url(url: &str) -> Option<String> {
 }
 
 pub fn add_repository_from_local_path(folder_path: &str) -> Result<AddRepositoryResponse> {
-    add_repository_from_local_path_with_options(folder_path, false)
-}
-
-pub fn add_repository_from_local_path_with_options(
-    folder_path: &str,
-    allow_non_git_directory: bool,
-) -> Result<AddRepositoryResponse> {
-    // Fast duplicate check: only needs git root path, no network calls.
+    // Fast duplicate check: only needs the root path, no network calls.
+    // A git repo resolves to its toplevel; a plain folder falls back to
+    // itself (non-git directories are always supported).
     let resolved_git_root = resolve_git_root_path(folder_path);
     let is_git_repository = resolved_git_root.is_ok();
-    let normalized_root_path = if allow_non_git_directory {
-        resolved_git_root.or_else(|_| resolve_local_directory_path(folder_path))?
-    } else {
-        resolved_git_root?
-    };
+    let normalized_root_path =
+        resolved_git_root.or_else(|_| resolve_local_directory_path(folder_path))?;
 
     let last_clone_directory = Path::new(&normalized_root_path)
         .parent()
@@ -1559,10 +1551,10 @@ pub fn add_repository_from_local_path_with_options(
     }
 
     // Only do the expensive remote/branch resolution for truly new repos.
-    let resolved_repository = if allow_non_git_directory && !is_git_repository {
-        resolve_directory_from_local_path(folder_path)?
-    } else {
+    let resolved_repository = if is_git_repository {
         resolve_repository_from_local_path(folder_path)?
+    } else {
+        resolve_directory_from_local_path(folder_path)?
     };
 
     let repository_id = insert_repository(&resolved_repository)
