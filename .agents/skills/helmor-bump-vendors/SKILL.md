@@ -49,8 +49,13 @@ read the relevant section before editing.
 5. **Compute + fill SHA256** for class B/C. Use `scripts/npm_vendor_sha.sh` for B; see the reference
    for C. **Both `arm64` and `x64` are mandatory** (see Critical rules).
 6. **Run the verification gates** (below) — all must pass.
-7. **Report**: current → target per vendor, breaking-change assessment, gate results, exact files
-   touched. Leave commit / changeset / PR to the user unless asked.
+7. **Create release metadata.** Once the gates pass, invoke the **`/helmor-release`** skill to draft
+   the changeset (and an in-app announcement if the bump warrants one). Don't skip this — a vendor
+   bump is a user-visible change and needs a changeset. A routine bundled-agent refresh is typically
+   a `patch` changeset with **no** announcement; the body should name the user-visible change (which
+   agents moved to latest), not the internal cleanup (Pi removal, pin tidy-ups, doc fixes).
+8. **Report**: current → target per vendor, breaking-change assessment, gate results, exact files
+   touched, and the changeset created. Leave commit / PR to the user unless asked.
 
 ## Critical rules (the non-obvious parts that cause bad bumps)
 
