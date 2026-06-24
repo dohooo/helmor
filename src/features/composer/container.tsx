@@ -144,6 +144,24 @@ const BUILTIN_CLIENT_COMMANDS: readonly SlashCommandEntry[] = [
 	CLAUDE_WORKFLOWS_COMMAND,
 ];
 
+// SDK-reported commands to hide per provider. claude-code lists /compact among
+// its slash commands, but the Agent SDK exposes no programmatic compaction path
+// (unlike Codex's thread/compact/start and OpenCode's session.summarize), so
+// sending it is a no-op — suppress it instead of showing a dead command.
+const SUPPRESSED_AGENT_COMMANDS: Partial<
+	Record<AgentProvider, ReadonlySet<string>>
+> = {
+	claude: new Set(["compact"]),
+};
+
+// SDK-reported commands to hide for every provider. /clear is a REPL-only
+// command: sent through the SDK it's a literal no-op (the next turn still
+// resumes the same provider session, so context is never cleared). No provider
+// wires it up, so hide it everywhere rather than show a dead command.
+const GLOBALLY_SUPPRESSED_AGENT_COMMANDS: ReadonlySet<string> = new Set([
+	"clear",
+]);
+
 type WorkspaceComposerContainerProps = {
 	displayedWorkspaceId: string | null;
 	displayedSessionId: string | null;
@@ -804,10 +822,14 @@ export const WorkspaceComposerContainer = memo(
 			const builtinNames = new Set(
 				builtinCommands.map((command) => command.name),
 			);
+			const suppressed = SUPPRESSED_AGENT_COMMANDS[slashProvider];
 			return [
 				...builtinCommands,
 				...agentSlashCommands.filter(
-					(command) => !builtinNames.has(command.name),
+					(command) =>
+						!builtinNames.has(command.name) &&
+						!suppressed?.has(command.name) &&
+						!GLOBALLY_SUPPRESSED_AGENT_COMMANDS.has(command.name),
 				),
 			];
 		}, [agentSlashCommands, slashProvider, t]);
