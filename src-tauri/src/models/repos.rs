@@ -1398,7 +1398,7 @@ pub fn resolve_repository_from_local_path(folder_path: &str) -> Result<ResolvedR
         .with_context(|| {
             format!(
                 "Unable to resolve a default branch for repository {} \
-                 (an empty repository with no commits cannot be a workspace base)",
+                 (no remote HEAD and no local branch could be determined)",
                 normalized_root.display()
             )
         })?;

@@ -41,8 +41,21 @@ export function buildCommitButtonPrompt(
 	const remoteName =
 		remote && remote.trim().length > 0 ? remote.trim() : "origin";
 	switch (mode) {
-		case "commit-and-push":
+		case "commit-and-push": {
 			// Pure git — no forge involved.
+			const hasRemote = Boolean(remote && remote.trim().length > 0);
+			// Local-only repo (no remote): commit, nothing to push to.
+			if (!hasRemote) {
+				return `Commit all uncommitted work in this workspace.
+
+Do the following, in order:
+1. Run \`git status\` and \`git diff\` to survey what's changed.
+2. Stage everything that should ship with \`git add\`.
+3. Commit with a concise, Conventional-Commits-style message (\`feat:\`, \`fix:\`, \`refactor:\`, etc.) summarizing the change.
+4. Report the resulting commit SHA.
+
+This repository has no remote, so do NOT push. Don't stop to ask for confirmation — execute each step automatically. If a pre-commit hook fails, report the failure and stop.`;
+			}
 			return `Commit and push all uncommitted work in this workspace.
 
 Do the following, in order:
@@ -53,6 +66,7 @@ Do the following, in order:
 5. Report the resulting commit SHA and pushed ref.
 
 Don't stop to ask for confirmation — execute each step automatically. If a pre-commit / pre-push hook fails, report the failure and stop without force-pushing.`;
+		}
 
 		case "open-pr": {
 			const dialect = forgePromptDialect(forge);

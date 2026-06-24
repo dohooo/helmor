@@ -74,6 +74,7 @@ function loadingActionLabel(label: string): string {
 			return "pulling";
 		case "resolve":
 			return "resolving";
+		case "commit":
 		case "commitPush":
 			return "committing";
 		default:
@@ -638,7 +639,8 @@ function buildGitRows(
 					}),
 					status: "pending",
 					action: {
-						label: "commitPush",
+						// No remote → commit only (the prompt skips push too).
+						label: workspaceRemote ? "commitPush" : "commit",
 						kind: "commit",
 						mode: "commit-and-push",
 					},

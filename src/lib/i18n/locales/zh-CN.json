@@ -266,6 +266,7 @@
 	"commitMergeabilityCalculating": "仍在计算可合并性，请稍候重试。",
 	"commitPromptNotDelivered": "提示词未送达",
 	"commitProviderNotConnected": "{provider} 未连接",
+	"commit": "提交",
 	"commitPush": "提交并推送",
 	"commitPushManually": "手动提交并推送",
 	"commitReconnectAccountTryAgain": "请重新连接你的 {provider} 账户后重试。",

@@ -266,6 +266,7 @@
 	"commitMergeabilityCalculating": "Mergeability is still being calculated. Please wait and try again.",
 	"commitPromptNotDelivered": "Prompt not delivered",
 	"commitProviderNotConnected": "{provider} not connected",
+	"commit": "Commit",
 	"commitPush": "Commit and push",
 	"commitPushManually": "Commit and push manually",
 	"commitReconnectAccountTryAgain": "Reconnect your {provider} account and try again.",
