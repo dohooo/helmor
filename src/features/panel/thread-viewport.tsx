@@ -67,6 +67,34 @@ export function resolveConversationRowHeight({
 	return measuredHeight ?? estimatedHeight;
 }
 
+// A row whose measured height changed only shifts the VISIBLE content when its
+// top sits above the reading position (the viewport top), so only those rows
+// need a scrollTop compensation. The streaming tail is never compensated — its
+// growth is a pure bottom-extension that useStickToBottom already follows.
+// Returns the pixels to add to the pending scroll adjustment (0 when none is
+// due). The single source of truth shared by the inline (handleHeightChange) and
+// batched (flush) commit paths, so the rule can never drift between them.
+function aboveViewportCompensationDelta({
+	rowTop,
+	headerHeight,
+	isStreaming,
+	previousHeight,
+	nextHeight,
+	scrollTop,
+}: {
+	rowTop: number;
+	headerHeight: number;
+	isStreaming: boolean;
+	previousHeight: number;
+	nextHeight: number;
+	scrollTop: number;
+}): number {
+	if (isStreaming || rowTop + headerHeight >= scrollTop) {
+		return 0;
+	}
+	return nextHeight - previousHeight;
+}
+
 // Floor for the Tauri stable-bottom tail window. Kept small on purpose: near the
 // bottom, visibleRows mounts this tail UNIONED with the regular scroll window, so
 // a giant row sitting above the window stays unmounted and the switch commit only
@@ -629,6 +657,10 @@ function ProgressiveConversationViewport({
 	const isUserScrollingRef = useRef(false);
 	const scrollIdleTimerRef = useRef<number | null>(null);
 	const deferredMeasuredHeightsRef = useRef<Record<string, number>>({});
+	// Rows whose deferred height change came from an expand/collapse toggle: the
+	// toggle's own click anchor already offset the scroller, so the flush must
+	// NOT compensate them again (mirrors the inline `!anchoredToggle` guard).
+	const deferredAnchoredKeysRef = useRef<Set<string>>(new Set());
 	const hasUserScrolledRef = useRef(false);
 
 	// DOM-driven sync for the streaming indicator pseudo row. See the effect
@@ -661,6 +693,7 @@ function ProgressiveConversationViewport({
 		isUserScrollingRef.current = false;
 		initialSettleAtRef.current = performance.now();
 		deferredMeasuredHeightsRef.current = {};
+		deferredAnchoredKeysRef.current = new Set();
 		// A mark from the previous session must not suppress a legit
 		// compensation here (message ids could collide across panes).
 		resetAnchoredToggle();
@@ -683,13 +716,46 @@ function ProgressiveConversationViewport({
 			return;
 		}
 		deferredMeasuredHeightsRef.current = {};
+		const anchoredKeys = deferredAnchoredKeysRef.current;
+		deferredAnchoredKeysRef.current = new Set();
+		// Deferred corrections include rows ABOVE the reading position. Committing
+		// their estimate→measured delta shifts every row below, so queue a scroll
+		// compensation (via the shared aboveViewportCompensationDelta rule) that
+		// holds the visible content when the flush lands — without it the position
+		// drifts the instant a scroll-up settles. Anchored toggles are skipped:
+		// their click anchor already moved the scroller.
+		if (scrollParent) {
+			const localHeaderHeight = Header ? PROGRESSIVE_VIEWPORT_HEADER_HEIGHT : 0;
+			let delta = 0;
+			for (const [rowKey, nextHeight] of entries) {
+				if (anchoredKeys.has(rowKey)) {
+					continue;
+				}
+				const row = rowsRef.current.find((entry) => entry.key === rowKey);
+				if (row?.kind !== "message") {
+					continue;
+				}
+				const previousHeight = measuredHeightsRef.current[rowKey] ?? row.height;
+				delta += aboveViewportCompensationDelta({
+					rowTop: row.top,
+					headerHeight: localHeaderHeight,
+					isStreaming: row.message.streaming === true,
+					previousHeight,
+					nextHeight,
+					scrollTop: scrollParent.scrollTop,
+				});
+			}
+			if (delta !== 0) {
+				pendingScrollAdjustmentRef.current += delta;
+			}
+		}
 		startTransition(() => {
 			setMeasuredHeights((current) => ({
 				...current,
 				...Object.fromEntries(entries),
 			}));
 		});
-	}, []);
+	}, [Header, scrollParent]);
 
 	useEffect(() => {
 		if (!scrollParent) {
@@ -723,6 +789,13 @@ function ProgressiveConversationViewport({
 					viewportHeight: nextViewportHeight,
 				};
 			});
+			// Commit measured-height corrections WITHIN the scroll frame instead of
+			// deferring every one to the 120ms post-stop idle. react-virtuoso and
+			// TanStack Virtual measure synchronously as rows render; committing per
+			// frame lets rows reach their real height while the motion still masks
+			// the reflow, so when the scroll stops there is nothing left to "pop".
+			// The idle flush in scheduleCommit stays as the final catch.
+			flushDeferredMeasuredHeights();
 		};
 
 		const scheduleCommit = () => {
@@ -1005,9 +1078,14 @@ function ProgressiveConversationViewport({
 		if (pendingScrollAdjustmentRef.current === 0) {
 			return;
 		}
-		if (!hasUserScrolledRef.current) {
-			scrollParent.scrollTop += pendingScrollAdjustmentRef.current;
-		}
+		// Apply regardless of hasUserScrolled: the queued delta is exactly the
+		// height correction of rows ABOVE the reading position (historical async
+		// content, or the deferred estimate→measured flush after a scroll-up
+		// settles), so adding it to scrollTop holds the visible content in place.
+		// Gating this on !hasUserScrolled WAS the scroll-up drift — once the user
+		// had scrolled, corrections committed uncompensated and the content jumped
+		// the instant the scroll ended.
+		scrollParent.scrollTop += pendingScrollAdjustmentRef.current;
 		pendingScrollAdjustmentRef.current = 0;
 		// visibleRows (not rows): the expansion wave widens the window without
 		// touching the row model, and the pin must land in that very commit.
@@ -1041,6 +1119,9 @@ function ProgressiveConversationViewport({
 				isShellResizing()
 			) {
 				deferredMeasuredHeightsRef.current[rowKey] = roundedHeight;
+				if (anchoredToggle) {
+					deferredAnchoredKeysRef.current.add(rowKey);
+				}
 				return;
 			}
 
@@ -1058,13 +1139,15 @@ function ProgressiveConversationViewport({
 			// scrollTop. Skip the adjust for the streaming row; keep it for
 			// historical rows (image loads, code highlighting, late font
 			// swaps) where it is genuinely needed.
-			if (
-				!isStreamingRow &&
-				!anchoredToggle &&
-				scrollParent &&
-				row.top + headerHeight < scrollParent.scrollTop
-			) {
-				pendingScrollAdjustmentRef.current += roundedHeight - previousHeight;
+			if (!anchoredToggle && scrollParent) {
+				pendingScrollAdjustmentRef.current += aboveViewportCompensationDelta({
+					rowTop: row.top,
+					headerHeight,
+					isStreaming: isStreamingRow,
+					previousHeight,
+					nextHeight: roundedHeight,
+					scrollTop: scrollParent.scrollTop,
+				});
 			}
 
 			const commit = () =>
