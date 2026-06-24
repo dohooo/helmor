@@ -87,6 +87,10 @@ const DEAD_COLUMNS: &[(&str, &str)] = &[
 /// Columns whose drop must be preceded by an index drop. Listed
 /// separately so the table above stays a single shape.
 const DEAD_INDEXED_COLUMNS: &[(&str, &str, &str)] = &[
+    // Retired with Smart Triage; `mode` ('chat'/'non_git') is now the single
+    // source of truth for no-git workspace categories. Indexed, so the index
+    // must be dropped before the column.
+    ("workspaces", "kind", "idx_workspaces_kind"),
     (
         "session_messages",
         "cancelled_at",
@@ -117,9 +121,9 @@ const DEAD_TABLES: &[(&str, &[&str])] = &[
     // that ran the intermediate code so they don't carry an orphan table.
     ("terminal_history", &["idx_terminal_history_workspace"]),
     // Smart Triage ("ai-tasks") was removed. Its two owned tables are dropped
-    // from legacy DBs; the workspaces.kind / triage_source_* and
-    // session_messages.is_ai_priming columns are intentionally retained as
-    // inert because their archive/import plumbing is shared.
+    // from legacy DBs, and `workspaces.kind` is dropped (see DEAD_COLUMNS).
+    // The triage_source_* and session_messages.is_ai_priming columns are
+    // retained inert because their archive/import plumbing is shared.
     (
         "triage_candidate",
         &["idx_triage_candidate_open", "idx_triage_candidate_source"],
@@ -835,19 +839,9 @@ fn run_migrations(connection: &Connection) -> Result<()> {
     materialize_review_pr_model_defaults(connection)?;
 
     // Smart Triage columns (idempotent ALTERs for pre-triage upgrades).
+    // `kind` was dropped after Smart Triage removal (see DEAD_COLUMNS);
+    // the rest are retained inert because archive/import plumbing is shared.
     if has_table(connection, "workspaces") {
-        // Match the fresh schema so a manual INSERT (which omits `kind`)
-        // resolves to 'manual' on upgraded and fresh DBs alike.
-        add_column_if_missing(
-            connection,
-            "workspaces",
-            "kind",
-            "TEXT NOT NULL DEFAULT 'manual'",
-        )?;
-        // Backfill rows the earlier nullable-`TEXT` migration left as NULL.
-        connection
-            .execute_batch("UPDATE workspaces SET kind = 'manual' WHERE kind IS NULL")
-            .context("Failed to backfill workspaces.kind NULLs")?;
         add_column_if_missing(
             connection,
             "workspaces",
@@ -859,10 +853,6 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         add_column_if_missing(connection, "workspaces", "triage_source_ref", "TEXT")?;
         // User-set display name. NULL = fall back to the auto-derived title.
         add_column_if_missing(connection, "workspaces", "custom_name", "TEXT")?;
-        // Index goes after the ALTER above — else old DBs would index a missing column.
-        connection
-            .execute_batch("CREATE INDEX IF NOT EXISTS idx_workspaces_kind ON workspaces(kind)")
-            .context("Failed to create idx_workspaces_kind")?;
         connection
             .execute_batch(
                 "CREATE INDEX IF NOT EXISTS idx_workspaces_triage_source
@@ -1118,7 +1108,6 @@ CREATE TABLE IF NOT EXISTS workspaces (
     port_count INTEGER,
     branch_intent TEXT DEFAULT 'from_branch',
     active_run_action_id TEXT,
-    kind TEXT NOT NULL DEFAULT 'manual',
     ai_priming_consumed INTEGER NOT NULL DEFAULT 0,
     triage_source_type TEXT,
     triage_source_ref TEXT,
@@ -1806,8 +1795,10 @@ mod tests {
                     linked_workspace_ids TEXT,
                     notes TEXT,
                     pr_description TEXT,
-                    secondary_directory_name TEXT
+                    secondary_directory_name TEXT,
+                    kind TEXT NOT NULL DEFAULT 'manual'
                 );
+                CREATE INDEX idx_workspaces_kind ON workspaces(kind);
                 CREATE TABLE sessions (
                     id TEXT PRIMARY KEY,
                     effort_level TEXT,

@@ -249,23 +249,6 @@ pub fn run() {
                 Err(e) => tracing::warn!("Failed to clean up initializing orphans: {e:#}"),
             }
 
-            // One-time cleanup for the retired Smart Triage feature: archive
-            // the auto-generated `ai_triage` workspaces the user never started
-            // (priming unconsumed AND no real message). Without this, those
-            // orphaned "proposed task" worktrees resurface as ordinary sidebar
-            // rows now that the dedicated triage group is gone. Full reversible
-            // archive (chat history preserved in the archive list). Runs inline
-            // after the orphan reconcilers above so a dir-missing row is already
-            // degraded; idempotent and a no-op for users who never used triage.
-            match workspace::workspaces::archive_unstarted_triage_workspaces() {
-                Ok(0) => {}
-                Ok(n) => tracing::info!(
-                    count = n,
-                    "Archived unstarted AI-triage workspaces (Smart Triage removed)"
-                ),
-                Err(e) => tracing::warn!("Failed to archive unstarted triage workspaces: {e:#}"),
-            }
-
             // Runtime registry crash-recovery sweep. Probes every
             // still-open row from a prior launch via `kill(pid, 0)`,
             // stamps dead rows ended, and logs the "maybe alive"

@@ -77,9 +77,6 @@ pub struct WorkspaceSidebarRow {
     pub created_at: String,
     pub updated_at: String,
     pub last_user_message_at: Option<String>,
-    /// "manual" (legacy "ai_triage" rows are archived on upgrade). Retained
-    /// inert after Smart Triage removal.
-    pub kind: String,
     /// Stacked PRs: `id` of the workspace one layer below this in a PR stack
     /// (its base). `None` for non-stacked rows. Drives sidebar stack grouping.
     pub parent_workspace_id: Option<String>,
@@ -1313,7 +1310,6 @@ pub fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
         last_user_message_at: record.last_user_message_at,
         parent_workspace_id: record.parent_workspace_id,
         custom_name: record.custom_name,
-        kind: record.kind,
     }
 }
 
@@ -1501,59 +1497,6 @@ pub fn purge_orphaned_workspaces() -> Result<usize> {
     Ok(count)
 }
 
-/// One-time reconcile for the retired Smart Triage feature: archive the
-/// auto-generated `ai_triage` workspaces the user never started, so their
-/// orphaned "proposed task" worktrees don't resurface as ordinary sidebar
-/// rows now that the dedicated triage group is gone.
-///
-/// "Never started" mirrors the old triage reaper's touched-guard: the priming
-/// message is still unconsumed AND no real (non-priming) message was ever
-/// sent. A workspace the user actually opened and messaged is left as a normal
-/// workspace. Each match goes through the full reversible archive
-/// ([`archive_workspace_impl`]) — worktree torn down, branch removed, chat
-/// history preserved in the archive list — exactly as dismissing a proposal
-/// did when triage was live.
-///
-/// Idempotent: archived rows are excluded, so repeat runs are no-ops.
-/// Best-effort per workspace; one failure is logged and never aborts the rest.
-pub fn archive_unstarted_triage_workspaces() -> Result<usize> {
-    let ids: Vec<String> = {
-        let connection = db::read_conn()?;
-        let mut stmt = connection.prepare(
-            "SELECT w.id
-             FROM workspaces w
-             WHERE w.kind = 'ai_triage'
-               AND w.state != 'archived'
-               AND COALESCE(w.ai_priming_consumed, 0) = 0
-               AND NOT EXISTS (
-                   SELECT 1
-                   FROM sessions s
-                   JOIN session_messages sm ON sm.session_id = s.id
-                   WHERE s.workspace_id = w.id
-                     AND COALESCE(sm.is_ai_priming, 0) = 0
-               )",
-        )?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        // `stmt` + the read connection drop at the end of this block, before
-        // the archive path below takes a write connection — SQLite would
-        // otherwise deadlock on the open read.
-        rows.filter_map(|r| r.ok()).collect()
-    };
-
-    let mut archived = 0usize;
-    for id in &ids {
-        match archive_workspace_impl(id) {
-            Ok(_) => archived += 1,
-            Err(error) => tracing::warn!(
-                workspace_id = %id,
-                error = %format!("{error:#}"),
-                "Triage cleanup: failed to archive unstarted workspace"
-            ),
-        }
-    }
-    Ok(archived)
-}
-
 /// Flip a single workspace row from its current operational state to
 /// `archived`, without touching sessions / session_messages. Used by
 /// [`purge_orphaned_workspaces`] to reconcile workspaces whose worktree
@@ -1709,7 +1652,8 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
                     }
                 }
             }
-            crate::workspace_state::WorkspaceMode::Local => {
+            crate::workspace_state::WorkspaceMode::Local
+            | crate::workspace_state::WorkspaceMode::NonGit => {
                 // User-owned dir — never touch.
             }
         }

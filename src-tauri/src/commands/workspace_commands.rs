@@ -49,8 +49,11 @@ pub async fn prepare_workspace_from_repo(
                     seed_session_id.as_deref(),
                 )
             }
-            crate::workspace_state::WorkspaceMode::Local => {
-                // Local mode ignores `branch_intent` (no separate worktree).
+            crate::workspace_state::WorkspaceMode::Local
+            | crate::workspace_state::WorkspaceMode::NonGit => {
+                // Local/non-git modes ignore `branch_intent` (no separate
+                // worktree). `prepare_local_workspace_impl` reads the repo
+                // to decide whether the stored mode is Local or NonGit.
                 workspaces::prepare_local_workspace_impl(
                     &repo_id,
                     source_branch.as_deref(),

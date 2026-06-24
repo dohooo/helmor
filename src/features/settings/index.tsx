@@ -399,17 +399,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 										/>
 									</SettingsRow>
 									<SettingsRow
-										title="nonGitDirectories"
-										description="allowOpenProjectAttachNonGitFolders"
-									>
-										<Switch
-											checked={settings.allowNonGitDirectories}
-											onCheckedChange={(checked) =>
-												updateSettings({ allowNonGitDirectories: checked })
-											}
-										/>
-									</SettingsRow>
-									<SettingsRow
 										title="followUpBehavior"
 										description={
 											<>

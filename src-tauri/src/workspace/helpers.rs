@@ -26,9 +26,9 @@ pub fn workspace_path(record: &WorkspaceRecord) -> Result<PathBuf> {
         WorkspaceMode::Worktree => {
             crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)
         }
-        WorkspaceMode::Local => non_empty(&record.root_path)
+        WorkspaceMode::Local | WorkspaceMode::NonGit => non_empty(&record.root_path)
             .map(PathBuf::from)
-            .with_context(|| format!("Workspace {} (local) is missing repo root_path", record.id)),
+            .with_context(|| format!("Workspace {} is missing repo root_path", record.id)),
         WorkspaceMode::Chat => {
             let dir_name = record.directory_name.trim();
             if dir_name.is_empty() {
@@ -927,7 +927,6 @@ mod tests {
             last_user_message_at: None,
             setup_completed_at: None,
             active_run_action_id: None,
-            kind: "manual".to_string(),
             ai_priming_consumed: false,
             parent_workspace_id: None,
             custom_name: None,
@@ -958,14 +957,20 @@ mod tests {
     }
 
     #[test]
+    fn workspace_path_for_non_git_uses_repo_root() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path().join("notes");
+        let record = fixture_record(WorkspaceMode::NonGit, Some(root.display().to_string()));
+        let path = workspace_path(&record).unwrap();
+        assert_eq!(path, root);
+    }
+
+    #[test]
     fn workspace_path_for_local_errors_without_root_path() {
         let record = fixture_record(WorkspaceMode::Local, None);
         let err = workspace_path(&record).unwrap_err();
         let msg = format!("{err:#}");
-        assert!(
-            msg.contains("local") && msg.contains("root_path"),
-            "unexpected error: {msg}"
-        );
+        assert!(msg.contains("root_path"), "unexpected error: {msg}");
     }
 
     #[test]
