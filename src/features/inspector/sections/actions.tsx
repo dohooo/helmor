@@ -643,35 +643,39 @@ function buildGitRows(
 						mode: "commit-and-push",
 					},
 				},
-		gitStatus.pushStatus === "unpublished"
-			? {
-					label: translateSource("branchNotPublishedRemote"),
-					status: "pending",
-					action: {
-						label: "push",
-						kind: "commit",
-						mode: "push",
-					},
-				}
-			: (gitStatus.aheadOfRemoteCount ?? 0) > 0
-				? {
-						label: formatSource("inspectorCommitsAheadOf", {
-							count: gitStatus.aheadOfRemoteCount,
-							commitLabel:
-								gitStatus.aheadOfRemoteCount === 1 ? "commit" : "commits",
-							target: gitStatus.remoteTrackingRef ?? "upstream",
-						}),
-						status: "pending",
-						action: {
-							label: "push",
-							kind: "commit",
-							mode: "push",
-						},
-					}
-				: {
-						label: translateSource("branchFullyPushed"),
-						status: "success",
-					},
+		...(workspaceRemote
+			? ([
+					gitStatus.pushStatus === "unpublished"
+						? {
+								label: translateSource("branchNotPublishedRemote"),
+								status: "pending",
+								action: {
+									label: "push",
+									kind: "commit",
+									mode: "push",
+								},
+							}
+						: (gitStatus.aheadOfRemoteCount ?? 0) > 0
+							? {
+									label: formatSource("inspectorCommitsAheadOf", {
+										count: gitStatus.aheadOfRemoteCount,
+										commitLabel:
+											gitStatus.aheadOfRemoteCount === 1 ? "commit" : "commits",
+										target: gitStatus.remoteTrackingRef ?? "upstream",
+									}),
+									status: "pending",
+									action: {
+										label: "push",
+										kind: "commit",
+										mode: "push",
+									},
+								}
+							: {
+									label: translateSource("branchFullyPushed"),
+									status: "success",
+								},
+				] as GitStatusItem[])
+			: []),
 		conflictCount > 0
 			? {
 					label: translateSource("mergeConflictsDetected"),

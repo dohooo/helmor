@@ -145,6 +145,9 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	newSessionShortcut,
 }: WorkspacePanelHeaderProps) {
 	const { t, f } = useI18n();
+	// Local-only repos (no remote) have no target branch / PR / stacked-PR
+	// concept — show only the current branch name, no `→ target` picker.
+	const hasRemote = Boolean(workspace?.remote);
 	const branchTone = getWorkspaceBranchTone({
 		workspaceState: workspace?.state,
 		status: workspace?.status,
@@ -370,7 +373,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 									</>
 								)}
 							</span>
-							{workspace?.parentWorkspaceId ? (
+							{hasRemote && workspace?.parentWorkspaceId ? (
 								<StackParentChip
 									parentWorkspaceId={workspace.parentWorkspaceId}
 									fallbackBranch={workspace.intendedTargetBranch}
@@ -378,7 +381,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 									archived={workspace.state === "archived"}
 									onSelectWorkspace={onSelectWorkspace}
 								/>
-							) : workspace?.intendedTargetBranch ? (
+							) : hasRemote && workspace?.intendedTargetBranch ? (
 								<>
 									<ArrowRight
 										className="relative top-px size-3 shrink-0 self-center text-muted-foreground"
