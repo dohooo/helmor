@@ -7,7 +7,6 @@
 // the `useAppShellState` result (`s` + its `sel` / `data` / `chrome` / `panels`
 // groups).
 import { useMemo } from "react";
-import { ReproInReviewEmptyButton } from "@/features/dev/repro-in-review-empty";
 import type { SettingsSection } from "@/features/settings";
 import { workspaceModeHasGitContext } from "@/lib/api";
 import { useAppShellState } from "@/shell/hooks/use-app-shell-state";
@@ -90,7 +89,7 @@ export function AppShell({
 		],
 	);
 
-	const appShellLayout = (
+	return (
 		<AppShellLayout
 			providerStack={{
 				selectionStore: sel.selectionStore,
@@ -208,18 +207,5 @@ export function AppShell({
 				mergeConfirmDialogNode: data.mergeConfirmDialogNode,
 			}}
 		/>
-	);
-
-	return (
-		<>
-			{appShellLayout}
-			{import.meta.env.DEV && import.meta.env.MODE !== "test" ? (
-				<ReproInReviewEmptyButton
-					workspaceId={selectedWorkspaceId}
-					sessionId={s.selectedSessionId}
-					onSelectSession={sel.handleSelectSession}
-				/>
-			) : null}
-		</>
 	);
 }
