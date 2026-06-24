@@ -62,6 +62,7 @@ import {
 	updateIntendedTargetBranch,
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
+	workspaceModeHasGitContext,
 } from "@/lib/api";
 import { I18nText, useI18n } from "@/lib/i18n";
 import { initialsFor } from "@/lib/initials";
@@ -249,7 +250,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 						className="hidden max-[960px]:block"
 					/>
 					{headerLeading}
-					{workspace?.mode === "chat" ? (
+					{workspace != null && !workspaceModeHasGitContext(workspace.mode) ? (
 						<span className="inline-flex items-center gap-1.5 overflow-hidden px-1 py-0.5 font-medium text-foreground">
 							<MessageCircle
 								className="size-3.5 shrink-0 text-muted-foreground"

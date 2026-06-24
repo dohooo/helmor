@@ -1241,9 +1241,7 @@ export function useWorkspacesSidebarController({
 				return;
 			}
 
-			const response = await addRepositoryFromLocalPath(selectedPath, {
-				allowNonGitDirectory: settings.allowNonGitDirectories,
-			});
+			const response = await addRepositoryFromLocalPath(selectedPath);
 			await applyAddRepositoryResponse(response);
 		} catch (error) {
 			pushWorkspaceToast(
@@ -1252,12 +1250,7 @@ export function useWorkspacesSidebarController({
 		} finally {
 			setAddingRepository(false);
 		}
-	}, [
-		addingRepository,
-		applyAddRepositoryResponse,
-		pushWorkspaceToast,
-		settings.allowNonGitDirectories,
-	]);
+	}, [addingRepository, applyAddRepositoryResponse, pushWorkspaceToast]);
 
 	const handleOpenCloneDialog = useCallback(() => {
 		setIsCloneDialogOpen(true);

@@ -313,7 +313,15 @@ pub fn prepare_local_workspace_impl(
     let repository = repos::load_repository_by_id(repo_id)?
         .with_context(|| format!("Repository not found: {repo_id}"))?;
     let repo_root = PathBuf::from(repository.root_path.trim());
-    let has_git_context = repository.default_branch.is_some();
+    // A repo added as a plain (non-git) directory has no default branch.
+    // This is the ONE place we read repo state to pick the workspace
+    // mode; every runtime path keys off the stored `mode` afterwards.
+    let mode = if repository.default_branch.is_some() {
+        WorkspaceMode::Local
+    } else {
+        WorkspaceMode::NonGit
+    };
+    let has_git_context = mode.has_git_context();
     if has_git_context {
         git_ops::ensure_git_repository(&repo_root)?;
     } else if !repo_root.is_dir() {
@@ -372,7 +380,7 @@ pub fn prepare_local_workspace_impl(
         &directory_name,
         &target_branch,
         &base_branch,
-        crate::workspace_state::WorkspaceMode::Local,
+        mode,
         WorkspaceBranchIntent::UseBranch,
         initial_status,
         &timestamp,
@@ -1028,13 +1036,6 @@ fn is_archive_eligible_state(state: WorkspaceState) -> bool {
     matches!(state, WorkspaceState::Ready | WorkspaceState::SetupPending)
 }
 
-fn can_archive_without_head(record: Option<&workspace_models::WorkspaceRecord>) -> bool {
-    match record {
-        Some(record) => record.kind == "ai_triage" && !record.ai_priming_consumed,
-        None => false,
-    }
-}
-
 fn delete_archived_branch(repo_root: &Path, branch: &str, workspace_id: &str) {
     let branch_delete_started = std::time::Instant::now();
     git_ops::run_git(
@@ -1291,14 +1292,6 @@ pub fn execute_archive_plan(plan: &ArchivePreparedPlan) -> Result<ArchiveWorkspa
                 "Archive: HEAD resolve + verify finished"
             );
             commit
-        }
-        Err(error) if can_archive_without_head(record.as_ref()) => {
-            tracing::info!(
-                workspace_id,
-                error = %format!("{error:#}"),
-                "Archive: continuing without HEAD for untouched AI triage workspace"
-            );
-            String::new()
         }
         Err(error) => return Err(error),
     };
