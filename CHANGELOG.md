@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.43.0
+
+### Minor Changes
+
+- [#825](https://github.com/dohooo/helmor/pull/825) [`4d07a72`](https://github.com/dohooo/helmor/commit/4d07a7263ef08e057c430f39bde0a6a2b77a25ac) Thanks [@JRBusiness](https://github.com/JRBusiness)! - Add opt-in support for attaching sessions to plain local folders that are not git repositories.
+
+  - New "Non-git directories" setting (Settings → General). When enabled, Open project can attach a session to any local folder; these run as local-mode sessions with no branch/worktree actions.
+  - Harden agent process environment resolution so bundled CLIs find their PATH reliably (Windows PATH is rebuilt from the registry), and resolve git pointer paths correctly for Windows absolute and UNC paths.
+
+### Patch Changes
+
+- [#894](https://github.com/dohooo/helmor/pull/894) [`e0beec2`](https://github.com/dohooo/helmor/commit/e0beec205189d17ee48b33528663cda9c86c2d4e) Thanks [@dohooo](https://github.com/dohooo)! - Scrolling up in a chat thread and stopping no longer makes the conversation jump or shake — row heights now settle into place while the scroll is still moving, so your reading position stays put.
+
+- [#895](https://github.com/dohooo/helmor/pull/895) [`d176c6d`](https://github.com/dohooo/helmor/commit/d176c6dcebdae3d99dcf1da189a647ae822b0ce4) Thanks [@dohooo](https://github.com/dohooo)! - Fix in-review workspaces sometimes opening to an empty "No session selected" panel instead of their conversation.
+
+- [#893](https://github.com/dohooo/helmor/pull/893) [`c56bb1b`](https://github.com/dohooo/helmor/commit/c56bb1b98e3667a30ea35648f1f40472df598c59) Thanks [@natllian](https://github.com/natllian)! - Refine non-git directory workspace support:
+  - Non-git folders now work out of the box — removed the opt-in "Non-git directories" setting.
+  - Non-git workspaces use the chat-style layout (no diff/inspector panel or branch pickers), and their repo settings page shows a "Non-git repository" notice instead of account and git options.
+
 ## 0.42.0
 
 ### Minor Changes
