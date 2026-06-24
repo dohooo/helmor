@@ -43,7 +43,7 @@ license text:
 - React (facebook/react) — MIT
 - Bun (oven-sh/bun) — MIT
 - Claude Agent SDK (@anthropic-ai/claude-agent-sdk) — Anthropic's terms
-- Codex SDK (@openai/codex-sdk) — OpenAI's terms
+- Codex CLI (@openai/codex) — OpenAI's terms
 
 Inclusion of these components does not imply endorsement by their respective
 owners.
