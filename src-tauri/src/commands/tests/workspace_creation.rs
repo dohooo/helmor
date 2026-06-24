@@ -1044,6 +1044,67 @@ fn finalize_workspace_transitions_initializing_to_ready_and_creates_worktree() {
 }
 
 #[test]
+fn worktree_for_no_remote_repo_forks_from_local_branch() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+
+    // A git repo with commits but NO remote configured.
+    let repo_dir = harness.root.join("local-only-repo");
+    fs::create_dir_all(&repo_dir).unwrap();
+    let root = repo_dir.to_str().unwrap();
+    git_ops::run_git(["init", "-b", "main", root], None).unwrap();
+    fs::write(repo_dir.join("README.md"), "hi").unwrap();
+    git_ops::run_git(["-C", root, "add", "README.md"], None).unwrap();
+    git_ops::run_git(
+        [
+            "-C",
+            root,
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "user.name=Helmor",
+            "-c",
+            "user.email=helmor@example.com",
+            "commit",
+            "-m",
+            "initial",
+        ],
+        None,
+    )
+    .unwrap();
+
+    let response = repos::add_repository_from_local_path(root).unwrap();
+    let repo = repos::load_repository_by_id(&response.repository_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(repo.remote, None);
+    assert_eq!(repo.default_branch.as_deref(), Some("main"));
+
+    // Worktree mode forks a new branch off the local default — no remote.
+    let prepared = workspaces::prepare_workspace_from_repo_impl(
+        &response.repository_id,
+        None,
+        WorkspaceBranchIntent::FromBranch,
+        WorkspaceStatus::InProgress,
+        None,
+    )
+    .unwrap();
+    let finalized = workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
+    assert_eq!(finalized.final_state, WorkspaceState::Ready);
+
+    let workspace_dir = std::path::PathBuf::from(&finalized.working_directory);
+    assert!(
+        workspace_dir.join(".git").exists(),
+        "worktree should be materialised from the local branch"
+    );
+    // The worktree checked out the freshly forked branch.
+    let head = git_ops::current_branch_name(&workspace_dir).unwrap();
+    assert_eq!(head, prepared.branch);
+}
+
+#[test]
 fn finalize_workspace_reports_setup_pending_when_helmor_json_has_setup() {
     let _guard = TEST_LOCK
         .lock()
@@ -2321,7 +2382,7 @@ fn list_branch_picker_entries_tags_local_and_remote_correctly() {
     let root = harness.source_repo_root.to_str().unwrap();
     git_ops::run_git(["-C", root, "branch", "wip/local-only"], None).unwrap();
 
-    let entries = workspaces::list_branch_picker_entries(&harness.source_repo_root, "origin");
+    let entries = workspaces::list_branch_picker_entries(&harness.source_repo_root, Some("origin"));
 
     let by_name: std::collections::HashMap<&str, (bool, bool)> = entries
         .iter()

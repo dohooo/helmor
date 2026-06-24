@@ -150,7 +150,7 @@ fn add_repository_from_local_path_attaches_non_git_directory() {
 }
 
 #[test]
-fn add_repository_from_local_path_still_rejects_git_repo_without_remote() {
+fn add_repository_from_local_path_accepts_git_repo_without_remote() {
     let _guard = TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -179,11 +179,28 @@ fn add_repository_from_local_path_still_rejects_git_repo_without_remote() {
     )
     .unwrap();
 
-    let error = repos::add_repository_from_local_path(root).unwrap_err();
-    assert!(
-        error.to_string().contains("Local-only repositories"),
-        "expected local-only git repo validation to still reject, got: {error}"
-    );
+    // A git repo without a remote is now supported (local-only): remote is
+    // None, default branch comes from local HEAD, and it stays a git repo
+    // (default_branch is Some, so it is NOT treated as a non-git directory).
+    let response = repos::add_repository_from_local_path(root).unwrap();
+    assert!(response.created_repository);
+
+    let repo = repos::load_repository_by_id(&response.repository_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(repo.remote, None);
+    assert_eq!(repo.default_branch.as_deref(), Some("main"));
+
+    let prepared = workspaces::prepare_local_workspace_impl(
+        &response.repository_id,
+        None,
+        crate::workspace_status::WorkspaceStatus::InProgress,
+        None,
+    )
+    .unwrap();
+    // Has git context (real branch), so it is a Local git workspace, not "Files".
+    assert_eq!(prepared.branch, "main");
+    assert_eq!(prepared.state, WorkspaceState::Ready);
 }
 
 #[test]

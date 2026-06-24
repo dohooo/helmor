@@ -784,6 +784,8 @@
 	"loadingUpdaterStatus": "正在加载更新器状态…",
 	"localLlm": "本地 LLM",
 	"localLlmLandsVeryExperimentalPreview": "本地 LLM 以非常实验性的预览形式上线，目前用于生成会话标题和分支名。更多功能即将推出。",
+	"localOnlyRepository": "纯本地仓库（无远端）",
+	"localOnlyRepositoryDescription": "这个 Git 仓库没有配置远端——分支、diff、提交都可用，但无法 push、pull 或创建 PR。",
 	"localRepositoryStaysExactlyBranchFiles": "你的本地仓库会保持原样，分支和文件都不会被修改。",
 	"log": "登录",
 	"logAgents": "登录你的 agent",

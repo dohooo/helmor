@@ -784,6 +784,8 @@
 	"loadingUpdaterStatus": "Loading updater status…",
 	"localLlm": "Local LLM",
 	"localLlmLandsVeryExperimentalPreview": "Local LLM lands as a very experimental preview — it powers session title and branch name generation for now. More features coming soon.",
+	"localOnlyRepository": "Local-only repository",
+	"localOnlyRepositoryDescription": "This git repository has no remote — branch, diff, and commit work, but push, pull, and pull requests are unavailable.",
 	"localRepositoryStaysExactlyBranchFiles": "Your local repository stays exactly as it is — branch and files untouched.",
 	"log": "Log in",
 	"logAgents": "Log in to your agents",

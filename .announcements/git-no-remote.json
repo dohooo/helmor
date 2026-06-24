@@ -1,0 +1,7 @@
+{
+	"items": [
+		{
+			"text": "Open project now works on local git repositories with no remote — branches, diffs, and worktrees all work. Push and pull-request actions are hidden since there's nowhere to publish."
+		}
+	]
+}

@@ -927,6 +927,18 @@ pub fn default_branch_ref(remote: &str, default_branch: &str) -> String {
     format!("refs/remotes/{remote}/{default_branch}")
 }
 
+/// The repository's remote name, or `None` when it has no remote (local-only
+/// git, or a non-git folder). Trim-empty-aware. This is the single source of
+/// truth for "does this repo have a remote" — callers must handle `None`
+/// explicitly (skip push/pull/PR, fall back to local refs) rather than
+/// defaulting a missing remote to the literal `"origin"`.
+pub fn remote_name(remote: &Option<String>) -> Option<&str> {
+    remote
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
 pub fn tracked_file_count(workspace_dir: &Path) -> Result<i64> {
     let workspace_dir = workspace_dir.display().to_string();
     let output = run_git(["-C", workspace_dir.as_str(), "ls-files"], None).with_context(|| {

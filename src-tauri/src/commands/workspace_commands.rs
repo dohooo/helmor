@@ -199,11 +199,13 @@ pub async fn list_branches_for_local_picker(repo_id: String) -> CmdResult<Vec<St
         if !repo_root.is_dir() {
             return Ok(Vec::new());
         }
-        let remote = repo.remote.unwrap_or_else(|| "origin".to_string());
-
         let mut seen = std::collections::BTreeSet::new();
         seen.extend(crate::git_ops::list_local_branches(&repo_root).unwrap_or_default());
-        seen.extend(crate::git_ops::list_remote_branches(&repo_root, &remote).unwrap_or_default());
+        if let Some(remote) = crate::git_ops::remote_name(&repo.remote) {
+            seen.extend(
+                crate::git_ops::list_remote_branches(&repo_root, remote).unwrap_or_default(),
+            );
+        }
         Ok(seen.into_iter().collect())
     })
     .await
@@ -226,8 +228,10 @@ pub async fn list_branches_for_workspace_picker(
             if !repo_root.is_dir() {
                 return Ok(Vec::new());
             }
-            let remote = repo.remote.unwrap_or_else(|| "origin".to_string());
-            Ok(workspaces::list_branch_picker_entries(&repo_root, &remote))
+            Ok(workspaces::list_branch_picker_entries(
+                &repo_root,
+                crate::git_ops::remote_name(&repo.remote),
+            ))
         },
     )
     .await

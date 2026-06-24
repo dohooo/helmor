@@ -25,6 +25,7 @@ import {
 import {
 	type ForgeAccount,
 	type ForgeProvider,
+	listBranchesForLocalPicker,
 	listRemoteBranches,
 	listRepoRemotes,
 	prefetchRemoteRefs,
@@ -57,9 +58,13 @@ export function RepositorySettingsPanel({
 	// The bound gh/glab account login lives on the repo row now;
 	// no more global OAuth identity.
 	const { f } = useI18n();
-	// A repo added as a plain folder has no default branch — git config
-	// (remote, branch, prefix) and forge accounts don't apply to it.
+	// Three states:
+	//  - non-git  (no default branch): no git config at all.
+	//  - no-remote (git, no remote): branch + scripts apply, but no
+	//    remote/account/PR/branch-prefix.
+	//  - normal   (git + remote): the full panel.
 	const isNonGit = !repo.defaultBranch;
+	const hasRemote = Boolean(repo.remote);
 	const githubLogin = repo.forgeLogin ?? null;
 	const [branches, setBranches] = useState<string[]>([]);
 	const [loading, setLoading] = useState(false);
@@ -86,19 +91,23 @@ export function RepositorySettingsPanel({
 
 	const fetchBranches = useCallback(() => {
 		setLoading(true);
-		void listRemoteBranches({ repoId: repo.id })
-			.then(setBranches)
-			.finally(() => setLoading(false));
-	}, [repo.id]);
+		// No remote → list local branches; otherwise the remote refs.
+		const load = hasRemote
+			? listRemoteBranches({ repoId: repo.id })
+			: listBranchesForLocalPicker(repo.id);
+		void load.then(setBranches).finally(() => setLoading(false));
+	}, [repo.id, hasRemote]);
 
 	const handleOpen = useCallback(() => {
 		fetchBranches();
+		// Prefetch only makes sense with a remote.
+		if (!hasRemote) return;
 		void prefetchRemoteRefs({ repoId: repo.id })
 			.then(({ fetched }) => {
 				if (fetched) fetchBranches();
 			})
 			.catch(() => {});
-	}, [repo.id, fetchBranches]);
+	}, [repo.id, fetchBranches, hasRemote]);
 
 	const handleSelect = useCallback(
 		(branch: string) => {
@@ -155,118 +164,122 @@ export function RepositorySettingsPanel({
 		<SettingsGroup>
 			<ForgeAccountHeader repo={repo} workspaceId={workspaceId} />
 
-			{!isNonGit && (
-				<>
-					<div className="py-5">
-						<div className="text-ui font-medium leading-snug text-foreground">
-							<I18nText source="remoteOrigin" />
-						</div>
-						<div className="mt-1 text-small leading-snug text-muted-foreground">
-							<I18nText source="whereShouldWePushPullCreate" />
-						</div>
-						<div className="mt-3">
-							<Popover
-								open={remoteOpen}
-								onOpenChange={(next: boolean) => {
-									setRemoteOpen(next);
-									if (next) fetchRemotes();
-								}}
-							>
-								<PopoverTrigger className="inline-flex cursor-interactive items-center gap-1 rounded-lg border border-app-border/40 bg-app-base/30 px-3 py-2 text-ui font-medium text-app-foreground transition-colors hover:border-app-border-strong">
-									<span className="truncate">{currentRemote}</span>
-									<ChevronDown
-										className="size-3 shrink-0 text-app-muted"
-										strokeWidth={2}
-									/>
-								</PopoverTrigger>
-								<PopoverContent align="start" className="w-[220px] p-0">
-									<Command className="rounded-lg! p-0.5">
-										<CommandList className="max-h-52">
-											<CommandEmpty>
-												<I18nText source="noRemotesFound" />
-											</CommandEmpty>
-											{remotes.map((remote) => (
-												<CommandItem
-													key={remote}
-													value={remote}
-													onSelect={() => handleRemoteSelect(remote)}
-													className="flex items-center justify-between gap-2 px-1.5 py-1 text-small"
-												>
-													<span
-														className={cn(
-															"truncate",
-															remote === currentRemote && "font-semibold",
-														)}
-													>
-														{remote}
-													</span>
-													{remote === currentRemote && (
-														<Check
-															className="size-3.5 shrink-0"
-															strokeWidth={2}
-														/>
+			{!isNonGit && hasRemote && (
+				<div className="py-5">
+					<div className="text-ui font-medium leading-snug text-foreground">
+						<I18nText source="remoteOrigin" />
+					</div>
+					<div className="mt-1 text-small leading-snug text-muted-foreground">
+						<I18nText source="whereShouldWePushPullCreate" />
+					</div>
+					<div className="mt-3">
+						<Popover
+							open={remoteOpen}
+							onOpenChange={(next: boolean) => {
+								setRemoteOpen(next);
+								if (next) fetchRemotes();
+							}}
+						>
+							<PopoverTrigger className="inline-flex cursor-interactive items-center gap-1 rounded-lg border border-app-border/40 bg-app-base/30 px-3 py-2 text-ui font-medium text-app-foreground transition-colors hover:border-app-border-strong">
+								<span className="truncate">{currentRemote}</span>
+								<ChevronDown
+									className="size-3 shrink-0 text-app-muted"
+									strokeWidth={2}
+								/>
+							</PopoverTrigger>
+							<PopoverContent align="start" className="w-[220px] p-0">
+								<Command className="rounded-lg! p-0.5">
+									<CommandList className="max-h-52">
+										<CommandEmpty>
+											<I18nText source="noRemotesFound" />
+										</CommandEmpty>
+										{remotes.map((remote) => (
+											<CommandItem
+												key={remote}
+												value={remote}
+												onSelect={() => handleRemoteSelect(remote)}
+												className="flex items-center justify-between gap-2 px-1.5 py-1 text-small"
+											>
+												<span
+													className={cn(
+														"truncate",
+														remote === currentRemote && "font-semibold",
 													)}
-												</CommandItem>
-											))}
-										</CommandList>
-									</Command>
-								</PopoverContent>
-							</Popover>
-							{remoteError && (
-								<p className="mt-2 text-small text-red-400/90">{remoteError}</p>
-							)}
-							{remoteNotice && (
-								<p className="mt-2 text-small text-amber-400/90">
-									{remoteNotice}
-								</p>
-							)}
-						</div>
+												>
+													{remote}
+												</span>
+												{remote === currentRemote && (
+													<Check
+														className="size-3.5 shrink-0"
+														strokeWidth={2}
+													/>
+												)}
+											</CommandItem>
+										))}
+									</CommandList>
+								</Command>
+							</PopoverContent>
+						</Popover>
+						{remoteError && (
+							<p className="mt-2 text-small text-red-400/90">{remoteError}</p>
+						)}
+						{remoteNotice && (
+							<p className="mt-2 text-small text-amber-400/90">
+								{remoteNotice}
+							</p>
+						)}
 					</div>
+				</div>
+			)}
 
-					<div className="py-5">
-						<div className="text-ui font-medium leading-snug text-foreground">
-							<I18nText source="branchNewWorkspacesFrom" />
-						</div>
-						<div className="mt-1 text-small leading-snug text-muted-foreground">
-							<I18nText source="eachWorkspaceIsolatedCopyCodebase" />
-						</div>
-						<div className="mt-3">
-							<BranchPickerPopover
-								currentBranch={currentBranch}
-								branches={branches}
-								loading={loading}
-								onOpen={handleOpen}
-								onSelect={handleSelect}
+			{!isNonGit && (
+				<div className="py-5">
+					<div className="text-ui font-medium leading-snug text-foreground">
+						<I18nText source="branchNewWorkspacesFrom" />
+					</div>
+					<div className="mt-1 text-small leading-snug text-muted-foreground">
+						<I18nText source="eachWorkspaceIsolatedCopyCodebase" />
+					</div>
+					<div className="mt-3">
+						<BranchPickerPopover
+							currentBranch={currentBranch}
+							branches={branches}
+							loading={loading}
+							onOpen={handleOpen}
+							onSelect={handleSelect}
+						>
+							<button
+								type="button"
+								className="inline-flex cursor-interactive items-center gap-1 rounded-lg border border-app-border/40 bg-app-base/30 px-3 py-2 text-ui font-medium text-app-foreground transition-colors hover:border-app-border-strong"
 							>
-								<button
-									type="button"
-									className="inline-flex cursor-interactive items-center gap-1 rounded-lg border border-app-border/40 bg-app-base/30 px-3 py-2 text-ui font-medium text-app-foreground transition-colors hover:border-app-border-strong"
-								>
-									<GitBranch
-										className="size-3.5 text-app-foreground-soft"
-										strokeWidth={1.8}
-									/>
-									<span className="truncate">
-										{repo.remote ?? "origin"}/{currentBranch}
-									</span>
-									<ChevronDown
-										className="size-3 shrink-0 text-app-muted"
-										strokeWidth={2}
-									/>
-								</button>
-							</BranchPickerPopover>
-							{error && (
-								<p className="mt-2 text-small text-red-400/90">{error}</p>
-							)}
-						</div>
+								<GitBranch
+									className="size-3.5 text-app-foreground-soft"
+									strokeWidth={1.8}
+								/>
+								<span className="truncate">
+									{repo.remote
+										? `${repo.remote}/${currentBranch}`
+										: currentBranch}
+								</span>
+								<ChevronDown
+									className="size-3 shrink-0 text-app-muted"
+									strokeWidth={2}
+								/>
+							</button>
+						</BranchPickerPopover>
+						{error && (
+							<p className="mt-2 text-small text-red-400/90">{error}</p>
+						)}
 					</div>
+				</div>
+			)}
 
-					<BranchPrefixSection
-						repo={repo}
-						githubLogin={githubLogin}
-						onChanged={onRepoSettingsChanged}
-					/>
-				</>
+			{!isNonGit && hasRemote && (
+				<BranchPrefixSection
+					repo={repo}
+					githubLogin={githubLogin}
+					onChanged={onRepoSettingsChanged}
+				/>
 			)}
 
 			{!isNonGit && (
@@ -274,7 +287,10 @@ export function RepositorySettingsPanel({
 					<ScriptsSection repoId={repo.id} workspaceId={workspaceId} />
 				</div>
 			)}
-			<RepositoryPreferencesSection repoId={repo.id} nonGit={isNonGit} />
+			<RepositoryPreferencesSection
+				repoId={repo.id}
+				nonGit={isNonGit || !hasRemote}
+			/>
 
 			<DeleteRepoSection repo={repo} onDeleted={onRepoDeleted} />
 		</SettingsGroup>
@@ -353,6 +369,29 @@ function ForgeAccountHeader({
 					</div>
 					<div className="mt-0.5 text-small text-muted-foreground">
 						<I18nText source="nonGitRepositoryDescription" />
+					</div>
+				</div>
+			</div>
+		);
+	}
+
+	// Git repo with no remote: branch/diff/commit work, but there's no
+	// account, push, pull, or pull-request flow — say so instead of a CTA.
+	if (!repo.remote) {
+		return (
+			<div className="flex items-center gap-3 py-5">
+				<div className="min-w-0 flex-1">
+					<div className="flex items-center gap-1.5 text-ui font-medium text-foreground">
+						<Laptop
+							className="size-3.5 text-muted-foreground"
+							strokeWidth={1.8}
+						/>
+						<span>
+							<I18nText source="localOnlyRepository" />
+						</span>
+					</div>
+					<div className="mt-0.5 text-small text-muted-foreground">
+						<I18nText source="localOnlyRepositoryDescription" />
 					</div>
 				</div>
 			</div>

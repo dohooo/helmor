@@ -92,6 +92,9 @@ export type GitSectionHeaderProps = {
 	 * needs attention, we swap the Create PR button for one forge connect CTA.
 	 */
 	forgeDetection?: ForgeDetection | null;
+	/** `false` for local-only repos (no remote): the ship/PR button and the
+	 *  forge Connect CTA are hidden — there's nowhere to push or open a PR. */
+	hasRemote?: boolean;
 	workspaceId?: string | null;
 	onChangeRequestClick?: () => void;
 	onCommit?: () => void | Promise<void>;
@@ -110,6 +113,7 @@ export function GitSectionHeader({
 	changeRequestName = "PR",
 	forgeRemoteState = null,
 	forgeDetection = null,
+	hasRemote = true,
 	workspaceId = null,
 	onChangeRequestClick,
 	onCommit,
@@ -156,17 +160,21 @@ export function GitSectionHeader({
 	// `cliStatus.status === "unauthenticated"` clause was redundant
 	// global-state plumbing.
 	const showForgeOnboarding =
-		forgeRemoteState === "unauthenticated" && forgeDetection !== null;
+		hasRemote &&
+		forgeRemoteState === "unauthenticated" &&
+		forgeDetection !== null;
 	useEffect(() => {
 		if (!showForgeOnboarding) {
 			setForgeConnecting(false);
 		}
 	}, [showForgeOnboarding]);
+	// Local-only repos (no remote) have no ship/PR/push action at all.
 	const showButton =
-		hasChanges ||
-		commitButtonState === "busy" ||
-		commitButtonMode !== "create-pr" ||
-		showForgeOnboarding;
+		hasRemote &&
+		(hasChanges ||
+			commitButtonState === "busy" ||
+			commitButtonMode !== "create-pr" ||
+			showForgeOnboarding);
 	const isMergeRequest = forgeDetection?.provider === "gitlab";
 	const showChangeRequest = changeRequest !== null && !showForgeOnboarding;
 	const showContinue = commitButtonMode === "merged" && showChangeRequest;

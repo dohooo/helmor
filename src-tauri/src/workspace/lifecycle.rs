@@ -154,16 +154,17 @@ pub fn prepare_workspace_from_repo_impl(
     let repo_root = PathBuf::from(repository.root_path.trim());
     git_ops::ensure_git_repository(&repo_root)?;
 
-    let remote = repository
-        .remote
-        .clone()
-        .unwrap_or_else(|| "origin".to_string());
-
-    if !git_ops::has_remote(&repo_root, &remote)? {
-        bail!(
-            "Repository \"{}\" has no remote \"{remote}\". Workspaces require a remote to branch from.",
-            repository.name
-        );
+    // Worktrees branch from a local branch (and, when present, the remote
+    // branch). A repo with no remote is fine — it just forks locally. When a
+    // remote IS configured, sanity-check that the git repo actually has it.
+    let remote = git_ops::remote_name(&repository.remote).map(str::to_owned);
+    if let Some(remote) = remote.as_deref() {
+        if !git_ops::has_remote(&repo_root, remote)? {
+            bail!(
+                "Repository \"{}\" has no remote \"{remote}\".",
+                repository.name
+            );
+        }
     }
 
     let directory_name = helpers::allocate_directory_name_for_repo(repo_id)?;
@@ -201,7 +202,7 @@ pub fn prepare_workspace_from_repo_impl(
                 );
             }
 
-            preflight_use_branch(&repo_root, &remote, &picked)?;
+            preflight_use_branch(&repo_root, remote.as_deref(), &picked)?;
 
             // TODO: when reusing a branch with a known upstream (e.g. `develop`),
             // derive `intended_target_branch` from `git rev-parse --symbolic-full-name
@@ -270,15 +271,19 @@ pub fn prepare_workspace_from_repo_impl(
 /// cache, so a branch that exists upstream but was pushed since the last fetch
 /// will be misreported as `BranchNotFound`. Either pre-fetch the picked branch
 /// here, or surface a "couldn't verify — try fetch" hint in the UI.
-fn preflight_use_branch(repo_root: &Path, remote: &str, branch: &str) -> Result<()> {
+fn preflight_use_branch(repo_root: &Path, remote: Option<&str>, branch: &str) -> Result<()> {
     let local_exists = git_ops::verify_branch_exists(repo_root, branch).is_ok();
-    let remote_exists =
-        git_ops::verify_remote_ref_exists(repo_root, remote, branch).unwrap_or(false);
+    let remote_exists = remote
+        .map(|remote| git_ops::verify_remote_ref_exists(repo_root, remote, branch).unwrap_or(false))
+        .unwrap_or(false);
 
     if !local_exists && !remote_exists {
-        return Err(coded(ErrorCode::BranchNotFound).context(format!(
-            "Branch `{branch}` not found locally or on remote `{remote}`."
-        )));
+        let where_ = match remote {
+            Some(remote) => format!("locally or on remote `{remote}`"),
+            None => "locally".to_string(),
+        };
+        return Err(coded(ErrorCode::BranchNotFound)
+            .context(format!("Branch `{branch}` not found {where_}.")));
     }
 
     if local_exists {
@@ -567,10 +572,8 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
     let repository = repos::load_repository_by_id(&record.repo_id)?
         .with_context(|| format!("Repository not found: {}", record.repo_id))?;
     let repo_root = PathBuf::from(repository.root_path.trim());
-    let remote = repository
-        .remote
-        .clone()
-        .unwrap_or_else(|| "origin".to_string());
+    // `None` for local-only repos — FromBranch then forks from the local base.
+    let remote = git_ops::remote_name(&repository.remote).map(str::to_owned);
     // start_ref source: init_parent (Phase 1's stored pick), with
     // repo default as fallback for legacy rows.
     let base_branch = helpers::non_empty(&record.initialization_parent_branch)
@@ -605,20 +608,25 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
                 // fall back to a local ref if the user picked a local-only
                 // branch — keeps `wip/poc`-style bases working without a
                 // round-trip to push first.
-                let remote_ref = git_ops::default_branch_ref(&remote, &base_branch);
-                let start_ref = if git_ops::verify_commitish_exists(
-                    &repo_root,
-                    &remote_ref,
-                    "remote ref missing",
-                )
-                .is_ok()
-                {
-                    remote_ref
-                } else {
-                    git_ops::verify_branch_exists(&repo_root, &base_branch).with_context(|| {
-                        format!("Base branch is missing in source repo: {base_branch}")
-                    })?;
-                    base_branch.clone()
+                let published_ref = remote
+                    .as_deref()
+                    .map(|remote| git_ops::default_branch_ref(remote, &base_branch))
+                    .filter(|remote_ref| {
+                        git_ops::verify_commitish_exists(
+                            &repo_root,
+                            remote_ref,
+                            "remote ref missing",
+                        )
+                        .is_ok()
+                    });
+                let start_ref = match published_ref {
+                    Some(remote_ref) => remote_ref,
+                    None => {
+                        git_ops::verify_branch_exists(&repo_root, &base_branch).with_context(
+                            || format!("Base branch is missing in source repo: {base_branch}"),
+                        )?;
+                        base_branch.clone()
+                    }
                 };
                 git_ops::create_worktree_from_start_point(
                     &repo_root,
@@ -1378,7 +1386,8 @@ struct RestorePreflightData {
     branch: String,
     archive_commit: Option<String>,
     target_branch: String,
-    remote: String,
+    /// `None` for local-only repos — restore is best-effort on the remote.
+    remote: Option<String>,
     workspace_dir: PathBuf,
 }
 
@@ -1404,7 +1413,7 @@ fn restore_workspace_preflight(workspace_id: &str) -> Result<RestorePreflightDat
         .to_string();
 
     let workspace_dir = helpers::workspace_path(&record)?;
-    let remote = record.remote.unwrap_or_else(|| "origin".to_string());
+    let remote = git_ops::remote_name(&record.remote).map(str::to_owned);
     git_ops::ensure_git_repository(&repo_root)?;
     if let Some(archive_commit) = archive_commit.as_deref() {
         git_ops::verify_commit_exists(&repo_root, archive_commit)?;
@@ -1434,33 +1443,36 @@ pub fn validate_restore_workspace(workspace_id: &str) -> Result<ValidateRestoreR
 
     let preflight = restore_workspace_preflight(workspace_id)?;
 
-    let remote = record.remote.unwrap_or_else(|| "origin".to_string());
+    let remote = git_ops::remote_name(&record.remote).map(str::to_owned);
     let intended = record
         .intended_target_branch
         .filter(|value| !value.trim().is_empty());
 
-    let conflict = if let Some(ref target) = intended {
-        let has_any_refs = !git_ops::list_remote_branches(&preflight.repo_root, &remote)
-            .unwrap_or_default()
-            .is_empty();
+    // A target-branch conflict can only exist against a remote — local-only
+    // repos have no remote target to diverge from.
+    let conflict = match (remote, intended) {
+        (Some(remote), Some(target)) => {
+            let has_any_refs = !git_ops::list_remote_branches(&preflight.repo_root, &remote)
+                .unwrap_or_default()
+                .is_empty();
 
-        let exists = git_ops::verify_remote_ref_exists(&preflight.repo_root, &remote, target)
-            .unwrap_or(false);
+            let exists = git_ops::verify_remote_ref_exists(&preflight.repo_root, &remote, &target)
+                .unwrap_or(false);
 
-        if exists || !has_any_refs {
-            None
-        } else {
-            let repo = crate::repos::load_repository_by_id(&record.repo_id)?
-                .with_context(|| format!("Repository not found: {}", record.repo_id))?;
-            let suggested = repo.default_branch.unwrap_or_else(|| "main".to_string());
-            Some(TargetBranchConflict {
-                current_branch: target.clone(),
-                suggested_branch: suggested,
-                remote,
-            })
+            if exists || !has_any_refs {
+                None
+            } else {
+                let repo = crate::repos::load_repository_by_id(&record.repo_id)?
+                    .with_context(|| format!("Repository not found: {}", record.repo_id))?;
+                let suggested = repo.default_branch.unwrap_or_else(|| "main".to_string());
+                Some(TargetBranchConflict {
+                    current_branch: target,
+                    suggested_branch: suggested,
+                    remote,
+                })
+            }
         }
-    } else {
-        None
+        _ => None,
     };
 
     Ok(ValidateRestoreResponse {
@@ -1553,7 +1565,7 @@ pub fn restore_workspace_impl(
             (commit.to_string(), None)
         }
         None => (
-            resolve_restore_target_start_point(&repo_root, &remote, target_branch)?,
+            resolve_restore_target_start_point(&repo_root, remote.as_deref(), target_branch)?,
             Some(target_branch.to_string()),
         ),
     };
@@ -1624,15 +1636,17 @@ pub fn restore_workspace_impl(
 
 fn resolve_restore_target_start_point(
     repo_root: &Path,
-    remote: &str,
+    remote: Option<&str>,
     target_branch: &str,
 ) -> Result<String> {
     if git_ops::verify_branch_exists(repo_root, target_branch).is_ok() {
         return Ok(target_branch.to_string());
     }
 
-    if git_ops::verify_remote_ref_exists(repo_root, remote, target_branch)? {
-        return Ok(format!("{remote}/{target_branch}"));
+    if let Some(remote) = remote {
+        if git_ops::verify_remote_ref_exists(repo_root, remote, target_branch)? {
+            return Ok(format!("{remote}/{target_branch}"));
+        }
     }
 
     bail!(

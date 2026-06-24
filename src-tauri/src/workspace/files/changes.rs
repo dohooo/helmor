@@ -313,7 +313,7 @@ pub(super) fn query_workspace_target(
     conn: &Connection,
     repo_name: &str,
     dir_name: &str,
-) -> Option<(String, String)> {
+) -> Option<(Option<String>, String)> {
     let sql = format!(
         "SELECT r.remote, COALESCE(w.intended_target_branch, r.default_branch)
 		 FROM workspaces w
@@ -329,14 +329,14 @@ pub(super) fn query_workspace_target(
         Ok((remote, target))
     })
     .ok()
-    .and_then(|(remote, target)| Some((remote.unwrap_or_else(|| "origin".into()), target?)))
+    .and_then(|(remote, target)| Some((remote, target?)))
 }
 
 pub(super) fn query_workspace_target_by_id(
     conn: &Connection,
     workspace_id: &str,
     workspace_root: &Path,
-) -> Option<(String, String)> {
+) -> Option<(Option<String>, String)> {
     let sql = format!(
         "SELECT r.remote,
 		        COALESCE(w.intended_target_branch, r.default_branch),
@@ -383,13 +383,13 @@ pub(super) fn query_workspace_target_by_id(
         return None;
     }
 
-    Some((remote.unwrap_or_else(|| "origin".into()), target?))
+    Some((remote, target?))
 }
 
 pub(super) fn query_local_workspace_target(
     conn: &Connection,
     workspace_root: &Path,
-) -> Option<(String, String)> {
+) -> Option<(Option<String>, String)> {
     let root_path = workspace_root.to_string_lossy();
     query_local_workspace_target_by_root_path(conn, root_path.as_ref()).or_else(|| {
         let canonical = workspace_root.canonicalize().ok()?;
@@ -404,7 +404,7 @@ pub(super) fn query_local_workspace_target(
 fn query_local_workspace_target_by_root_path(
     conn: &Connection,
     root_path: &str,
-) -> Option<(String, String)> {
+) -> Option<(Option<String>, String)> {
     let sql = format!(
         "SELECT r.remote, COALESCE(w.intended_target_branch, r.default_branch)
 		 FROM workspaces w
@@ -424,7 +424,7 @@ fn query_local_workspace_target_by_root_path(
         return None;
     }
 
-    Some((remote.unwrap_or_else(|| "origin".into()), target?))
+    Some((remote, target?))
 }
 
 fn path_matches(path: &Path, stored: &str) -> bool {
@@ -444,7 +444,7 @@ fn path_matches(path: &Path, stored: &str) -> bool {
 fn lookup_workspace_target(
     workspace_root: &Path,
     workspace_id: Option<&str>,
-) -> Option<(String, String)> {
+) -> Option<(Option<String>, String)> {
     let conn = db::read_conn().ok()?;
     if let Some(workspace_id) = workspace_id {
         return query_workspace_target_by_id(&conn, workspace_id, workspace_root);
@@ -471,7 +471,9 @@ pub(super) fn resolve_target_ref_for_workspace(
     let mut candidates = Vec::<String>::new();
 
     if let Some((remote, target)) = lookup_workspace_target(workspace_root, workspace_id) {
-        candidates.push(format!("refs/remotes/{remote}/{target}"));
+        if let Some(remote) = remote.as_deref() {
+            candidates.push(format!("refs/remotes/{remote}/{target}"));
+        }
         candidates.push(format!("refs/heads/{target}"));
     }
 

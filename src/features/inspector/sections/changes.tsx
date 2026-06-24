@@ -344,6 +344,7 @@ function ChangesSectionImpl({
 				changeRequestName={changeRequestName}
 				forgeRemoteState={forgeStatusQuery.data?.remoteState ?? null}
 				forgeDetection={forgeDetection}
+				hasRemote={Boolean(workspaceRemoteUrl)}
 				workspaceId={workspaceId}
 				hasChanges={hasChanges}
 				isRefreshing={isForgeRefreshing}

@@ -716,10 +716,14 @@ fn create_workspace_fixture_db(
     // produces the `testuser/<directory>` branch the assertions expect.
     connection
         .execute(
+            // `init_create_git_repo` adds an `origin` remote, so the repo row
+            // records it too — matching what `resolve_repository_from_local_path`
+            // stores for a real repo. `repos.remote` is the source of truth for
+            // "has a remote".
             r#"INSERT INTO repos (
-                id, remote_url, name, default_branch, root_path, display_order, hidden,
+                id, remote, remote_url, name, default_branch, root_path, display_order, hidden,
                 branch_prefix_type, branch_prefix_custom
-              ) VALUES (?1, NULL, ?2, 'main', ?3, 1, 0, 'custom', 'testuser/')"#,
+              ) VALUES (?1, 'origin', NULL, ?2, 'main', ?3, 1, 0, 'custom', 'testuser/')"#,
             (repo_id, repo_name, stored_root_path),
         )
         .unwrap();
@@ -838,7 +842,9 @@ fn create_branch_switch_fixture_db(
     let connection = open_fixture_db(db_path);
     connection
         .execute(
-            "INSERT INTO repos (id, name, remote_url, default_branch, root_path) VALUES (?1, ?2, NULL, 'main', ?3)",
+            // The branch-switch harness clones the source, so the working
+            // repo has an `origin` remote — record it (SSOT for "has remote").
+            "INSERT INTO repos (id, name, remote, remote_url, default_branch, root_path) VALUES (?1, ?2, 'origin', NULL, 'main', ?3)",
             ["repo-1", repo_name, source_repo.to_str().unwrap()],
         )
         .unwrap();

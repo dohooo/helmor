@@ -1386,10 +1386,10 @@ pub fn resolve_repository_from_local_path(folder_path: &str) -> Result<ResolvedR
             )
         })?;
 
+    // A git repo with no remote is supported (local-only). Its default
+    // branch comes from local HEAD; push/pull/PR/forge features are gated
+    // off downstream by the absent `remote`.
     let remote = resolve_repository_remote(normalized_root)?;
-    if remote.is_none() {
-        bail!("Local-only repositories are not supported.");
-    }
     let remote_url = match remote.as_deref() {
         Some(remote_name) => Some(resolve_repository_remote_url(normalized_root, remote_name)?),
         None => None,
@@ -1397,17 +1397,19 @@ pub fn resolve_repository_from_local_path(folder_path: &str) -> Result<ResolvedR
     let default_branch = resolve_repository_default_branch(normalized_root, remote.as_deref())
         .with_context(|| {
             format!(
-                "Unable to resolve a default branch for repository {}",
+                "Unable to resolve a default branch for repository {} \
+                 (an empty repository with no commits cannot be a workspace base)",
                 normalized_root.display()
             )
         })?;
 
-    // Keep repo creation local: no network probes or CLI calls here.
-    let (provider, _) = crate::forge::detect_provider_for_repo_offline(
-        remote_url.as_deref(),
-        Some(normalized_root),
-    );
-    let forge_provider = Some(provider.as_storage_str().to_string());
+    // Forge classification only applies to repos with a remote. Keep repo
+    // creation local: no network probes or CLI calls here.
+    let forge_provider = remote_url.as_deref().map(|url| {
+        let (provider, _) =
+            crate::forge::detect_provider_for_repo_offline(Some(url), Some(normalized_root));
+        provider.as_storage_str().to_string()
+    });
 
     Ok(ResolvedRepositoryInput {
         name,
@@ -1712,8 +1714,25 @@ fn resolve_repository_remote_url(repo_root: &Path, remote: &str) -> Result<Strin
 }
 
 fn resolve_repository_default_branch(repo_root: &Path, remote: Option<&str>) -> Option<String> {
-    let remote = remote?;
-    resolve_default_branch_from_remote_head(repo_root, remote).ok()
+    if let Some(remote) = remote {
+        if let Ok(branch) = resolve_default_branch_from_remote_head(repo_root, remote) {
+            return Some(branch);
+        }
+    }
+    // No remote (or its HEAD is unavailable): use the local current branch,
+    // falling back to the first local branch for a detached/unborn HEAD.
+    resolve_local_default_branch(repo_root)
+}
+
+/// The repo's local default branch: current branch, else the first local
+/// branch. `None` only for an empty repo with no branches at all.
+fn resolve_local_default_branch(repo_root: &Path) -> Option<String> {
+    if let Ok(branch) = git_ops::current_branch_name(repo_root) {
+        return Some(branch);
+    }
+    git_ops::list_local_branches(repo_root)
+        .ok()
+        .and_then(|branches| branches.into_iter().next())
 }
 
 fn resolve_default_branch_from_remote_head(repo_root: &Path, remote: &str) -> Result<String> {
