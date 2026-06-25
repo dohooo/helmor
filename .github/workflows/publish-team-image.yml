@@ -59,5 +59,9 @@ jobs:
           file: ./Dockerfile
           platforms: linux/amd64
           push: true
-          tags: docker.io/caspianzhao/helmor-team-sandbox:latest
+          # CF Containers reject `:latest`, so deploys reference the pinned tag;
+          # `:latest` is kept only as a human-facing convenience pointer.
+          tags: |
+            docker.io/caspianzhao/helmor-team-sandbox:0.1.0
+            docker.io/caspianzhao/helmor-team-sandbox:latest
           provenance: false

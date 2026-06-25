@@ -45,11 +45,12 @@ const WRANGLER =
 	resolve(cloudRoot, "node_modules/.bin/wrangler");
 
 /** Public image the deployed Container references (Docker Hub by default — CF
- *  pulls public Docker Hub with no registry auth). Parameterised so the
- *  registry/namespace stays a deploy-time choice, not hard-coded. */
+ *  pulls public Docker Hub with no registry auth). MUST be a PINNED tag: CF
+ *  Containers reject `:latest` ("Latest tags are not allowed"). Parameterised so
+ *  the registry/namespace/tag stays a deploy-time choice, not hard-coded. */
 const TEAM_IMAGE =
 	process.env.HELMOR_TEAM_IMAGE ||
-	"docker.io/caspianzhao/helmor-team-sandbox:latest";
+	"docker.io/caspianzhao/helmor-team-sandbox:0.1.0";
 
 /** Optional gh token to inject as the Worker's GITHUB_TOKEN secret (clone/push
  *  for the cloud sandbox). Absent → skipped; basic chat doesn't need it. */

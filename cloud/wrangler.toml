@@ -14,13 +14,14 @@ main = "src/index.ts"
 compatibility_date = "2026-06-09"
 compatibility_flags = ["nodejs_compat"]
 
-# Single sandbox for Phase 0 (one team → one sandbox). Image lives at the repo
-# root; its directory becomes the Docker build context (the stages `COPY . .`).
-# The image tag inside the Dockerfile (SANDBOX_VERSION) MUST match the
-# @cloudflare/sandbox version in package.json.
+# Single sandbox for Phase 0 (one team → one sandbox). References our PUBLIC
+# prebuilt image (built + pushed by .github/workflows/publish-team-image.yml), so
+# `wrangler deploy` needs NO local Docker build — Cloudflare pulls it from the
+# public registry. Rebuild the image (Dockerfile) only when the serve runtime
+# changes; this tag just has to point at a published build.
 [[containers]]
 class_name = "Sandbox"
-image = "../Dockerfile"
+image = "docker.io/caspianzhao/helmor-team-sandbox:0.1.0"
 instance_type = "standard-3"
 max_instances = 1
 
