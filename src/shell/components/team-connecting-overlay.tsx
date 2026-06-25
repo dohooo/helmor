@@ -42,7 +42,7 @@ export function TeamConnectingOverlay() {
 
 	return (
 		<div
-			className="fixed inset-0 z-40 flex flex-col items-center justify-center gap-6 bg-background/40 backdrop-blur-md"
+			className="fixed inset-0 z-40 flex flex-col items-center justify-center gap-6 bg-background/20 backdrop-blur-sm"
 			role="status"
 			aria-live="polite"
 		>

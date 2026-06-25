@@ -3,52 +3,96 @@ import { useStreamingStore } from "@/features/conversation/state/streaming-store
 import { resumeEventStream, suspendEventStream } from "@/lib/ipc";
 import { isTeamModeActive } from "@/lib/team-mode";
 
-/** How long the window must stay hidden before we drop the team `/v1/stream`, so
- *  the remote sandbox can idle-sleep. Long enough to ride out a quick tab-switch,
- *  short enough to save idle cost. */
+/** Drop the team `/v1/stream` after the window has been HIDDEN this long, so the
+ *  remote sandbox can idle-sleep. Long enough to ride out a quick tab-switch. */
 const HIDDEN_SUSPEND_DELAY_MS = 60_000;
+/** Also drop it after the window has been VISIBLE but the user IDLE this long
+ *  (no clicks/keys, no turn in flight) — the real lever against always-on cost:
+ *  an open-but-unused Helmor would otherwise pin the sandbox awake all day.
+ *  Generous so ordinary read/think time never triggers it. INTERIM: until the
+ *  event stream moves to a hibernating Durable Object (Stage C), resuming after
+ *  an idle suspend cold-starts the sandbox, so the threshold is tuned to make
+ *  that rare. */
+const VISIBLE_IDLE_SUSPEND_MS = 10 * 60_000;
 
 /**
- * Team-mode only: drop the shared companion SSE after the window has been hidden
- * for a grace period, so an unattended remote sandbox idle-sleeps instead of
- * staying awake on a live-but-idle connection. Re-focusing resumes the stream,
- * which wakes the sandbox via the normal cold-start (+ reconnecting banner).
- *
- * Never suspends mid-turn — a hidden window can still be streaming an agent
- * reply we want to keep receiving. The suspend/resume calls are no-ops on the
- * native (local) transport, so this is inert outside team mode.
+ * Team-mode only: drop the shared companion SSE when the app is unattended —
+ * either the window is hidden, or it's visible but the user has been idle — so
+ * an idle remote sandbox stops instead of burning cost on a live-but-idle
+ * connection. Any activity (or re-focus) resumes the stream, which wakes the
+ * sandbox via the normal cold-start. Never suspends mid-turn. The suspend/resume
+ * calls are no-ops on the native (local) transport, so this is inert outside
+ * team mode.
  */
 export function useCompanionIdleSuspend(): void {
 	useEffect(() => {
-		let hiddenTimer: ReturnType<typeof setTimeout> | null = null;
+		let timer: ReturnType<typeof setTimeout> | null = null;
+		let suspended = false;
+
 		const clearTimer = () => {
-			if (hiddenTimer) {
-				clearTimeout(hiddenTimer);
-				hiddenTimer = null;
+			if (timer) {
+				clearTimeout(timer);
+				timer = null;
 			}
+		};
+
+		const turnInFlight = () => {
+			const s = useStreamingStore.getState();
+			return (
+				s.sendingContextKeys.size > 0 ||
+				Object.keys(s.activeSessionByContext).length > 0
+			);
+		};
+
+		const suspendNow = () => {
+			if (!isTeamModeActive() || suspended) return;
+			// Never drop the stream mid-turn — retry once the turn settles.
+			if (turnInFlight()) {
+				timer = setTimeout(suspendNow, 60_000);
+				return;
+			}
+			suspended = true;
+			suspendEventStream();
+		};
+
+		/** (Re)arm the visible-idle countdown — called on activity + re-focus. */
+		const reArm = () => {
+			clearTimer();
+			timer = setTimeout(suspendNow, VISIBLE_IDLE_SUSPEND_MS);
 		};
 
 		const onVisibilityChange = () => {
 			clearTimer();
 			if (document.visibilityState === "hidden") {
-				hiddenTimer = setTimeout(() => {
-					if (!isTeamModeActive()) return;
-					const streaming = useStreamingStore.getState();
-					const turnInFlight =
-						streaming.sendingContextKeys.size > 0 ||
-						Object.keys(streaming.activeSessionByContext).length > 0;
-					if (turnInFlight) return;
-					suspendEventStream();
-				}, HIDDEN_SUSPEND_DELAY_MS);
+				timer = setTimeout(suspendNow, HIDDEN_SUSPEND_DELAY_MS);
 			} else {
+				// Returning to a visible window: re-ensure the stream (cheap no-op if
+				// already live), clear any idle-suspend, and re-arm the idle timer.
+				suspended = false;
 				resumeEventStream();
+				reArm();
 			}
 		};
 
+		const onActivity = () => {
+			if (document.visibilityState !== "visible") return;
+			if (suspended) {
+				suspended = false;
+				resumeEventStream();
+			}
+			reArm();
+		};
+
 		document.addEventListener("visibilitychange", onVisibilityChange);
+		window.addEventListener("pointerdown", onActivity, { passive: true });
+		window.addEventListener("keydown", onActivity);
+		if (document.visibilityState === "visible") reArm();
+
 		return () => {
 			clearTimer();
 			document.removeEventListener("visibilitychange", onVisibilityChange);
+			window.removeEventListener("pointerdown", onActivity);
+			window.removeEventListener("keydown", onActivity);
 		};
 	}, []);
 }

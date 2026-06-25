@@ -777,40 +777,40 @@ export async function ensureServe(
 		console.error("Phase 2b restore failed (cold-starting empty)", error);
 	}
 
-	// Phase 1 Codex token broker: mint a fresh, short-lived ChatgptAuthTokens
-	// auth.json from the team's identity DO and inject it as CODEX_AUTH_JSON for
-	// THIS cold start (design §3.3). Computed per startProcess — never a static
-	// binding — so a sandbox wake never replays a stale token. A missing
-	// identity or a brick/refresh failure starts serve WITHOUT Codex auth (the
-	// container runs un-authenticated for Codex until the user re-authorizes);
-	// we log only a NON-SENSITIVE marker, never the auth.json or any token.
-	const codexAuthJson = await withTimeout(
-		mintCodexAuthJson(env),
-		identityMintTimeoutMs,
-		"codex identity mint",
-	).catch((error) => {
-		console.error(
-			"Phase 1 codex mint timed out or failed",
-			error instanceof Error ? error.message : "unknown",
-		);
-		return null;
-	});
-	// Claude subscription token broker: mint the team's Claude OAuth token and
-	// inject it as the plain CLAUDE_CODE_OAUTH_TOKEN env var (VERIFIED §1.5: the
-	// serve process env is inherited all the way to the claude child — no file
-	// write needed, unlike CODEX_AUTH_JSON). A missing identity starts serve
-	// WITHOUT Claude subscription auth; never logs the token.
-	const claudeToken = await withTimeout(
-		mintClaudeOauthToken(env),
-		identityMintTimeoutMs,
-		"claude identity mint",
-	).catch((error) => {
-		console.error(
-			"Claude mint timed out or failed",
-			error instanceof Error ? error.message : "unknown",
-		);
-		return null;
-	});
+	// Phase 1 token brokers: mint a fresh, short-lived Codex auth.json
+	// (CODEX_AUTH_JSON) and the Claude OAuth token (CLAUDE_CODE_OAUTH_TOKEN) from
+	// the team's identity DOs and inject them for THIS cold start (design §3.3 /
+	// VERIFIED §1.5). Computed per startProcess — never static bindings — so a
+	// wake never replays a stale token. Run CONCURRENTLY: they hit independent
+	// identity DOs, so serializing them needlessly added up to ~15s to every cold
+	// start; failures stay isolated (one null never sinks the other). A missing
+	// identity / brick / refresh failure starts serve WITHOUT that agent's auth
+	// (it runs un-authenticated until re-authorize); we log only a NON-SENSITIVE
+	// marker, never any token.
+	const [codexAuthJson, claudeToken] = await Promise.all([
+		withTimeout(
+			mintCodexAuthJson(env),
+			identityMintTimeoutMs,
+			"codex identity mint",
+		).catch((error) => {
+			console.error(
+				"Phase 1 codex mint timed out or failed",
+				error instanceof Error ? error.message : "unknown",
+			);
+			return null;
+		}),
+		withTimeout(
+			mintClaudeOauthToken(env),
+			identityMintTimeoutMs,
+			"claude identity mint",
+		).catch((error) => {
+			console.error(
+				"Claude mint timed out or failed",
+				error instanceof Error ? error.message : "unknown",
+			);
+			return null;
+		}),
+	]);
 
 	await withTimeout(
 		sandbox.startProcess(SERVE_START_CMD, {

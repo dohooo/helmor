@@ -93,5 +93,7 @@ HELMOR_SANDBOX_ID = "helmor-team-0"
 HELMOR_COMPANION_PORT = "8080"
 # Idle auto-sleep: stop the container after this much inactivity (no open
 # companion connection). The next request cold-starts it and restores the last
-# backup. Accepts "30s", "15m", "1h", or a number of seconds.
-SANDBOX_IDLE_TIMEOUT = "15m"
+# backup. Accepts "30s", "15m", "1h", or a number of seconds. Shortened from 15m
+# so the sandbox stops promptly once the desktop drops its SSE on idle (see
+# use-companion-idle-suspend.ts) — the main lever against always-on cost.
+SANDBOX_IDLE_TIMEOUT = "5m"
