@@ -1,19 +1,18 @@
-import { Check, Cloud, MonitorSmartphone } from "lucide-react";
+import { Check, Cloud, MonitorSmartphone, Settings } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
-	DropdownMenuLabel,
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-	HoverCard,
-	HoverCardContent,
-	HoverCardTrigger,
-} from "@/components/ui/hover-card";
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { isTauriRuntime } from "@/lib/platform";
 import { getTeamConfig, isTeamModeActive } from "@/lib/team-mode";
 import { switchTeamMode } from "@/lib/team-switch";
@@ -34,7 +33,7 @@ import {
  * green (online), yellow + gentle pulse (connecting/reconnecting — a cold
  * sandbox can take up to ~2 min), red (disconnected — connecting has persisted
  * past the cold-start ceiling). The local <MonitorSmartphone> stays muted with
- * no status. A hover card surfaces the status word + backend host (and one
+ * no status. A tooltip surfaces the status word + backend host (and one
  * reason line when red); the same element is the dropdown trigger, so a click
  * still opens the Local/Team switch.
  *
@@ -69,7 +68,7 @@ function cloudToneClass(phase: ConnectionPhase): string {
 	}
 }
 
-/** Parse the bare host out of the saved Worker URL for the hover card. Falls
+/** Parse the bare host out of the saved Worker URL for the tooltip. Falls
  *  back to the raw value if it isn't a parseable URL. */
 function teamHost(): string | null {
 	const config = getTeamConfig();
@@ -110,8 +109,8 @@ export function TeamModeSwitch() {
 
 	return (
 		<DropdownMenu open={open} onOpenChange={setOpen}>
-			<HoverCard openDelay={150} closeDelay={50}>
-				<HoverCardTrigger asChild>
+			<Tooltip>
+				<TooltipTrigger asChild>
 					<DropdownMenuTrigger asChild>
 						<Button
 							type="button"
@@ -130,29 +129,32 @@ export function TeamModeSwitch() {
 							)}
 						</Button>
 					</DropdownMenuTrigger>
-				</HoverCardTrigger>
-				<HoverCardContent side="top" align="start" className="w-auto max-w-64">
+				</TooltipTrigger>
+				<TooltipContent
+					side="top"
+					sideOffset={4}
+					className={cn(
+						"rounded-md px-2 text-small",
+						active
+							? "flex flex-col gap-0.5 py-1 leading-tight"
+							: "flex h-[24px] items-center leading-none",
+					)}
+				>
 					{active ? (
-						<div className="flex flex-col gap-0.5">
-							<span className="font-medium leading-none">
-								{PHASE_LABEL[status.phase]}
-							</span>
-							{host ? (
-								<span className="text-mini text-muted-foreground leading-tight">
-									{host}
-								</span>
-							) : null}
+						<>
+							<span className="font-medium">{PHASE_LABEL[status.phase]}</span>
+							{host ? <span className="text-background/60">{host}</span> : null}
 							{status.phase === "disconnected" ? (
-								<span className="text-mini text-muted-foreground leading-tight">
+								<span className="text-background/60">
 									Can't reach the team sandbox.
 								</span>
 							) : null}
-						</div>
+						</>
 					) : (
-						<span className="leading-none">Local (this Mac)</span>
+						<span>Local (this Mac)</span>
 					)}
-				</HoverCardContent>
-			</HoverCard>
+				</TooltipContent>
+			</Tooltip>
 			{/* Invisible live region: announce team-connection drops/recoveries to
 			    assistive tech. The visual cue is icon color + hover text only, which
 			    a screen reader can't perceive — this restores the announce-on-change
@@ -162,9 +164,7 @@ export function TeamModeSwitch() {
 					{`Team backend: ${PHASE_LABEL[status.phase]}`}
 				</span>
 			) : null}
-			<DropdownMenuContent align="end" className="min-w-44">
-				<DropdownMenuLabel>Workspace location</DropdownMenuLabel>
-				<DropdownMenuSeparator />
+			<DropdownMenuContent align="end" className="min-w-36">
 				<DropdownMenuItem onSelect={selectLocal}>
 					<MonitorSmartphone strokeWidth={2} />
 					<span className="flex-1">Local</span>
@@ -181,7 +181,8 @@ export function TeamModeSwitch() {
 						publishShellEvent({ type: "open-settings", section: "team" })
 					}
 				>
-					<span className="flex-1">Configure team backend…</span>
+					<Settings strokeWidth={2} />
+					<span className="flex-1">Configure</span>
 				</DropdownMenuItem>
 			</DropdownMenuContent>
 		</DropdownMenu>
