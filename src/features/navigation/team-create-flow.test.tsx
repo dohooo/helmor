@@ -1,10 +1,4 @@
-import {
-	cleanup,
-	fireEvent,
-	render,
-	screen,
-	waitFor,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -13,6 +7,8 @@ const mocks = vi.hoisted(() => ({
 	createTeam: vi.fn(() => Promise.resolve({ teamId: "t" })),
 	openUrl: vi.fn(),
 	publishShellEvent: vi.fn(),
+	codexAuthorize: vi.fn(),
+	claudeAuthorize: vi.fn(),
 }));
 
 vi.mock("@/lib/api", () => ({ deployTeamCloud: mocks.deployTeamCloud }));
@@ -25,6 +21,33 @@ vi.mock("@/shell/event-bus", () => ({
 vi.mock("@/lib/workspace-helpers", () => ({
 	describeUnknownError: (_error: unknown, fallback: string) => fallback,
 }));
+// The cloud-identity hooks use React Query + control-plane fetches; stub them so
+// the create-flow logic is tested in isolation (no QueryClientProvider needed).
+vi.mock("@/features/settings/panels/cloud-identity/use-cloud-identity", () => ({
+	useCloudIdentity: () => ({
+		status: { hasToken: false },
+		isLoading: false,
+		isError: false,
+		isAuthorizing: false,
+		needsReauthorize: false,
+		authorize: mocks.codexAuthorize,
+		refetch: vi.fn(),
+	}),
+}));
+vi.mock(
+	"@/features/settings/panels/cloud-identity/use-cloud-claude-identity",
+	() => ({
+		useCloudClaudeIdentity: () => ({
+			status: { hasToken: false },
+			isLoading: false,
+			isError: false,
+			isAuthorizing: false,
+			error: null,
+			authorize: mocks.claudeAuthorize,
+			refetch: vi.fn(),
+		}),
+	}),
+);
 
 import { TeamCreateFlow } from "./team-create-flow";
 
@@ -36,7 +59,7 @@ afterEach(() => {
 });
 
 describe("TeamCreateFlow", () => {
-	it("deploys, bootstraps, and switches into team mode", async () => {
+	it("deploys + bootstraps, then authorizes agents before switching in", async () => {
 		mocks.deployTeamCloud.mockResolvedValue({
 			kind: "deployed",
 			workerUrl: "https://team.example.workers.dev",
@@ -47,13 +70,25 @@ describe("TeamCreateFlow", () => {
 
 		fireEvent.click(screen.getByRole("button", { name: CONNECT }));
 
-		await waitFor(() =>
-			expect(mocks.switchTeamMode).toHaveBeenCalledWith({
-				url: "https://team.example.workers.dev",
-				token: "admin-tok",
-			}),
-		);
+		// Lands on the authorize step (NOT switched in yet) with both agents.
+		await screen.findByRole("button", { name: /^Finish$/i });
 		expect(mocks.createTeam).toHaveBeenCalled();
+		expect(mocks.switchTeamMode).not.toHaveBeenCalled();
+		const authorizeButtons = screen.getAllByRole("button", {
+			name: /Authorize/i,
+		});
+		expect(authorizeButtons).toHaveLength(2); // Codex + Claude
+
+		// Codex Authorize wires to the cloud-identity hook.
+		fireEvent.click(authorizeButtons[0]);
+		expect(mocks.codexAuthorize).toHaveBeenCalled();
+
+		// Finish switches into team mode + closes the card.
+		fireEvent.click(screen.getByRole("button", { name: /^Finish$/i }));
+		expect(mocks.switchTeamMode).toHaveBeenCalledWith({
+			url: "https://team.example.workers.dev",
+			token: "admin-tok",
+		});
 		expect(onDone).toHaveBeenCalled();
 	});
 

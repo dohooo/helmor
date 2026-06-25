@@ -3,10 +3,13 @@ import {
 	ArrowLeft,
 	Check,
 	ExternalLink,
+	KeyRound,
 	Loader2,
 } from "lucide-react";
 import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { useCloudClaudeIdentity } from "@/features/settings/panels/cloud-identity/use-cloud-claude-identity";
+import { useCloudIdentity } from "@/features/settings/panels/cloud-identity/use-cloud-identity";
 import {
 	deployTeamCloud,
 	type TeamDeployProgress,
@@ -14,6 +17,7 @@ import {
 } from "@/lib/api";
 import { openUrl } from "@/lib/platform-bridge";
 import { createTeam } from "@/lib/team-api";
+import type { TeamConfig } from "@/lib/team-mode";
 import { switchTeamMode } from "@/lib/team-switch";
 import { describeUnknownError } from "@/lib/workspace-helpers";
 import { publishShellEvent } from "@/shell/event-bus";
@@ -21,17 +25,16 @@ import { publishShellEvent } from "@/shell/event-bus";
 /**
  * "Create a team" path of the setup card: stand up a fresh Cloudflare backend
  * for the admin in-app. Drives {@link deployTeamCloud} (Cloudflare OAuth →
- * provision → deploy), shows live per-step progress, then persists the config +
- * switches into team mode — the connecting overlay takes over while the cold
- * sandbox wakes.
+ * provision → deploy), shows live per-step progress, then an `authorize` step
+ * to bind the cloud agent identities (Codex / Claude) — without one, cloud runs
+ * have no subscription identity and produce no result. Finishing persists the
+ * config + switches into team mode (the connecting overlay covers the cold
+ * start).
  *
- * Two non-error branches the UI must handle: `needs-upgrade` (the account lacks
- * Workers Paid, which Containers require — show a deep-link + retry) and a
- * graceful error fallback to the manual Advanced setup. The auto-deploy backend
- * itself requires our published public image + a paid Cloudflare account to run
- * end-to-end; until then the error branch keeps Create from being a dead end.
+ * Non-error branches the UI handles: `needs-upgrade` (the account lacks Workers
+ * Paid — deep-link + retry) and a graceful error fallback to Advanced setup.
  */
-type Phase = "intro" | "running" | "needs-upgrade" | "error" | "done";
+type Phase = "intro" | "running" | "needs-upgrade" | "authorize" | "error";
 type StepStatus = "pending" | "active" | "done" | "error";
 
 const STEPS: { key: TeamDeployStep; label: string }[] = [
@@ -62,6 +65,13 @@ export function TeamCreateFlow({
 		useState<Record<TeamDeployStep, StepStatus>>(ALL_PENDING);
 	const [error, setError] = useState<string | null>(null);
 	const [upgradeUrl, setUpgradeUrl] = useState<string | null>(null);
+	// Set once the deploy succeeds; drives the cloud-identity authorize step and
+	// the final switch. The cloud-identity hooks read it directly (the config
+	// isn't persisted until Finish), so authorize works before we switch in.
+	const [deployedConfig, setDeployedConfig] = useState<TeamConfig | null>(null);
+
+	const codex = useCloudIdentity(deployedConfig);
+	const claude = useCloudClaudeIdentity(deployedConfig);
 
 	const run = useCallback(async () => {
 		setPhase("running");
@@ -87,21 +97,31 @@ export function TeamCreateFlow({
 				return;
 			}
 			const config = { url: result.workerUrl, token: result.adminToken };
+			setDeployedConfig(config);
 			// Bootstrap the single team row (idempotent; the admin token authorizes
-			// it). Best-effort — switching in is what actually connects the user.
+			// it). Best-effort — the identity binds to this member regardless.
 			await createTeam(config).catch(() => {});
-			setPhase("done");
-			// Persists config, flips team mode on, and repoints the transport in
-			// place — same mechanism as the invite-join path.
-			switchTeamMode(config);
-			onDone();
+			// Don't switch in yet: first let the user bind a cloud agent identity,
+			// otherwise cloud runs would have nothing to authenticate with.
+			setPhase("authorize");
 		} catch (caught) {
 			setError(describeUnknownError(caught, "Cloud setup didn't finish."));
 			setPhase("error");
 		}
-	}, [onDone]);
+	}, []);
+
+	const finish = useCallback(() => {
+		if (deployedConfig) {
+			// Persists config, flips team mode on, repoints the transport in place —
+			// same mechanism as the invite-join path.
+			switchTeamMode(deployedConfig);
+		}
+		onDone();
+	}, [deployedConfig, onDone]);
 
 	const running = phase === "running";
+	const codexAuthorized = codex.status?.hasToken ?? false;
+	const claudeAuthorized = claude.status?.hasToken ?? false;
 
 	return (
 		<div>
@@ -167,6 +187,39 @@ export function TeamCreateFlow({
 				</div>
 			) : null}
 
+			{phase === "authorize" ? (
+				<div className="mt-4 flex flex-col gap-2">
+					<p className="text-mini text-muted-foreground leading-tight">
+						Authorize the agents you'll run in the cloud. They sign in with your
+						subscription, held in the team control plane — never on this machine
+						or in the container.
+					</p>
+					<AgentAuthRow
+						label="Codex (ChatGPT)"
+						authorized={codexAuthorized}
+						busy={codex.isAuthorizing}
+						onAuthorize={codex.authorize}
+					/>
+					<AgentAuthRow
+						label="Claude"
+						authorized={claudeAuthorized}
+						busy={claude.isAuthorizing}
+						onAuthorize={claude.authorize}
+					/>
+					{!codexAuthorized && !claudeAuthorized ? (
+						<p className="text-mini text-status-warning leading-tight">
+							Authorize at least one — cloud runs need an agent identity to
+							return results.
+						</p>
+					) : null}
+					<div className="mt-1 flex justify-end">
+						<Button size="sm" onClick={finish}>
+							Finish
+						</Button>
+					</div>
+				</div>
+			) : null}
+
 			{phase === "error" ? (
 				<div className="mt-4 flex flex-col gap-2">
 					<p className="text-mini text-status-danger leading-tight">{error}</p>
@@ -202,6 +255,46 @@ export function TeamCreateFlow({
 					deploying a fresh backend takes a minute or two.
 				</p>
 			) : null}
+		</div>
+	);
+}
+
+function AgentAuthRow({
+	label,
+	authorized,
+	busy,
+	onAuthorize,
+}: {
+	label: string;
+	authorized: boolean;
+	busy: boolean;
+	onAuthorize: () => void;
+}) {
+	return (
+		<div className="flex items-center justify-between gap-2 rounded-lg border border-border/45 bg-card/60 px-3 py-2">
+			<span className="flex items-center gap-1.5 text-ui">
+				{authorized ? (
+					<Check className="size-4 text-status-success" strokeWidth={2.4} />
+				) : (
+					<KeyRound
+						className="size-4 text-muted-foreground"
+						strokeWidth={1.8}
+					/>
+				)}
+				<span>{label}</span>
+				{authorized ? (
+					<span className="text-mini text-status-success">authorized</span>
+				) : null}
+			</span>
+			<Button
+				variant={authorized ? "outline" : "default"}
+				size="sm"
+				onClick={onAuthorize}
+				disabled={busy}
+			>
+				{busy ? <Loader2 className="size-3.5 animate-spin" /> : null}
+				{authorized ? "Re-authorize" : "Authorize"}
+			</Button>
 		</div>
 	);
 }
