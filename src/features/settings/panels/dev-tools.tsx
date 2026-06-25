@@ -1,4 +1,11 @@
-import { Cloud, Container, Loader2, RotateCcw, Trash2 } from "lucide-react";
+import {
+	Cloud,
+	Container,
+	FolderOpen,
+	Loader2,
+	RotateCcw,
+	Trash2,
+} from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -7,6 +14,7 @@ import {
 	devResetAllData,
 	listTeamContainers,
 	loadDataInfo,
+	revealPathInFinder,
 	type TeamContainer,
 } from "@/lib/api";
 import { I18nText } from "@/lib/i18n";
@@ -17,6 +25,7 @@ import {
 	SettingsNotice,
 	SettingsRow,
 } from "../components/settings-row";
+import { TeamCloudDiagnostics } from "./team-cloud-diagnostics";
 
 export function DevToolsPanel() {
 	const [dataDir, setDataDir] = useState<string | null>(null);
@@ -169,9 +178,51 @@ export function DevToolsPanel() {
 			</SettingsGroup>
 
 			<h3 className="mt-2 font-medium text-muted-foreground text-small">
+				Diagnostics
+			</h3>
+			<SettingsGroup>
+				<SettingsRow
+					align="start"
+					title={
+						<span className="flex items-center gap-1.5">
+							<FolderOpen
+								className="size-3.5 text-muted-foreground"
+								strokeWidth={1.8}
+							/>
+							<span>Data &amp; logs</span>
+						</span>
+					}
+					description="Reveal the app data directory or the JSONL logs (rust + sidecar) in Finder — the first stop when something misbehaves."
+				>
+					<div className="flex items-center gap-1.5">
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={!dataDir}
+							onClick={() => dataDir && void revealPathInFinder(dataDir)}
+						>
+							Data dir
+						</Button>
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={!dataDir}
+							onClick={() =>
+								dataDir && void revealPathInFinder(`${dataDir}/logs`)
+							}
+						>
+							Logs
+						</Button>
+					</div>
+				</SettingsRow>
+			</SettingsGroup>
+
+			<h3 className="mt-2 font-medium text-muted-foreground text-small">
 				Team cloud
 			</h3>
 			<SettingsGroup>
+				<TeamCloudDiagnostics />
+
 				<SettingsRow
 					align="start"
 					title={
