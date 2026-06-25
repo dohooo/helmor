@@ -66,18 +66,67 @@ export function TeamCreateFlow({
 		useState<Record<TeamDeployStep, StepStatus>>(ALL_PENDING);
 	const [error, setError] = useState<string | null>(null);
 	const [upgradeUrl, setUpgradeUrl] = useState<string | null>(null);
+	// The companion-token config the deploy hands back. Kept so the Retry
+	// button can re-attempt member registration against it.
+	const [adminConfig, setAdminConfig] = useState<TeamConfig | null>(null);
 	// Set once the deploy succeeds; drives the cloud-identity authorize step and
 	// the final switch. The cloud-identity hooks read it directly (the config
 	// isn't persisted until Finish), so authorize works before we switch in.
 	const [deployedConfig, setDeployedConfig] = useState<TeamConfig | null>(null);
+	// The creator's MEMBER token once registration succeeds (null = not yet a
+	// member, so the cloud-identity PUT routes would 401).
+	const [memberToken, setMemberToken] = useState<string | null>(null);
+	// Why registration couldn't bind a member token (identity unresolved /
+	// mint/accept failed). Drives the Retry banner on the authorize step.
+	const [memberError, setMemberError] = useState<string | null>(null);
 
 	const codex = useCloudIdentity(deployedConfig);
 	const claude = useCloudClaudeIdentity(deployedConfig);
-	const { identity } = useTeamIdentity();
+	const { identity, refetch: refetchIdentity } = useTeamIdentity();
+
+	// Register the creator as a team member so cloud-identity authorize uses a
+	// MEMBER-scoped bearer. The cloud-identity PUT routes are member-only (the
+	// shared companion token classifies as admin/no-member → 401), so without a
+	// member token the Authorize buttons fail silently. We resolve the GitHub
+	// identity robustly (the cached roster can be transiently empty if `gh` was
+	// slow — refetch forces a fresh read) and NEVER silently fall back to the
+	// companion token: a failure surfaces as `memberError` + a Retry.
+	const registerMember = useCallback(
+		async (admin: TeamConfig) => {
+			const id = identity ?? (await refetchIdentity());
+			if (!id) {
+				setMemberToken(null);
+				setDeployedConfig(admin);
+				setMemberError(
+					"Couldn't read your GitHub identity — connect GitHub in Settings → Accounts, then Retry.",
+				);
+				return;
+			}
+			try {
+				const invite = await mintInvite(admin);
+				await acceptInvite(admin.url, invite.token, id);
+				setMemberToken(invite.token);
+				setDeployedConfig({ url: admin.url, token: invite.token });
+				setMemberError(null);
+			} catch (caught) {
+				setMemberToken(null);
+				setDeployedConfig(admin);
+				setMemberError(
+					describeUnknownError(
+						caught,
+						"Couldn't register you as a team member — Retry.",
+					),
+				);
+			}
+		},
+		[identity, refetchIdentity],
+	);
 
 	const run = useCallback(async () => {
 		setPhase("running");
 		setError(null);
+		setMemberError(null);
+		setMemberToken(null);
 		setStepStatus(ALL_PENDING);
 		try {
 			const result = await deployTeamCloud({
@@ -98,26 +147,12 @@ export function TeamCreateFlow({
 				setPhase("needs-upgrade");
 				return;
 			}
-			const adminConfig = { url: result.workerUrl, token: result.adminToken };
+			const admin = { url: result.workerUrl, token: result.adminToken };
+			setAdminConfig(admin);
 			// Bootstrap the single team row (admin-gated by the companion token).
-			await createTeam(adminConfig).catch(() => {});
-			// The deploy hands back the shared companion token, which the worker
-			// treats as "admin" (no member) — but cloud-identity is MEMBER-scoped,
-			// so authorizing with it 401s. Register the creator as a member (mint an
-			// invite + accept it as themselves) and use that member token, exactly
-			// like the invite-join path, so cloud-identity authorize works.
-			let config = adminConfig;
-			if (identity) {
-				try {
-					const invite = await mintInvite(adminConfig);
-					await acceptInvite(adminConfig.url, invite.token, identity);
-					config = { url: result.workerUrl, token: invite.token };
-				} catch {
-					// Fall back to the admin token; cloud-identity authorize may 401,
-					// which the user then sees on the authorize step.
-				}
-			}
-			setDeployedConfig(config);
+			await createTeam(admin).catch(() => {});
+			// Register the creator as a member + adopt that member token.
+			await registerMember(admin);
 			// Don't switch in yet: first let the user bind a cloud agent identity,
 			// otherwise cloud runs would have nothing to authenticate with.
 			setPhase("authorize");
@@ -125,7 +160,7 @@ export function TeamCreateFlow({
 			setError(describeUnknownError(caught, "Cloud setup didn't finish."));
 			setPhase("error");
 		}
-	}, [identity]);
+	}, [registerMember]);
 
 	const finish = useCallback(() => {
 		if (deployedConfig) {
@@ -137,6 +172,7 @@ export function TeamCreateFlow({
 	}, [deployedConfig, onDone]);
 
 	const running = phase === "running";
+	const registered = memberToken !== null;
 	const codexAuthorized = codex.status?.hasToken ?? false;
 	const claudeAuthorized = claude.status?.hasToken ?? false;
 
@@ -211,19 +247,40 @@ export function TeamCreateFlow({
 						subscription, held in the team control plane — never on this machine
 						or in the container.
 					</p>
+					{!registered ? (
+						<div className="flex flex-col items-start gap-1.5 rounded-lg border border-status-warning/40 bg-status-warning/10 p-3">
+							<p className="text-mini text-status-warning leading-tight">
+								{memberError ??
+									"Registering you as a team member so you can authorize agents…"}
+							</p>
+							{memberError && adminConfig ? (
+								<Button
+									variant="outline"
+									size="sm"
+									onClick={() => void registerMember(adminConfig)}
+								>
+									Retry
+								</Button>
+							) : null}
+						</div>
+					) : null}
 					<AgentAuthRow
 						label="Codex (ChatGPT)"
 						authorized={codexAuthorized}
 						busy={codex.isAuthorizing}
+						error={codex.error}
+						disabled={!registered}
 						onAuthorize={codex.authorize}
 					/>
 					<AgentAuthRow
 						label="Claude"
 						authorized={claudeAuthorized}
 						busy={claude.isAuthorizing}
+						error={claude.error}
+						disabled={!registered}
 						onAuthorize={claude.authorize}
 					/>
-					{!codexAuthorized && !claudeAuthorized ? (
+					{registered && !codexAuthorized && !claudeAuthorized ? (
 						<p className="text-mini text-status-warning leading-tight">
 							Authorize at least one — cloud runs need an agent identity to
 							return results.
@@ -280,38 +337,47 @@ function AgentAuthRow({
 	label,
 	authorized,
 	busy,
+	error,
+	disabled,
 	onAuthorize,
 }: {
 	label: string;
 	authorized: boolean;
 	busy: boolean;
+	error?: string | null;
+	disabled?: boolean;
 	onAuthorize: () => void;
 }) {
 	return (
-		<div className="flex items-center justify-between gap-2 rounded-lg border border-border/45 bg-card/60 px-3 py-2">
-			<span className="flex items-center gap-1.5 text-ui">
-				{authorized ? (
-					<Check className="size-4 text-status-success" strokeWidth={2.4} />
-				) : (
-					<KeyRound
-						className="size-4 text-muted-foreground"
-						strokeWidth={1.8}
-					/>
-				)}
-				<span>{label}</span>
-				{authorized ? (
-					<span className="text-mini text-status-success">authorized</span>
-				) : null}
-			</span>
-			<Button
-				variant={authorized ? "outline" : "default"}
-				size="sm"
-				onClick={onAuthorize}
-				disabled={busy}
-			>
-				{busy ? <Loader2 className="size-3.5 animate-spin" /> : null}
-				{authorized ? "Re-authorize" : "Authorize"}
-			</Button>
+		<div className="flex flex-col gap-1 rounded-lg border border-border/45 bg-card/60 px-3 py-2">
+			<div className="flex items-center justify-between gap-2">
+				<span className="flex items-center gap-1.5 text-ui">
+					{authorized ? (
+						<Check className="size-4 text-status-success" strokeWidth={2.4} />
+					) : (
+						<KeyRound
+							className="size-4 text-muted-foreground"
+							strokeWidth={1.8}
+						/>
+					)}
+					<span>{label}</span>
+					{authorized ? (
+						<span className="text-mini text-status-success">authorized</span>
+					) : null}
+				</span>
+				<Button
+					variant={authorized ? "outline" : "default"}
+					size="sm"
+					onClick={onAuthorize}
+					disabled={busy || disabled}
+				>
+					{busy ? <Loader2 className="size-3.5 animate-spin" /> : null}
+					{authorized ? "Re-authorize" : "Authorize"}
+				</Button>
+			</div>
+			{error ? (
+				<p className="text-mini text-status-danger leading-tight">{error}</p>
+			) : null}
 		</div>
 	);
 }

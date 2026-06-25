@@ -16,6 +16,18 @@ const mocks = vi.hoisted(() => ({
 	publishShellEvent: vi.fn(),
 	codexAuthorize: vi.fn(),
 	claudeAuthorize: vi.fn(),
+	// Mutable so a test can simulate an unresolved GitHub identity. `refetch`
+	// returns null by default (no roster) — overridden per test as needed.
+	teamIdentity: {
+		identity: { githubId: "123", login: "admin" } as {
+			githubId: string;
+			login: string;
+		} | null,
+		isLoading: false,
+		refetch: vi.fn(
+			async () => null as { githubId: string; login: string } | null,
+		),
+	},
 }));
 
 vi.mock("@/lib/api", () => ({ deployTeamCloud: mocks.deployTeamCloud }));
@@ -26,10 +38,7 @@ vi.mock("@/lib/team-api", () => ({
 	acceptInvite: mocks.acceptInvite,
 }));
 vi.mock("@/features/team/use-team-identity", () => ({
-	useTeamIdentity: () => ({
-		identity: { githubId: "123", login: "admin" },
-		isLoading: false,
-	}),
+	useTeamIdentity: () => mocks.teamIdentity,
 }));
 vi.mock("@/lib/platform-bridge", () => ({ openUrl: mocks.openUrl }));
 vi.mock("@/shell/event-bus", () => ({
@@ -46,6 +55,7 @@ vi.mock("@/features/settings/panels/cloud-identity/use-cloud-identity", () => ({
 		isLoading: false,
 		isError: false,
 		isAuthorizing: false,
+		error: null,
 		needsReauthorize: false,
 		authorize: mocks.codexAuthorize,
 		refetch: vi.fn(),
@@ -73,6 +83,8 @@ const CONNECT = /Connect Cloudflare & deploy/i;
 afterEach(() => {
 	cleanup();
 	vi.clearAllMocks();
+	// Restore the default resolvable identity for the next test.
+	mocks.teamIdentity.identity = { githubId: "123", login: "admin" };
 });
 
 describe("TeamCreateFlow", () => {
@@ -110,6 +122,33 @@ describe("TeamCreateFlow", () => {
 			token: "member-tok",
 		});
 		expect(onDone).toHaveBeenCalled();
+	});
+
+	it("surfaces a membership error + Retry (no silent companion-token fallback) when the GitHub identity can't be resolved", async () => {
+		mocks.deployTeamCloud.mockResolvedValue({
+			kind: "deployed",
+			workerUrl: "https://team.example.workers.dev",
+			adminToken: "admin-tok",
+		});
+		// gh roster is empty (e.g. `gh` was flaky) → no identity, even on refetch.
+		mocks.teamIdentity.identity = null;
+		render(<TeamCreateFlow onBack={vi.fn()} onDone={vi.fn()} />);
+
+		fireEvent.click(screen.getByRole("button", { name: CONNECT }));
+
+		// Lands on authorize, but with a membership error instead of a member token.
+		await screen.findByText(/Couldn't read your GitHub identity/i);
+		// We must NOT have minted/accepted (nothing to bind) — and must NOT have
+		// silently saved the companion token as if registration succeeded.
+		expect(mocks.mintInvite).not.toHaveBeenCalled();
+		expect(mocks.acceptInvite).not.toHaveBeenCalled();
+		// Authorize buttons stay disabled until registration succeeds — clicking
+		// them with a companion token would 401.
+		for (const btn of screen.getAllByRole("button", { name: /Authorize/i })) {
+			expect((btn as HTMLButtonElement).disabled).toBe(true);
+		}
+		// And a Retry is offered (membership can be re-attempted once gh recovers).
+		expect(screen.getByRole("button", { name: /^Retry$/i })).toBeTruthy();
 	});
 
 	it("shows the upgrade gate when the account lacks Workers Paid", async () => {

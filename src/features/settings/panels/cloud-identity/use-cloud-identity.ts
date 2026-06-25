@@ -34,6 +34,8 @@ export interface UseCloudIdentity {
 	isError: boolean;
 	/** The local `codex login` → upload round-trip is running. */
 	isAuthorizing: boolean;
+	/** Human-readable error from the authorize round-trip, or `null`. */
+	error: string | null;
 	/**
 	 * True when the cloud identity exists but can no longer authenticate and
 	 * the user must re-run authorize: either the DO marked it `bricked`
@@ -117,6 +119,12 @@ export function useCloudIdentity(cfg: TeamConfig | null): UseCloudIdentity {
 		isLoading: statusQuery.isLoading,
 		isError: statusQuery.isError,
 		isAuthorizing: authorizeMutation.isPending,
+		error:
+			authorizeMutation.error instanceof Error
+				? authorizeMutation.error.message
+				: authorizeMutation.error
+					? String(authorizeMutation.error)
+					: null,
 		needsReauthorize:
 			(status?.bricked ?? false) || isCloudIdentityExpired(status),
 		authorize: () => authorizeMutation.mutate(),

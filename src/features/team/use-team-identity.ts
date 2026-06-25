@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import type { ForgeAccount } from "@/lib/api";
 import type { TeamIdentity } from "@/lib/team-api";
 import { useForgeAccountsAll } from "@/lib/use-forge-accounts";
@@ -34,6 +34,15 @@ export interface TeamIdentityState {
 	identity: TeamIdentity | null;
 	/** True while the forge-account roster is still being fetched. */
 	isLoading: boolean;
+	/**
+	 * Force a fresh forge-roster fetch and resolve the identity from THAT
+	 * result (not the possibly-stale render value). Returns the freshly
+	 * resolved identity, or `null` if still none. The create flow relies on
+	 * this: the cached roster can be transiently empty (e.g. `gh` was slow at
+	 * first paint), and registering the creator as a member needs a real
+	 * GitHub id — silently proceeding without one binds a non-member token.
+	 */
+	refetch: () => Promise<TeamIdentity | null>;
 }
 
 /**
@@ -48,5 +57,11 @@ export function useTeamIdentity(): TeamIdentityState {
 		const account = pickGithubIdentityAccount(accounts);
 		return account ? toTeamIdentity(account) : null;
 	}, [accounts]);
-	return { identity, isLoading: accountsQuery.isPending };
+	const { refetch: refetchAccounts } = accountsQuery;
+	const refetch = useCallback(async (): Promise<TeamIdentity | null> => {
+		const { data } = await refetchAccounts();
+		const account = pickGithubIdentityAccount(data ?? []);
+		return account ? toTeamIdentity(account) : null;
+	}, [refetchAccounts]);
+	return { identity, isLoading: accountsQuery.isPending, refetch };
 }
