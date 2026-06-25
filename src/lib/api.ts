@@ -1065,6 +1065,59 @@ export async function authorizeCloudForgeIdentity(
 	});
 }
 
+/**
+ * One step of the team-cloud auto-deploy, streamed live so the setup card can
+ * show real progress instead of a dead spinner. `status` advances
+ * `start` → `done`, or `error` if that step fails.
+ */
+export type TeamDeployStep =
+	| "login" // Cloudflare OAuth (drive `wrangler login`, loopback callback)
+	| "plan" // confirm the account has Workers Paid (Containers require it)
+	| "provision" // create D1 / R2 / secrets for this account
+	| "deploy" // `wrangler deploy` — Worker + Container referencing our public image
+	| "verify"; // wait for the freshly-deployed Worker to answer
+
+export interface TeamDeployProgress {
+	step: TeamDeployStep;
+	status: "start" | "done" | "error";
+	/** Human-readable line for the progress list (already safe to render). */
+	message: string;
+}
+
+/**
+ * Terminal outcome of {@link deployTeamCloud}. `needs-upgrade` is NOT a failure:
+ * the account simply lacks Workers Paid (Containers need it), so the card shows
+ * the one-click upgrade deep-link + a retry rather than an error.
+ */
+export type TeamDeployResult =
+	| { kind: "deployed"; workerUrl: string; adminToken: string }
+	| { kind: "needs-upgrade"; upgradeUrl: string };
+
+/**
+ * Stand up a brand-new team-cloud backend on the user's OWN Cloudflare account:
+ * drive `wrangler login` (OAuth via loopback — the same pattern the
+ * cloud-identity brokers use), provision D1/R2/secrets, then `wrangler deploy` a
+ * Worker that references our PUBLIC prebuilt sandbox image (no per-user
+ * `docker build`). On success returns the Worker URL + the admin/companion token
+ * to persist with `saveTeamConfig`.
+ *
+ * The Cloudflare OAuth token and the admin token are control-plane secrets:
+ * held by the Rust backend / wrangler only — never logged, returned in progress
+ * lines, or written to D1 / the container. LOCAL_ONLY — always runs on the
+ * desktop host (wrangler + the browser sign-in live here, not in the sandbox).
+ */
+export async function deployTeamCloud(args?: {
+	onProgress?: (event: TeamDeployProgress) => void;
+}): Promise<TeamDeployResult> {
+	const channel = new Channel<TeamDeployProgress>();
+	if (args?.onProgress) {
+		channel.onmessage = args.onProgress;
+	}
+	return await invoke<TeamDeployResult>("deploy_team_cloud", {
+		channel,
+	});
+}
+
 // Cursor is an SDK (no versioned CLI), so it has no entry.
 export type AgentVersionsResult = {
 	claude: string | null;

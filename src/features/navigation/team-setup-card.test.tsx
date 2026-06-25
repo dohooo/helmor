@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	accept: vi.fn(),
-	publishShellEvent: vi.fn(),
 	toastError: vi.fn(),
 	identity: {
 		identity: null as null | { githubId: string; login: string },
@@ -24,8 +23,10 @@ vi.mock("@/lib/team-mode", () => ({
 	parseInviteLink: (value: string) =>
 		value.includes("invite=") ? { url: "https://x", token: "tok" } : null,
 }));
-vi.mock("@/shell/event-bus", () => ({
-	publishShellEvent: mocks.publishShellEvent,
+// Isolate the card from the deploy flow — that logic is unit-tested separately
+// in team-create-flow.test.tsx.
+vi.mock("./team-create-flow", () => ({
+	TeamCreateFlow: () => <div data-testid="create-flow" />,
 }));
 
 import { useTeamSetupStore } from "./state/team-setup-store";
@@ -63,14 +64,10 @@ describe("TeamSetupCard", () => {
 		expect(mocks.accept).not.toHaveBeenCalled();
 	});
 
-	it("Create falls back to Team settings and closes the card", () => {
+	it("Create switches to the auto-deploy flow", () => {
 		useTeamSetupStore.getState().requestSetup();
 		render(<TeamSetupCard />);
 		fireEvent.click(screen.getByRole("button", { name: "Create" }));
-		expect(mocks.publishShellEvent).toHaveBeenCalledWith({
-			type: "open-settings",
-			section: "team",
-		});
-		expect(useTeamSetupStore.getState().open).toBe(false);
+		expect(screen.getByTestId("create-flow")).toBeInTheDocument();
 	});
 });
