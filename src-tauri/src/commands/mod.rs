@@ -16,6 +16,7 @@ pub(crate) mod session_commands;
 pub(crate) mod settings_commands;
 pub(crate) mod slack_commands;
 pub(crate) mod system_commands;
+pub(crate) mod team_cloud;
 pub(crate) mod terminal_commands;
 pub(crate) mod updater_commands;
 pub(crate) mod workspace_commands;

@@ -700,7 +700,8 @@ fn build_app(mode: AppMode) -> tauri::App {
             commands::companion_commands::companion_destroy_stable_url,
             commands::cloud_identity::authorize_cloud_codex_identity,
             commands::cloud_identity::authorize_cloud_claude_identity,
-            commands::cloud_identity::authorize_cloud_forge_identity
+            commands::cloud_identity::authorize_cloud_forge_identity,
+            commands::team_cloud::deploy_team_cloud
         ]);
 
     let mut context = tauri::generate_context!();

@@ -517,6 +517,9 @@ const LOCAL_ONLY_INVOKES = new Set<string>([
 	// Forge creds (gh token / glab config) live in THIS Mac's keychain / config
 	// files — capture must run on the desktop, never the cloud container.
 	"authorize_cloud_forge_identity",
+	// Auto-deploy drives wrangler (OAuth + deploy) on this Mac; it can't run in
+	// the cloud container.
+	"deploy_team_cloud",
 	// Dev-only inspection helpers read buffers owned by the desktop Tauri host.
 	"debug_list_terminal_buffers",
 	"debug_read_terminal_buffer",

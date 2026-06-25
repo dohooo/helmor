@@ -55,6 +55,9 @@ const LOCAL_ONLY: &[&str] = &[
     // Forge creds are captured from THIS Mac's keychain / config files; the
     // cloud container cannot read them, so the command runs on the desktop host.
     "authorize_cloud_forge_identity",
+    // Auto-deploy drives wrangler (OAuth + deploy) on THIS Mac; it can't run in
+    // the cloud container.
+    "deploy_team_cloud",
     // Dev-only desktop inspection helpers read buffers owned by the Tauri host.
     "debug_list_terminal_buffers",
     "debug_read_terminal_buffer",
