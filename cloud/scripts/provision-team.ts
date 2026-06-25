@@ -48,7 +48,8 @@ const WRANGLER =
  *  pulls public Docker Hub with no registry auth). Parameterised so the
  *  registry/namespace stays a deploy-time choice, not hard-coded. */
 const TEAM_IMAGE =
-	process.env.HELMOR_TEAM_IMAGE || "docker.io/helmor/team-sandbox:latest";
+	process.env.HELMOR_TEAM_IMAGE ||
+	"docker.io/caspianzhao/helmor-team-sandbox:latest";
 
 /** Optional gh token to inject as the Worker's GITHUB_TOKEN secret (clone/push
  *  for the cloud sandbox). Absent → skipped; basic chat doesn't need it. */
