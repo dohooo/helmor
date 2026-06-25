@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as teamSwitch from "@/lib/team-switch";
 import { renderWithProviders } from "@/test/render-with-providers";
+import { useTeamSetupStore } from "./state/team-setup-store";
 import { TeamModeSwitch } from "./team-mode-switch";
 
 // The switch is desktop-only; pretend we're inside the Tauri webview.
@@ -28,6 +29,7 @@ describe("TeamModeSwitch", () => {
 	afterEach(() => {
 		cleanup();
 		vi.restoreAllMocks();
+		useTeamSetupStore.getState().close();
 	});
 
 	it("shows the local label by default", () => {
@@ -37,12 +39,11 @@ describe("TeamModeSwitch", () => {
 		).toBeInTheDocument();
 	});
 
-	it("routes to the Team settings panel when Team is picked unconfigured", async () => {
+	it("opens the Join / Create setup card when Team is picked unconfigured", async () => {
 		const user = userEvent.setup();
 		const reload = stubReload();
 		const switchSpy = vi.spyOn(teamSwitch, "switchTeamMode");
-		const onOpenSettings = vi.fn();
-		window.addEventListener("helmor:open-settings", onOpenSettings);
+		useTeamSetupStore.getState().close();
 
 		renderWithProviders(<TeamModeSwitch />);
 		await user.click(
@@ -50,12 +51,11 @@ describe("TeamModeSwitch", () => {
 		);
 		await user.click(screen.getByRole("menuitem", { name: /^team$/i }));
 
-		expect(onOpenSettings).toHaveBeenCalledTimes(1);
-		// Unconfigured Team must NOT switch (it routes to settings instead) and
-		// must never reload.
+		// Unconfigured Team opens the setup card (not raw settings); it must NOT
+		// switch into a broken mode, and never reload.
+		expect(useTeamSetupStore.getState().open).toBe(true);
 		expect(switchSpy).not.toHaveBeenCalled();
 		expect(reload).not.toHaveBeenCalled();
-		window.removeEventListener("helmor:open-settings", onOpenSettings);
 	});
 
 	it("activates team mode in place (no reload) when a backend is configured", async () => {

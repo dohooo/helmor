@@ -31,10 +31,13 @@ describe("TeamPanel", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("disables Test connection until a Worker URL is entered", () => {
+	// The Team-mode toggle was removed (the workspace-location switch owns
+	// Local<->Team now). The panel keeps Join + an Advanced manual-connect path.
+
+	it("disables Test until a Worker URL is entered (Advanced)", () => {
 		renderWithProviders(<TeamPanel />);
 
-		const testButton = screen.getByRole("button", { name: /test connection/i });
+		const testButton = screen.getByRole("button", { name: /^test$/i });
 		expect(testButton).toBeDisabled();
 
 		fireEvent.change(screen.getByPlaceholderText(/workers\.dev/i), {
@@ -43,7 +46,7 @@ describe("TeamPanel", () => {
 		expect(testButton).toBeEnabled();
 	});
 
-	it("pings /v1/health with the entered token on Test connection", async () => {
+	it("pings /v1/health with the entered token on Test", async () => {
 		const fetchMock = vi
 			.fn()
 			.mockResolvedValue(new Response("{}", { status: 200 }));
@@ -56,7 +59,7 @@ describe("TeamPanel", () => {
 		fireEvent.change(screen.getByPlaceholderText(/hlm_/), {
 			target: { value: "hlm_secret" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: /test connection/i }));
+		fireEvent.click(screen.getByRole("button", { name: /^test$/i }));
 
 		await waitFor(() =>
 			expect(fetchMock).toHaveBeenCalledWith(
@@ -66,18 +69,7 @@ describe("TeamPanel", () => {
 		);
 	});
 
-	it("reflects the persisted active state in the toggle", () => {
-		localStorage.setItem("helmor.team.url", "https://team.example.com");
-		localStorage.setItem("helmor.team.token", "hlm_secret");
-		localStorage.setItem("helmor.team.mode", "1");
-
-		renderWithProviders(<TeamPanel />);
-		expect(
-			screen.getByRole("switch", { name: /toggle team mode/i }),
-		).toBeChecked();
-	});
-
-	it("switches in place via switchTeamMode (no reload) when toggled on with a URL", () => {
+	it("Connect switches in place via switchTeamMode (no reload) with a URL", () => {
 		const reload = stubReload();
 		const switchSpy = vi
 			.spyOn(teamSwitch, "switchTeamMode")
@@ -90,7 +82,7 @@ describe("TeamPanel", () => {
 		fireEvent.change(screen.getByPlaceholderText(/hlm_/), {
 			target: { value: "hlm_secret" },
 		});
-		fireEvent.click(screen.getByRole("switch", { name: /toggle team mode/i }));
+		fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
 
 		expect(switchSpy).toHaveBeenCalledWith({
 			url: "https://team.example.com",
@@ -99,30 +91,13 @@ describe("TeamPanel", () => {
 		expect(reload).not.toHaveBeenCalled();
 	});
 
-	it("does not switch (and shows an error) when toggled on with no URL", () => {
+	it("disables Connect until a Worker URL is entered", () => {
 		const switchSpy = vi
 			.spyOn(teamSwitch, "switchTeamMode")
 			.mockImplementation(() => {});
 
 		renderWithProviders(<TeamPanel />);
-		fireEvent.click(screen.getByRole("switch", { name: /toggle team mode/i }));
-
+		expect(screen.getByRole("button", { name: /^connect$/i })).toBeDisabled();
 		expect(switchSpy).not.toHaveBeenCalled();
-	});
-
-	it("switches back to local via switchTeamMode(null) (no reload) when toggled off", () => {
-		localStorage.setItem("helmor.team.url", "https://team.example.com");
-		localStorage.setItem("helmor.team.token", "hlm_secret");
-		localStorage.setItem("helmor.team.mode", "1");
-		const reload = stubReload();
-		const switchSpy = vi
-			.spyOn(teamSwitch, "switchTeamMode")
-			.mockImplementation(() => {});
-
-		renderWithProviders(<TeamPanel />);
-		fireEvent.click(screen.getByRole("switch", { name: /toggle team mode/i }));
-
-		expect(switchSpy).toHaveBeenCalledWith(null);
-		expect(reload).not.toHaveBeenCalled();
 	});
 });
