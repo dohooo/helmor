@@ -109,31 +109,7 @@ fn add_repository_from_local_path_re_add_with_only_archived_workspaces_lands_on_
 }
 
 #[test]
-fn add_repository_from_local_path_rejects_non_git_directory_without_side_effects() {
-    let _guard = TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let harness = CreateTestHarness::new();
-    let plain_dir = harness.root.join("not-a-repo");
-    fs::create_dir_all(&plain_dir).unwrap();
-
-    let error = repos::add_repository_from_local_path(plain_dir.to_str().unwrap()).unwrap_err();
-    let connection = Connection::open(harness.db_path()).unwrap();
-    let (repo_count, workspace_count): (i64, i64) = connection
-        .query_row(
-            "SELECT (SELECT COUNT(*) FROM repos), (SELECT COUNT(*) FROM workspaces)",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .unwrap();
-
-    assert!(error.to_string().contains("Git working tree"));
-    assert_eq!(repo_count, 1);
-    assert_eq!(workspace_count, 0);
-}
-
-#[test]
-fn add_repository_from_local_path_can_attach_non_git_directory_when_enabled() {
+fn add_repository_from_local_path_attaches_non_git_directory() {
     let _guard = TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -142,9 +118,7 @@ fn add_repository_from_local_path_can_attach_non_git_directory_when_enabled() {
     fs::create_dir_all(&plain_dir).unwrap();
     fs::write(plain_dir.join("todo.txt"), "ship it\n").unwrap();
 
-    let response =
-        repos::add_repository_from_local_path_with_options(plain_dir.to_str().unwrap(), true)
-            .unwrap();
+    let response = repos::add_repository_from_local_path(plain_dir.to_str().unwrap()).unwrap();
     assert!(response.created_repository);
 
     let repo = repos::load_repository_by_id(&response.repository_id)
@@ -176,7 +150,7 @@ fn add_repository_from_local_path_can_attach_non_git_directory_when_enabled() {
 }
 
 #[test]
-fn add_repository_from_local_path_with_non_git_enabled_still_rejects_git_repo_without_remote() {
+fn add_repository_from_local_path_accepts_git_repo_without_remote() {
     let _guard = TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -205,11 +179,28 @@ fn add_repository_from_local_path_with_non_git_enabled_still_rejects_git_repo_wi
     )
     .unwrap();
 
-    let error = repos::add_repository_from_local_path_with_options(root, true).unwrap_err();
-    assert!(
-        error.to_string().contains("Local-only repositories"),
-        "expected local-only git repo validation to survive toggle, got: {error}"
-    );
+    // A git repo without a remote is now supported (local-only): remote is
+    // None, default branch comes from local HEAD, and it stays a git repo
+    // (default_branch is Some, so it is NOT treated as a non-git directory).
+    let response = repos::add_repository_from_local_path(root).unwrap();
+    assert!(response.created_repository);
+
+    let repo = repos::load_repository_by_id(&response.repository_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(repo.remote, None);
+    assert_eq!(repo.default_branch.as_deref(), Some("main"));
+
+    let prepared = workspaces::prepare_local_workspace_impl(
+        &response.repository_id,
+        None,
+        crate::workspace_status::WorkspaceStatus::InProgress,
+        None,
+    )
+    .unwrap();
+    // Has git context (real branch), so it is a Local git workspace, not "Files".
+    assert_eq!(prepared.branch, "main");
+    assert_eq!(prepared.state, WorkspaceState::Ready);
 }
 
 #[test]

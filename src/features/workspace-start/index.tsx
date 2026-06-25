@@ -681,136 +681,134 @@ export function WorkspaceStartPage({
 								</PopoverContent>
 							</Popover>
 						) : null}
-						<DropdownMenu>
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<DropdownMenuTrigger asChild>
-										<button
-											type="button"
-											// Chat mode is always enabled (no repo needed);
-											// other modes require a selected repository.
-											disabled={mode !== "chat" && !selectedRepository}
-											className="inline-flex h-7 cursor-interactive items-center gap-1 rounded-md px-1.5 text-ui font-medium text-muted-foreground outline-none transition-colors hover:bg-muted/45 hover:text-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-										>
-											{mode === "local" ? (
-												<Laptop
-													className="size-3.5 shrink-0"
-													strokeWidth={1.8}
+						{/* Mode picker. Hidden for non-git folders — they only
+						 *  support a single (local) mode, so there's nothing to pick. */}
+						{!selectedRepositoryIsPlainDirectory && (
+							<DropdownMenu>
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<DropdownMenuTrigger asChild>
+											<button
+												type="button"
+												// Chat mode is always enabled (no repo needed);
+												// other modes require a selected repository.
+												disabled={mode !== "chat" && !selectedRepository}
+												className="inline-flex h-7 cursor-interactive items-center gap-1 rounded-md px-1.5 text-ui font-medium text-muted-foreground outline-none transition-colors hover:bg-muted/45 hover:text-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+											>
+												{mode === "local" ? (
+													<Laptop
+														className="size-3.5 shrink-0"
+														strokeWidth={1.8}
+													/>
+												) : mode === "chat" ? (
+													<MessageCircle
+														className="size-3.5 shrink-0"
+														strokeWidth={1.8}
+													/>
+												) : (
+													<Split
+														className="size-3.5 shrink-0 rotate-90"
+														strokeWidth={1.8}
+													/>
+												)}
+												<span>
+													{mode === "local"
+														? t("workLocally")
+														: mode === "chat"
+															? t("justChat")
+															: t("newWorktree")}
+												</span>
+												<ChevronDown
+													className="size-3 shrink-0 text-muted-foreground"
+													strokeWidth={2}
 												/>
-											) : mode === "chat" ? (
-												<MessageCircle
-													className="size-3.5 shrink-0"
-													strokeWidth={1.8}
-												/>
-											) : (
-												<Split
-													className="size-3.5 shrink-0 rotate-90"
-													strokeWidth={1.8}
-												/>
-											)}
-											<span>
-												{mode === "local"
-													? t("workLocally")
-													: mode === "chat"
-														? t("justChat")
-														: t("newWorktree")}
-											</span>
-											<ChevronDown
-												className="size-3 shrink-0 text-muted-foreground"
-												strokeWidth={2}
-											/>
-										</button>
-									</DropdownMenuTrigger>
-								</TooltipTrigger>
-								<TooltipContent
-									side="top"
-									sideOffset={4}
-									className="rounded-md px-2 text-small leading-none"
-								>
-									<I18nText source="selectWhereRunTask" />
-								</TooltipContent>
-							</Tooltip>
-							{/* Skip focus return so the wrapping Tooltip doesn't re-open via onFocus after selection. */}
-							<DropdownMenuContent
-								align="start"
-								className="w-fit min-w-36"
-								onCloseAutoFocus={(event) => event.preventDefault()}
-							>
-								{repositories.length === 0 ? (
-									// No repos → swap the repo-bound modes for an "Add a
-									// repository" CTA that fires `helmor:open-add-repository`
-									// (sidebar listener opens its add-repo sub-menu).
-									<>
-										<DropdownMenuItem
-											onClick={() =>
-												publishShellEvent({ type: "open-add-repository" })
-											}
-											className="gap-2 pr-3"
-										>
-											<FolderPlus className="size-3.5" strokeWidth={1.8} />
-											<I18nText source="addRepository" />
-										</DropdownMenuItem>
-										<DropdownMenuSeparator />
-										<DropdownMenuItem
-											onClick={() => onModeChange("chat")}
-											className="gap-2 pr-3"
-											data-checked="true"
-										>
-											<MessageCircle className="size-3.5" strokeWidth={1.8} />
-											<I18nText source="justChat" />
-											{justChatShortcut ? (
-												<InlineShortcutDisplay
-													hotkey={justChatShortcut}
-													className="ml-auto text-muted-foreground"
-												/>
-											) : null}
-										</DropdownMenuItem>
-									</>
-								) : selectedRepositoryIsPlainDirectory ? (
-									<DropdownMenuItem
-										onClick={() => onModeChange("local")}
-										className="gap-2 pr-3"
-										data-checked="true"
+											</button>
+										</DropdownMenuTrigger>
+									</TooltipTrigger>
+									<TooltipContent
+										side="top"
+										sideOffset={4}
+										className="rounded-md px-2 text-small leading-none"
 									>
-										<Laptop className="size-3.5" strokeWidth={1.8} />
-										<span>Work locally</span>
-									</DropdownMenuItem>
-								) : (
-									<>
-										<DropdownMenuItem
-											onClick={() => onModeChange("local")}
-											className="gap-2 pr-3"
-											data-checked={mode === "local" ? "true" : undefined}
-										>
-											<Laptop className="size-3.5" strokeWidth={1.8} />
-											<I18nText source="workLocally" />
-										</DropdownMenuItem>
-										<DropdownMenuItem
-											onClick={() => onModeChange("worktree")}
-											className="gap-2 pr-3"
-											data-checked={mode === "worktree" ? "true" : undefined}
-										>
-											<Split className="size-3.5 rotate-90" strokeWidth={1.8} />
-											<I18nText source="newWorktree" />
-										</DropdownMenuItem>
-										<DropdownMenuItem
-											onClick={() => onModeChange("chat")}
-											className="gap-2 pr-3"
-											data-checked={mode === "chat" ? "true" : undefined}
-										>
-											<MessageCircle className="size-3.5" strokeWidth={1.8} />
-											<I18nText source="justChat" />
-											{justChatShortcut ? (
-												<InlineShortcutDisplay
-													hotkey={justChatShortcut}
-													className="ml-auto text-muted-foreground"
+										<I18nText source="selectWhereRunTask" />
+									</TooltipContent>
+								</Tooltip>
+								{/* Skip focus return so the wrapping Tooltip doesn't re-open via onFocus after selection. */}
+								<DropdownMenuContent
+									align="start"
+									className="w-fit min-w-36"
+									onCloseAutoFocus={(event) => event.preventDefault()}
+								>
+									{repositories.length === 0 ? (
+										// No repos → swap the repo-bound modes for an "Add a
+										// repository" CTA that fires `helmor:open-add-repository`
+										// (sidebar listener opens its add-repo sub-menu).
+										<>
+											<DropdownMenuItem
+												onClick={() =>
+													publishShellEvent({ type: "open-add-repository" })
+												}
+												className="gap-2 pr-3"
+											>
+												<FolderPlus className="size-3.5" strokeWidth={1.8} />
+												<I18nText source="addRepository" />
+											</DropdownMenuItem>
+											<DropdownMenuSeparator />
+											<DropdownMenuItem
+												onClick={() => onModeChange("chat")}
+												className="gap-2 pr-3"
+												data-checked="true"
+											>
+												<MessageCircle className="size-3.5" strokeWidth={1.8} />
+												<I18nText source="justChat" />
+												{justChatShortcut ? (
+													<InlineShortcutDisplay
+														hotkey={justChatShortcut}
+														className="ml-auto text-muted-foreground"
+													/>
+												) : null}
+											</DropdownMenuItem>
+										</>
+									) : (
+										<>
+											<DropdownMenuItem
+												onClick={() => onModeChange("local")}
+												className="gap-2 pr-3"
+												data-checked={mode === "local" ? "true" : undefined}
+											>
+												<Laptop className="size-3.5" strokeWidth={1.8} />
+												<I18nText source="workLocally" />
+											</DropdownMenuItem>
+											<DropdownMenuItem
+												onClick={() => onModeChange("worktree")}
+												className="gap-2 pr-3"
+												data-checked={mode === "worktree" ? "true" : undefined}
+											>
+												<Split
+													className="size-3.5 rotate-90"
+													strokeWidth={1.8}
 												/>
-											) : null}
-										</DropdownMenuItem>
-									</>
-								)}
-							</DropdownMenuContent>
-						</DropdownMenu>
+												<I18nText source="newWorktree" />
+											</DropdownMenuItem>
+											<DropdownMenuItem
+												onClick={() => onModeChange("chat")}
+												className="gap-2 pr-3"
+												data-checked={mode === "chat" ? "true" : undefined}
+											>
+												<MessageCircle className="size-3.5" strokeWidth={1.8} />
+												<I18nText source="justChat" />
+												{justChatShortcut ? (
+													<InlineShortcutDisplay
+														hotkey={justChatShortcut}
+														className="ml-auto text-muted-foreground"
+													/>
+												) : null}
+											</DropdownMenuItem>
+										</>
+									)}
+								</DropdownMenuContent>
+							</DropdownMenu>
+						)}
 						{/* Branch intent picker. Worktree mode only. */}
 						{mode === "worktree" && !selectedRepositoryIsPlainDirectory ? (
 							<DropdownMenu>

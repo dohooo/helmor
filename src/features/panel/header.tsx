@@ -62,6 +62,7 @@ import {
 	updateIntendedTargetBranch,
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
+	workspaceModeHasGitContext,
 } from "@/lib/api";
 import { I18nText, useI18n } from "@/lib/i18n";
 import { initialsFor } from "@/lib/initials";
@@ -144,6 +145,9 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	newSessionShortcut,
 }: WorkspacePanelHeaderProps) {
 	const { t, f } = useI18n();
+	// Local-only repos (no remote) have no target branch / PR / stacked-PR
+	// concept — show only the current branch name, no `→ target` picker.
+	const hasRemote = Boolean(workspace?.remote);
 	const branchTone = getWorkspaceBranchTone({
 		workspaceState: workspace?.state,
 		status: workspace?.status,
@@ -249,7 +253,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 						className="hidden max-[960px]:block"
 					/>
 					{headerLeading}
-					{workspace?.mode === "chat" ? (
+					{workspace != null && !workspaceModeHasGitContext(workspace.mode) ? (
 						<span className="inline-flex items-center gap-1.5 overflow-hidden px-1 py-0.5 font-medium text-foreground">
 							<MessageCircle
 								className="size-3.5 shrink-0 text-muted-foreground"
@@ -369,7 +373,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 									</>
 								)}
 							</span>
-							{workspace?.parentWorkspaceId ? (
+							{hasRemote && workspace?.parentWorkspaceId ? (
 								<StackParentChip
 									parentWorkspaceId={workspace.parentWorkspaceId}
 									fallbackBranch={workspace.intendedTargetBranch}
@@ -377,7 +381,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 									archived={workspace.state === "archived"}
 									onSelectWorkspace={onSelectWorkspace}
 								/>
-							) : workspace?.intendedTargetBranch ? (
+							) : hasRemote && workspace?.intendedTargetBranch ? (
 								<>
 									<ArrowRight
 										className="relative top-px size-3 shrink-0 self-center text-muted-foreground"

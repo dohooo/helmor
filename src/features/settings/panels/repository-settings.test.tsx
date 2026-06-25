@@ -7,6 +7,7 @@ import { RepositorySettingsPanel } from "./repository-settings";
 
 const apiMocks = vi.hoisted(() => ({
 	listRemoteBranches: vi.fn(),
+	listBranchesForLocalPicker: vi.fn(),
 	listRepoRemotes: vi.fn(),
 	listForgeAccounts: vi.fn(),
 	loadRepoPreferences: vi.fn(),
@@ -29,6 +30,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 	return {
 		...actual,
 		listRemoteBranches: apiMocks.listRemoteBranches,
+		listBranchesForLocalPicker: apiMocks.listBranchesForLocalPicker,
 		listRepoRemotes: apiMocks.listRepoRemotes,
 		listForgeAccounts: apiMocks.listForgeAccounts,
 		loadRepoPreferences: apiMocks.loadRepoPreferences,
@@ -79,6 +81,7 @@ describe("RepositorySettingsPanel branch prefix", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
 		apiMocks.listRemoteBranches.mockResolvedValue([]);
+		apiMocks.listBranchesForLocalPicker.mockResolvedValue([]);
 		apiMocks.listRepoRemotes.mockResolvedValue([]);
 		apiMocks.listForgeAccounts.mockResolvedValue([]);
 		apiMocks.loadRepoPreferences.mockResolvedValue({
@@ -239,5 +242,50 @@ describe("RepositorySettingsPanel branch prefix", () => {
 		expect(
 			screen.getByRole("button", { name: /^Connect$/i }),
 		).toBeInTheDocument();
+	});
+
+	it("shows a non-git notice and hides forge account + git config for a non-git repo", () => {
+		renderPanel(
+			repo({
+				defaultBranch: null,
+				remote: null,
+				forgeProvider: "unknown",
+				forgeLogin: null,
+			}),
+		);
+
+		expect(screen.getByText("Non-git repository")).toBeInTheDocument();
+		// No account/connect CTA, and no git-only config sections.
+		expect(screen.queryByRole("button", { name: /^Connect$/i })).toBeNull();
+		expect(screen.queryByText("GitHub not connected")).toBeNull();
+		expect(screen.queryByText("Remote origin")).toBeNull();
+		expect(screen.queryByText("Scripts")).toBeNull();
+		// Only the every-new-chat "General preferences" applies; git/PR
+		// preference items are hidden.
+		expect(screen.getByText("General preferences")).toBeInTheDocument();
+		expect(screen.queryByText("Create PR preferences")).toBeNull();
+	});
+
+	it("shows a local-only notice and hides remote/account/PR config for a git repo without a remote", () => {
+		renderPanel(
+			repo({
+				remote: null,
+				remoteUrl: null,
+				forgeProvider: null,
+				forgeLogin: null,
+				// Still a git repo (has a default branch).
+				defaultBranch: "main",
+			}),
+		);
+
+		expect(screen.getByText("Local-only repository")).toBeInTheDocument();
+		// No account/connect, no remote-origin config, no PR-class prefs.
+		expect(screen.queryByRole("button", { name: /^Connect$/i })).toBeNull();
+		expect(screen.queryByText("GitHub not connected")).toBeNull();
+		expect(screen.queryByText("Remote origin")).toBeNull();
+		expect(screen.queryByText("Create PR preferences")).toBeNull();
+		// But the branch picker (local) and general preferences DO apply.
+		expect(screen.getByText("Branch new workspaces from")).toBeInTheDocument();
+		expect(screen.getByText("General preferences")).toBeInTheDocument();
 	});
 });

@@ -66,6 +66,14 @@ function makeUserMessage(text: string): ThreadMessageLike {
 	};
 }
 
+function makeAssistantMessage(text: string): ThreadMessageLike {
+	return {
+		id: "assistant-md",
+		role: "assistant",
+		content: [{ type: "text", id: "assistant-md-text", text }],
+	};
+}
+
 describe("estimateThreadRowHeights", () => {
 	it("reserves expanded height for collapsed tool groups", () => {
 		const messages: ThreadMessageLike[] = [
@@ -251,6 +259,35 @@ describe("estimateThreadRowHeights", () => {
 
 		expect(wrapped8k).toBe(wrapped2k);
 		expect(wrapped2k).toBe(hardLines);
+	});
+
+	// Accuracy lock for the scroll-stop "shake": a one-line user row measures
+	// 70px on the live DOM = 28 (line) + 16 (bubble padding) + 20 (action gutter)
+	// + 6 (row shell). Omitting the action gutter regressed every user row to
+	// 50px, so each popped down 20px the moment its measured height committed.
+	it("prices a one-line user message at the live-measured 70px", () => {
+		const [height] = estimateThreadRowHeights([makeUserMessage("hi")], {
+			fontSize: 14,
+			paneWidth: 822,
+		});
+		expect(height).toBe(70);
+	});
+
+	// A fenced language renders a ~30px header bar (language label + copy/download
+	// actions); a bare ``` block does not. The estimator must add the header only
+	// when a language is present, or code-heavy assistant rows mis-estimate and
+	// pop on measurement.
+	it("adds the code-block header height only when a language is fenced", () => {
+		const code = "const value = compute();\nreturn value;";
+		const [withLang] = estimateThreadRowHeights(
+			[makeAssistantMessage(`\`\`\`ts\n${code}\n\`\`\``)],
+			{ fontSize: 14, paneWidth: 960 },
+		);
+		const [noLang] = estimateThreadRowHeights(
+			[makeAssistantMessage(`\`\`\`\n${code}\n\`\`\``)],
+			{ fontSize: 14, paneWidth: 960 },
+		);
+		expect(withLang - noLang).toBe(30);
 	});
 });
 

@@ -536,6 +536,7 @@ export function WorkspaceInspectorSidebar({
 				workspaceId={workspaceId ?? null}
 				workspaceRootPath={workspaceRootPath ?? null}
 				workspaceBranch={workspaceBranch ?? null}
+				workspaceRemote={workspaceRemote ?? null}
 				workspaceRemoteUrl={workspaceRemoteUrl ?? null}
 				workspaceTargetBranch={workspaceTargetBranch ?? null}
 				changes={changes}
