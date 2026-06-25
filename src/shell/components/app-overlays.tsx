@@ -13,6 +13,7 @@ import type { WorkspaceRow } from "@/lib/api";
 import type { AppSettings, WorkspaceRightSidebarMode } from "@/lib/settings";
 import { resolveTheme } from "@/lib/settings";
 import { useActiveStreamsReattach } from "@/shell/hooks/use-active-streams-reattach";
+import { TeamConnectingOverlay } from "./team-connecting-overlay";
 
 type Props = {
 	theme: AppSettings["theme"];
@@ -51,6 +52,7 @@ export function AppOverlays({
 
 	return (
 		<>
+			<TeamConnectingOverlay />
 			<Toaster
 				theme={resolveTheme(theme)}
 				position="bottom-right"
