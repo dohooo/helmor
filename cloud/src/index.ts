@@ -362,7 +362,7 @@ async function route(
 	}
 
 	try {
-		await ensureServe(sandbox, env, port);
+		await ensureServe(sandbox, env, port, { syncUrl: url.origin });
 	} catch (error) {
 		return new Response(
 			JSON.stringify({
@@ -739,6 +739,11 @@ export interface EnsureServeOptions {
 	identityMintTimeoutMs?: number;
 	readyTimeoutMs?: number;
 	pollIntervalMs?: number;
+	/** Worker public origin, injected into the serve process as HELMOR_SYNC_URL
+	 *  so the container can write session/message changes back to D1 via
+	 *  PUT {syncUrl}/team/sync (Stage B data-plane mirror). Absent ⇒ no
+	 *  write-through (e.g. local-dev, where the proxy mirrors directly). */
+	syncUrl?: string;
 }
 
 export async function ensureServe(
@@ -845,6 +850,10 @@ export async function ensureServe(
 				// container is up). The in-container loader reads it lazily on the
 				// first forge op, so writing it right after startProcess is in time.
 				HELMOR_FORGE_MEMBERS_PATH: FORGE_MEMBERS_PATH,
+				// Stage B: the container POSTs session/message mirror writes to
+				// PUT {HELMOR_SYNC_URL}/team/sync (companion-token-authed). Absent on
+				// local-dev (the proxy mirrors directly), so the write-through is inert.
+				...(options.syncUrl ? { HELMOR_SYNC_URL: options.syncUrl } : {}),
 			},
 		}),
 		startProcessTimeoutMs,
