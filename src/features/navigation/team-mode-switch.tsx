@@ -13,6 +13,7 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useTeamSetupStore } from "@/features/navigation/state/team-setup-store";
 import { isTauriRuntime } from "@/lib/platform";
 import { getTeamConfig, isTeamModeActive } from "@/lib/team-mode";
 import { switchTeamMode } from "@/lib/team-switch";
@@ -98,9 +99,10 @@ export function TeamModeSwitch() {
 	const selectTeam = () => {
 		if (active) return;
 		if (!configured) {
-			// No backend yet — route to the Team settings panel so the user can
-			// enter the Worker URL + token instead of flipping into a broken mode.
-			publishShellEvent({ type: "open-settings", section: "team" });
+			// No backend yet — open the Join / Create setup card (frosted overlay)
+			// instead of flipping into a broken mode or dumping the user into raw
+			// Settings fields.
+			useTeamSetupStore.getState().requestSetup();
 			return;
 		}
 		// `configured` guarantees a non-null config here.

@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { ReleaseAnnouncementToastHost } from "@/features/announcements";
 import { usePresenceSubscription } from "@/features/navigation/state/presence-store";
+import { TeamSetupCard } from "@/features/navigation/team-setup-card";
 import type { QuickSwitchControls } from "@/features/quick-switch";
 import { QuickSwitchOverlay } from "@/features/quick-switch";
 import type { SettingsSection } from "@/features/settings";
@@ -53,6 +54,7 @@ export function AppOverlays({
 	return (
 		<>
 			<TeamConnectingOverlay />
+			<TeamSetupCard />
 			<Toaster
 				theme={resolveTheme(theme)}
 				position="bottom-right"
