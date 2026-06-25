@@ -52,6 +52,10 @@ export function createLocalTeamGatewayStore(
 		putForgeIdentity: (memberId, input) =>
 			options.registry.putForgeIdentity(memberId, input),
 		getForgeIdentity: (memberId) => options.registry.getForgeIdentity(memberId),
+		syncTeamData: (input) => options.registry.syncTeamData(input),
+		listSessions: (workspaceId) => options.registry.listSessions(workspaceId),
+		listSessionMessages: (sessionId) =>
+			options.registry.listSessionMessages(sessionId),
 	};
 }
 

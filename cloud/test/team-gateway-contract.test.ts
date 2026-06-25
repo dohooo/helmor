@@ -160,6 +160,82 @@ describe("shared Team Gateway contract", () => {
 			expect(request.headers.get("X-Helmor-Member-Id")).toBe("member-1");
 		}
 	});
+
+	it("mirrors sessions + messages via /team/sync and serves them sandbox-independently", async () => {
+		const { store } = makeStore();
+		const memberToken = await acceptMember(store);
+
+		// Container write-through (companion/admin token only).
+		const sync = await teamRoute(store, "/team/sync", {
+			method: "PUT",
+			headers: { ...auth(ADMIN_TOKEN), "content-type": "application/json" },
+			body: JSON.stringify({
+				sessions: [
+					{
+						id: "s1",
+						workspaceId: "w1",
+						title: "Hello",
+						status: "idle",
+						sessionKind: "gui",
+						updatedAt: "2026-01-01T00:00:00Z",
+					},
+				],
+				messages: [
+					{
+						id: "m1",
+						sessionId: "s1",
+						role: "user",
+						content: '{"type":"user_prompt","text":"hi"}',
+						sentAt: "2026-01-01T00:00:01Z",
+					},
+				],
+			}),
+		});
+		expect(sync.status).toBe(200);
+
+		// A member can READ the mirror (works with the sandbox asleep).
+		const sessions = await teamRoute(store, "/team/sessions?workspaceId=w1", {
+			headers: auth(memberToken),
+		});
+		expect(sessions.status).toBe(200);
+		expect(await sessions.json()).toEqual({
+			sessions: [
+				expect.objectContaining({
+					id: "s1",
+					workspace_id: "w1",
+					title: "Hello",
+				}),
+			],
+		});
+
+		const messages = await teamRoute(store, "/team/messages?sessionId=s1", {
+			headers: auth(memberToken),
+		});
+		expect(messages.status).toBe(200);
+		expect(await messages.json()).toEqual({
+			messages: [
+				expect.objectContaining({
+					id: "m1",
+					session_id: "s1",
+					content: '{"type":"user_prompt","text":"hi"}',
+				}),
+			],
+		});
+
+		// A MEMBER token cannot write the mirror (companion-only).
+		const forbidden = await teamRoute(store, "/team/sync", {
+			method: "PUT",
+			headers: { ...auth(memberToken), "content-type": "application/json" },
+			body: JSON.stringify({ sessions: [] }),
+		});
+		expect(forbidden.status).toBe(401);
+
+		// An unauthorized token cannot read.
+		const unauth = await teamRoute(store, "/team/sessions?workspaceId=w1", {
+			headers: auth("nope"),
+		});
+		expect(unauth.status).toBe(401);
+	});
 });
 
 function makeStore(): {

@@ -56,6 +56,47 @@ CREATE TABLE IF NOT EXISTS invites (
 CREATE INDEX IF NOT EXISTS idx_invites_member ON invites(member_id);
 CREATE INDEX IF NOT EXISTS idx_workspaces_team ON workspaces(team_id);
 
+-- Stage B data plane: denormalized, read-only mirror of the sandbox's SESSIONS
+-- so the desktop can browse history with the container asleep. `id` /
+-- `workspace_id` are the SAME ids as the sandbox rows. Fed by the container's
+-- write-through (PUT /team/sync); D1 never feeds back into the sandbox.
+-- Browse-essential columns only — fields needed to RESUME a turn (drafts,
+-- provider_session_id, fast_mode, unread_count) come from the live container on
+-- wake, not the mirror.
+CREATE TABLE IF NOT EXISTS sessions (
+  id                   TEXT PRIMARY KEY,
+  workspace_id         TEXT NOT NULL,
+  title                TEXT,
+  status               TEXT,
+  model                TEXT,
+  agent_type           TEXT,
+  permission_mode      TEXT,
+  effort_level         TEXT,
+  action_kind          TEXT,
+  session_kind         TEXT,
+  is_hidden            INTEGER NOT NULL DEFAULT 0,
+  last_user_message_at TEXT,
+  created_at           TEXT,
+  updated_at           TEXT
+);
+
+-- Append-only mirror of the sandbox's session_messages — the chat history the
+-- desktop renders by running the SAME `convert_historical` pipeline over these
+-- raw rows. `content` is the verbatim message JSON. Rows are immutable once
+-- written (matching the sandbox) and cascade-deleted with their session.
+CREATE TABLE IF NOT EXISTS messages (
+  id         TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  role       TEXT,
+  content    TEXT,
+  sent_at    TEXT,
+  created_at TEXT,
+  author_id  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, sent_at);
+
 -- ── One-time migrations for PRE-EXISTING databases ───────────────────────────
 -- The CREATE TABLE statements above only add new columns to FRESH databases
 -- (a `CREATE TABLE IF NOT EXISTS` no-ops if the table already exists, so it

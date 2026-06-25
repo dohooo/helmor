@@ -19,6 +19,7 @@ import {
 	type TeamGatewayAcceptInviteResult,
 	type TeamGatewayAuth,
 	type TeamGatewayStore,
+	type TeamSyncInput,
 } from "./team-gateway/core";
 
 export { TEAM_ID };
@@ -113,6 +114,9 @@ export function createWorkerTeamGatewayStore(
 		putForgeIdentity: (memberId, input) =>
 			putForgeIdentity(env, memberId, input),
 		getForgeIdentity: (memberId) => getForgeIdentity(env, memberId),
+		syncTeamData: (input) => syncTeamData(env, input),
+		listSessions: (workspaceId) => listSessions(env, workspaceId),
+		listSessionMessages: (sessionId) => listSessionMessages(env, sessionId),
 	};
 }
 
@@ -225,6 +229,120 @@ async function listWorkspaces(env: Env): Promise<unknown[]> {
 		"SELECT id, name, status, created_at FROM workspaces WHERE team_id = ?1",
 	)
 		.bind(TEAM_ID)
+		.all();
+	return results;
+}
+
+/**
+ * Stage B write-through (PUT /team/sync, container→D1). Upserts session rows,
+ * APPENDS message rows (immutable — `ON CONFLICT DO NOTHING`), and applies
+ * cascade deletes. Everything is id-keyed + idempotent, so a retried/duplicated
+ * sync is a no-op and a wake-time reconcile self-heals any dropped best-effort
+ * write. Batched into one D1 transaction.
+ */
+async function syncTeamData(
+	env: Env,
+	input: TeamSyncInput,
+): Promise<{ ok: true }> {
+	const stmts: ReturnType<typeof env.DB.prepare>[] = [];
+	for (const s of input.sessions ?? []) {
+		if (!s?.id || !s.workspaceId) continue;
+		stmts.push(
+			env.DB.prepare(
+				`INSERT INTO sessions
+				   (id, workspace_id, title, status, model, agent_type, permission_mode,
+				    effort_level, action_kind, session_kind, is_hidden,
+				    last_user_message_at, created_at, updated_at)
+				 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
+				 ON CONFLICT(id) DO UPDATE SET
+				   workspace_id = excluded.workspace_id,
+				   title = excluded.title,
+				   status = excluded.status,
+				   model = excluded.model,
+				   agent_type = excluded.agent_type,
+				   permission_mode = excluded.permission_mode,
+				   effort_level = excluded.effort_level,
+				   action_kind = excluded.action_kind,
+				   session_kind = excluded.session_kind,
+				   is_hidden = excluded.is_hidden,
+				   last_user_message_at = excluded.last_user_message_at,
+				   updated_at = excluded.updated_at`,
+			).bind(
+				s.id,
+				s.workspaceId,
+				s.title ?? null,
+				s.status ?? null,
+				s.model ?? null,
+				s.agentType ?? null,
+				s.permissionMode ?? null,
+				s.effortLevel ?? null,
+				s.actionKind ?? null,
+				s.sessionKind ?? null,
+				s.isHidden ? 1 : 0,
+				s.lastUserMessageAt ?? null,
+				s.createdAt ?? null,
+				s.updatedAt ?? null,
+			),
+		);
+	}
+	for (const m of input.messages ?? []) {
+		if (!m?.id || !m.sessionId) continue;
+		// Append-only: a message id never changes, so ignore a duplicate insert.
+		stmts.push(
+			env.DB.prepare(
+				`INSERT INTO messages (id, session_id, role, content, sent_at, created_at, author_id)
+				 VALUES (?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(id) DO NOTHING`,
+			).bind(
+				m.id,
+				m.sessionId,
+				m.role ?? null,
+				m.content ?? null,
+				m.sentAt ?? null,
+				m.createdAt ?? null,
+				m.authorId ?? null,
+			),
+		);
+	}
+	for (const id of input.deletedSessionIds ?? []) {
+		if (!id) continue;
+		stmts.push(
+			env.DB.prepare("DELETE FROM messages WHERE session_id = ?1").bind(id),
+		);
+		stmts.push(env.DB.prepare("DELETE FROM sessions WHERE id = ?1").bind(id));
+	}
+	for (const id of input.deletedMessageIds ?? []) {
+		if (!id) continue;
+		stmts.push(env.DB.prepare("DELETE FROM messages WHERE id = ?1").bind(id));
+	}
+	if (stmts.length > 0) await env.DB.batch(stmts);
+	return { ok: true };
+}
+
+/** Read the session mirror for a workspace (newest first). Sandbox-independent. */
+async function listSessions(env: Env, workspaceId: string): Promise<unknown[]> {
+	if (!workspaceId) return [];
+	const { results } = await env.DB.prepare(
+		`SELECT id, workspace_id, title, status, model, agent_type, permission_mode,
+		        effort_level, action_kind, session_kind, is_hidden,
+		        last_user_message_at, created_at, updated_at
+		 FROM sessions WHERE workspace_id = ?1 ORDER BY updated_at DESC`,
+	)
+		.bind(workspaceId)
+		.all();
+	return results;
+}
+
+/** Read the raw message mirror for a session, ordered for the pipeline. */
+async function listSessionMessages(
+	env: Env,
+	sessionId: string,
+): Promise<unknown[]> {
+	if (!sessionId) return [];
+	const { results } = await env.DB.prepare(
+		`SELECT id, session_id, role, content, sent_at, created_at, author_id
+		 FROM messages WHERE session_id = ?1 ORDER BY sent_at ASC, rowid ASC`,
+	)
+		.bind(sessionId)
 		.all();
 	return results;
 }

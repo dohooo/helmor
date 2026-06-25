@@ -3,7 +3,7 @@ import {
 	type ForgeIdentityStatus,
 	forgeStatusFromInput,
 } from "../forge-config";
-import { TEAM_ID } from "../team-gateway/core";
+import { TEAM_ID, type TeamSyncInput } from "../team-gateway/core";
 
 export const LOCAL_TEAM_ID = TEAM_ID;
 
@@ -31,6 +31,35 @@ export interface LocalInvite {
 	expires_at: string | null;
 }
 
+/** Stage B mirror rows — snake_case to match the D1 columns + the desktop's
+ *  historical-record reader, so local dev and the deployed Worker serve the
+ *  same shape. */
+export interface LocalSessionRow {
+	id: string;
+	workspace_id: string;
+	title: string | null;
+	status: string | null;
+	model: string | null;
+	agent_type: string | null;
+	permission_mode: string | null;
+	effort_level: string | null;
+	action_kind: string | null;
+	session_kind: string | null;
+	is_hidden: number;
+	last_user_message_at: string | null;
+	created_at: string | null;
+	updated_at: string | null;
+}
+export interface LocalMessageRow {
+	id: string;
+	session_id: string;
+	role: string | null;
+	content: string | null;
+	sent_at: string | null;
+	created_at: string | null;
+	author_id: string | null;
+}
+
 export interface CloudCodexIdentityStatus {
 	hasToken: boolean;
 	accountId: string | null;
@@ -54,6 +83,8 @@ export interface LocalTeamSnapshot {
 	members: Record<string, LocalTeamMember>;
 	invites: Record<string, LocalInvite>;
 	workspaces: Record<string, LocalTeamWorkspace & { team_id: string }>;
+	sessions: Record<string, LocalSessionRow>;
+	messages: Record<string, LocalMessageRow>;
 	codexIdentities: Record<string, CloudCodexIdentityStatus>;
 	claudeIdentities: Record<string, CloudClaudeIdentityStatus>;
 	/** Local-dev only: the raw Claude OAuth token per member, kept so the
@@ -105,6 +136,9 @@ export interface LocalTeamRegistry {
 		status?: string;
 		createdAt?: string;
 	}): Promise<void>;
+	syncTeamData(input: TeamSyncInput): Promise<{ ok: true }>;
+	listSessions(workspaceId: string): Promise<LocalSessionRow[]>;
+	listSessionMessages(sessionId: string): Promise<LocalMessageRow[]>;
 	putCodexIdentity(
 		memberId: string,
 		input: { refreshToken: string; idToken: string },
@@ -256,6 +290,72 @@ export class InMemoryLocalTeamRegistry implements LocalTeamRegistry {
 		this.changed();
 	}
 
+	async syncTeamData(input: TeamSyncInput): Promise<{ ok: true }> {
+		for (const s of input.sessions ?? []) {
+			if (!s?.id || !s.workspaceId) continue;
+			this.snapshotState.sessions[s.id] = {
+				id: s.id,
+				workspace_id: s.workspaceId,
+				title: s.title ?? null,
+				status: s.status ?? null,
+				model: s.model ?? null,
+				agent_type: s.agentType ?? null,
+				permission_mode: s.permissionMode ?? null,
+				effort_level: s.effortLevel ?? null,
+				action_kind: s.actionKind ?? null,
+				session_kind: s.sessionKind ?? null,
+				is_hidden: s.isHidden ? 1 : 0,
+				last_user_message_at: s.lastUserMessageAt ?? null,
+				created_at: s.createdAt ?? null,
+				updated_at: s.updatedAt ?? null,
+			};
+		}
+		for (const m of input.messages ?? []) {
+			if (!m?.id || !m.sessionId) continue;
+			// Append-only: never overwrite an existing message row.
+			if (this.snapshotState.messages[m.id]) continue;
+			this.snapshotState.messages[m.id] = {
+				id: m.id,
+				session_id: m.sessionId,
+				role: m.role ?? null,
+				content: m.content ?? null,
+				sent_at: m.sentAt ?? null,
+				created_at: m.createdAt ?? null,
+				author_id: m.authorId ?? null,
+			};
+		}
+		for (const id of input.deletedSessionIds ?? []) {
+			if (!id) continue;
+			delete this.snapshotState.sessions[id];
+			for (const mid of Object.keys(this.snapshotState.messages)) {
+				if (this.snapshotState.messages[mid]?.session_id === id) {
+					delete this.snapshotState.messages[mid];
+				}
+			}
+		}
+		for (const id of input.deletedMessageIds ?? []) {
+			if (id) delete this.snapshotState.messages[id];
+		}
+		this.changed();
+		return { ok: true };
+	}
+
+	async listSessions(workspaceId: string): Promise<LocalSessionRow[]> {
+		return Object.values(this.snapshotState.sessions)
+			.filter((s) => s.workspace_id === workspaceId)
+			.sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+	}
+
+	async listSessionMessages(sessionId: string): Promise<LocalMessageRow[]> {
+		return Object.values(this.snapshotState.messages)
+			.filter((m) => m.session_id === sessionId)
+			.sort((a, b) =>
+				(a.sent_at ?? a.created_at ?? "").localeCompare(
+					b.sent_at ?? b.created_at ?? "",
+				),
+			);
+	}
+
 	async putCodexIdentity(
 		memberId: string,
 		input: { refreshToken: string; idToken: string },
@@ -390,6 +490,8 @@ function normalizeSnapshot(
 		members: initial?.members ?? {},
 		invites: initial?.invites ?? {},
 		workspaces: initial?.workspaces ?? {},
+		sessions: initial?.sessions ?? {},
+		messages: initial?.messages ?? {},
 		codexIdentities: initial?.codexIdentities ?? {},
 		claudeIdentities: initial?.claudeIdentities ?? {},
 		claudeTokens: initial?.claudeTokens ?? {},

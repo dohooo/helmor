@@ -35,6 +35,48 @@ export interface TeamGatewayStore {
 		input: { githubToken?: string; glabConfigYml?: string },
 	): Promise<unknown>;
 	getForgeIdentity(memberId: string): Promise<unknown>;
+	/** Stage B data-plane mirror: container write-through (companion-gated). */
+	syncTeamData(input: TeamSyncInput): Promise<{ ok: true }>;
+	/** Read the D1 session mirror for a workspace (sandbox-independent). */
+	listSessions(workspaceId: string): Promise<unknown[]>;
+	/** Read the D1 message mirror for a session (raw rows for convert_historical). */
+	listSessionMessages(sessionId: string): Promise<unknown[]>;
+}
+
+/** Container → Worker write-through payload (PUT /team/sync). Field names are
+ *  camelCase to match the Rust serde convention; the store maps them onto the
+ *  snake_case D1 columns. All arrays optional so a sync can carry just the
+ *  changed rows. */
+export interface TeamSyncSessionRow {
+	id: string;
+	workspaceId: string;
+	title?: string | null;
+	status?: string | null;
+	model?: string | null;
+	agentType?: string | null;
+	permissionMode?: string | null;
+	effortLevel?: string | null;
+	actionKind?: string | null;
+	sessionKind?: string | null;
+	isHidden?: boolean;
+	lastUserMessageAt?: string | null;
+	createdAt?: string | null;
+	updatedAt?: string | null;
+}
+export interface TeamSyncMessageRow {
+	id: string;
+	sessionId: string;
+	role?: string | null;
+	content?: string | null;
+	sentAt?: string | null;
+	createdAt?: string | null;
+	authorId?: string | null;
+}
+export interface TeamSyncInput {
+	sessions?: TeamSyncSessionRow[];
+	messages?: TeamSyncMessageRow[];
+	deletedSessionIds?: string[];
+	deletedMessageIds?: string[];
 }
 
 export interface TeamGatewayAcceptInviteInput {
@@ -196,6 +238,34 @@ export async function handleTeamGatewayRoute(
 			const caller = await auth();
 			if (!caller.memberId) return json({ code: "Unauthorized" }, 401);
 			return json(await store.getForgeIdentity(caller.memberId));
+		}
+		case "PUT /team/sync": {
+			// Container write-through ONLY — uses the shared companion token, which
+			// classifies as "admin". A member token can never mutate the mirror.
+			if ((await auth()).caller !== "admin") {
+				return json({ code: "Unauthorized" }, 401);
+			}
+			const body = await readGatewayJsonBody(request);
+			await store.syncTeamData(body as TeamSyncInput);
+			return json({ ok: true });
+		}
+		case "GET /team/sessions": {
+			// Member-or-admin read of the session mirror — works while the sandbox
+			// is asleep (D1 only, no container).
+			if ((await auth()).caller === "unauthorized") {
+				return json({ code: "Unauthorized" }, 401);
+			}
+			const workspaceId = url.searchParams.get("workspaceId") ?? "";
+			return json({ sessions: await store.listSessions(workspaceId) });
+		}
+		case "GET /team/messages": {
+			// Member-or-admin read of the message mirror (raw rows → the desktop
+			// runs convert_historical locally). Sandbox-independent.
+			if ((await auth()).caller === "unauthorized") {
+				return json({ code: "Unauthorized" }, 401);
+			}
+			const sessionId = url.searchParams.get("sessionId") ?? "";
+			return json({ messages: await store.listSessionMessages(sessionId) });
 		}
 		default:
 			return json({ code: "NotFound", message: `no route ${route}` }, 404);
