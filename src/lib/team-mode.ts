@@ -69,6 +69,20 @@ export function saveTeamConfig(config: TeamConfig): void {
 }
 
 /**
+ * Wipe the saved team backend entirely — URL, token, AND the mode flag — so the
+ * next "Team" pick starts from a clean slate (the setup card, not a stale
+ * config). Reload after calling to repoint the live transport back to local.
+ * Used by the dev-tools "Reset team-cloud config" action.
+ */
+export function clearTeamConfig(): void {
+	const store = storage();
+	if (!store) return;
+	store.removeItem(URL_KEY);
+	store.removeItem(TOKEN_KEY);
+	store.removeItem(MODE_KEY);
+}
+
+/**
  * Local-dev convenience: the fixed URL + member token the `bun run dev:team`
  * proxy seeds, so toggling Team mode in a dev build needs no manual entry.
  * `null` in a production build — the fixed token only works against the

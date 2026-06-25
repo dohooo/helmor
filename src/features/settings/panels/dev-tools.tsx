@@ -1,10 +1,11 @@
-import { Loader2, RotateCcw, Trash2 } from "lucide-react";
+import { Cloud, Loader2, RotateCcw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { devResetAllData, loadDataInfo } from "@/lib/api";
 import { I18nText } from "@/lib/i18n";
 import { saveSettings } from "@/lib/settings";
+import { clearTeamConfig } from "@/lib/team-mode";
 import {
 	SettingsGroup,
 	SettingsNotice,
@@ -43,6 +44,13 @@ export function DevToolsPanel() {
 	const handleResetOnboarding = useCallback(() => {
 		void saveSettings({ onboardingCompleted: false });
 		setOnboardingReset(true);
+	}, []);
+
+	const handleResetTeamCloud = useCallback(() => {
+		// Wipe the saved team backend, then reload so the live IPC transport
+		// repoints back to local and the next "Team" pick starts at setup.
+		clearTeamConfig();
+		window.location.reload();
 	}, []);
 
 	return (
@@ -121,6 +129,29 @@ export function DevToolsPanel() {
 						) : (
 							<I18nText source="resetAllDevData" />
 						)}
+					</Button>
+				</SettingsRow>
+			</SettingsGroup>
+
+			<h3 className="mt-2 text-small font-medium text-muted-foreground">
+				Team cloud
+			</h3>
+			<SettingsGroup>
+				<SettingsRow
+					align="start"
+					title={
+						<span className="flex items-center gap-1.5">
+							<Cloud
+								className="size-3.5 text-muted-foreground"
+								strokeWidth={1.8}
+							/>
+							<span>Reset team-cloud config</span>
+						</span>
+					}
+					description="Clear the saved Worker URL, token, and team-mode flag, then reload — the next time you pick Team, setup starts fresh. Remote containers / identities are unaffected."
+				>
+					<Button variant="outline" size="sm" onClick={handleResetTeamCloud}>
+						Reset
 					</Button>
 				</SettingsRow>
 			</SettingsGroup>
