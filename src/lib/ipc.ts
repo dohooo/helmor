@@ -520,6 +520,9 @@ const LOCAL_ONLY_INVOKES = new Set<string>([
 	// Auto-deploy drives wrangler (OAuth + deploy) on this Mac; it can't run in
 	// the cloud container.
 	"deploy_team_cloud",
+	// Dev-tools: list/delete remote Cloudflare Containers via wrangler on this Mac.
+	"list_team_containers",
+	"delete_team_container",
 	// Dev-only inspection helpers read buffers owned by the desktop Tauri host.
 	"debug_list_terminal_buffers",
 	"debug_read_terminal_buffer",

@@ -58,6 +58,9 @@ const LOCAL_ONLY: &[&str] = &[
     // Auto-deploy drives wrangler (OAuth + deploy) on THIS Mac; it can't run in
     // the cloud container.
     "deploy_team_cloud",
+    // Dev-tools: list/delete remote Cloudflare Containers via wrangler on this Mac.
+    "list_team_containers",
+    "delete_team_container",
     // Dev-only desktop inspection helpers read buffers owned by the Tauri host.
     "debug_list_terminal_buffers",
     "debug_read_terminal_buffer",

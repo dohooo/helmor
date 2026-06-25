@@ -78,8 +78,24 @@ enum ScriptLine {
     },
 }
 
-/// Locate `cloud/scripts/provision-team.ts`. Mirrors `resolve_sidecar_path`'s
-/// dev resolution: Tauri dev sets cwd to `src-tauri/`, so check the parent too.
+/// Locate a `cloud/scripts/<name>` helper. Mirrors `resolve_sidecar_path`'s dev
+/// resolution: Tauri dev sets cwd to `src-tauri/`, so check the parent too. A
+/// release build doesn't bundle these yet.
+fn resolve_cloud_script(name: &str) -> anyhow::Result<PathBuf> {
+    if let Ok(cwd) = std::env::current_dir() {
+        for base in [cwd.as_path(), cwd.parent().unwrap_or(cwd.as_path())] {
+            let candidate = base.join("cloud/scripts").join(name);
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+    anyhow::bail!(
+        "Team cloud tooling isn't available in this build yet (cloud/scripts/{name} isn't bundled). Use Advanced setup in Settings → Team, or run a dev build."
+    )
+}
+
+/// The provision engine. An env override aids manual testing.
 fn resolve_provision_script() -> anyhow::Result<PathBuf> {
     if let Ok(path) = std::env::var("HELMOR_PROVISION_SCRIPT") {
         let p = PathBuf::from(path);
@@ -87,17 +103,7 @@ fn resolve_provision_script() -> anyhow::Result<PathBuf> {
             return Ok(p);
         }
     }
-    if let Ok(cwd) = std::env::current_dir() {
-        for base in [cwd.as_path(), cwd.parent().unwrap_or(cwd.as_path())] {
-            let candidate = base.join("cloud/scripts/provision-team.ts");
-            if candidate.is_file() {
-                return Ok(candidate);
-            }
-        }
-    }
-    anyhow::bail!(
-        "Team auto-deploy isn't available in this build yet (the provisioner isn't bundled). Use Advanced setup in Settings → Team, or run a dev build."
-    )
+    resolve_cloud_script("provision-team.ts")
 }
 
 /// Run the provision script, forwarding progress to `channel`, returning the
@@ -179,4 +185,60 @@ pub async fn deploy_team_cloud(
         .await
         .map_err(|e| anyhow::anyhow!("provision task join failed: {e}"))??;
     Ok(result)
+}
+
+/// Run a `cloud/scripts` helper and capture its stdout (the machine payload).
+/// Blocking — call from `spawn_blocking`.
+fn run_cloud_script_capture(script_name: &str, args: &[&str]) -> anyhow::Result<String> {
+    let script = resolve_cloud_script(script_name)?;
+    let cloud_dir = script.parent().and_then(|p| p.parent());
+
+    let mut command = Command::new(crate::platform::executable::resolve_for_spawn("bun"));
+    command
+        .arg("run")
+        .arg(&script)
+        .args(args)
+        .env("WRANGLER_SEND_METRICS", "false")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+    if let Some(dir) = cloud_dir {
+        command.current_dir(dir);
+    }
+
+    let output = command
+        .output()
+        .context("Failed to run the team-containers helper (is Bun installed?)")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "team-containers {} failed (exit {:?})",
+            args.first().copied().unwrap_or(""),
+            output.status.code()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// List the operator's remote Cloudflare Containers — the raw
+/// `wrangler containers list --json` payload (the frontend parses it). Dev-only
+/// tooling. LOCAL_ONLY — runs wrangler on the desktop host.
+#[tauri::command]
+pub async fn list_team_containers() -> CmdResult<String> {
+    let json = tauri::async_runtime::spawn_blocking(|| {
+        run_cloud_script_capture("team-containers.ts", &["list"])
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("list task join failed: {e}"))??;
+    Ok(json)
+}
+
+/// Delete a remote Cloudflare Container by id. Dev-only tooling. LOCAL_ONLY.
+#[tauri::command]
+pub async fn delete_team_container(id: String) -> CmdResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        run_cloud_script_capture("team-containers.ts", &["delete", &id])
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("delete task join failed: {e}"))??;
+    Ok(())
 }

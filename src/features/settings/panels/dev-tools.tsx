@@ -1,8 +1,14 @@
-import { Cloud, Loader2, RotateCcw, Trash2 } from "lucide-react";
+import { Cloud, Container, Loader2, RotateCcw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { devResetAllData, loadDataInfo } from "@/lib/api";
+import {
+	deleteTeamContainer,
+	devResetAllData,
+	listTeamContainers,
+	loadDataInfo,
+	type TeamContainer,
+} from "@/lib/api";
 import { I18nText } from "@/lib/i18n";
 import { saveSettings } from "@/lib/settings";
 import { clearTeamConfig } from "@/lib/team-mode";
@@ -18,6 +24,9 @@ export function DevToolsPanel() {
 	const [resetting, setResetting] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [onboardingReset, setOnboardingReset] = useState(false);
+	const [containers, setContainers] = useState<TeamContainer[] | null>(null);
+	const [loadingContainers, setLoadingContainers] = useState(false);
+	const [containerError, setContainerError] = useState<string | null>(null);
 
 	useEffect(() => {
 		void loadDataInfo().then((info) => {
@@ -52,6 +61,32 @@ export function DevToolsPanel() {
 		clearTeamConfig();
 		window.location.reload();
 	}, []);
+
+	const loadContainers = useCallback(async () => {
+		setLoadingContainers(true);
+		setContainerError(null);
+		try {
+			setContainers(await listTeamContainers());
+		} catch (e) {
+			setContainerError(e instanceof Error ? e.message : String(e));
+			setContainers([]);
+		} finally {
+			setLoadingContainers(false);
+		}
+	}, []);
+
+	const removeContainer = useCallback(
+		async (id: string) => {
+			setContainerError(null);
+			try {
+				await deleteTeamContainer(id);
+				await loadContainers();
+			} catch (e) {
+				setContainerError(e instanceof Error ? e.message : String(e));
+			}
+		},
+		[loadContainers],
+	);
 
 	return (
 		<>
@@ -133,7 +168,7 @@ export function DevToolsPanel() {
 				</SettingsRow>
 			</SettingsGroup>
 
-			<h3 className="mt-2 text-small font-medium text-muted-foreground">
+			<h3 className="mt-2 font-medium text-muted-foreground text-small">
 				Team cloud
 			</h3>
 			<SettingsGroup>
@@ -152,6 +187,66 @@ export function DevToolsPanel() {
 				>
 					<Button variant="outline" size="sm" onClick={handleResetTeamCloud}>
 						Reset
+					</Button>
+				</SettingsRow>
+
+				<SettingsRow
+					align="start"
+					title={
+						<span className="flex items-center gap-1.5">
+							<Container
+								className="size-3.5 text-muted-foreground"
+								strokeWidth={1.8}
+							/>
+							<span>Remote containers</span>
+						</span>
+					}
+					description={
+						<>
+							List the Cloudflare Containers you've deployed, then delete
+							leftovers.
+							{containerError ? (
+								<SettingsNotice tone="error">{containerError}</SettingsNotice>
+							) : null}
+							{containers && containers.length === 0 && !containerError ? (
+								<SettingsNotice tone="info">
+									No containers found.
+								</SettingsNotice>
+							) : null}
+							{containers && containers.length > 0 ? (
+								<div className="mt-2 flex flex-col gap-1">
+									{containers.map((container, index) => (
+										<div
+											key={container.id ?? container.name ?? index}
+											className="flex items-center justify-between gap-2 rounded-md border border-border/45 bg-card/60 px-2 py-1"
+										>
+											<code className="truncate text-mini">
+												{container.name ?? container.id ?? "unknown"}
+											</code>
+											<Button
+												variant="ghost"
+												size="sm"
+												disabled={!container.id}
+												onClick={() =>
+													container.id && void removeContainer(container.id)
+												}
+											>
+												Delete
+											</Button>
+										</div>
+									))}
+								</div>
+							) : null}
+						</>
+					}
+				>
+					<Button
+						variant="outline"
+						size="sm"
+						onClick={() => void loadContainers()}
+						disabled={loadingContainers}
+					>
+						{loadingContainers ? "Loading…" : "List"}
 					</Button>
 				</SettingsRow>
 			</SettingsGroup>

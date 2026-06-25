@@ -1118,6 +1118,40 @@ export async function deployTeamCloud(args?: {
 	});
 }
 
+/**
+ * A remote Cloudflare Container, as surfaced by `wrangler containers list`. The
+ * exact JSON shape varies by wrangler version, so this stays intentionally
+ * loose — the dev-tools list renders whatever id / name it finds.
+ */
+export interface TeamContainer {
+	id?: string;
+	name?: string;
+	[key: string]: unknown;
+}
+
+/** Dev-tools: list the operator's remote Cloudflare Containers. LOCAL_ONLY. */
+export async function listTeamContainers(): Promise<TeamContainer[]> {
+	const raw = await invoke<string>("list_team_containers");
+	try {
+		const parsed = JSON.parse(raw) as unknown;
+		const arr = Array.isArray(parsed)
+			? parsed
+			: ((parsed as { containers?: unknown[] })?.containers ??
+				(parsed as { apps?: unknown[] })?.apps ??
+				[]);
+		return (arr as TeamContainer[]).filter(
+			(c): c is TeamContainer => typeof c === "object" && c !== null,
+		);
+	} catch {
+		return [];
+	}
+}
+
+/** Dev-tools: delete a remote Cloudflare Container by id. LOCAL_ONLY. */
+export async function deleteTeamContainer(id: string): Promise<void> {
+	await invoke("delete_team_container", { id });
+}
+
 // Cursor is an SDK (no versioned CLI), so it has no entry.
 export type AgentVersionsResult = {
 	claude: string | null;
