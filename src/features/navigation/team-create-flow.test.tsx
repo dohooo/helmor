@@ -5,6 +5,13 @@ const mocks = vi.hoisted(() => ({
 	deployTeamCloud: vi.fn(),
 	switchTeamMode: vi.fn(),
 	createTeam: vi.fn(() => Promise.resolve({ teamId: "t" })),
+	mintInvite: vi.fn(() =>
+		Promise.resolve({
+			token: "member-tok",
+			url: "https://x/?invite=member-tok",
+		}),
+	),
+	acceptInvite: vi.fn(() => Promise.resolve({ ok: true, memberId: "123" })),
 	openUrl: vi.fn(),
 	publishShellEvent: vi.fn(),
 	codexAuthorize: vi.fn(),
@@ -13,7 +20,17 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/api", () => ({ deployTeamCloud: mocks.deployTeamCloud }));
 vi.mock("@/lib/team-switch", () => ({ switchTeamMode: mocks.switchTeamMode }));
-vi.mock("@/lib/team-api", () => ({ createTeam: mocks.createTeam }));
+vi.mock("@/lib/team-api", () => ({
+	createTeam: mocks.createTeam,
+	mintInvite: mocks.mintInvite,
+	acceptInvite: mocks.acceptInvite,
+}));
+vi.mock("@/features/team/use-team-identity", () => ({
+	useTeamIdentity: () => ({
+		identity: { githubId: "123", login: "admin" },
+		isLoading: false,
+	}),
+}));
 vi.mock("@/lib/platform-bridge", () => ({ openUrl: mocks.openUrl }));
 vi.mock("@/shell/event-bus", () => ({
 	publishShellEvent: mocks.publishShellEvent,
@@ -85,9 +102,12 @@ describe("TeamCreateFlow", () => {
 
 		// Finish switches into team mode + closes the card.
 		fireEvent.click(screen.getByRole("button", { name: /^Finish$/i }));
+		// The creator is registered as a member (mint + accept), so the saved
+		// bearer is the MEMBER token — not the shared companion token.
+		expect(mocks.acceptInvite).toHaveBeenCalled();
 		expect(mocks.switchTeamMode).toHaveBeenCalledWith({
 			url: "https://team.example.workers.dev",
-			token: "admin-tok",
+			token: "member-tok",
 		});
 		expect(onDone).toHaveBeenCalled();
 	});

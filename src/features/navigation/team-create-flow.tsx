@@ -10,13 +10,14 @@ import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useCloudClaudeIdentity } from "@/features/settings/panels/cloud-identity/use-cloud-claude-identity";
 import { useCloudIdentity } from "@/features/settings/panels/cloud-identity/use-cloud-identity";
+import { useTeamIdentity } from "@/features/team/use-team-identity";
 import {
 	deployTeamCloud,
 	type TeamDeployProgress,
 	type TeamDeployStep,
 } from "@/lib/api";
 import { openUrl } from "@/lib/platform-bridge";
-import { createTeam } from "@/lib/team-api";
+import { acceptInvite, createTeam, mintInvite } from "@/lib/team-api";
 import type { TeamConfig } from "@/lib/team-mode";
 import { switchTeamMode } from "@/lib/team-switch";
 import { describeUnknownError } from "@/lib/workspace-helpers";
@@ -72,6 +73,7 @@ export function TeamCreateFlow({
 
 	const codex = useCloudIdentity(deployedConfig);
 	const claude = useCloudClaudeIdentity(deployedConfig);
+	const { identity } = useTeamIdentity();
 
 	const run = useCallback(async () => {
 		setPhase("running");
@@ -96,11 +98,26 @@ export function TeamCreateFlow({
 				setPhase("needs-upgrade");
 				return;
 			}
-			const config = { url: result.workerUrl, token: result.adminToken };
+			const adminConfig = { url: result.workerUrl, token: result.adminToken };
+			// Bootstrap the single team row (admin-gated by the companion token).
+			await createTeam(adminConfig).catch(() => {});
+			// The deploy hands back the shared companion token, which the worker
+			// treats as "admin" (no member) — but cloud-identity is MEMBER-scoped,
+			// so authorizing with it 401s. Register the creator as a member (mint an
+			// invite + accept it as themselves) and use that member token, exactly
+			// like the invite-join path, so cloud-identity authorize works.
+			let config = adminConfig;
+			if (identity) {
+				try {
+					const invite = await mintInvite(adminConfig);
+					await acceptInvite(adminConfig.url, invite.token, identity);
+					config = { url: result.workerUrl, token: invite.token };
+				} catch {
+					// Fall back to the admin token; cloud-identity authorize may 401,
+					// which the user then sees on the authorize step.
+				}
+			}
 			setDeployedConfig(config);
-			// Bootstrap the single team row (idempotent; the admin token authorizes
-			// it). Best-effort — the identity binds to this member regardless.
-			await createTeam(config).catch(() => {});
 			// Don't switch in yet: first let the user bind a cloud agent identity,
 			// otherwise cloud runs would have nothing to authenticate with.
 			setPhase("authorize");
@@ -108,7 +125,7 @@ export function TeamCreateFlow({
 			setError(describeUnknownError(caught, "Cloud setup didn't finish."));
 			setPhase("error");
 		}
-	}, []);
+	}, [identity]);
 
 	const finish = useCallback(() => {
 		if (deployedConfig) {
