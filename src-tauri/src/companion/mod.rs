@@ -25,11 +25,13 @@ mod rpc;
 mod server;
 pub mod stable_url;
 mod stream;
+pub mod team_sync;
 mod tunnel;
 
 pub use rpc::build_dispatcher;
 pub use server::{Dispatcher, StreamStarter};
 pub use stream::build_stream_starter;
+pub use team_sync::TeamSync;
 pub use tunnel::{
     create_named_tunnel, delete_named_tunnel, is_signed_in, sign_in_cloudflare, TunnelState,
 };

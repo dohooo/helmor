@@ -154,6 +154,10 @@ fn build_app(mode: AppMode) -> tauri::App {
         .manage(global_hotkey::GlobalHotkeyState::default())
         .manage(commands::forge_commands::ForgeAuthEdgeStore::default())
         .manage(companion::CompanionState::new())
+        // Stage B data-plane mirror. Inert unless HELMOR_SYNC_URL +
+        // HELMOR_COMPANION_TOKEN are set (the cloud serve host), so the desktop
+        // app manages a disabled instance.
+        .manage(companion::TeamSync::from_env())
         .manage(companion::TunnelState::new())
         .setup(move |app| {
             // Deterministic startup core: data dir, logging, DB schema, pools,

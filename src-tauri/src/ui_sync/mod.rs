@@ -9,6 +9,11 @@ pub use manager::UiSyncManager;
 pub use socket::{is_listener_running, notify_running_app, socket_path, start_listener};
 
 pub fn publish<R: Runtime>(app: &AppHandle<R>, event: UiMutationEvent) {
+    // Stage B: mirror session/message changes to the team Worker's D1 so the
+    // desktop can browse history while the sandbox sleeps. Inert unless this is
+    // the cloud serve host; cheap-filters internally and spawns its own
+    // best-effort task, so it never blocks the publish path.
+    crate::companion::team_sync::on_ui_mutation(app, &event);
     let manager = app.state::<UiSyncManager>();
     manager.publish(event);
 }
