@@ -31,7 +31,12 @@
 
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	appendFileSync,
+	mkdtempSync,
+	readFileSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -125,25 +130,45 @@ function looksLikeNeedsPaid(text: string): boolean {
 }
 
 /** Generate the per-account wrangler config from the committed template:
- *  swap the local Dockerfile build for the PUBLIC image, and drop the
- *  hard-coded D1 block so `d1 create --update-config` adds a fresh one for
- *  THIS account. Returns the temp config path. */
+ *   - drop the hard-coded D1 block (its id is our dev account's; the caller
+ *     injects THIS account's id),
+ *   - swap the local Dockerfile build for the PUBLIC image,
+ *   - make `main` ABSOLUTE — wrangler resolves `main` relative to the config
+ *     file, and ours lives in a temp dir, so a relative `src/index.ts` 404s
+ *     ("entry-point file … not found"). Returns the temp config path. */
 function writeAccountConfig(): string {
 	const template = readFileSync(join(cloudRoot, "wrangler.toml"), "utf8");
-	// TOML blocks in this file are blank-line separated; drop the committed D1
-	// block (its database_id belongs to our dev account) so the new account
-	// gets its own via `d1 create --update-config`.
+	// TOML blocks are blank-line separated; drop the committed D1 block.
 	const blocks = template
 		.split(/\n\n+/)
 		.filter((b) => !b.includes("[[d1_databases]]"));
 	const rewritten = blocks
 		.join("\n\n")
-		// Reference the prebuilt PUBLIC image instead of a local `docker build`.
-		.replace(/image\s*=\s*"[^"]*"/, `image = "${TEAM_IMAGE}"`);
+		.replace(/image\s*=\s*"[^"]*"/, `image = "${TEAM_IMAGE}"`)
+		.replace(
+			/^main\s*=\s*"[^"]*"/m,
+			`main = "${join(cloudRoot, "src/index.ts")}"`,
+		);
 	const dir = mkdtempSync(join(tmpdir(), "helmor-team-deploy-"));
 	const path = join(dir, "wrangler.toml");
 	writeFileSync(path, rewritten, "utf8");
 	return path;
+}
+
+/** Resolve a D1 database's id by name via `d1 list --json` (works whether it
+ *  was just created or already existed). Empty string if not found. */
+function findD1Id(name: string): string {
+	const res = wrangler(["d1", "list", "--json"]);
+	if (res.code !== 0) return "";
+	try {
+		const dbs = JSON.parse(res.stdout) as Array<{
+			uuid?: string;
+			name?: string;
+		}>;
+		return dbs.find((db) => db.name === name)?.uuid ?? "";
+	} catch {
+		return "";
+	}
 }
 
 function main(): void {
@@ -173,17 +198,20 @@ function main(): void {
 	const configPath = writeAccountConfig();
 	log(`[provision] account config: ${configPath}`);
 
-	// D1: create + auto-write the binding/UUID into our temp config.
-	// TODO(verify): confirm `--update-config` appends the [[d1_databases]] block
-	// to a .toml on a real account (vs only .jsonc).
-	const d1 = wrangler(
-		["d1", "create", "helmor-team", "--binding", "DB", "--update-config"],
-		{ configPath },
-	);
-	if (d1.code !== 0 && !d1.stderr.toLowerCase().includes("already exists")) {
-		log(`[provision] d1 create failed:\n${d1.stderr}`);
+	// D1: ensure it exists, then write its REAL id into the config. (`d1 create
+	// --update-config` silently skips the binding when the DB already exists,
+	// leaving the deploy with no DB binding; resolving the id explicitly also
+	// handles re-running against an account that's already set up.)
+	wrangler(["d1", "create", "helmor-team"]); // best-effort; "already exists" ok
+	const dbId = findD1Id("helmor-team");
+	if (!dbId) {
+		log("[provision] couldn't resolve the helmor-team D1 id.");
 		process.exit(1);
 	}
+	appendFileSync(
+		configPath,
+		`\n[[d1_databases]]\nbinding = "DB"\ndatabase_name = "helmor-team"\ndatabase_id = "${dbId}"\n`,
+	);
 
 	// R2 bucket (name fixed in the template's binding).
 	const r2 = wrangler(["r2", "bucket", "create", "helmor-team-backups"]);
