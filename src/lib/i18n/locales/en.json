@@ -1505,6 +1505,7 @@
 	"system": "System",
 	"systemProxy": "System proxy",
 	"targetUrl": "Target URL",
+	"teamRoomMentionAgentForReply": "@mention an agent (@claude) for a reply — plain messages go to teammates",
 	"terminal": "Terminal",
 	"terminalFont": "Terminal font",
 	"terminalMode": "Terminal Mode",

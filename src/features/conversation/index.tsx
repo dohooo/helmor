@@ -31,6 +31,7 @@ import {
 } from "@/lib/query-client";
 import { type ModelRef, useSettings } from "@/lib/settings";
 import type { ContextCard } from "@/lib/sources/types";
+import { isTeamModeActive } from "@/lib/team-mode";
 import {
 	useSubmitQueueApi,
 	useSubmitQueueForSession,
@@ -842,7 +843,15 @@ export const WorkspaceConversationContainer = memo(
 						repoId={repoId}
 						disabled={selectionPending}
 						forceAvailable={composerForceAvailable}
-						placeholder={composerPlaceholder}
+						placeholder={
+							// In team mode every session is a shared room: an un-@mentioned
+							// message broadcasts to teammates and does NOT reach an agent
+							// (see use-streaming's `teamModeActive && !hasTeamAgentMention`
+							// room-chat gate). Hint that you must @mention an agent to get a
+							// reply. An explicit placeholder (e.g. the start surface) wins.
+							composerPlaceholder ??
+							(isTeamModeActive() ? "teamRoomMentionAgentForReply" : undefined)
+						}
 						contextKeyOverride={composerContextKeyOverride}
 						sending={sendingForComposer}
 						sendError={activeSendError}
