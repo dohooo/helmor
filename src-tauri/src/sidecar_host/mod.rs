@@ -1,6 +1,5 @@
 //! Reverse IPC — sidecar `hostRequest` on stdout, Rust `hostResponse` on stdin.
 
-pub mod handlers;
 pub mod protocol;
 
 use anyhow::Result;
@@ -10,7 +9,8 @@ use tauri::{AppHandle, Manager, Runtime};
 pub use protocol::{HostRequest, HostResponse};
 
 pub async fn dispatch<R: Runtime>(app: AppHandle<R>, method: &str, params: Value) -> Result<Value> {
-    handlers::route(app, method, params).await
+    let _ = (app, params);
+    Err(unknown_method(method))
 }
 
 /// Install the sidecar reverse-IPC dispatcher and spawn the worker thread that

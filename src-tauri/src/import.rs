@@ -934,15 +934,6 @@ fn import_workspace_column_lists(conn: &Connection) -> Result<(String, String)> 
         }
 
         // Coalesce AI-triage NOT NULL columns so pre-triage Conductor DBs import cleanly.
-        if col == "kind" {
-            main_parts.push(col.clone());
-            source_parts.push(if source_set.contains("kind") {
-                "COALESCE(kind, 'manual') AS kind".to_string()
-            } else {
-                "'manual' AS kind".to_string()
-            });
-            continue;
-        }
         if col == "ai_priming_consumed" {
             main_parts.push(col.clone());
             source_parts.push(if source_set.contains("ai_priming_consumed") {

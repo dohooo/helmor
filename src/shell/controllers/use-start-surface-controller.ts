@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { StartSubmitMode } from "@/features/composer/start-submit-mode";
 import type {
 	ComposerCreatePrepareOutcome,
+	ComposerSettingsController,
 	ComposerSubmitPayload,
 	PendingCreatedWorkspaceSubmit,
 } from "@/features/conversation";
@@ -75,6 +76,9 @@ export type StartSurfaceState = {
 		directories: readonly string[];
 		onChange: (next: readonly string[]) => void;
 	};
+	/** Persisted composer picks for the start surface, so model/effort/
+	 *  permission/fast survive the start-subtree unmount on navigation. */
+	startComposerSettingsController: ComposerSettingsController;
 };
 
 export type StartSurfaceActions = {
@@ -169,6 +173,13 @@ export function useStartSurfaceController(
 
 	// Pickers read from settings; writes go through `updateSettings`.
 	const prefs = appSettings.startSurfacePreferences;
+	const startRepository =
+		repositories.find((repository) => repository.id === startRepositoryId) ??
+		repositories[0] ??
+		null;
+	const startRepositoryIsPlainDirectory = Boolean(
+		startRepository && !startRepository.defaultBranch,
+	);
 	// Chat is a top-level toggle (independent of repo). When off, the start
 	// surface falls back to the selected repo's stored work mode.
 	const repoWorkMode = readRepoPreference(
@@ -183,8 +194,10 @@ export function useStartSurfaceController(
 	const startMode: WorkspaceMode =
 		repositories.length === 0
 			? "chat"
-			: (transientModeOverride ??
-				(prefs.chatModeActive ? "chat" : repoWorkMode));
+			: startRepositoryIsPlainDirectory
+				? "local"
+				: (transientModeOverride ??
+					(prefs.chatModeActive ? "chat" : repoWorkMode));
 	const startBranchIntent = readRepoPreference(
 		prefs.branchIntentByRepoId,
 		startRepositoryId,
@@ -207,11 +220,6 @@ export function useStartSurfaceController(
 		deps.setPendingCreatedWorkspaceSubmit,
 	);
 	const pushToastRef = useLatestRef(deps.pushToast);
-
-	const startRepository =
-		repositories.find((repository) => repository.id === startRepositoryId) ??
-		repositories[0] ??
-		null;
 
 	// Default repo selection: prefer the persisted `repoId`, fall back to
 	// the first repo. Re-runs when the persisted value resolves or the
@@ -276,7 +284,7 @@ export function useStartSurfaceController(
 			if (!startRepository) throw new Error("no repo");
 			return getRepoCurrentBranch(startRepository.id);
 		},
-		enabled: Boolean(startRepository?.id),
+		enabled: Boolean(startRepository?.id) && !startRepositoryIsPlainDirectory,
 	});
 	// Local: live HEAD wins (the worktree's persisted override must not leak in).
 	// Worktree: pendingNewBranch > per-repo override > default.
@@ -286,7 +294,7 @@ export function useStartSurfaceController(
 				startLocalBranchSelection ??
 				startLocalCurrentBranchQuery.data ??
 				startRepository?.defaultBranch ??
-				"main")
+				"Files")
 			: (startPendingNewBranch ??
 				startSourceBranchOverride ??
 				startRepository?.defaultBranch ??
@@ -301,7 +309,7 @@ export function useStartSurfaceController(
 			if (!startRepository) throw new Error("no repo");
 			return listBranchesForWorkspacePicker(startRepository.id);
 		},
-		enabled: Boolean(startRepository?.id),
+		enabled: Boolean(startRepository?.id) && !startRepositoryIsPlainDirectory,
 	});
 
 	const selectRepository = useCallback(
@@ -369,6 +377,11 @@ export function useStartSurfaceController(
 				});
 				return;
 			}
+
+			// `non_git` isn't a user-selectable start mode — it's derived
+			// from the repo being a plain directory. The picker never emits
+			// it; guard so `mode` narrows to a `StartSurfaceWorkMode`.
+			if (mode === "non_git") return;
 
 			// Leaving chat back into a repo-bound mode requires a repo.
 			if (!startRepository) return;
@@ -502,7 +515,12 @@ export function useStartSurfaceController(
 			}
 
 			try {
-				if (startMode !== "chat" && startPendingNewBranch && startRepository) {
+				if (
+					startMode !== "chat" &&
+					!startRepositoryIsPlainDirectory &&
+					startPendingNewBranch &&
+					startRepository
+				) {
 					await createAndCheckoutBranch(
 						startRepository.id,
 						startPendingNewBranch,
@@ -519,7 +537,10 @@ export function useStartSurfaceController(
 					// Chat mode ignores repoId/sourceBranch — pass empty
 					// strings so the function signature stays the same.
 					repoId: startRepository?.id ?? "",
-					sourceBranch: startMode === "chat" ? "" : startSourceBranch,
+					sourceBranch:
+						startMode === "chat" || startRepositoryIsPlainDirectory
+							? ""
+							: startSourceBranch,
 					mode: startMode,
 					// Only worktree mode honors branchIntent.
 					branchIntent:
@@ -749,6 +770,7 @@ export function useStartSurfaceController(
 			startMode,
 			startPendingLinkedDirectories,
 			startPendingNewBranch,
+			startRepositoryIsPlainDirectory,
 			startRepository?.id,
 			startSourceBranch,
 		],
@@ -772,6 +794,68 @@ export function useStartSurfaceController(
 			},
 		}),
 		[startPendingLinkedDirectories],
+	);
+
+	// Persisted composer picks for the start surface. Writes merge into
+	// `startSurfacePreferences`; only `start:*` context keys are persisted so a
+	// stray `session:*` key (e.g. from the fast-mode-unavailable subscription on
+	// the start container) can't pollute the blob.
+	const startComposerSettingsController = useMemo<ComposerSettingsController>(
+		() => ({
+			modelSelections: prefs.composerModelByContextKey,
+			effortLevels: prefs.composerEffortByContextKey,
+			permissionModes: prefs.composerPermissionModeByContextKey,
+			fastModes: prefs.composerFastModeByContextKey,
+			onSelectModel: (contextKey, modelId, provider) => {
+				if (!contextKey.startsWith("start:")) return;
+				void updateSettings({
+					startSurfacePreferences: {
+						...prefs,
+						composerModelByContextKey: {
+							...prefs.composerModelByContextKey,
+							[contextKey]: { provider, modelId },
+						},
+					},
+				});
+			},
+			onSelectEffort: (contextKey, level) => {
+				if (!contextKey.startsWith("start:")) return;
+				void updateSettings({
+					startSurfacePreferences: {
+						...prefs,
+						composerEffortByContextKey: {
+							...prefs.composerEffortByContextKey,
+							[contextKey]: level,
+						},
+					},
+				});
+			},
+			onChangePermissionMode: (contextKey, mode) => {
+				if (!contextKey.startsWith("start:")) return;
+				void updateSettings({
+					startSurfacePreferences: {
+						...prefs,
+						composerPermissionModeByContextKey: {
+							...prefs.composerPermissionModeByContextKey,
+							[contextKey]: mode,
+						},
+					},
+				});
+			},
+			onChangeFastMode: (contextKey, enabled) => {
+				if (!contextKey.startsWith("start:")) return;
+				void updateSettings({
+					startSurfacePreferences: {
+						...prefs,
+						composerFastModeByContextKey: {
+							...prefs.composerFastModeByContextKey,
+							[contextKey]: enabled,
+						},
+					},
+				});
+			},
+		}),
+		[prefs, updateSettings],
 	);
 
 	const startBranches = startBranchesQuery.data ?? EMPTY_BRANCH_LIST;
@@ -814,6 +898,7 @@ export function useStartSurfaceController(
 			startComposerContextKey,
 			startComposerInsertTarget,
 			startLinkedDirectoriesController,
+			startComposerSettingsController,
 		}),
 		[
 			startBranchIntent,
@@ -821,6 +906,7 @@ export function useStartSurfaceController(
 			startBranchesQuery.isFetching,
 			startComposerContextKey,
 			startComposerInsertTarget,
+			startComposerSettingsController,
 			startInboxProviderSourceTab,
 			startInboxProviderTab,
 			startInboxStateFilterBySource,

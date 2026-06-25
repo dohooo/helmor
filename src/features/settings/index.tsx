@@ -84,7 +84,6 @@ import { ProvidersPanel } from "./panels/providers";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
 import { TeamPanel } from "./panels/team";
 import { TeamAdminPanel } from "./panels/team-admin";
-import { TriagePanel } from "./panels/triage";
 
 const FALLBACK_EFFORT_LEVELS = ["low", "medium", "high"];
 
@@ -645,7 +644,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 										settings={settings}
 										updateSettings={updateSettings}
 									/>
-									{settings.localLlm.enabled ? <TriagePanel /> : null}
 									<MobileCompanionPanel />
 								</SettingsGroup>
 							)}

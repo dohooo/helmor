@@ -1,6 +1,5 @@
-// opencode's instantiation of the opencode-protocol family. The fork twin
-// lives in `mimo.ts`; anything they share is in `server.ts` /
-// `session-manager.ts`.
+// opencode's instantiation of the opencode-protocol family. Shared machinery
+// lives in `server.ts` / `session-manager.ts`.
 
 import type { ProtocolServerConfig } from "./server.js";
 import type { ProtocolManagerConfig } from "./session-manager.js";

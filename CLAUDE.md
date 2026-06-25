@@ -37,7 +37,7 @@ Single test file: `bun x vitest run src/App.test.tsx` | `cd sidecar && bun test 
 
 - **Frontend** (`src/`): React 19 SPA in Tauri webview. State management handled by specialized hooks (`useAppShellState`, `useSelectionController`, `useEditorEditMode`, `useGlobalShortcutHandlers`, `useAppBootstrap`) under `src/shell/`. TanStack React Query + context providers.
 - **Rust backend** (`src-tauri/src/`): Tauri host, SQLite database, spawns and supervises the sidecar.
-- **Sidecar** (`sidecar/`): Bun + TypeScript, wraps `@anthropic-ai/claude-agent-sdk` and `@openai/codex-sdk`. Built to `sidecar/dist/helmor-sidecar` via `bun build --compile`. JSON event stream over stdout.
+- **Sidecar** (`sidecar/`): Bun + TypeScript, wraps `@anthropic-ai/claude-agent-sdk` and `@openai/codex` (CLI). Built to `sidecar/dist/helmor-sidecar` via `bun build --compile`. JSON event stream over stdout.
 
 Message flow: user prompt -> Rust `agents::streaming` -> sidecar -> SDK -> stdout events -> Rust accumulator -> adapter + collapse -> `ThreadMessageLike[]` -> `tauri::ipc::Channel` -> React.
 

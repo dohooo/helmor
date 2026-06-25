@@ -33,6 +33,21 @@ interface PendingRpc {
 	reject: (err: Error) => void;
 }
 
+/** Poll until a given RPC has been dispatched and parked in `pending`.
+ *  The number of awaits `sendMessage` runs before `sendRequest("turn/start")`
+ *  isn't fixed (cold-start `ensureContext` init), so a fixed `setTimeout(0)`
+ *  count flaked on slow CI runners — poll the captured queue instead. */
+async function waitForPending(
+	pending: PendingRpc[],
+	method: string,
+): Promise<void> {
+	for (let i = 0; i < 500; i++) {
+		if (pending.some((p) => p.method === method)) return;
+		await new Promise((r) => setTimeout(r, 0));
+	}
+	throw new Error(`timed out waiting for pending RPC ${method}`);
+}
+
 /** Duck-typed stand-in for `CodexAppServer`. Captures the REAL
  *  handlers the manager installs via `setHandlers`, and exposes
  *  controllable `sendRequest` promises so the test can hold RPC
@@ -151,8 +166,7 @@ async function driveToSendMessage(sessionId: string) {
 	// Let `sendMessage` run until it calls `sendRequest("turn/start")`
 	// and parks. At this point `setHandlers` has been called with the
 	// real handleNotification/handleRequest closures.
-	await new Promise((r) => setTimeout(r, 0));
-	await new Promise((r) => setTimeout(r, 0));
+	await waitForPending(fake.pending, "turn/start");
 
 	// Reply to turn/start with a valid turn id so ctx.activeTurnId
 	// populates — `steer()` won't proceed without it.

@@ -16,6 +16,10 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { isAbortError, isQueryClosedTransient } from "../abort.js";
 import { ActiveTurnRegistry } from "../active-turn-registry.js";
+import {
+	applyWindowsPathFromRegistry,
+	type WindowsPathEnvOptions,
+} from "../agent-path-env.js";
 import { buildAgentProxyEnv } from "../agent-proxy.js";
 import {
 	buildClaudeRichMeta,
@@ -126,14 +130,21 @@ const CLAUDE_BIN_PATH = resolveClaudeBinPath();
 // spawned claude-code child loses HOME / PATH / cached OAuth creds and
 // reports "Not logged in". Returns undefined when no overrides are
 // supplied so the SDK keeps its default-process.env path.
-function mergeQueryEnv(
+export function buildClaudeBaseEnv(
+	baseEnv: NodeJS.ProcessEnv = process.env,
+	options: WindowsPathEnvOptions = {},
+): { [key: string]: string | undefined } {
+	return applyWindowsPathFromRegistry({ ...baseEnv }, options);
+}
+
+export function mergeQueryEnv(
 	...overrides: (Record<string, string> | undefined)[]
 ): { [key: string]: string | undefined } | undefined {
 	const present = overrides.filter(
 		(o): o is Record<string, string> => o !== undefined,
 	);
-	if (present.length === 0) return undefined;
-	return Object.assign({}, process.env, ...present);
+	if (present.length === 0 && process.platform !== "win32") return undefined;
+	return Object.assign(buildClaudeBaseEnv(), ...present);
 }
 
 // claude-agent-sdk v0.3.142 changed MCP servers to connect in the
@@ -154,10 +165,10 @@ interface LiveSession {
 	 * Streaming-input source. The initial prompt is pushed up front in
 	 * `sendMessage`; each `steer()` call pushes one more user message.
 	 * The SDK folds every pushed message into ONE extended turn and
-	 * emits a SINGLE terminal `result` when the whole trajectory is
-	 * done — verified empirically (steer mid-stream yields one merged
-	 * assistant message and one result, not per-push results). The
-	 * for-await loop therefore bails on the first result it sees.
+	 * emits a SINGLE *terminal* `result` when the whole trajectory is
+	 * done. Backgrounded tasks add intermediate `background_requested`
+	 * results mid-turn (filtered out, see `isBackgroundPauseResult`), so
+	 * the for-await loop bails on the first *genuinely terminal* result.
 	 */
 	readonly promptSource: Pushable<SDKUserMessage>;
 	/** Request id owning this session; needed by `steer()` to synthesize
@@ -716,6 +727,22 @@ export class ClaudeSessionManager implements SessionManager {
 						session_id: sessionId,
 						uuid: randomUUID(),
 					});
+				}
+				// Backgrounded task pause: SDK keeps the SAME query() alive and
+				// resumes later via task_notification. Record usage, but keep the
+				// pause result OUT of the pipeline (accumulator assumes one result
+				// per turn) and do NOT end the turn — must intercept before the
+				// unconditional passthrough below.
+				if (isBackgroundPauseResult(message)) {
+					const meta = buildClaudeStoredMeta(message, model ?? "");
+					if (meta) {
+						emitter.contextUsageUpdated(
+							requestId,
+							sessionId,
+							JSON.stringify(meta),
+						);
+					}
+					continue;
 				}
 				// AskUserQuestion tool_use blocks pass through INTACT — the Rust
 				// adapter renders them as the persistent Q&A card (and merges
@@ -1276,10 +1303,23 @@ function isResultMessage(
 	);
 }
 
+/** Intermediate `result` the SDK emits when a task is backgrounded — the
+ *  same `query()` stays alive and resumes via `task_notification`. NOT
+ *  terminal: must be filtered before passthrough so it never reaches the
+ *  accumulator (one-result-per-turn) and never fires `end`. */
+function isBackgroundPauseResult(message: SDKMessage): boolean {
+	return (
+		message.type === "result" &&
+		(message as { terminal_reason?: string }).terminal_reason ===
+			"background_requested"
+	);
+}
+
 /** Terminal result — success OR error. Both shapes carry
  *  `usage`/`modelUsage`, so both should update the ring. AskUserQuestion
- *  pauses live inside `canUseTool` instead of producing a result event,
- *  so any `result` we see here is genuinely terminal for this turn. */
+ *  pauses live inside `canUseTool` instead of producing a result event, and
+ *  `background_requested` pauses are filtered upstream, so any `result` that
+ *  reaches this check is genuinely terminal for this turn. */
 function isTerminalResult(message: SDKMessage): boolean {
 	return message.type === "result";
 }

@@ -408,7 +408,7 @@ function compareStrings(left: string, right: string): number {
  *   orthogonal to repo (workspaces the user has elevated, and workspaces
  *   queued for later) and are worth preserving as their own buckets in
  *   either grouping mode.
- * - Pass through at head: chats (no repo) + ai-tasks (cross-repo by nature).
+ * - Pass through at head: chats (no repo).
  * - Everything else (in-flight creates, in-progress, in review, done,
  *   canceled) flattens into per-repo buckets keyed by `repoId`. Each repo
  *   group's title is the repository name.
@@ -433,11 +433,7 @@ export function regroupByRepo(groups: WorkspaceGroup[]): WorkspaceGroup[] {
 
 	let seen = 0;
 	for (const group of groups) {
-		if (
-			group.id === "pinned" ||
-			group.id === "chats" ||
-			group.id === "ai-tasks"
-		) {
+		if (group.id === "pinned" || group.id === "chats") {
 			head.push(group);
 			continue;
 		}

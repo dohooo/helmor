@@ -165,8 +165,6 @@ export const helmorQueryKeys = {
 	slackThread: (teamId: string, channelId: string, anchorTs: string) =>
 		["slackThread", teamId, channelId, anchorTs] as const,
 	slackEmojiMap: (teamId: string) => ["slackEmojiMap", teamId] as const,
-	triageConfig: ["triage", "config"] as const,
-	triageActiveStatus: ["triage", "activeStatus"] as const,
 	pairedDevices: ["pairedDevices"] as const,
 	// Team cloud control-plane reads, keyed by Worker URL so switching
 	// backends doesn't serve a stale roster.

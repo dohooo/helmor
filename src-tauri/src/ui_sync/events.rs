@@ -116,14 +116,6 @@ pub enum UiMutationEvent {
     SlackTokenInvalidated {
         team_id: String,
     },
-    /// AI-triage config changed.
-    TriageConfigChanged,
-    /// Active tick status changed (begin / progress / end).
-    TriageActiveStatusChanged,
-    /// An AI-triage workspace was created. Frontend invalidates sidebar.
-    TriageWorkspaceCreated {
-        workspace_id: String,
-    },
     /// Fast mode was requested but didn't engage; the composer flips its
     /// fast-mode toggle off for this session.
     FastModeUnavailable {
@@ -262,11 +254,6 @@ mod tests {
             },
             UiMutationEvent::SlackTokenInvalidated {
                 team_id: "T1".into(),
-            },
-            UiMutationEvent::TriageConfigChanged,
-            UiMutationEvent::TriageActiveStatusChanged,
-            UiMutationEvent::TriageWorkspaceCreated {
-                workspace_id: "w".into(),
             },
             UiMutationEvent::FastModeUnavailable {
                 session_id: "s".into(),
@@ -457,9 +444,6 @@ mod tests {
             E::TerminalPromptCaptured { .. } => "TerminalPromptCaptured",
             E::SlackWorkspacesChanged => "SlackWorkspacesChanged",
             E::SlackTokenInvalidated { .. } => "SlackTokenInvalidated",
-            E::TriageConfigChanged => "TriageConfigChanged",
-            E::TriageActiveStatusChanged => "TriageActiveStatusChanged",
-            E::TriageWorkspaceCreated { .. } => "TriageWorkspaceCreated",
             E::FastModeUnavailable { .. } => "FastModeUnavailable",
             E::PairedDevicesChanged => "PairedDevicesChanged",
             E::WorkspaceRevealRequested { .. } => "WorkspaceRevealRequested",
@@ -519,9 +503,6 @@ mod tests {
             E::SlackTokenInvalidated {
                 team_id: "t".into(),
             },
-            E::TriageConfigChanged,
-            E::TriageActiveStatusChanged,
-            E::TriageWorkspaceCreated { workspace_id: w() },
             E::FastModeUnavailable {
                 session_id: s(),
                 reason: "r".into(),

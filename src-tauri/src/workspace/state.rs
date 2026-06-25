@@ -93,7 +93,9 @@ pub const OPERATIONAL_FILTER: &str = "NOT IN ('archived', 'initializing')";
 /// repo's root path; multiple Local workspaces can coexist as parallel
 /// conversations over the same disk. `Chat` = a scratch directory with
 /// no git binding at all — used for "Just Chat" sessions that aren't
-/// tied to any repository.
+/// tied to any repository. `NonGit` = a user-picked plain directory
+/// that isn't a git repo; like `Local` it operates in place on the
+/// repo root path, but like `Chat` it has no git context.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceMode {
@@ -101,6 +103,7 @@ pub enum WorkspaceMode {
     Worktree,
     Local,
     Chat,
+    NonGit,
 }
 
 impl WorkspaceMode {
@@ -109,13 +112,29 @@ impl WorkspaceMode {
             Self::Worktree => "worktree",
             Self::Local => "local",
             Self::Chat => "chat",
+            Self::NonGit => "non_git",
         }
     }
 
-    /// True when the workspace has no git context (no repo, no branch,
-    /// no worktree). Chat-mode workspaces are the only such variant
-    /// today. Used by code paths that should early-return on chat
-    /// workspaces (git status watcher, branch ops, PR sync, etc.).
+    /// True when the workspace is backed by a real git repo (branch,
+    /// worktree, diffs, PRs all apply). `Chat` and `NonGit` are the
+    /// "no git context" variants — this is the single predicate every
+    /// git-touching path should gate on, instead of inspecting
+    /// `default_branch`.
+    pub const fn has_git_context(&self) -> bool {
+        matches!(self, Self::Worktree | Self::Local)
+    }
+
+    /// True when the working directory is the repo's own `root_path`
+    /// (shared, never created or deleted by Helmor). Both `Local` and
+    /// `NonGit` operate in place on the user's directory.
+    pub const fn uses_repo_root(&self) -> bool {
+        matches!(self, Self::Local | Self::NonGit)
+    }
+
+    /// True for "Just Chat" workspaces only (synthetic `__chat__` repo,
+    /// scratch dir). Use this for chat-SPECIFIC plumbing; use
+    /// `has_git_context` for the broader "no git" gate.
     pub const fn is_chat(&self) -> bool {
         matches!(self, Self::Chat)
     }
@@ -146,6 +165,7 @@ impl FromStr for WorkspaceMode {
             "worktree" => Ok(Self::Worktree),
             "local" => Ok(Self::Local),
             "chat" => Ok(Self::Chat),
+            "non_git" => Ok(Self::NonGit),
             other => Err(UnknownWorkspaceMode(other.to_string())),
         }
     }

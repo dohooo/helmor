@@ -252,6 +252,16 @@ export function useWorkspaceDnd({
 				if (event.pointerId !== pendingStartRef.current?.pointerId) {
 					return;
 				}
+				// Lost release (e.g. trackpad tap-to-click): the primary button is
+				// no longer held but no pointerup arrived. On macOS the button
+				// state still rides along on pointermove — end the drag here
+				// instead of following the cursor forever.
+				if ((event.buttons & 1) === 0) {
+					dragStateRef.current = null;
+					setDragState(null);
+					clearPendingStart();
+					return;
+				}
 				event.preventDefault();
 				scheduleDragFrame(event);
 				return;
@@ -269,6 +279,11 @@ export function useWorkspaceDnd({
 				return;
 			}
 			if (Math.hypot(dx, dy) >= DRAG_MOVE_ACTIVATE_PX) {
+				// Primary button not held → a tap, not a press-drag. Don't activate.
+				if ((event.buttons & 1) === 0) {
+					clearPendingStart();
+					return;
+				}
 				event.preventDefault();
 				beginDrag(pending, event);
 			}
@@ -280,11 +295,14 @@ export function useWorkspaceDnd({
 				flushDragFrame();
 			}
 			const active = dragStateRef.current;
-			if (active && event.pointerId === pendingStartRef.current?.pointerId) {
+			if (active) {
 				event.preventDefault();
+				// Commit only for the pointer that started the drag; any other
+				// release still ends it so the drag can't get stuck.
 				if (
-					active.targetGroupId !== active.sourceGroupId ||
-					active.beforeWorkspaceId !== active.workspaceId
+					event.pointerId === pendingStartRef.current?.pointerId &&
+					(active.targetGroupId !== active.sourceGroupId ||
+						active.beforeWorkspaceId !== active.workspaceId)
 				) {
 					onMoveWorkspace?.(
 						active.workspaceId,
@@ -342,6 +360,11 @@ export function useWorkspaceDnd({
 
 			const target = event.currentTarget;
 			const rect = target.getBoundingClientRect();
+			// Drop any stranded drag from a gesture whose release was lost.
+			if (dragStateRef.current) {
+				dragStateRef.current = null;
+				setDragState(null);
+			}
 			clearPendingStart();
 			pendingStartRef.current = {
 				workspaceId: row.id,

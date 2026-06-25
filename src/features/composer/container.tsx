@@ -77,7 +77,6 @@ import type { PermissionPanelProps } from "./permission-panel";
 import { SessionContextInjector } from "./session-context-injector";
 import type { StartSubmitMode } from "./start-submit-mode";
 import { SubmitQueueList } from "./submit-queue-list";
-import { TriageQuickActions } from "./triage-quick-actions";
 import type { UserInputResponseHandler } from "./user-input";
 import { WorkflowProgressPanel } from "./workflow-progress-panel";
 
@@ -112,8 +111,7 @@ const OPENCODE_COMPACT_COMMAND: SlashCommandEntry = {
 	name: "compact",
 	description: "compactConversationSContext",
 	source: "builtin",
-	// MiMo Code is an opencode-protocol fork; same /compact wire path.
-	providers: ["opencode", "mimo"],
+	providers: ["opencode"],
 };
 
 const CODEX_GOAL_COMMAND: SlashCommandEntry = {
@@ -147,6 +145,24 @@ const BUILTIN_CLIENT_COMMANDS: readonly SlashCommandEntry[] = [
 	CLAUDE_GOAL_COMMAND,
 	CLAUDE_WORKFLOWS_COMMAND,
 ];
+
+// SDK-reported commands to hide per provider. claude-code lists /compact among
+// its slash commands, but the Agent SDK exposes no programmatic compaction path
+// (unlike Codex's thread/compact/start and OpenCode's session.summarize), so
+// sending it is a no-op — suppress it instead of showing a dead command.
+const SUPPRESSED_AGENT_COMMANDS: Partial<
+	Record<AgentProvider, ReadonlySet<string>>
+> = {
+	claude: new Set(["compact"]),
+};
+
+// SDK-reported commands to hide for every provider. /clear is a REPL-only
+// command: sent through the SDK it's a literal no-op (the next turn still
+// resumes the same provider session, so context is never cleared). No provider
+// wires it up, so hide it everywhere rather than show a dead command.
+const GLOBALLY_SUPPRESSED_AGENT_COMMANDS: ReadonlySet<string> = new Set([
+	"clear",
+]);
 
 type WorkspaceComposerContainerProps = {
 	displayedWorkspaceId: string | null;
@@ -536,15 +552,6 @@ export const WorkspaceComposerContainer = memo(
 		});
 		const hasOpencodeCustomProviders =
 			(opencodeCustomProvidersQuery.data?.length ?? 0) > 0;
-		// Same jump for the MiMo Code section.
-		const mimoSectionPresent = modelSections.some((s) => s.id === "mimo");
-		const mimoCustomProvidersQuery = useQuery({
-			queryKey: helmorQueryKeys.customProviders("mimo"),
-			queryFn: () => listCustomProviders("mimo"),
-			enabled: mimoSectionPresent,
-		});
-		const hasMimoCustomProviders =
-			(mimoCustomProvidersQuery.data?.length ?? 0) > 0;
 		const currentSession =
 			(sessionsQuery.data ?? []).find(
 				(session) => session.id === displayedSessionId,
@@ -700,9 +707,9 @@ export const WorkspaceComposerContainer = memo(
 		const handleModelSelect = useCallback(
 			async (modelId: string, pickedProvider: string | null) => {
 				const currentProvider = provider;
-				// Provider comes straight from the picked option — opencode and
-				// mimo share a slug namespace, so re-deriving it from the id alone
-				// would resolve to the wrong section.
+				// Provider comes straight from the picked option — opencode
+				// sub-providers share a slug namespace, so re-deriving it from the
+				// id alone would resolve to the wrong section.
 				const newProvider =
 					pickedProvider ??
 					findModelOption(modelSections, modelId)?.provider ??
@@ -780,10 +787,7 @@ export const WorkspaceComposerContainer = memo(
 		// Custom Codex providers (`codex:<id>`) collapse to "codex".
 		const slashProvider: AgentProvider = isCodexProvider(provider)
 			? "codex"
-			: provider === "cursor" ||
-					provider === "opencode" ||
-					provider === "mimo" ||
-					provider === "kimi"
+			: provider === "cursor" || provider === "opencode" || provider === "kimi"
 				? provider
 				: "claude";
 		// Prefer the repoId from a real workspace; on the start page there's no
@@ -821,10 +825,14 @@ export const WorkspaceComposerContainer = memo(
 			const builtinNames = new Set(
 				builtinCommands.map((command) => command.name),
 			);
+			const suppressed = SUPPRESSED_AGENT_COMMANDS[slashProvider];
 			return [
 				...builtinCommands,
 				...agentSlashCommands.filter(
-					(command) => !builtinNames.has(command.name),
+					(command) =>
+						!builtinNames.has(command.name) &&
+						!suppressed?.has(command.name) &&
+						!GLOBALLY_SUPPRESSED_AGENT_COMMANDS.has(command.name),
 				),
 			];
 		}, [agentSlashCommands, slashProvider, t]);
@@ -1186,34 +1194,7 @@ export const WorkspaceComposerContainer = memo(
 
 		const autoCloseHelpText = t("composerAutoCloseHelp");
 
-		// Start/Dismiss quick actions for un-engaged triage workspaces. Dismiss reuses the sidebar controller's archive path.
-		const [triageGraduating, setTriageGraduating] = useState(false);
-		const [triageDismissing, setTriageDismissing] = useState(false);
 		const [workflowsPanelOpen, setWorkflowsPanelOpen] = useState(false);
-		useEffect(() => {
-			setTriageGraduating(false);
-			setTriageDismissing(false);
-		}, [displayedWorkspaceId]);
-
-		const isTriagePriming =
-			workspaceDetailQuery.data?.triagePrimingUnconsumed === true &&
-			!triageGraduating &&
-			!triageDismissing;
-
-		const handleTriageStart = useCallback(() => {
-			setTriageGraduating(true);
-			handleComposerSubmitInner("Go ahead.", [], [], []);
-		}, [handleComposerSubmitInner]);
-
-		const handleTriageDismiss = useCallback(() => {
-			if (!displayedWorkspaceId || triageDismissing) return;
-			setTriageDismissing(true);
-			// Delegates archive to the sidebar controller (one optimistic path).
-			publishShellEvent({
-				type: "request-archive-workspace",
-				workspaceId: displayedWorkspaceId,
-			});
-		}, [displayedWorkspaceId, triageDismissing]);
 
 		// Typing-presence reporter (team mode only). Debounced so a burst of
 		// keystrokes coalesces into ~one `report_presence` call per 1.5s; the
@@ -1236,7 +1217,6 @@ export const WorkspaceComposerContainer = memo(
 				}
 			};
 		}, []);
-
 		return (
 			// `z-20` lifts the entire composer stacking context above the thread
 			// viewport's `z-10` root (`thread-viewport.tsx:99`). Without this the
@@ -1245,13 +1225,7 @@ export const WorkspaceComposerContainer = memo(
 			// top edge, because the composer's `isolate` traps popup z-index
 			// inside a stacking context whose outer z defaults to `auto`.
 			<div className="relative isolate z-20 flex flex-col">
-				{isTriagePriming ? (
-					<TriageQuickActions
-						onStart={handleTriageStart}
-						onDismiss={handleTriageDismiss}
-						disabled={composerUnavailable || sending || triageDismissing}
-					/>
-				) : isActionSession ? (
+				{isActionSession ? (
 					<ActionRow
 						className={cn(
 							"relative z-0 mx-auto -mb-px w-[90%] rounded-t-2xl border-b-0",
@@ -1376,7 +1350,6 @@ export const WorkspaceComposerContainer = memo(
 						selectedModelProvider={effectiveModel?.provider ?? null}
 						modelSections={modelSections}
 						hasOpencodeCustomProviders={hasOpencodeCustomProviders}
-						hasMimoCustomProviders={hasMimoCustomProviders}
 						modelsLoading={modelsLoading}
 						onSelectModel={handleSelectModelInner}
 						provider={provider}

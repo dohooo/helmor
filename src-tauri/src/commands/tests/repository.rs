@@ -109,27 +109,98 @@ fn add_repository_from_local_path_re_add_with_only_archived_workspaces_lands_on_
 }
 
 #[test]
-fn add_repository_from_local_path_rejects_non_git_directory_without_side_effects() {
+fn add_repository_from_local_path_attaches_non_git_directory() {
     let _guard = TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let harness = CreateTestHarness::new();
-    let plain_dir = harness.root.join("not-a-repo");
+    let plain_dir = harness.root.join("notes");
     fs::create_dir_all(&plain_dir).unwrap();
+    fs::write(plain_dir.join("todo.txt"), "ship it\n").unwrap();
 
-    let error = repos::add_repository_from_local_path(plain_dir.to_str().unwrap()).unwrap_err();
-    let connection = Connection::open(harness.db_path()).unwrap();
-    let (repo_count, workspace_count): (i64, i64) = connection
-        .query_row(
-            "SELECT (SELECT COUNT(*) FROM repos), (SELECT COUNT(*) FROM workspaces)",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
+    let response = repos::add_repository_from_local_path(plain_dir.to_str().unwrap()).unwrap();
+    assert!(response.created_repository);
+
+    let repo = repos::load_repository_by_id(&response.repository_id)
+        .unwrap()
         .unwrap();
+    assert_eq!(repo.name, "notes");
+    assert_eq!(repo.default_branch, None);
+    assert_eq!(repo.remote, None);
 
-    assert!(error.to_string().contains("Git working tree"));
-    assert_eq!(repo_count, 1);
-    assert_eq!(workspace_count, 0);
+    let prepared = workspaces::prepare_local_workspace_impl(
+        &response.repository_id,
+        None,
+        crate::workspace_status::WorkspaceStatus::InProgress,
+        None,
+    )
+    .unwrap();
+    // Compare canonicalized paths: the prepared working directory is
+    // canonicalized, and on macOS the temp dir under /var symlinks to
+    // /private/var, so a raw string compare would spuriously differ.
+    assert_eq!(
+        prepared
+            .working_directory
+            .as_deref()
+            .map(|p| fs::canonicalize(p).unwrap()),
+        Some(fs::canonicalize(&plain_dir).unwrap()),
+    );
+    assert_eq!(prepared.branch, "Files");
+    assert_eq!(prepared.state, WorkspaceState::Ready);
+}
+
+#[test]
+fn add_repository_from_local_path_accepts_git_repo_without_remote() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let local_git_repo = harness.root.join("local-git-no-remote");
+    fs::create_dir_all(&local_git_repo).unwrap();
+    let root = local_git_repo.to_str().unwrap();
+    git_ops::run_git(["init", "-b", "main", root], None).unwrap();
+    fs::write(local_git_repo.join("tracked.txt"), "main").unwrap();
+    git_ops::run_git(["-C", root, "add", "tracked.txt"], None).unwrap();
+    git_ops::run_git(
+        [
+            "-C",
+            root,
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "user.name=Helmor",
+            "-c",
+            "user.email=helmor@example.com",
+            "commit",
+            "-m",
+            "initial",
+        ],
+        None,
+    )
+    .unwrap();
+
+    // A git repo without a remote is now supported (local-only): remote is
+    // None, default branch comes from local HEAD, and it stays a git repo
+    // (default_branch is Some, so it is NOT treated as a non-git directory).
+    let response = repos::add_repository_from_local_path(root).unwrap();
+    assert!(response.created_repository);
+
+    let repo = repos::load_repository_by_id(&response.repository_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(repo.remote, None);
+    assert_eq!(repo.default_branch.as_deref(), Some("main"));
+
+    let prepared = workspaces::prepare_local_workspace_impl(
+        &response.repository_id,
+        None,
+        crate::workspace_status::WorkspaceStatus::InProgress,
+        None,
+    )
+    .unwrap();
+    // Has git context (real branch), so it is a Local git workspace, not "Files".
+    assert_eq!(prepared.branch, "main");
+    assert_eq!(prepared.state, WorkspaceState::Ready);
 }
 
 #[test]

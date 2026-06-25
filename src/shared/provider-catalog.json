@@ -57,13 +57,6 @@
 			"icon": "qwen"
 		},
 		{
-			"key": "xiaomi",
-			"label": "Xiaomi MiMo",
-			"baseUrl": "https://api.xiaomimimo.com/anthropic",
-			"apiKeyUrl": "https://platform.xiaomimimo.com/#/console/api-keys",
-			"icon": "xiaomi"
-		},
-		{
 			"key": "deepseek",
 			"label": "DeepSeek",
 			"baseUrl": "https://api.deepseek.com/anthropic",
@@ -333,14 +326,6 @@
 			"key": "umans-ai-coding-plan",
 			"label": "Umans AI Coding Plan",
 			"icon": "generic"
-		}
-	],
-	"mimo": [
-		{
-			"key": "xiaomi",
-			"label": "Xiaomi MiMo",
-			"icon": "xiaomi",
-			"apiKeyUrl": "https://platform.xiaomimimo.com/#/console/api-keys"
 		}
 	]
 }

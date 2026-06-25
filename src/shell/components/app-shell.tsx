@@ -8,6 +8,7 @@
 // groups).
 import { useMemo } from "react";
 import type { SettingsSection } from "@/features/settings";
+import { workspaceModeHasGitContext } from "@/lib/api";
 import { useAppShellState } from "@/shell/hooks/use-app-shell-state";
 import { AppShellLayout } from "./app-shell-layout";
 import { WorkspaceHeaderActions } from "./workspace-header-actions";
@@ -64,7 +65,9 @@ export function AppShell({
 					openPreferredEditorShortcut={chrome.openPreferredEditorShortcut}
 					rightSidebarToggleShortcut={chrome.rightSidebarToggleShortcut}
 					inspectorCollapsed={inspectorCollapsed}
-					isChatMode={data.selectedWorkspaceDetail?.mode === "chat"}
+					noGitContext={
+						!workspaceModeHasGitContext(data.selectedWorkspaceDetail?.mode)
+					}
 					onOpenPreferredEditor={chrome.handleOpenPreferredEditor}
 					onToggleInspector={() =>
 						setInspectorCollapsed((collapsed) => !collapsed)

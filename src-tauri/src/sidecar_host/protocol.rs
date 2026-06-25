@@ -1,4 +1,4 @@
-//! Wire shapes for the sidecar → Rust reverse IPC.
+//! Wire shapes for the sidecar -> Rust reverse IPC.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

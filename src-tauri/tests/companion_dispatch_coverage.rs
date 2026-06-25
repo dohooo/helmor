@@ -36,7 +36,6 @@ const BROWSER_UNSUPPORTED: &[&str] = &[
     "slack_prepare_thread_context",
     "spawn_agent_login_terminal",
     "spawn_forge_cli_auth_terminal",
-    "spawn_lark_cli_auth_terminal",
     "spawn_terminal",
     "subscribe_local_llm_downloads",
 ];

@@ -123,6 +123,9 @@ type ChangesSectionProps = {
 	workspaceId: string | null;
 	workspaceRootPath: string | null;
 	workspaceBranch: string | null;
+	/** Remote NAME (e.g. "origin"); null for local-only repos. SSOT for
+	 *  "has a remote" — used to gate the ship/PR button. */
+	workspaceRemote: string | null;
 	workspaceRemoteUrl: string | null;
 	workspaceTargetBranch: string | null;
 	changes: InspectorFileItem[];
@@ -148,6 +151,7 @@ function ChangesSectionImpl({
 	workspaceId,
 	workspaceRootPath,
 	workspaceBranch,
+	workspaceRemote,
 	workspaceRemoteUrl,
 	workspaceTargetBranch,
 	changes,
@@ -344,6 +348,7 @@ function ChangesSectionImpl({
 				changeRequestName={changeRequestName}
 				forgeRemoteState={forgeStatusQuery.data?.remoteState ?? null}
 				forgeDetection={forgeDetection}
+				hasRemote={Boolean(workspaceRemote)}
 				workspaceId={workspaceId}
 				hasChanges={hasChanges}
 				isRefreshing={isForgeRefreshing}

@@ -102,51 +102,6 @@ fn archive_workspace_removes_worktree() {
 }
 
 #[test]
-fn archive_workspace_allows_unborn_head_for_untouched_ai_triage() {
-    let _guard = TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let harness = ArchiveTestHarness::new();
-    git_ops::run_git(
-        [
-            "-C",
-            harness.workspace_dir().to_str().unwrap(),
-            "checkout",
-            "--orphan",
-            "triage/unborn",
-        ],
-        None,
-    )
-    .unwrap();
-
-    let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
-    connection
-        .execute(
-            "UPDATE workspaces SET kind = 'ai_triage', ai_priming_consumed = 0 WHERE id = ?1",
-            [&harness.workspace_id],
-        )
-        .unwrap();
-    drop(connection);
-
-    let response = workspaces::archive_workspace_impl(&harness.workspace_id).unwrap();
-
-    assert_eq!(response.archived_workspace_id, harness.workspace_id);
-    assert_eq!(response.archived_state, WorkspaceState::Archived);
-    assert!(!harness.workspace_dir().exists());
-
-    let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
-    let (state, archive_commit): (String, Option<String>) = connection
-        .query_row(
-            "SELECT state, archive_commit FROM workspaces WHERE id = ?1",
-            [&harness.workspace_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .unwrap();
-    assert_eq!(state, "archived");
-    assert_eq!(archive_commit.as_deref(), Some(""));
-}
-
-#[test]
 fn archive_workspace_rejects_unborn_head_for_manual_workspace() {
     let _guard = TEST_LOCK
         .lock()
@@ -553,6 +508,7 @@ fn start_archive_workspace_syncs_git_fetchers_after_success() {
     let app = mock_builder()
         .manage(workspaces::ArchiveJobManager::new())
         .manage(crate::git_watcher::GitWatcherManager::new())
+        .manage(crate::workspace::scripts::ScriptProcessManager::new())
         .build(mock_context(noop_assets()))
         .unwrap();
     let app_handle = app.handle().clone();

@@ -87,6 +87,10 @@ const DEAD_COLUMNS: &[(&str, &str)] = &[
 /// Columns whose drop must be preceded by an index drop. Listed
 /// separately so the table above stays a single shape.
 const DEAD_INDEXED_COLUMNS: &[(&str, &str, &str)] = &[
+    // Retired with Smart Triage; `mode` ('chat'/'non_git') is now the single
+    // source of truth for no-git workspace categories. Indexed, so the index
+    // must be dropped before the column.
+    ("workspaces", "kind", "idx_workspaces_kind"),
     (
         "session_messages",
         "cancelled_at",
@@ -116,6 +120,15 @@ const DEAD_TABLES: &[(&str, &[&str])] = &[
     // decided not to ship cross-restart history; this drop cleans up dev DBs
     // that ran the intermediate code so they don't carry an orphan table.
     ("terminal_history", &["idx_terminal_history_workspace"]),
+    // Smart Triage ("ai-tasks") was removed. Its two owned tables are dropped
+    // from legacy DBs, and `workspaces.kind` is dropped (see DEAD_COLUMNS).
+    // The triage_source_* and session_messages.is_ai_priming columns are
+    // retained inert because their archive/import plumbing is shared.
+    (
+        "triage_candidate",
+        &["idx_triage_candidate_open", "idx_triage_candidate_source"],
+    ),
+    ("triage_fetch_cursor", &[]),
 ];
 
 fn drop_dead_schema(connection: &Connection) -> Result<()> {
@@ -840,19 +853,9 @@ fn run_migrations(connection: &Connection) -> Result<()> {
     materialize_review_pr_model_defaults(connection)?;
 
     // Smart Triage columns (idempotent ALTERs for pre-triage upgrades).
+    // `kind` was dropped after Smart Triage removal (see DEAD_COLUMNS);
+    // the rest are retained inert because archive/import plumbing is shared.
     if has_table(connection, "workspaces") {
-        // Match the fresh schema so a manual INSERT (which omits `kind`)
-        // resolves to 'manual' on upgraded and fresh DBs alike.
-        add_column_if_missing(
-            connection,
-            "workspaces",
-            "kind",
-            "TEXT NOT NULL DEFAULT 'manual'",
-        )?;
-        // Backfill rows the earlier nullable-`TEXT` migration left as NULL.
-        connection
-            .execute_batch("UPDATE workspaces SET kind = 'manual' WHERE kind IS NULL")
-            .context("Failed to backfill workspaces.kind NULLs")?;
         add_column_if_missing(
             connection,
             "workspaces",
@@ -862,10 +865,8 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         // Triage source provenance: `(source_type, source_ref)` dedups across ticks.
         add_column_if_missing(connection, "workspaces", "triage_source_type", "TEXT")?;
         add_column_if_missing(connection, "workspaces", "triage_source_ref", "TEXT")?;
-        // Index goes after the ALTER above — else old DBs would index a missing column.
-        connection
-            .execute_batch("CREATE INDEX IF NOT EXISTS idx_workspaces_kind ON workspaces(kind)")
-            .context("Failed to create idx_workspaces_kind")?;
+        // User-set display name. NULL = fall back to the auto-derived title.
+        add_column_if_missing(connection, "workspaces", "custom_name", "TEXT")?;
         connection
             .execute_batch(
                 "CREATE INDEX IF NOT EXISTS idx_workspaces_triage_source
@@ -904,13 +905,6 @@ fn run_migrations(connection: &Connection) -> Result<()> {
                 .context("Failed to drop sessions.carry_room_context column")?;
         }
     }
-    if has_table(connection, "triage_candidate") {
-        // Why an item surfaced for the user (review_requested / assigned /
-        // mentioned / author / owned_issue). Nullable — older rows + sources
-        // that don't stamp a reason stay NULL.
-        add_column_if_missing(connection, "triage_candidate", "involvement_reason", "TEXT")?;
-    }
-
     // Per-session "active plan" projection. Provider plan/todo events
     // (Codex `turn/plan/updated`, Claude `ExitPlanMode`) are normalised
     // by `agents::session_plan` into a typed plan and upserted here so
@@ -1159,11 +1153,11 @@ CREATE TABLE IF NOT EXISTS workspaces (
     port_count INTEGER,
     branch_intent TEXT DEFAULT 'from_branch',
     active_run_action_id TEXT,
-    kind TEXT NOT NULL DEFAULT 'manual',
     ai_priming_consumed INTEGER NOT NULL DEFAULT 0,
     triage_source_type TEXT,
     triage_source_ref TEXT,
     parent_workspace_id TEXT,
+    custom_name TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -1251,37 +1245,6 @@ CREATE TABLE IF NOT EXISTS slack_workspaces (
     added_at INTEGER NOT NULL
 );
 
--- AI triage fetcher: pre-computed candidate index.
--- Background fetchers write rows here. The local-LLM Layer-2 tick reads
--- `decision IS NULL` rows in batches. Heavy payloads live on disk under
--- `cache/triage/`, only `payload_path` is stored here.
-CREATE TABLE IF NOT EXISTS triage_candidate (
-    id TEXT PRIMARY KEY,
-    source TEXT NOT NULL,
-    source_kind TEXT NOT NULL,
-    source_ref TEXT NOT NULL,
-    source_time TEXT NOT NULL,
-    sender TEXT,
-    title TEXT,
-    preview TEXT,
-    external_url TEXT,
-    involvement_reason TEXT,
-    payload_path TEXT NOT NULL,
-    payload_bytes INTEGER NOT NULL DEFAULT 0,
-    decision TEXT,
-    UNIQUE(source, source_ref)
-);
-
--- Per-(source, source_parent) fetch checkpoint. Only IM-class fetchers
--- write rows here; forge fetchers don't use the cursor (gh/glab inbox
--- APIs do their own "what's new" filtering server-side).
-CREATE TABLE IF NOT EXISTS triage_fetch_cursor (
-    source TEXT NOT NULL,
-    source_parent TEXT NOT NULL,
-    last_source_time TEXT,
-    PRIMARY KEY (source, source_parent)
-);
-
 -- Mobile browser companion: paired phones. Stores only a SHA-256 of the PAT,
 -- never the plaintext. Survives desktop restarts so a phone never re-scans.
 CREATE TABLE IF NOT EXISTS paired_devices (
@@ -1298,8 +1261,6 @@ CREATE INDEX IF NOT EXISTS idx_session_messages_sent_at ON session_messages(sess
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace_id ON sessions(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_workspaces_repository_id ON workspaces(repository_id);
 CREATE INDEX IF NOT EXISTS idx_runtime_processes_ended_at ON runtime_processes(ended_at);
-CREATE INDEX IF NOT EXISTS idx_triage_candidate_open ON triage_candidate(source_time DESC) WHERE decision IS NULL;
-CREATE INDEX IF NOT EXISTS idx_triage_candidate_source ON triage_candidate(source, source_time DESC);
 -- idx_workspaces_kind + idx_workspaces_triage_source are created in
 -- `run_migrations` (after the ALTERs on upgraded DBs).
 
@@ -1882,8 +1843,10 @@ mod tests {
                     linked_workspace_ids TEXT,
                     notes TEXT,
                     pr_description TEXT,
-                    secondary_directory_name TEXT
+                    secondary_directory_name TEXT,
+                    kind TEXT NOT NULL DEFAULT 'manual'
                 );
+                CREATE INDEX idx_workspaces_kind ON workspaces(kind);
                 CREATE TABLE sessions (
                     id TEXT PRIMARY KEY,
                     effort_level TEXT,

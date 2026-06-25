@@ -74,6 +74,7 @@ function loadingActionLabel(label: string): string {
 			return "pulling";
 		case "resolve":
 			return "resolving";
+		case "commit":
 		case "commitPush":
 			return "committing";
 		default:
@@ -638,40 +639,45 @@ function buildGitRows(
 					}),
 					status: "pending",
 					action: {
-						label: "commitPush",
+						// No remote → commit only (the prompt skips push too).
+						label: workspaceRemote ? "commitPush" : "commit",
 						kind: "commit",
 						mode: "commit-and-push",
 					},
 				},
-		gitStatus.pushStatus === "unpublished"
-			? {
-					label: translateSource("branchNotPublishedRemote"),
-					status: "pending",
-					action: {
-						label: "push",
-						kind: "commit",
-						mode: "push",
-					},
-				}
-			: (gitStatus.aheadOfRemoteCount ?? 0) > 0
-				? {
-						label: formatSource("inspectorCommitsAheadOf", {
-							count: gitStatus.aheadOfRemoteCount,
-							commitLabel:
-								gitStatus.aheadOfRemoteCount === 1 ? "commit" : "commits",
-							target: gitStatus.remoteTrackingRef ?? "upstream",
-						}),
-						status: "pending",
-						action: {
-							label: "push",
-							kind: "commit",
-							mode: "push",
-						},
-					}
-				: {
-						label: translateSource("branchFullyPushed"),
-						status: "success",
-					},
+		...(workspaceRemote
+			? ([
+					gitStatus.pushStatus === "unpublished"
+						? {
+								label: translateSource("branchNotPublishedRemote"),
+								status: "pending",
+								action: {
+									label: "push",
+									kind: "commit",
+									mode: "push",
+								},
+							}
+						: (gitStatus.aheadOfRemoteCount ?? 0) > 0
+							? {
+									label: formatSource("inspectorCommitsAheadOf", {
+										count: gitStatus.aheadOfRemoteCount,
+										commitLabel:
+											gitStatus.aheadOfRemoteCount === 1 ? "commit" : "commits",
+										target: gitStatus.remoteTrackingRef ?? "upstream",
+									}),
+									status: "pending",
+									action: {
+										label: "push",
+										kind: "commit",
+										mode: "push",
+									},
+								}
+							: {
+									label: translateSource("branchFullyPushed"),
+									status: "success",
+								},
+				] as GitStatusItem[])
+			: []),
 		conflictCount > 0
 			? {
 					label: translateSource("mergeConflictsDetected"),

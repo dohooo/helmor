@@ -93,13 +93,13 @@ impl WatchableWorkspace {
             WorkspaceMode::Worktree => {
                 crate::data_dir::workspace_dir(&self.repo_name, &self.directory_name)
             }
-            WorkspaceMode::Local => self
+            WorkspaceMode::Local | WorkspaceMode::NonGit => self
                 .root_path
                 .as_deref()
                 .map(std::path::PathBuf::from)
-                .with_context(|| format!("Local workspace {} is missing repo root_path", self.id)),
+                .with_context(|| format!("Workspace {} is missing repo root_path", self.id)),
             // Chat workspaces have no git context; the watcher should
-            // skip them before this resolves (see `is_watchable`).
+            // skip them before this resolves (see `load_watchable_workspaces`).
             WorkspaceMode::Chat => anyhow::bail!(
                 "Chat workspace {} should never be watched (no git)",
                 self.id
@@ -664,9 +664,9 @@ fn lookup_fetch_target(workspace_id: &str) -> Result<(PathBuf, String, String, S
     let branch = branch.context("No target branch configured")?;
     let workspace_dir = match mode {
         WorkspaceMode::Worktree => crate::data_dir::workspace_dir(&repo_name, &dir_name)?,
-        WorkspaceMode::Local => root_path
+        WorkspaceMode::Local | WorkspaceMode::NonGit => root_path
             .map(PathBuf::from)
-            .context("Local workspace is missing repo root_path")?,
+            .context("Workspace is missing repo root_path")?,
         // Chat workspaces have no remote, no branch — the watcher
         // never registers them, so this branch shouldn't fire.
         WorkspaceMode::Chat => {
@@ -781,16 +781,16 @@ fn update_branch_in_db(
 
 fn load_watchable_workspaces() -> Result<Vec<WatchableWorkspace>> {
     let connection = db::read_conn()?;
-    // Chat-mode workspaces have no git context — exclude them from the
-    // watcher entirely so we never try to fetch, diff, or read HEAD on
-    // a scratch dir that isn't a repo.
+    // Chat and non-git workspaces have no git context — exclude them from
+    // the watcher entirely so we never try to fetch, diff, or read HEAD on
+    // a directory that isn't a repo.
     let mut stmt = connection.prepare(
         "SELECT w.id, r.name, w.directory_name, w.branch, w.state,
                 r.remote, COALESCE(w.intended_target_branch, r.default_branch), r.id,
                 COALESCE(w.mode, 'worktree'), r.root_path
          FROM workspaces w
          JOIN repos r ON r.id = w.repository_id
-         WHERE COALESCE(w.mode, 'worktree') != 'chat'",
+         WHERE COALESCE(w.mode, 'worktree') NOT IN ('chat', 'non_git')",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(WatchableWorkspace {

@@ -602,7 +602,11 @@ describe("ClaudeSessionManager.sendMessage", () => {
 		};
 		expect(args.options?.env?.MCP_CONNECTION_NONBLOCKING).toBe("0");
 		// process.env is still spread in — we add the flag, we don't replace.
-		expect(args.options?.env?.PATH).toBeDefined();
+		expect(
+			Object.entries(args.options?.env ?? {}).find(
+				([key, value]) => key.toLowerCase() === "path" && value,
+			)?.[1],
+		).toBeDefined();
 	});
 
 	test("emits fast_mode_unavailable when fast mode was requested but the result reports it off", async () => {

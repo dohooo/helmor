@@ -141,13 +141,12 @@ type WorkspaceComposerProps = {
 	onStop?: () => void;
 	sending?: boolean;
 	selectedModelId: string | null;
-	/** Provider of the selected model — disambiguates the opencode/mimo shared
-	 *  slug namespace so the right section's option is matched. */
+	/** Provider of the selected model — disambiguates a shared slug namespace
+	 *  so the right section's option is matched. */
 	selectedModelProvider?: string | null;
 	modelSections: AgentModelSection[];
 	/** false → OpenCode picker shows an "Add custom model…" jump. */
 	hasOpencodeCustomProviders?: boolean;
-	hasMimoCustomProviders?: boolean;
 	modelsLoading?: boolean;
 	onSelectModel: (modelId: string, provider: string | null) => void;
 	provider?: string;
@@ -307,7 +306,6 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	selectedModelProvider = null,
 	modelSections,
 	hasOpencodeCustomProviders = false,
-	hasMimoCustomProviders = false,
 	modelsLoading = false,
 	onSelectModel,
 	provider: _provider = "claude",
@@ -452,7 +450,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			for (const option of section.options) {
 				if (option.id !== selectedModelId) continue;
 				// Prefer an exact (id, provider) match — the same slug can appear
-				// under both opencode and mimo. Fall back to first-by-id.
+				// under more than one slug-based provider. Fall back to first-by-id.
 				if (!selectedModelProvider || option.provider === selectedModelProvider)
 					return option;
 				byIdOnly ??= option;
@@ -1112,7 +1110,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 														</DropdownMenuLabel>
 														{section.options.map((option) => (
 															<DropdownMenuItem
-																// id alone collides across opencode/mimo — namespace by section.
+																// id alone can collide across slug providers — namespace by section.
 																key={`${section.id}:${option.id}`}
 																disabled={toolbarDisabled}
 																onClick={() => {
@@ -1153,10 +1151,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 																</span>
 															</DropdownMenuItem>
 														) : null}
-														{(section.id === "opencode" &&
-															!hasOpencodeCustomProviders) ||
-														(section.id === "mimo" &&
-															!hasMimoCustomProviders) ? (
+														{section.id === "opencode" &&
+														!hasOpencodeCustomProviders ? (
 															<DropdownMenuItem
 																onClick={handleOpenProviderSettings}
 																className="flex items-center gap-3"
@@ -1282,6 +1278,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										{supportsPlanMode ? (
 											<PlanModeButton
 												disabled={toolbarDisabled}
+												hotkey={togglePlanShortcut}
 												className={cn(
 													`size-7 justify-center px-0 ${composerToolbarTriggerClassName}`,
 													permissionMode === "plan"
@@ -1564,10 +1561,12 @@ function PlanModeButton({
 	disabled,
 	className,
 	onToggle,
+	hotkey,
 }: {
 	disabled: boolean;
 	className: string;
 	onToggle: () => void;
+	hotkey?: string | null;
 }) {
 	const { t } = useI18n();
 	const button = (
@@ -1586,9 +1585,15 @@ function PlanModeButton({
 			<TooltipContent
 				side="top"
 				sideOffset={4}
-				className="flex h-[24px] items-center rounded-md px-2 text-small leading-none"
+				className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 			>
 				<span>{t("plan")}</span>
+				{hotkey ? (
+					<InlineShortcutDisplay
+						hotkey={hotkey}
+						className="text-background/60"
+					/>
+				) : null}
 			</TooltipContent>
 		</Tooltip>
 	);

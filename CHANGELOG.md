@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.43.0
+
+### Minor Changes
+
+- [#825](https://github.com/dohooo/helmor/pull/825) [`4d07a72`](https://github.com/dohooo/helmor/commit/4d07a7263ef08e057c430f39bde0a6a2b77a25ac) Thanks [@JRBusiness](https://github.com/JRBusiness)! - Add opt-in support for attaching sessions to plain local folders that are not git repositories.
+
+  - New "Non-git directories" setting (Settings → General). When enabled, Open project can attach a session to any local folder; these run as local-mode sessions with no branch/worktree actions.
+  - Harden agent process environment resolution so bundled CLIs find their PATH reliably (Windows PATH is rebuilt from the registry), and resolve git pointer paths correctly for Windows absolute and UNC paths.
+
+### Patch Changes
+
+- [#894](https://github.com/dohooo/helmor/pull/894) [`e0beec2`](https://github.com/dohooo/helmor/commit/e0beec205189d17ee48b33528663cda9c86c2d4e) Thanks [@dohooo](https://github.com/dohooo)! - Scrolling up in a chat thread and stopping no longer makes the conversation jump or shake — row heights now settle into place while the scroll is still moving, so your reading position stays put.
+
+- [#895](https://github.com/dohooo/helmor/pull/895) [`d176c6d`](https://github.com/dohooo/helmor/commit/d176c6dcebdae3d99dcf1da189a647ae822b0ce4) Thanks [@dohooo](https://github.com/dohooo)! - Fix in-review workspaces sometimes opening to an empty "No session selected" panel instead of their conversation.
+
+- [#893](https://github.com/dohooo/helmor/pull/893) [`c56bb1b`](https://github.com/dohooo/helmor/commit/c56bb1b98e3667a30ea35648f1f40472df598c59) Thanks [@natllian](https://github.com/natllian)! - Refine non-git directory workspace support:
+  - Non-git folders now work out of the box — removed the opt-in "Non-git directories" setting.
+  - Non-git workspaces use the chat-style layout (no diff/inspector panel or branch pickers), and their repo settings page shows a "Non-git repository" notice instead of account and git options.
+
+## 0.42.0
+
+### Minor Changes
+
+- [#660](https://github.com/dohooo/helmor/pull/660) [`cb2522b`](https://github.com/dohooo/helmor/commit/cb2522b666a6b866241abf54199e4ce0fa325e79) Thanks [@himanshhhhuv](https://github.com/himanshhhhuv)! - Enhanced repository picker with search, full repo names, and numerical shortcuts.
+
+  - Added search functionality to filter repositories by typing
+  - Display full repository name (owner/repo format) alongside folder name when available
+  - Press 1-9 to quickly select from first nine repositories
+
+- [#879](https://github.com/dohooo/helmor/pull/879) [`21e7800`](https://github.com/dohooo/helmor/commit/21e7800c241a565dc677c492dd4e2d7bea8ff56d) Thanks [@dohooo](https://github.com/dohooo)! - Remove two features:
+  - Smart Triage — the "AI tasks" feature that used the on-device local model to scan connected sources (GitHub, GitLab, Slack, Lark) and auto-propose task workspaces. Never-started proposed-task workspaces left in your library are archived automatically on upgrade (chat history is preserved in the archive list).
+  - The MiMo Code agent provider and the Xiaomi MiMo model provider.
+
+### Patch Changes
+
+- [#880](https://github.com/dohooo/helmor/pull/880) [`5a1a570`](https://github.com/dohooo/helmor/commit/5a1a5703bb7abb197b34da047e3c87d982a50952) Thanks [@natllian](https://github.com/natllian)! - Improve the Cursor (Composer) provider in Helmor:
+
+  - MCP servers configured in Cursor (e.g. Linear, Context7) now work in Cursor agent sessions and render with their tool name, server, and an MCP icon, matching Claude and Codex.
+  - Cursor progress now appears as discrete step-by-step updates instead of accumulating into one ever-growing paragraph.
+  - A Cursor authentication error in one workspace no longer halts active Cursor sessions in your other workspaces.
+
+- [#876](https://github.com/dohooo/helmor/pull/876) [`d4ab24d`](https://github.com/dohooo/helmor/commit/d4ab24d2e5a0f6e57986d6a65649827930916318) Thanks [@aidxun](https://github.com/aidxun)! - Fix the Chinese release announcement title so the version appears in the natural sentence order.
+
+- [#884](https://github.com/dohooo/helmor/pull/884) [`406c6ac`](https://github.com/dohooo/helmor/commit/406c6ac0f88910fa3574ae71d120e72ab6d13a69) Thanks [@natllian](https://github.com/natllian)! - Fix archiving a workspace so it now stops that workspace's running scripts and terminals instead of leaving them as orphan processes.
+
+- [#882](https://github.com/dohooo/helmor/pull/882) [`66825eb`](https://github.com/dohooo/helmor/commit/66825ebaa673323e4e1df6eebb590ae86b14b5cb) Thanks [@natllian](https://github.com/natllian)! - Add a Rename action to the workspace right-click menu in the sidebar, so you can give any workspace a custom display name (clear it to restore the automatic title).
+
+- [#887](https://github.com/dohooo/helmor/pull/887) [`578e39d`](https://github.com/dohooo/helmor/commit/578e39ddfb19dd5d52e8623bde1e6564f5c27825) Thanks [@natllian](https://github.com/natllian)! - Fix sidebar drag-and-drop getting stuck in a phantom drag after a trackpad tap, so reordering workspaces and repository groups no longer locks onto the cursor.
+
+- [#886](https://github.com/dohooo/helmor/pull/886) [`5322397`](https://github.com/dohooo/helmor/commit/532239745d0e24f9facf3a31e7866e6df63029e1) Thanks [@natllian](https://github.com/natllian)! - Fix the new-workspace start screen so your model, reasoning effort, plan mode, and fast mode picks survive switching to another workspace and back instead of resetting to defaults.
+
+- [#883](https://github.com/dohooo/helmor/pull/883) [`2c3ad57`](https://github.com/dohooo/helmor/commit/2c3ad57726f12de899c6dc90f29ff536350837f2) Thanks [@natllian](https://github.com/natllian)! - Refine the start-page repository picker and fix a keyboard shortcut:
+
+  - The repository dropdown now sizes to its content instead of a fixed width.
+  - A new Alt+R shortcut opens the repository list, shown in the tooltip next to the switch-repository shortcut.
+  - Alt+P now opens the model picker on the start page (previously it only worked inside a conversation).
+
+- [#881](https://github.com/dohooo/helmor/pull/881) [`1b0b47e`](https://github.com/dohooo/helmor/commit/1b0b47eed870385f607f5117925f5ae50fdb974b) Thanks [@dohooo](https://github.com/dohooo)! - Update the bundled coding agents and their driver SDKs — Claude Code, Codex, Cursor, OpenCode, MiMo, and Kimi — to their latest versions.
+
 ## 0.41.0
 
 ### Minor Changes

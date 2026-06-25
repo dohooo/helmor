@@ -43,7 +43,7 @@ export function AgentProxyPanel() {
 	return (
 		<SettingsRow
 			title="proxy"
-			description="routesAllProviderTrafficClaudeCode"
+			description="routesAllProviderTrafficClaudeCode2"
 			align="start"
 			className="gap-8"
 		>

@@ -20,7 +20,8 @@ use crate::{
 
 struct RepoContext {
     root: PathBuf,
-    remote: String,
+    /// `None` for local-only repositories (no remote configured).
+    remote: Option<String>,
 }
 
 /// Resolve the repository root and remote from either a workspace_id or a repo_id.
@@ -32,13 +33,13 @@ fn resolve_repo_context(workspace_id: Option<&str>, repo_id: Option<&str>) -> Re
             let root = helpers::non_empty(&record.root_path)
                 .map(PathBuf::from)
                 .with_context(|| format!("Workspace {ws_id} is missing repo root_path"))?;
-            let remote = record.remote.unwrap_or_else(|| "origin".to_string());
+            let remote = git_ops::remote_name(&record.remote).map(str::to_owned);
             Ok(RepoContext { root, remote })
         }
         (_, Some(r_id)) => {
             let repo = crate::repos::load_repository_by_id(r_id)?
                 .with_context(|| format!("Repository not found: {r_id}"))?;
-            let remote = repo.remote.unwrap_or_else(|| "origin".to_string());
+            let remote = git_ops::remote_name(&repo.remote).map(str::to_owned);
             Ok(RepoContext {
                 root: PathBuf::from(repo.root_path.trim()),
                 remote,
@@ -54,7 +55,11 @@ pub fn list_remote_branches(
 ) -> Result<Vec<String>> {
     let ctx = resolve_repo_context(workspace_id, repo_id)?;
     git_ops::ensure_git_repository(&ctx.root)?;
-    git_ops::list_remote_branches(&ctx.root, &ctx.remote)
+    // Local-only repos have no remote branches.
+    let Some(remote) = ctx.remote.as_deref() else {
+        return Ok(Vec::new());
+    };
+    git_ops::list_remote_branches(&ctx.root, remote)
 }
 
 /// One row for the start-page branch picker.
@@ -68,15 +73,20 @@ pub struct BranchPickerEntry {
 
 /// Merge local + remote branches into `{name, hasLocal, hasRemote}` rows,
 /// sorted by name. Pure local fs reads (no network).
-pub fn list_branch_picker_entries(repo_root: &Path, remote: &str) -> Vec<BranchPickerEntry> {
+pub fn list_branch_picker_entries(
+    repo_root: &Path,
+    remote: Option<&str>,
+) -> Vec<BranchPickerEntry> {
     use std::collections::BTreeMap;
 
     let mut by_name: BTreeMap<String, (bool, bool)> = BTreeMap::new();
     for name in git_ops::list_local_branches(repo_root).unwrap_or_default() {
         by_name.entry(name).or_insert((false, false)).0 = true;
     }
-    for name in git_ops::list_remote_branches(repo_root, remote).unwrap_or_default() {
-        by_name.entry(name).or_insert((false, false)).1 = true;
+    if let Some(remote) = remote {
+        for name in git_ops::list_remote_branches(repo_root, remote).unwrap_or_default() {
+            by_name.entry(name).or_insert((false, false)).1 = true;
+        }
     }
     by_name
         .into_iter()
@@ -248,7 +258,10 @@ fn try_realign_local_branch(
         return Ok(None);
     }
 
-    let remote = record.remote.as_deref().unwrap_or("origin");
+    // Local-only repos have no remote to realign against.
+    let Some(remote) = git_ops::remote_name(&record.remote) else {
+        return Ok(None);
+    };
 
     if !matches!(
         git_ops::verify_remote_ref_exists(&workspace_dir, remote, target_branch),
@@ -293,7 +306,10 @@ pub fn refresh_remote_and_realign(
         return Ok(false);
     }
 
-    let remote = record.remote.as_deref().unwrap_or("origin");
+    // Local-only repos have no remote to fetch/realign from.
+    let Some(remote) = git_ops::remote_name(&record.remote) else {
+        return Ok(false);
+    };
     if git_ops::fetch_remote_branch(&workspace_dir, remote, target_branch).is_err() {
         return Ok(false);
     }
@@ -328,7 +344,9 @@ pub fn refresh_remote_and_realign(
         return Ok(false);
     }
 
-    let remote = fresh_record.remote.as_deref().unwrap_or("origin");
+    let Some(remote) = git_ops::remote_name(&fresh_record.remote) else {
+        return Ok(false);
+    };
     let target_ref = format!("{remote}/{target_branch}");
     git_ops::reset_current_branch_hard(&workspace_dir, &target_ref)?;
     Ok(true)
@@ -411,12 +429,18 @@ pub fn prefetch_remote_refs(
         if !workspace_dir.is_dir() {
             return Ok(PrefetchRemoteRefsResponse { fetched: false });
         }
-        let remote = record.remote.unwrap_or_else(|| "origin".to_string());
-        git_ops::fetch_all_remote(&workspace_dir, &remote)?;
+        // Local-only repos have no remote to prefetch.
+        let Some(remote) = git_ops::remote_name(&record.remote) else {
+            return Ok(PrefetchRemoteRefsResponse { fetched: false });
+        };
+        git_ops::fetch_all_remote(&workspace_dir, remote)?;
     } else {
         let ctx = resolve_repo_context(None, repo_id)?;
         git_ops::ensure_git_repository(&ctx.root)?;
-        git_ops::fetch_all_remote(&ctx.root, &ctx.remote)?;
+        let Some(remote) = ctx.remote.as_deref() else {
+            return Ok(PrefetchRemoteRefsResponse { fetched: false });
+        };
+        git_ops::fetch_all_remote(&ctx.root, remote)?;
     }
 
     Ok(PrefetchRemoteRefsResponse { fetched: true })
@@ -440,10 +464,9 @@ pub fn sync_workspace_with_target_branch(
         .clone()
         .or(record.default_branch.clone())
         .unwrap_or_else(|| "main".to_string());
-    let remote = record
-        .remote
-        .clone()
-        .unwrap_or_else(|| "origin".to_string());
+    let Some(remote) = git_ops::remote_name(&record.remote).map(str::to_owned) else {
+        bail!("This repository has no remote; remote operations are unavailable.");
+    };
     let workspace_dir = helpers::workspace_path(&record)?;
     if !workspace_dir.is_dir() {
         bail_coded!(
@@ -562,10 +585,9 @@ pub fn push_workspace_to_remote(workspace_id: &str) -> Result<PushWorkspaceToRem
         );
     }
 
-    let remote = record
-        .remote
-        .clone()
-        .unwrap_or_else(|| "origin".to_string());
+    let Some(remote) = git_ops::remote_name(&record.remote).map(str::to_owned) else {
+        bail!("This repository has no remote; remote operations are unavailable.");
+    };
     let workspace_dir = helpers::workspace_path(&record)?;
     if !workspace_dir.is_dir() {
         bail_coded!(
@@ -624,10 +646,9 @@ pub fn continue_workspace_from_target_branch(
         .clone()
         .or(record.default_branch.clone())
         .unwrap_or_else(|| "main".to_string());
-    let remote = record
-        .remote
-        .clone()
-        .unwrap_or_else(|| "origin".to_string());
+    let Some(remote) = git_ops::remote_name(&record.remote).map(str::to_owned) else {
+        bail!("This repository has no remote; remote operations are unavailable.");
+    };
     let start_point = if git_ops::verify_remote_ref_exists(&workspace_dir, &remote, &target_branch)?
     {
         format!("{remote}/{target_branch}")
