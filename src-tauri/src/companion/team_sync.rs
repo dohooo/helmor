@@ -7,8 +7,9 @@
 //! cloud serve host. On the desktop / local-dev they're unset, so this is fully
 //! inert. The write-through is BEST-EFFORT: a failed POST never affects the
 //! local turn. A per-session `rowid` high-water-mark means only NEW messages are
-//! sent; it resets on restart, so a cold start re-syncs everything — the
-//! self-healing reconcile.
+//! sent on each live mutation; [`TeamSync::backfill_all`] (run once at serve
+//! startup) pushes ALL existing rows, so history created before the write-through
+//! existed is mirrored too — the self-healing reconcile.
 //!
 //! Single integration point: [`on_ui_mutation`] is called from
 //! `crate::ui_sync::publish`, the choke point every mutation flows through.
@@ -198,6 +199,36 @@ impl TeamSync {
         )
         .await
     }
+
+    /// One-time reconcile run once at serve startup: push EVERY workspace's
+    /// session rows (authoritative set ⇒ also prunes stale D1 rows) and then all
+    /// messages for every session. Idempotent (id-keyed upserts + append-only
+    /// inserts), so history created before the write-through existed gets
+    /// mirrored, and any drift from a missed best-effort write self-heals. The
+    /// cursors it sets mean subsequent live syncs only send new rows.
+    pub async fn backfill_all(&self) -> Result<()> {
+        if self.config.is_none() {
+            return Ok(());
+        }
+        let workspace_ids = tauri::async_runtime::spawn_blocking(read_all_workspace_ids).await??;
+        for workspace_id in &workspace_ids {
+            if let Err(error) = self.sync_workspace_sessions(workspace_id).await {
+                tracing::warn!(error = %format!("{error:#}"), workspace_id = %workspace_id, "team_sync: backfill workspace failed");
+            }
+        }
+        let session_ids = tauri::async_runtime::spawn_blocking(read_all_session_ids).await??;
+        for session_id in &session_ids {
+            if let Err(error) = self.sync_session(session_id).await {
+                tracing::warn!(error = %format!("{error:#}"), session_id = %session_id, "team_sync: backfill session failed");
+            }
+        }
+        tracing::info!(
+            workspaces = workspace_ids.len(),
+            sessions = session_ids.len(),
+            "team_sync: backfill complete"
+        );
+        Ok(())
+    }
 }
 
 async fn post_sync(cfg: &SyncConfig, payload: &SyncPayload) -> Result<()> {
@@ -320,6 +351,22 @@ fn read_workspace_session_rows(workspace_id: &str) -> Result<Vec<SyncSession>> {
          FROM sessions WHERE workspace_id = ?1",
     )?;
     let rows = statement.query_map([workspace_id], map_session_row)?;
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
+/// Distinct workspace ids that currently have any session (backfill scope).
+fn read_all_workspace_ids() -> Result<Vec<String>> {
+    let conn = db::read_conn()?;
+    let mut statement = conn.prepare("SELECT DISTINCT workspace_id FROM sessions")?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
+/// Every session id (backfill: each gets its full message history pushed).
+fn read_all_session_ids() -> Result<Vec<String>> {
+    let conn = db::read_conn()?;
+    let mut statement = conn.prepare("SELECT id FROM sessions")?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 

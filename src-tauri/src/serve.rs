@@ -104,6 +104,23 @@ pub fn setup(app: &tauri::App) -> Result<()> {
     })
     .context("serve: companion server failed to start")?;
 
+    // 5. One-time team-mirror reconcile: push all existing sessions/messages to
+    //    the D1 mirror so the desktop can browse full history while the sandbox
+    //    sleeps. Best-effort + idempotent; inert unless TeamSync is enabled
+    //    (HELMOR_SYNC_URL + HELMOR_COMPANION_TOKEN present).
+    if handle
+        .try_state::<companion::TeamSync>()
+        .is_some_and(|sync| sync.is_enabled())
+    {
+        let backfill_handle = handle.clone();
+        tauri::async_runtime::spawn(async move {
+            let sync = backfill_handle.state::<companion::TeamSync>();
+            if let Err(error) = sync.backfill_all().await {
+                tracing::warn!(error = %format!("{error:#}"), "serve: team mirror backfill failed");
+            }
+        });
+    }
+
     tracing::info!(port, "helmor serve: companion listening on 0.0.0.0");
     Ok(())
 }
