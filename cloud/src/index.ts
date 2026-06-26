@@ -375,6 +375,30 @@ async function route(
 		);
 	}
 
+	// Member/admin warm-up (Stage D): pre-wake the container in the BACKGROUND so
+	// a subsequent @agent run is hot. Fire-and-forget (ctx.waitUntil) + 202 so the
+	// caller (composer focus) never blocks on the ~cold start. Same auth as
+	// /admin/restart-sandbox.
+	if (url.pathname === "/admin/warm-up") {
+		const authed =
+			forwarded.headers.get("X-Helmor-Member-Id") !== null ||
+			forwarded.headers.get("Authorization") ===
+				`Bearer ${env.HELMOR_COMPANION_TOKEN}`;
+		if (!authed) {
+			return new Response(
+				JSON.stringify({
+					code: "Unauthorized",
+					message: "member or admin token required",
+				}),
+				{ status: 401, headers: { "content-type": "application/json" } },
+			);
+		}
+		ctx.waitUntil(
+			ensureServe(sandbox, env, port, { syncUrl: url.origin }).catch(() => {}),
+		);
+		return new Response(null, { status: 202 });
+	}
+
 	try {
 		await ensureServe(sandbox, env, port, { syncUrl: url.origin });
 	} catch (error) {

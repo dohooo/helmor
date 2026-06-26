@@ -58,7 +58,8 @@ import type {
 } from "@/lib/composer-insert";
 import { recordComposerRender } from "@/lib/dev-render-debug";
 import { I18nText, useI18n } from "@/lib/i18n";
-import { isTeamModeActive } from "@/lib/team-mode";
+import { warmUpSandbox } from "@/lib/team-api";
+import { getTeamConfig, isTeamModeActive } from "@/lib/team-mode";
 import { cn } from "@/lib/utils";
 import { clampEffort } from "@/lib/workspace-helpers";
 import { ComposerButton } from "./button";
@@ -109,6 +110,22 @@ import type { UserInputResponseHandler } from "./user-input";
 import { UserInputPanel } from "./user-input-panel";
 
 const OPEN_SETTINGS_EVENT = "helmor:open-settings";
+
+// Stage D: pre-warm the team sandbox on composer focus so a following @agent run
+// is hot (Stage C lets the container sleep when idle). Team mode only +
+// throttled — a focus storm (clicks, re-renders) must not spam the Worker.
+// Best-effort: warmUpSandbox swallows errors and the Worker returns 202 at once.
+const WARM_UP_THROTTLE_MS = 60_000;
+let lastWarmUpAt = 0;
+function maybeWarmUpTeamSandbox(): void {
+	if (!isTeamModeActive()) return;
+	const now = Date.now();
+	if (now - lastWarmUpAt < WARM_UP_THROTTLE_MS) return;
+	const cfg = getTeamConfig();
+	if (!cfg) return;
+	lastWarmUpAt = now;
+	void warmUpSandbox(cfg);
+}
 
 type WorkspaceComposerProps = {
 	contextKey: string;
@@ -915,7 +932,10 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						<LexicalComposer initialConfig={initialConfig}>
 							<div
 								className="relative"
-								onFocusCapture={() => setIsInputFocused(true)}
+								onFocusCapture={() => {
+									setIsInputFocused(true);
+									maybeWarmUpTeamSandbox();
+								}}
 								onBlurCapture={(event) => {
 									if (
 										event.currentTarget.contains(

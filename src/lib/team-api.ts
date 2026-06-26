@@ -137,6 +137,25 @@ function authHeaders(cfg: TeamConfig): HeadersInit {
 }
 
 /**
+ * Stage D: pre-warm the team sandbox container in the BACKGROUND so a subsequent
+ * @agent run is hot. The Worker's `/admin/warm-up` returns 202 immediately and
+ * wakes the container via `ctx.waitUntil`. Fire-and-forget + best-effort — a
+ * failure (offline / transient) is swallowed; warm-up is an optimization, never
+ * a hard dependency, and must never block or surface an error to the composer.
+ */
+export async function warmUpSandbox(cfg: TeamConfig): Promise<void> {
+	const base = normalizeUrl(cfg.url);
+	try {
+		await fetch(`${base}/admin/warm-up`, {
+			method: "POST",
+			headers: authHeaders(cfg),
+		});
+	} catch {
+		// best-effort: warm-up never blocks or surfaces an error
+	}
+}
+
+/**
  * `POST /team/bootstrap` (admin) — create/upsert the single team row, returning
  * its id. The route is admin-gated: a 401 means {@link TeamConfig.token} is not
  * the companion/admin token (an ordinary invite/member token can't bootstrap).
