@@ -50,6 +50,50 @@ pub async fn list_session_thread_messages(
     .await
 }
 
+/// One raw message row as stored in the D1 mirror (Stage B). Mirrors the columns
+/// the team Worker's `GET /team/messages` returns, so the desktop can render
+/// history from D1 while the sandbox sleeps.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoricalRecordInput {
+    pub id: String,
+    pub role: String,
+    pub content: String,
+    pub created_at: String,
+    #[serde(default)]
+    pub author_id: Option<String>,
+}
+
+/// Run the SAME historical pipeline as [`list_session_thread_messages`] over raw
+/// rows supplied by the caller (the team D1 mirror) instead of the local DB.
+/// LOCAL command (never proxied) — it's pure CPU, no DB, so team mode can render
+/// sandbox-independent history identically to the container path.
+#[tauri::command]
+pub async fn convert_historical_records(
+    records: Vec<HistoricalRecordInput>,
+) -> CmdResult<Vec<pipeline::types::ThreadMessageLike>> {
+    run_blocking(move || {
+        let records: Vec<pipeline::types::HistoricalRecord> = records
+            .into_iter()
+            .map(|record| pipeline::types::HistoricalRecord {
+                id: record.id,
+                // Mirror roles are always one of user/assistant/system/error;
+                // an unknown value degrades to a System notice rather than failing.
+                role: record
+                    .role
+                    .parse()
+                    .unwrap_or(pipeline::types::MessageRole::System),
+                content: record.content,
+                parsed_content: None,
+                created_at: record.created_at,
+                author_id: record.author_id,
+            })
+            .collect();
+        Ok(pipeline::MessagePipeline::convert_historical(&records))
+    })
+    .await
+}
+
 /// `seed_session_id`: see `sessions::CreateSessionOverrides::seed_session_id` —
 /// frontend-provided UUID used as the new `sessions.id` when present.
 #[allow(clippy::too_many_arguments)] // Tauri IPC command — args mirror the frontend call.

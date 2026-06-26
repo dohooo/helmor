@@ -64,6 +64,10 @@ const LOCAL_ONLY: &[&str] = &[
     // Dev-only desktop inspection helpers read buffers owned by the Tauri host.
     "debug_list_terminal_buffers",
     "debug_read_terminal_buffer",
+    // Stage B: render team D1 mirror rows into the thread via the local pipeline.
+    // Pure CPU on the desktop — never proxied to the container, which would defeat
+    // reading history while the sandbox sleeps.
+    "convert_historical_records",
 ];
 
 #[test]

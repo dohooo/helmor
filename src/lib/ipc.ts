@@ -540,6 +540,10 @@ const LOCAL_ONLY_INVOKES = new Set<string>([
 	// mode) would store it there and hand back a path this desktop webview
 	// can't resolve, so the hover preview shows a broken image. Keep local.
 	"save_pasted_image",
+	// Stage B: convert team D1 mirror rows → thread messages via the local
+	// pipeline. Runs on the desktop over rows fetched from /team/messages; routing
+	// it to the container would defeat reading history while the sandbox sleeps.
+	"convert_historical_records",
 ]);
 
 export function invoke<T>(

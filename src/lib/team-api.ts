@@ -10,6 +10,7 @@
  * survives a login rename.
  */
 
+import type { ActionKind, WorkspaceSessionSummary } from "./api";
 import type { TeamConfig } from "./team-mode";
 
 /** A team member as returned by `GET /team/members`. Field names mirror
@@ -216,6 +217,100 @@ export async function listTeamWorkspaces(
 	}
 	const body = (await res.json()) as { workspaces?: TeamWorkspace[] };
 	return body.workspaces ?? [];
+}
+
+/** Raw D1 session-mirror row from `GET /team/sessions` (snake_case, matching the
+ *  Worker's `sessions` table). Mapped to {@link WorkspaceSessionSummary} below. */
+interface TeamSessionRow {
+	id: string;
+	workspace_id: string;
+	title: string | null;
+	status: string | null;
+	model: string | null;
+	agent_type: string | null;
+	permission_mode: string | null;
+	effort_level: string | null;
+	action_kind: string | null;
+	session_kind: string | null;
+	is_hidden: number | boolean;
+	last_user_message_at: string | null;
+	created_at: string | null;
+	updated_at: string | null;
+}
+
+function toSessionSummary(row: TeamSessionRow): WorkspaceSessionSummary {
+	return {
+		id: row.id,
+		workspaceId: row.workspace_id,
+		title: row.title ?? "Untitled",
+		agentType: row.agent_type ?? null,
+		status: row.status ?? "idle",
+		model: row.model ?? null,
+		permissionMode: row.permission_mode ?? "default",
+		// Browsing-only fields: these resume-time values come from the live
+		// container when the user actually runs a turn, not the mirror.
+		providerSessionId: null,
+		effortLevel: row.effort_level ?? null,
+		unreadCount: 0,
+		fastMode: false,
+		createdAt: row.created_at ?? "",
+		updatedAt: row.updated_at ?? "",
+		lastUserMessageAt: row.last_user_message_at ?? null,
+		isHidden: row.is_hidden === 1 || row.is_hidden === true,
+		actionKind: (row.action_kind as ActionKind | null) ?? null,
+		sessionKind: row.session_kind === "terminal" ? "terminal" : "gui",
+		active: false,
+	};
+}
+
+/** `GET /team/sessions` — the D1 session mirror for a workspace. Readable with
+ *  the sandbox asleep (Stage B), shaped like the local `list_workspace_sessions`. */
+export async function listTeamSessions(
+	cfg: TeamConfig,
+	workspaceId: string,
+): Promise<WorkspaceSessionSummary[]> {
+	const base = normalizeUrl(cfg.url);
+	const res = await fetch(
+		`${base}/team/sessions?workspaceId=${encodeURIComponent(workspaceId)}`,
+		{ headers: authHeaders(cfg) },
+	);
+	if (!res.ok) {
+		throw new Error(`Failed to load team sessions (HTTP ${res.status})`);
+	}
+	const body = (await res.json()) as { sessions?: TeamSessionRow[] };
+	return (body.sessions ?? []).map(toSessionSummary);
+}
+
+/** Raw D1 message-mirror row from `GET /team/messages` (snake_case). Fed to the
+ *  local `convert_historical_records` command so it renders identically to the
+ *  container path. */
+export interface TeamMessageRow {
+	id: string;
+	session_id: string;
+	role: string | null;
+	content: string | null;
+	sent_at: string | null;
+	created_at: string | null;
+	author_id: string | null;
+}
+
+/** `GET /team/messages` — the D1 message mirror for a session (raw rows). */
+export async function listTeamSessionMessages(
+	cfg: TeamConfig,
+	sessionId: string,
+): Promise<TeamMessageRow[]> {
+	const base = normalizeUrl(cfg.url);
+	const res = await fetch(
+		`${base}/team/messages?sessionId=${encodeURIComponent(sessionId)}`,
+		{ headers: authHeaders(cfg) },
+	);
+	if (!res.ok) {
+		throw new Error(
+			`Failed to load team session messages (HTTP ${res.status})`,
+		);
+	}
+	const body = (await res.json()) as { messages?: TeamMessageRow[] };
+	return body.messages ?? [];
 }
 
 /**

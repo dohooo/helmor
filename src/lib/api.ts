@@ -11,6 +11,8 @@ import type {
 	ProviderFamily,
 } from "./provider-config";
 import { setSessionThreadPaginationState } from "./session-thread-pagination";
+import { listTeamSessionMessages, listTeamSessions } from "./team-api";
+import { getTeamConfig, isTeamModeActive } from "./team-mode";
 
 export type { CustomProvider, CustomProviderModel, ProviderFamily };
 
@@ -2574,6 +2576,12 @@ export async function prefetchRemoteRefs(opts: {
 export async function loadWorkspaceSessions(
 	workspaceId: string,
 ): Promise<WorkspaceSessionSummary[]> {
+	// Team mode: read the D1 session mirror so the sidebar lists sessions even
+	// with the sandbox asleep (no /rpc → no container wake).
+	if (isTeamModeActive()) {
+		const cfg = getTeamConfig();
+		if (cfg) return listTeamSessions(cfg, workspaceId);
+	}
 	try {
 		return await invoke<WorkspaceSessionSummary[]>("list_workspace_sessions", {
 			workspaceId,
@@ -2603,10 +2611,44 @@ export const DEFAULT_SESSION_THREAD_TAIL_LIMIT = 200;
  * queryFn (which then updates the pagination store) and by the
  * "Load earlier" expand path (which needs `hasMore` after each fetch).
  */
+/** Render raw D1 mirror message rows into the thread via the LOCAL pipeline
+ *  (`convert_historical_records`). Team mode reads history from D1 and converts
+ *  on the desktop, identically to the container path. */
+export async function convertHistoricalRecords(
+	records: {
+		id: string;
+		role: string;
+		content: string;
+		createdAt: string;
+		authorId: string | null;
+	}[],
+): Promise<ThreadMessageLike[]> {
+	return invoke<ThreadMessageLike[]>("convert_historical_records", { records });
+}
+
 export async function fetchSessionThreadMessagesPage(
 	sessionId: string,
 	options?: { tailLimit?: number | null },
 ): Promise<SessionThreadMessagesPage> {
+	// Team mode: read the D1 message mirror + render via the LOCAL pipeline, so
+	// history shows with the sandbox asleep. The mirror returns the whole session
+	// (no windowing), so hasMore is always false here.
+	if (isTeamModeActive()) {
+		const cfg = getTeamConfig();
+		if (cfg) {
+			const rows = await listTeamSessionMessages(cfg, sessionId);
+			const messages = await convertHistoricalRecords(
+				rows.map((row) => ({
+					id: row.id,
+					role: row.role ?? "system",
+					content: row.content ?? "",
+					createdAt: row.created_at ?? "",
+					authorId: row.author_id ?? null,
+				})),
+			);
+			return { messages, hasMore: false };
+		}
+	}
 	const tailLimit =
 		options?.tailLimit === undefined
 			? DEFAULT_SESSION_THREAD_TAIL_LIMIT

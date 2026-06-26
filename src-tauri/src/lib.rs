@@ -598,6 +598,7 @@ fn build_app(mode: AppMode) -> tauri::App {
             commands::terminal_commands::set_terminal_session_busy,
             commands::terminal_commands::convert_session_to_terminal,
             commands::session_commands::list_session_thread_messages,
+            commands::session_commands::convert_historical_records,
             commands::workspace_commands::list_workspace_groups,
             commands::session_commands::list_workspace_sessions,
             commands::session_commands::create_session,
