@@ -236,6 +236,55 @@ describe("shared Team Gateway contract", () => {
 		});
 		expect(unauth.status).toBe(401);
 	});
+
+	it("prunes D1 sessions the container no longer has via replaceWorkspaceSessions", async () => {
+		const { store } = makeStore();
+		const memberToken = await acceptMember(store);
+		const put = (body: unknown) =>
+			teamRoute(store, "/team/sync", {
+				method: "PUT",
+				headers: { ...auth(ADMIN_TOKEN), "content-type": "application/json" },
+				body: JSON.stringify(body),
+			});
+		const sessionIds = async () => {
+			const res = await teamRoute(store, "/team/sessions?workspaceId=w1", {
+				headers: auth(memberToken),
+			});
+			const { sessions } = (await res.json()) as {
+				sessions: Array<{ id: string }>;
+			};
+			return sessions.map((s) => s.id).sort();
+		};
+
+		// Seed two sessions (each with a message).
+		await put({
+			sessions: [
+				{ id: "s1", workspaceId: "w1" },
+				{ id: "s2", workspaceId: "w1" },
+			],
+			messages: [
+				{ id: "m1", sessionId: "s1", content: "a" },
+				{ id: "m2", sessionId: "s2", content: "b" },
+			],
+		});
+		expect(await sessionIds()).toEqual(["s1", "s2"]);
+
+		// Authoritative set says only s1 remains → s2 (+ its messages) pruned.
+		await put({
+			replaceWorkspaceSessions: { workspaceId: "w1", sessionIds: ["s1"] },
+		});
+		expect(await sessionIds()).toEqual(["s1"]);
+		const afterPrune = await teamRoute(store, "/team/messages?sessionId=s2", {
+			headers: auth(memberToken),
+		});
+		expect(await afterPrune.json()).toEqual({ messages: [] });
+
+		// Empty set → last session deleted → prune the whole workspace.
+		await put({
+			replaceWorkspaceSessions: { workspaceId: "w1", sessionIds: [] },
+		});
+		expect(await sessionIds()).toEqual([]);
+	});
 });
 
 function makeStore(): {

@@ -314,6 +314,33 @@ async function syncTeamData(
 		if (!id) continue;
 		stmts.push(env.DB.prepare("DELETE FROM messages WHERE id = ?1").bind(id));
 	}
+	// Authoritative prune: drop D1 sessions (+ their messages) for the workspace
+	// that the container no longer has. Runs after the upserts above, so newly
+	// created sessions in the same sync survive.
+	const replace = input.replaceWorkspaceSessions;
+	if (replace?.workspaceId) {
+		const ids = (replace.sessionIds ?? []).filter(Boolean);
+		if (ids.length === 0) {
+			stmts.push(
+				env.DB.prepare(
+					"DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE workspace_id = ?1)",
+				).bind(replace.workspaceId),
+				env.DB.prepare("DELETE FROM sessions WHERE workspace_id = ?1").bind(
+					replace.workspaceId,
+				),
+			);
+		} else {
+			const ph = ids.map((_, i) => `?${i + 2}`).join(",");
+			stmts.push(
+				env.DB.prepare(
+					`DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE workspace_id = ?1 AND id NOT IN (${ph}))`,
+				).bind(replace.workspaceId, ...ids),
+				env.DB.prepare(
+					`DELETE FROM sessions WHERE workspace_id = ?1 AND id NOT IN (${ph})`,
+				).bind(replace.workspaceId, ...ids),
+			);
+		}
+	}
 	if (stmts.length > 0) await env.DB.batch(stmts);
 	return { ok: true };
 }

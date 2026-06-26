@@ -77,6 +77,12 @@ export interface TeamSyncInput {
 	messages?: TeamSyncMessageRow[];
 	deletedSessionIds?: string[];
 	deletedMessageIds?: string[];
+	/** Authoritative session-id set for one workspace: any D1 session for this
+	 *  workspace whose id is NOT listed is pruned (with its messages). Lets the
+	 *  container reconcile deletes without tracking per-delete deltas (which it
+	 *  can't do reliably across a sandbox restart). An empty `sessionIds` prunes
+	 *  the whole workspace (its last session was deleted). */
+	replaceWorkspaceSessions?: { workspaceId: string; sessionIds: string[] };
 }
 
 export interface TeamGatewayAcceptInviteInput {

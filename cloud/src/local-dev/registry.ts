@@ -336,6 +336,22 @@ export class InMemoryLocalTeamRegistry implements LocalTeamRegistry {
 		for (const id of input.deletedMessageIds ?? []) {
 			if (id) delete this.snapshotState.messages[id];
 		}
+		const replace = input.replaceWorkspaceSessions;
+		if (replace?.workspaceId) {
+			const keep = new Set((replace.sessionIds ?? []).filter(Boolean));
+			for (const sid of Object.keys(this.snapshotState.sessions)) {
+				const row = this.snapshotState.sessions[sid];
+				if (row?.workspace_id !== replace.workspaceId || keep.has(sid)) {
+					continue;
+				}
+				delete this.snapshotState.sessions[sid];
+				for (const mid of Object.keys(this.snapshotState.messages)) {
+					if (this.snapshotState.messages[mid]?.session_id === sid) {
+						delete this.snapshotState.messages[mid];
+					}
+				}
+			}
+		}
 		this.changed();
 		return { ok: true };
 	}

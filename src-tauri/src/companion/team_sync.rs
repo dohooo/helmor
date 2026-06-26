@@ -75,6 +75,15 @@ struct SyncMessage {
     author_id: Option<String>,
 }
 
+/// Authoritative session-id set for one workspace. The Worker prunes any D1
+/// session for this workspace whose id isn't listed (empty ⇒ prune all).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReplaceWorkspaceSessions {
+    workspace_id: String,
+    session_ids: Vec<String>,
+}
+
 #[derive(Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct SyncPayload {
@@ -82,6 +91,8 @@ struct SyncPayload {
     sessions: Vec<SyncSession>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     messages: Vec<SyncMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    replace_workspace_sessions: Option<ReplaceWorkspaceSessions>,
 }
 
 impl Default for TeamSync {
@@ -135,7 +146,8 @@ impl TeamSync {
         })
         .await??;
         // Session gone (deleted between event + read) — nothing to upsert; the
-        // B.4 wake reconcile prunes deleted rows.
+        // workspace-level prune (replaceWorkspaceSessions, sent on the same
+        // SessionListChanged the delete fires) removes its D1 rows.
         let Some(session) = session else {
             return Ok(());
         };
@@ -145,6 +157,7 @@ impl TeamSync {
             &SyncPayload {
                 sessions: vec![session],
                 messages,
+                replace_workspace_sessions: None,
             },
         )
         .await?;
@@ -169,14 +182,18 @@ impl TeamSync {
         let sessions =
             tauri::async_runtime::spawn_blocking(move || read_workspace_session_rows(&wid))
                 .await??;
-        if sessions.is_empty() {
-            return Ok(());
-        }
+        // Send the AUTHORITATIVE id set (even when empty) so the Worker prunes
+        // sessions the container no longer has — incl. the last one deleted.
+        let session_ids = sessions.iter().map(|s| s.id.clone()).collect();
         post_sync(
             cfg,
             &SyncPayload {
                 sessions,
                 messages: vec![],
+                replace_workspace_sessions: Some(ReplaceWorkspaceSessions {
+                    workspace_id: workspace_id.to_string(),
+                    session_ids,
+                }),
             },
         )
         .await
@@ -392,9 +409,31 @@ mod tests {
                 created_at: None,
                 author_id: None,
             }],
+            replace_workspace_sessions: None,
         };
         let json = serde_json::to_value(&payload).unwrap();
         assert!(json.get("sessions").is_none());
         assert!(json.get("messages").is_some());
+        assert!(json.get("replaceWorkspaceSessions").is_none());
+    }
+
+    /// The authoritative-set prune field must serialize to
+    /// `replaceWorkspaceSessions` with camelCase `sessionIds` — the Worker keys
+    /// the prune off this exact shape.
+    #[test]
+    fn replace_workspace_sessions_serializes_as_camel_case() {
+        let payload = SyncPayload {
+            sessions: Vec::new(),
+            messages: Vec::new(),
+            replace_workspace_sessions: Some(ReplaceWorkspaceSessions {
+                workspace_id: "w1".into(),
+                session_ids: vec!["s1".into(), "s2".into()],
+            }),
+        };
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(json["replaceWorkspaceSessions"]["workspaceId"], "w1");
+        assert_eq!(json["replaceWorkspaceSessions"]["sessionIds"][0], "s1");
+        assert_eq!(json["replaceWorkspaceSessions"]["sessionIds"][1], "s2");
+        assert!(json.get("sessions").is_none());
     }
 }
