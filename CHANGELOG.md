@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.44.0
+
+### Minor Changes
+
+- [#896](https://github.com/dohooo/helmor/pull/896) [`d172b5b`](https://github.com/dohooo/helmor/commit/d172b5bbb37270f3e9bb2eb8251011d057076b91) Thanks [@natllian](https://github.com/natllian)! - Support local git repositories that have no remote, including worktree workspaces.
+
+  - Open a git repo with no remote configured — branches, diffs, commits, and worktrees all work, with the default branch read from local HEAD.
+  - Push, pull, fetch, pull requests, and the forge Connect prompts are hidden for these local-only repos; repo settings show a "Local-only repository" notice and a local-branch picker.
+
+### Patch Changes
+
+- [#897](https://github.com/dohooo/helmor/pull/897) [`fe6108d`](https://github.com/dohooo/helmor/commit/fe6108d1ca42b7b637234e698c25b83aae62da7a) Thanks [@natllian](https://github.com/natllian)! - Fix Claude turns ending prematurely after a subagent is moved to the background — the main agent now stays paused and resumes once the background task completes.
+
+- [#900](https://github.com/dohooo/helmor/pull/900) [`ba5cee8`](https://github.com/dohooo/helmor/commit/ba5cee89b44ce0f3edf98dcdf4da561c9bcd3b7b) Thanks [@dohooo](https://github.com/dohooo)! - Update the bundled Claude Code, Cursor, OpenCode, and Kimi coding agents to their latest versions.
+
+- [#898](https://github.com/dohooo/helmor/pull/898) [`ebf63e4`](https://github.com/dohooo/helmor/commit/ebf63e4c534bf1f9a74c1235f7161d1b3436b09c) Thanks [@natllian](https://github.com/natllian)! - Hide the `/compact` (Claude) and `/clear` (all agents) slash commands, which showed up in the command menu but did nothing when run.
+
 ## 0.43.0
 
 ### Minor Changes
