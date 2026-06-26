@@ -26,6 +26,8 @@ use crate::models::db;
 use crate::ui_sync::UiMutationEvent;
 
 const SYNC_PATH: &str = "/team/sync";
+/// Stage C: the Worker route that broadcasts one event to the team hub.
+const EVENT_PATH: &str = "/team/event";
 
 /// Tauri-managed write-through client. Inert unless `HELMOR_SYNC_URL` +
 /// `HELMOR_COMPANION_TOKEN` are in the environment.
@@ -94,6 +96,15 @@ struct SyncPayload {
     messages: Vec<SyncMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     replace_workspace_sessions: Option<ReplaceWorkspaceSessions>,
+}
+
+/// Stage C realtime envelope. Mirrors the old SSE frame the desktop parsed (an
+/// `event` name + JSON `data`), so `companionListen("ui-mutation", …)` consumes
+/// it unchanged once the transport flips from SSE to the TeamHub WebSocket.
+#[derive(Serialize)]
+struct EventEnvelope<'a> {
+    event: &'a str,
+    data: &'a UiMutationEvent,
 }
 
 impl Default for TeamSync {
@@ -229,6 +240,27 @@ impl TeamSync {
         );
         Ok(())
     }
+
+    /// Stage C: POST one already-serialized event envelope to the team hub for
+    /// realtime broadcast to every connected member. Best-effort; inert when
+    /// disabled. Does NOT touch D1 — that is the Stage-B data mirror's job.
+    async fn broadcast_event(&self, body: String) -> Result<()> {
+        let Some(cfg) = self.config.as_ref() else {
+            return Ok(());
+        };
+        let response = cfg
+            .client
+            .post(format!("{}{}", cfg.sync_url, EVENT_PATH))
+            .bearer_auth(&cfg.token)
+            .header("content-type", "application/json")
+            .body(body)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            anyhow::bail!("POST /team/event returned HTTP {}", response.status());
+        }
+        Ok(())
+    }
 }
 
 async fn post_sync(cfg: &SyncConfig, payload: &SyncPayload) -> Result<()> {
@@ -245,10 +277,38 @@ async fn post_sync(cfg: &SyncConfig, payload: &SyncPayload) -> Result<()> {
     Ok(())
 }
 
-/// Called from `ui_sync::publish` for EVERY mutation. Filters to the data-plane
-/// events, then spawns a best-effort mirror sync. Cheap no-op for other events,
-/// when disabled, or when `TeamSync` isn't managed (tests / non-serve apps).
+/// Called from `ui_sync::publish` for EVERY mutation. Two best-effort jobs, both
+/// inert when disabled / unmanaged (tests / non-serve apps):
+///   - Stage C realtime: relay EVERY event to the team hub (`/team/event`) so
+///     members see it live WITHOUT the container holding a desktop stream.
+///   - Stage B data mirror: the session/message subset → D1 (`/team/sync`).
 pub fn on_ui_mutation<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: &UiMutationEvent) {
+    // `try_state` (not `state`) so this never panics in a test app that didn't
+    // `.manage(TeamSync)`. Gates both jobs below.
+    if !app
+        .try_state::<TeamSync>()
+        .is_some_and(|sync| sync.is_enabled())
+    {
+        return;
+    }
+
+    // Stage C — realtime: broadcast EVERY ui-mutation. Serialize here (the event
+    // is borrowed) then move the owned line into the spawn.
+    if let Ok(body) = serde_json::to_string(&EventEnvelope {
+        event: "ui-mutation",
+        data: event,
+    }) {
+        let app_evt = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Some(sync) = app_evt.try_state::<TeamSync>() {
+                if let Err(error) = sync.broadcast_event(body).await {
+                    tracing::warn!(error = %format!("{error:#}"), "team_sync: event broadcast failed");
+                }
+            }
+        });
+    }
+
+    // Stage B — data mirror: only the session/message subset hits D1.
     let session_id = match event {
         UiMutationEvent::SessionTurnPersisted { session_id }
         | UiMutationEvent::SessionMessagesAppended { session_id } => Some(session_id.clone()),
@@ -259,14 +319,6 @@ pub fn on_ui_mutation<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: &UiMu
         _ => None,
     };
     if session_id.is_none() && workspace_id.is_none() {
-        return;
-    }
-    // `try_state` (not `state`) so this never panics in a test app that didn't
-    // `.manage(TeamSync)`. Skip the spawn entirely when disabled / unmanaged.
-    if !app
-        .try_state::<TeamSync>()
-        .is_some_and(|sync| sync.is_enabled())
-    {
         return;
     }
 
@@ -482,5 +534,23 @@ mod tests {
         assert_eq!(json["replaceWorkspaceSessions"]["sessionIds"][0], "s1");
         assert_eq!(json["replaceWorkspaceSessions"]["sessionIds"][1], "s2");
         assert!(json.get("sessions").is_none());
+    }
+
+    /// The realtime envelope must serialize to `{"event":"ui-mutation","data":…}`
+    /// with `data` the tagged UiMutationEvent — the exact frame the desktop's
+    /// `companionListen("ui-mutation", …)` consumer already parses.
+    #[test]
+    fn event_envelope_matches_sse_frame_shape() {
+        let event = UiMutationEvent::SessionListChanged {
+            workspace_id: "w1".into(),
+        };
+        let json = serde_json::to_value(EventEnvelope {
+            event: "ui-mutation",
+            data: &event,
+        })
+        .unwrap();
+        assert_eq!(json["event"], "ui-mutation");
+        assert_eq!(json["data"]["type"], "sessionListChanged");
+        assert_eq!(json["data"]["workspaceId"], "w1");
     }
 }
