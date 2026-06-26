@@ -16,12 +16,27 @@ import { getTeamConfig } from "@/lib/team-mode";
 export interface TeamConnectStage {
 	label: string;
 	detail: string;
+	/** Terminal auth failure (401/403): the saved team token is invalid — not a
+	 *  transient cold-start — so the overlay shows a terminal "re-join" state
+	 *  instead of spinning "Connecting…" forever. */
+	unauthorized?: boolean;
 }
 
 const POLL_GAP_MS = 3000;
 const POLL_TIMEOUT_MS = 10_000;
 
 function mapStatus(status: number, message: string): TeamConnectStage {
+	// 401/403 = the saved team token is invalid (removed from the team, or the
+	// team was reset). Terminal — NOT a cold-start — so the overlay must stop
+	// "connecting" and offer a re-join / Back-to-Local escape.
+	if (status === 401 || status === 403) {
+		return {
+			label: "Team access not authorized",
+			detail:
+				"Your team token is no longer valid — you may have been removed from the team, or it was reset. Re-join the team, or go back to Local.",
+			unauthorized: true,
+		};
+	}
 	const m = message.toLowerCase();
 	if (m.includes("serve host not ready") || m.includes("session init")) {
 		return {
@@ -77,7 +92,12 @@ export function useTeamConnectStage(active: boolean): TeamConnectStage | null {
 					const body = (await res.json().catch(() => ({}))) as {
 						message?: string;
 					};
-					setStage(mapStatus(res.status, body.message ?? ""));
+					const next = mapStatus(res.status, body.message ?? "");
+					setStage(next);
+					// Terminal auth failure: stop polling — the token won't fix
+					// itself, and each /v1/health probe wakes the container (cost).
+					// A re-join resets the transport + remounts this hook.
+					if (next.unauthorized) cancelled = true;
 				}
 			} catch {
 				if (!cancelled) {

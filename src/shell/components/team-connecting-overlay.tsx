@@ -31,14 +31,22 @@ export function TeamConnectingOverlay() {
 
 	if (!teamActive || phase === "online") return null;
 
+	// A 401/403 from the cold-start probe is a TERMINAL auth failure (invalid
+	// team token), not a slow wake — surface it as such, not endless "connecting".
+	const unauthorized = stage?.unauthorized === true;
 	const stalled = phase === "disconnected";
-	const headline = stalled
-		? "Can't reach the team cloud"
-		: (stage?.label ?? "Connecting to team cloud…");
-	const detail = stalled
-		? "The cloud sandbox isn't responding. It may still be waking — wait a little, or switch back to Local."
-		: (stage?.detail ??
-			"Waking your team's Cloudflare sandbox. A cold start can take a minute.");
+	const headline = unauthorized
+		? "Team access not authorized"
+		: stalled
+			? "Can't reach the team cloud"
+			: (stage?.label ?? "Connecting to team cloud…");
+	const detail = unauthorized
+		? (stage?.detail ??
+			"Your team token is no longer valid. Re-join the team, or go back to Local.")
+		: stalled
+			? "The cloud sandbox isn't responding. It may still be waking — wait a little, or switch back to Local."
+			: (stage?.detail ??
+				"Waking your team's Cloudflare sandbox. A cold start can take a minute.");
 
 	return (
 		<div
@@ -61,7 +69,7 @@ export function TeamConnectingOverlay() {
 				>
 					Back to Local
 				</Button>
-				{stalled ? (
+				{stalled || unauthorized ? (
 					<Button
 						size="sm"
 						onClick={() =>
