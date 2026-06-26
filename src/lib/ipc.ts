@@ -794,6 +794,129 @@ function reconnectDelayMs(attempt: number): number {
 	return Math.random() * windowMs;
 }
 
+// Team-mode event transport: a single shared WebSocket to the Worker's `/v1/ws`,
+// relayed by the hibernating TeamHub Durable Object, so an open connection no
+// longer pins the compute container. (The phone-companion browser keeps the SSE
+// path — it talks to the desktop's own companion server, which has no TeamHub.)
+const TEAM_WS_MARKER = "helmor.v1";
+const WS_PING = JSON.stringify({ t: "ping" });
+const WS_PING_INTERVAL_MS = 20_000;
+
+/**
+ * Open the team event WebSocket and pump messages into {@link dispatchEvent}
+ * until it closes. Resolves on a clean close, rejects on error/abort — both
+ * drive the reconnect loop in {@link runEventStream}. The bearer rides the WS
+ * subprotocol (browsers can't set Authorization); the hub echoes the marker.
+ */
+function pumpWebSocket(
+	signal: AbortSignal,
+	isCurrent: () => boolean,
+	onOpen: () => void,
+): Promise<void> {
+	return new Promise<void>((resolve, reject) => {
+		if (signal.aborted) {
+			reject(new Error("aborted"));
+			return;
+		}
+		const url = `${baseUrl().replace(/^http/, "ws")}/v1/ws`;
+		const ws = new WebSocket(url, [TEAM_WS_MARKER, authToken() ?? ""]);
+		let settled = false;
+		let pinger: ReturnType<typeof setInterval> | undefined;
+		let awaitingPong = false;
+		const closeQuietly = () => {
+			try {
+				ws.close();
+			} catch {
+				/* already closed */
+			}
+		};
+		const finish = (run: () => void) => {
+			if (settled) return;
+			settled = true;
+			if (pinger) clearInterval(pinger);
+			signal.removeEventListener("abort", onAbort);
+			run();
+		};
+		function onAbort() {
+			closeQuietly();
+			finish(() => reject(new Error("aborted")));
+		}
+		signal.addEventListener("abort", onAbort, { once: true });
+
+		ws.onopen = () => {
+			// A teardown that raced the open must not flip state or keep the socket.
+			if (!isCurrent()) {
+				closeQuietly();
+				return;
+			}
+			onOpen();
+			// Liveness: ping every interval; the hub auto-replies `pong` WITHOUT
+			// waking from hibernation. A missing pong by the next tick ⇒ dead → close
+			// → reconnect (parity with the old SSE stall watchdog).
+			pinger = setInterval(() => {
+				if (awaitingPong) {
+					closeQuietly();
+					return;
+				}
+				awaitingPong = true;
+				try {
+					ws.send(WS_PING);
+				} catch {
+					closeQuietly();
+				}
+			}, WS_PING_INTERVAL_MS);
+		};
+		ws.onmessage = (event: MessageEvent) => {
+			if (typeof event.data !== "string") return;
+			const msg = safeJson(event.data) as {
+				event?: string;
+				data?: unknown;
+				t?: string;
+			} | null;
+			if (msg?.t === "pong") {
+				awaitingPong = false;
+				return;
+			}
+			// Drop-in with the old SSE frame: `{event, data}` → dispatchEvent.
+			if (msg && typeof msg.event === "string") {
+				dispatchEvent(msg.event, msg.data);
+			}
+		};
+		ws.onclose = () => finish(() => resolve());
+		ws.onerror = () => {
+			closeQuietly();
+			finish(() => reject(new Error("websocket error")));
+		};
+	});
+}
+
+/**
+ * Phone-companion transport: open the desktop companion server's `/v1/stream`
+ * SSE and pump frames into {@link dispatchEvent}. Same signature as
+ * {@link pumpWebSocket} so {@link runEventStream} can pick either by transport.
+ */
+async function pumpServerSentEvents(
+	signal: AbortSignal,
+	isCurrent: () => boolean,
+	onOpen: () => void,
+): Promise<void> {
+	const res = await fetch(`${baseUrl()}/v1/stream`, {
+		headers: authHeaders(),
+		signal,
+	});
+	if (!isCurrent()) return; // switched away while the fetch resolved
+	if (!res.ok || !res.body) {
+		if (res.status === 401 && transport.companion) {
+			setCompanionAuthState("unauthed");
+		}
+		throw new Error(`stream status ${res.status}`);
+	}
+	onOpen();
+	// `pumpSse` returns on a clean close too, not only on throw — both are a
+	// "drop" that must trigger a reconnect.
+	await pumpSse(res.body, dispatchEvent);
+}
+
 async function runEventStream(
 	signal: AbortSignal,
 	generation: number,
@@ -807,23 +930,16 @@ async function runEventStream(
 	for (;;) {
 		if (!isCurrent()) return;
 		try {
-			const res = await fetch(`${baseUrl()}/v1/stream`, {
-				headers: authHeaders(),
-				signal,
+			// Team mode rides the hibernating TeamHub WebSocket (so the container
+			// stays asleep); the phone-companion browser talks to the desktop's own
+			// companion server, which only serves SSE. Both resolve on a clean drop
+			// and reject on error/abort → back off + reconnect. `onOpen` clears the
+			// connecting/reconnecting state + resets backoff when the connection opens.
+			const pump = transport.team ? pumpWebSocket : pumpServerSentEvents;
+			await pump(signal, isCurrent, () => {
+				setCompanionConnectionState("online");
+				attempt = 0;
 			});
-			if (!isCurrent()) return; // switched away while the fetch resolved
-			if (!res.ok || !res.body) {
-				if (res.status === 401 && transport.companion)
-					setCompanionAuthState("unauthed");
-				throw new Error(`stream status ${res.status}`);
-			}
-			// Stream (re)opened: clear any connecting/reconnecting state and reset
-			// backoff.
-			setCompanionConnectionState("online");
-			attempt = 0;
-			// `pumpSse` returns on a clean close too, not only on throw — both are
-			// a "drop" that must trigger a reconnect.
-			await pumpSse(res.body, dispatchEvent);
 		} catch {
 			// Connection dropped (sleeping sandbox cold start, backgrounded tab,
 			// network blip) — fall through to back off and reconnect. A switch-away
@@ -920,17 +1036,16 @@ async function pumpNdjson(
  *  `reconnecting` promptly instead of waiting out a (possibly minutes-long)
  *  TCP timeout.
  *
- *  CONTRACT: that ~15s cadence is the companion's keepalive (Rust `server.rs`
- *  `/v1/stream`); in desktop team mode it reaches us proxied through the cloud
- *  Worker, whose ping interval lives outside this repo. This threshold must stay
- *  comfortably above the upstream ping interval — if the companion/Worker
- *  keepalive cadence changes, bump this to match or healthy streams false-trip a
- *  reconnect. */
+ *  CONTRACT: that ~15s cadence is the companion server's keepalive (Rust
+ *  `server.rs` `/v1/stream`). This is the PHONE-companion transport only — team
+ *  mode rides the TeamHub WebSocket. Keep this comfortably above the upstream
+ *  ping interval or healthy streams false-trip a reconnect. */
 const SSE_STALL_TIMEOUT_MS = 22_000;
 
 /**
  * Minimal SSE frame parser: accumulates `event:` / `data:` lines and emits on
- * the blank-line frame boundary.
+ * the blank-line frame boundary. Used by the phone-companion transport (the
+ * desktop's own companion server serves SSE); team mode uses the WebSocket.
  */
 async function pumpSse(
 	body: ReadableStream<Uint8Array>,

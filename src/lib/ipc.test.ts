@@ -177,89 +177,94 @@ describe("ipc transport switch", () => {
 	});
 });
 
-describe("ipc SSE loop teardown", () => {
+/** Minimal WebSocket stand-in for the team event stream: records construction,
+ *  sends, and close, and lets a test drive the lifecycle handlers. */
+class MockWebSocket {
+	static instances: MockWebSocket[] = [];
+	url: string;
+	protocols?: string | string[];
+	onopen: (() => void) | null = null;
+	onmessage: ((ev: { data: string }) => void) | null = null;
+	onclose: (() => void) | null = null;
+	onerror: (() => void) | null = null;
+	closed = false;
+	sent: string[] = [];
+	constructor(url: string, protocols?: string | string[]) {
+		this.url = url;
+		this.protocols = protocols;
+		MockWebSocket.instances.push(this);
+	}
+	send(data: string): void {
+		this.sent.push(data);
+	}
+	close(): void {
+		this.closed = true;
+	}
+}
+
+describe("ipc event-stream loop teardown", () => {
 	beforeEach(() => {
 		localStorage.clear();
 		tauriInvoke.mockClear();
 		tauriListen.mockClear();
 		vi.unstubAllGlobals();
+		MockWebSocket.instances.length = 0;
 	});
 
 	afterEach(() => {
 		vi.unstubAllGlobals();
 	});
 
-	it("aborts the in-flight /v1/stream fetch on teardown", async () => {
+	it("closes the in-flight /v1/ws WebSocket on teardown", async () => {
 		configureTeamBackend();
 		activateTeamMode();
 		const ipc = await freshIpc();
 
-		// A never-resolving stream body keeps the loop parked inside the fetch /
-		// pumpSse so we can observe the abort. Capture the signal handed to fetch.
-		let capturedSignal: AbortSignal | undefined;
-		const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
-			capturedSignal = init?.signal ?? undefined;
-			return new Promise<Response>(() => {}); // never resolves
-		});
-		vi.stubGlobal("fetch", fetchMock);
+		vi.stubGlobal("WebSocket", MockWebSocket as unknown as typeof WebSocket);
 
-		// `listen` on a remote transport arms the shared SSE loop.
+		// `listen` on a remote transport arms the shared loop, which opens the
+		// WebSocket synchronously inside pumpWebSocket.
 		await ipc.listen("ui-mutation", () => {});
-		// Let the microtask that kicks off `runEventStream` run.
 		await Promise.resolve();
 		await Promise.resolve();
 
-		expect(fetchMock).toHaveBeenCalledTimes(1);
-		expect(capturedSignal).toBeDefined();
-		expect(capturedSignal?.aborted).toBe(false);
+		expect(MockWebSocket.instances).toHaveLength(1);
+		const ws = MockWebSocket.instances[0];
+		expect(ws.url).toContain("/v1/ws");
+		// Auth rides the WS subprotocol (browsers can't set Authorization).
+		expect(ws.protocols).toEqual(["helmor.v1", expect.any(String)]);
+		expect(ws.closed).toBe(false);
 
-		// Switching away tears the loop down → the long-lived fetch is aborted.
+		// Switching away tears the loop down → the socket is closed.
 		localStorage.removeItem("helmor.team.mode");
 		ipc.applyTransportSwitch();
 
-		expect(capturedSignal?.aborted).toBe(true);
+		expect(ws.closed).toBe(true);
 	});
 
-	it("a late-resolving fetch from a torn-down loop cannot flip connection state", async () => {
+	it("a late onopen from a torn-down loop cannot flip connection state", async () => {
 		configureTeamBackend();
 		activateTeamMode();
 		const ipc = await freshIpc();
 
-		// First fetch resolves only AFTER we tear down — its `setOnline` must be
-		// suppressed by the generation/abort guard.
-		let resolveFirst: ((res: Response) => void) | undefined;
-		const okBody = new ReadableStream<Uint8Array>({
-			start() {
-				/* open but idle — pumpSse parks reading */
-			},
-		});
-		const fetchMock = vi.fn(
-			() =>
-				new Promise<Response>((resolve) => {
-					resolveFirst = resolve;
-				}),
-		);
-		vi.stubGlobal("fetch", fetchMock);
+		vi.stubGlobal("WebSocket", MockWebSocket as unknown as typeof WebSocket);
 
 		await ipc.listen("ui-mutation", () => {});
 		await Promise.resolve();
 		await Promise.resolve();
-		expect(fetchMock).toHaveBeenCalledTimes(1);
-		// Seeded "connecting" from the switch-equivalent boot is not set here (we
-		// booted directly into team mode, so state is the default "online" until a
-		// drop). Force a known non-online baseline by tearing down first.
+		expect(MockWebSocket.instances).toHaveLength(1);
+		const ws = MockWebSocket.instances[0];
+
+		// Tear down before the socket reports open.
 		localStorage.removeItem("helmor.team.mode");
 		ipc.applyTransportSwitch(); // teardown bumps generation; state → online (local)
 		expect(ipc.getCompanionConnectionState()).toBe("online");
+		expect(ws.closed).toBe(true); // teardown closed the stale socket
 
-		// NOW let the stale fetch resolve OK. The old loop must see it's no longer
-		// current (aborted + generation bumped) and return WITHOUT setting online
-		// or reopening — and crucially without throwing.
-		resolveFirst?.(new Response(okBody, { status: 200 }));
-		await Promise.resolve();
+		// A late open from the torn-down loop must NOT flip to online or reopen.
+		ws.onopen?.();
 		await Promise.resolve();
 
-		// Still online-local (the stale loop didn't touch state); no new fetch.
 		expect(ipc.getCompanionConnectionState()).toBe("online");
 		expect(ipc.isRemoteTransport()).toBe(false);
 	});
