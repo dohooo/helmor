@@ -158,9 +158,14 @@ export { ClaudeIdentity } from "./claude-identity";
 // wrangler.toml's `CODEX_IDENTITY` binding (Phase 1 Codex token broker).
 export { CodexIdentity } from "./codex-identity";
 export { ForgeIdentity } from "./forge-identity";
+// Stage C event plane: the hibernating WebSocket relay hub (see team-hub.ts).
+export { TeamHub } from "./team-hub";
 
 export interface Env {
 	Sandbox: DurableObjectNamespace<CloudflareSandbox>;
+	/** Team event plane (Stage C): hibernating WS relay hub. Pure relay — no
+	 *  secrets, no D1. Reached via idFromName(HELMOR_SANDBOX_ID). */
+	TEAM_HUB: DurableObjectNamespace<import("./team-hub").TeamHub>;
 	/** Team registry: members / invites / teams / workspaces mirror (Phase 3). */
 	DB: D1Database;
 	/** Fixed sandbox id for Phase 0 (one team → one sandbox). */
@@ -316,6 +321,15 @@ async function route(
 	// Team registry (`/team/*`): D1-backed JSON routes. Returns null for any
 	// other path, which falls through to the container proxy below.
 	const url = new URL(req.url);
+
+	// Event plane (Stage C): realtime lives on the hibernating TeamHub DO, NOT
+	// the container — handle before the team registry + any ensureServe so these
+	// never wake the sandbox.
+	if (url.pathname === "/v1/ws") return handleTeamEventSubscribe(req, env);
+	if (url.pathname === "/team/event" && req.method === "POST") {
+		return handleTeamEventPublish(req, env);
+	}
+
 	const teamResp = await handleTeamRoute(req, env, url);
 	if (teamResp) return teamResp;
 
@@ -637,6 +651,66 @@ async function deriveForwardedRequest(
 	});
 	if (headers instanceof Response) return headers;
 	return new Request(request, { headers });
+}
+
+/** WS subprotocol marker carrying the bearer (browsers can't set Authorization
+ *  on a WebSocket): the desktop offers `["helmor.v1", "<token>"]`. */
+const TEAM_WS_MARKER = "helmor.v1";
+
+/** GET /v1/ws — desktop subscribes to the team event stream over a hibernating
+ *  WebSocket on the TeamHub DO. The bearer rides the WS subprotocol; we classify
+ *  it exactly like an HTTP bearer and reject `unauthorized`. NEVER touches the
+ *  container (the whole point: realtime survives sandbox sleep). */
+async function handleTeamEventSubscribe(
+	req: Request,
+	env: Env,
+): Promise<Response> {
+	if (req.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+		return new Response("Expected WebSocket upgrade", { status: 426 });
+	}
+	const token =
+		(req.headers.get("Sec-WebSocket-Protocol") ?? "")
+			.split(",")
+			.map((p) => p.trim())
+			.find((p) => p && p !== TEAM_WS_MARKER) ?? null;
+	const store = createWorkerTeamGatewayStore(env, new URL(req.url));
+	const auth = await store.classifyBearer(token);
+	if (auth.caller === "unauthorized") {
+		return new Response("Unauthorized", { status: 401 });
+	}
+	const stub = env.TEAM_HUB.get(
+		env.TEAM_HUB.idFromName(env.HELMOR_SANDBOX_ID ?? "helmor-team-0"),
+	);
+	return stub.fetch("https://team-hub/ws", {
+		headers: {
+			Upgrade: "websocket",
+			"X-Helmor-Member-Id": auth.memberId ?? "",
+		},
+	});
+}
+
+/** POST /team/event — the container/Worker pushes one already-shaped event line
+ *  (`{"event","data"}`) to broadcast to every connected member. Companion token
+ *  only (the container holds HELMOR_COMPANION_TOKEN ⇒ classifyBearer "admin").
+ *  NEVER touches the container. */
+async function handleTeamEventPublish(
+	req: Request,
+	env: Env,
+): Promise<Response> {
+	if (
+		req.headers.get("Authorization") !== `Bearer ${env.HELMOR_COMPANION_TOKEN}`
+	) {
+		return new Response("Unauthorized", { status: 401 });
+	}
+	const line = await req.text();
+	if (!line) return new Response(null, { status: 204 });
+	const stub = env.TEAM_HUB.get(
+		env.TEAM_HUB.idFromName(env.HELMOR_SANDBOX_ID ?? "helmor-team-0"),
+	);
+	return stub.fetch("https://team-hub/broadcast", {
+		method: "POST",
+		body: line,
+	});
 }
 
 /** Where the per-member forge creds file is written in the container. OUTSIDE

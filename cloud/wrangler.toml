@@ -53,6 +53,13 @@ name = "CLAUDE_IDENTITY"
 class_name = "ForgeIdentity"
 name = "FORGE_IDENTITY"
 
+# Team event plane (Stage C): one hibernating WebSocket hub that relays realtime
+# events (ui-mutations, room chat) to all members WITHOUT pinning the container.
+# Pure relay — no secrets, no D1. Keyed idFromName(HELMOR_SANDBOX_ID).
+[[durable_objects.bindings]]
+class_name = "TeamHub"
+name = "TEAM_HUB"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Sandbox"]
@@ -68,6 +75,10 @@ new_sqlite_classes = ["ClaudeIdentity"]
 [[migrations]]
 tag = "v4"
 new_sqlite_classes = ["ForgeIdentity"]
+
+[[migrations]]
+tag = "v5"
+new_sqlite_classes = ["TeamHub"]
 
 # D1 control-plane registry (Phase 3 / action item ①): members / workspaces /
 # invites / teams. Additive — the Phase 0 stateless proxy is untouched. Schema
