@@ -83,8 +83,11 @@ pub async fn convert_historical_records(
                     .role
                     .parse()
                     .unwrap_or(pipeline::types::MessageRole::System),
+                // Parse the raw mirror content into JSON so the pipeline can
+                // classify + render it — same as the desktop's local read
+                // (models/sessions.rs). Leaving it None rendered raw JSON in the UI.
+                parsed_content: serde_json::from_str(&record.content).ok(),
                 content: record.content,
-                parsed_content: None,
                 created_at: record.created_at,
                 author_id: record.author_id,
             })
