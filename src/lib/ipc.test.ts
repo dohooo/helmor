@@ -175,6 +175,23 @@ describe("ipc transport switch", () => {
 
 		expect(states).toEqual(["connecting", "online"]);
 	});
+
+	it("re-entry into an ESTABLISHED team switches instantly (online, no connecting overlay)", async () => {
+		const ipc = await freshIpc();
+		const states: string[] = [];
+		ipc.subscribeCompanionConnection(() => {
+			states.push(ipc.getCompanionConnectionState());
+		});
+
+		// The team event stream has connected successfully before.
+		localStorage.setItem("helmor.team.established", "1");
+		configureTeamBackend();
+		activateTeamMode();
+		ipc.applyTransportSwitch(); // established → instant "online", no blocking "connecting"
+
+		expect(ipc.getCompanionConnectionState()).toBe("online");
+		expect(states).not.toContain("connecting");
+	});
 });
 
 /** Minimal WebSocket stand-in for the team event stream: records construction,
