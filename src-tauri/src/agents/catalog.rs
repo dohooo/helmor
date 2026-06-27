@@ -724,7 +724,7 @@ fn custom_provider_options(
             provider_key: Some(model.provider_key),
             effort_levels: claude_effort_levels(),
             supports_fast_mode: false,
-            supports_context_usage: false,
+            supports_context_usage: true,
         })
         .collect()
 }
@@ -1072,7 +1072,7 @@ mod tests {
             sections[0].options[6].effort_levels,
             vec!["low", "medium", "high", "xhigh", "max"]
         );
-        assert!(!sections[0].options[6].supports_context_usage);
+        assert!(sections[0].options[6].supports_context_usage);
         assert_eq!(sections[1].id, "codex");
     }
 

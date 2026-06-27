@@ -2,8 +2,10 @@ import { formatDistanceToNow } from "date-fns";
 import {
 	AlertCircle,
 	AlertTriangle,
+	Check,
 	Goal,
 	Info,
+	Loader2,
 	MessageSquareText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -29,6 +31,12 @@ import {
 
 // --- sub-components ---
 
+// Compact-lifecycle notice labels from `pipeline/adapter/labels.rs`.
+// Same pair for Claude (`status:compacting` / `compact_boundary`) and
+// Codex (`codex_compacting` / `codex_compacted`) — one icon mapping covers both.
+export const COMPACTING_LABEL = "Compacting context";
+export const COMPACTED_LABEL = "Context compacted";
+
 export function SystemNotice({
 	part,
 	wrap = false,
@@ -36,18 +44,27 @@ export function SystemNotice({
 	part: SystemNoticePart;
 	wrap?: boolean;
 }) {
-	const Icon =
-		part.severity === "error"
-			? AlertCircle
-			: part.severity === "warning"
-				? AlertTriangle
-				: Info;
-	const iconClass =
-		part.severity === "error"
-			? "text-destructive"
-			: part.severity === "warning"
-				? "text-chart-5"
-				: "text-chart-3";
+	// Compact lifecycle: spinner while compacting, check when done.
+	const isCompacting = part.label === COMPACTING_LABEL;
+	const isCompacted = part.label === COMPACTED_LABEL;
+	const Icon = isCompacting
+		? Loader2
+		: isCompacted
+			? Check
+			: part.severity === "error"
+				? AlertCircle
+				: part.severity === "warning"
+					? AlertTriangle
+					: Info;
+	const iconClass = isCompacting
+		? "animate-spin text-muted-foreground/70"
+		: isCompacted
+			? "text-chart-2"
+			: part.severity === "error"
+				? "text-destructive"
+				: part.severity === "warning"
+					? "text-chart-5"
+					: "text-chart-3";
 	return (
 		<span
 			className={cn(

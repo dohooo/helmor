@@ -697,10 +697,8 @@ fn convert_system_msg(
     // Apply the same noise filter live ingest uses, so old persisted
     // rows from earlier code versions render with the new rules. Edit
     // `pipeline::event_filter` to toggle.
-    if let Some(s) = sub {
-        if super::event_filter::is_suppressed_system_subtype(s) {
-            return;
-        }
+    if parsed.is_some_and(super::event_filter::is_suppressed_system_event) {
+        return;
     }
     if let Some(value) = parsed {
         if super::event_filter::is_suppressed_local_bash_task(value) {
