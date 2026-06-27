@@ -17,7 +17,6 @@ import {
 	type CollapsedGroupPart,
 	type ExtendedMessagePart,
 	partKey,
-	type ToolCallPart,
 } from "@/lib/api";
 import { I18nText, useI18n } from "@/lib/i18n";
 import { childrenStructurallyEqual } from "@/lib/structural-equality";
@@ -25,6 +24,7 @@ import { cn } from "@/lib/utils";
 import { TodoList, WorkflowCard } from "./content-parts";
 import { EditDiffTrigger } from "./edit-diff";
 import {
+	isCollapsedGroupPart,
 	isLiveStreamingStatus,
 	isTodoListPart,
 	isToolCallPart,
@@ -199,6 +199,7 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 			<AgentChildrenBlock
 				toolName={toolName}
 				toolArgs={args}
+				result={result}
 				streamingStatus={streamingStatus}
 				isRunning={result == null}
 				parts={childParts}
@@ -463,6 +464,7 @@ const AGENT_PREVIEW_STEPS = 3;
 type AgentChildrenBlockProps = {
 	toolName: string;
 	toolArgs: Record<string, unknown>;
+	result?: unknown;
 	streamingStatus?: string;
 	isRunning?: boolean;
 	parts: ExtendedMessagePart[];
@@ -474,6 +476,7 @@ export function agentChildrenBlockPropsEqual(
 ): boolean {
 	return (
 		prev.toolName === next.toolName &&
+		prev.result === next.result &&
 		prev.streamingStatus === next.streamingStatus &&
 		prev.isRunning === next.isRunning &&
 		childrenStructurallyEqual(prev.parts, next.parts) &&
@@ -484,6 +487,7 @@ export function agentChildrenBlockPropsEqual(
 const AgentChildrenBlock = memo(function AgentChildrenBlock({
 	toolName,
 	toolArgs,
+	result,
 	streamingStatus,
 	isRunning,
 	parts,
@@ -492,12 +496,15 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 	const isLive = isLiveStreamingStatus(streamingStatus);
 	const streaming = isLive || (!streamingStatus && !!isRunning);
 	const info = getToolInfo(toolName, toolArgs, t, f);
-	const toolCallParts = useMemo(
-		() =>
-			parts.filter((part): part is ToolCallPart => part.type === "tool-call"),
-		[parts],
-	);
-	const toolUseCount = toolCallParts.length;
+	const toolUseCount = parts.reduce((count, part) => {
+		if (isToolCallPart(part)) {
+			return count + 1;
+		}
+		if (isCollapsedGroupPart(part)) {
+			return count + part.tools.length;
+		}
+		return count;
+	}, 0);
 	// While the sub-agent is live, surface the trailing text/reasoning block
 	// (the part currently streaming) in the collapsed preview. The collapsed
 	// view otherwise lists only tool calls, so a streaming text turn nested
@@ -505,10 +512,26 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 	const lastPart = parts[parts.length - 1];
 	const liveTail =
 		streaming && lastPart && !isToolCallPart(lastPart) ? lastPart : null;
+	const previewFilter =
+		toolName === "Skill"
+			? undefined
+			: (part: ExtendedMessagePart) =>
+					part.type === "tool-call" || part.type === "collapsed-group";
+	const finalResultText =
+		toolName === "Skill" && !streaming && typeof result === "string"
+			? result
+			: null;
+	const [open, setOpen] = useState(true);
 
 	return (
-		<div className="flex flex-col">
-			<div className="flex max-w-full items-center gap-1.5 py-0.5 text-small text-muted-foreground">
+		<details
+			className="group/agent flex flex-col"
+			onToggle={(event) => {
+				setOpen(event.currentTarget.open);
+			}}
+			open={open}
+		>
+			<summary className="flex max-w-full cursor-interactive items-center gap-1.5 py-0.5 text-small text-muted-foreground [&::-webkit-details-marker]:hidden">
 				<span className="shrink-0">{info.icon}</span>
 				<span className="font-medium">{info.action}</span>
 				{info.detail ? (
@@ -527,53 +550,82 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 						? `${toolUseCount} tool ${toolUseCount === 1 ? "use" : "uses"}`
 						: `${parts.length} steps`}
 				</span>
-			</div>
+				<span className="shrink-0 cursor-interactive text-muted-foreground/40 hover:text-muted-foreground">
+					<svg
+						className="size-2.5 group-open/agent:rotate-90"
+						viewBox="0 0 12 12"
+						fill="none"
+					>
+						<path
+							d="M4.5 2.5L8.5 6L4.5 9.5"
+							stroke="currentColor"
+							strokeWidth={1.5}
+							strokeLinecap="round"
+							strokeLinejoin="round"
+						/>
+					</svg>
+				</span>
+			</summary>
 
-			<TruncatedToolList
-				items={parts}
-				previewCount={AGENT_PREVIEW_STEPS}
-				previewFilter={(part) => part.type === "tool-call"}
-				previewTail={liveTail}
-				getKey={partKey}
-				renderItem={(part, { expanded }) => {
-					if (isToolCallPart(part)) {
-						return (
-							<AssistantToolCall
-								toolName={part.toolName ?? "unknown"}
-								args={part.args ?? {}}
-								result={part.result}
-								isError={part.isError}
-								compact={!expanded}
-								childParts={part.children}
-							/>
-						);
-					}
-					if (part.type === "text" && part.text) {
-						return (
-							<div className="text-ui leading-6 text-muted-foreground">
-								{part.text.slice(0, 300)}
-								{part.text.length > 300 ? "…" : ""}
-							</div>
-						);
-					}
-					if (part.type === "reasoning" && part.text) {
-						return (
-							<Reasoning>
-								<ReasoningTrigger />
-								<ReasoningContent>{part.text}</ReasoningContent>
-							</Reasoning>
-						);
-					}
-					if (isTodoListPart(part)) {
-						return <TodoList part={part} />;
-					}
-					if (isWorkflowPart(part)) {
-						return <WorkflowCard part={part} />;
-					}
-					return null;
-				}}
-			/>
-		</div>
+			{open ? (
+				<>
+					<TruncatedToolList
+						items={parts}
+						previewCount={AGENT_PREVIEW_STEPS}
+						previewFilter={previewFilter}
+						previewTail={liveTail}
+						getKey={partKey}
+						renderItem={(part, { expanded }) => {
+							if (isToolCallPart(part)) {
+								return (
+									<AssistantToolCall
+										toolName={part.toolName ?? "unknown"}
+										args={part.args ?? {}}
+										result={part.result}
+										isError={part.isError}
+										compact={!expanded}
+										childParts={part.children}
+									/>
+								);
+							}
+							if (part.type === "text" && part.text) {
+								return (
+									<div className="text-ui leading-6 text-muted-foreground">
+										{part.text.slice(0, 300)}
+										{part.text.length > 300 ? "…" : ""}
+									</div>
+								);
+							}
+							if (part.type === "reasoning" && part.text) {
+								return (
+									<Reasoning>
+										<ReasoningTrigger />
+										<ReasoningContent>{part.text}</ReasoningContent>
+									</Reasoning>
+								);
+							}
+							if (isCollapsedGroupPart(part)) {
+								return <CollapsedToolGroup group={part} />;
+							}
+							if (isTodoListPart(part)) {
+								return <TodoList part={part} />;
+							}
+							if (isWorkflowPart(part)) {
+								return <WorkflowCard part={part} />;
+							}
+							return null;
+						}}
+					/>
+					{finalResultText ? (
+						<div className="ml-5 mt-1 max-h-[16rem] overflow-auto rounded-md bg-accent/35 text-mini leading-5">
+							<pre className="whitespace-pre-wrap break-words p-1.5 text-muted-foreground/80">
+								{finalResultText}
+							</pre>
+						</div>
+					) : null}
+				</>
+			) : null}
+		</details>
 	);
 }, agentChildrenBlockPropsEqual);
 

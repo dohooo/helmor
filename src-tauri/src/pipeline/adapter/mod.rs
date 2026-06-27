@@ -28,7 +28,7 @@ use serde_json::Value;
 
 // Canonical tool names shared across adapter submodules.
 pub(crate) const PROMPT_TOOL_NAME: &str = "Prompt";
-pub(crate) const AGENT_TOOL_NAMES: &[&str] = &["Agent", "Task"];
+pub(crate) const AGENT_TOOL_NAMES: &[&str] = &["Agent", "Task", "Skill"];
 
 use blocks::{
     assistant_has_recognized_blocks, late_merge_unresolved_tool_results, merge_tool_results,
