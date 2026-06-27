@@ -1,0 +1,28 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: msg-1
+  content_length: 1
+  content:
+    - type: tool-call
+      tool_name: Task
+      tool_call_id: toolu_1
+      args_keys:
+        - description
+      args_text_length: 34
+      has_result: false
+      result_kind: ~
+      result_preview: ~
+      streaming_status: ~
+      children_count: 1
+      children:
+        - type: subagent
+          status: completed
+          title: Inspect the repo
+          summary: Inspected package.json and docs.
+  status:
+    type: complete
+    reason: stop
+  streaming: ~

@@ -7,7 +7,7 @@ import {
 	Search,
 	Terminal,
 } from "lucide-react";
-import { memo, useMemo, useState } from "react";
+import { memo, type ReactNode, useMemo, useState } from "react";
 import {
 	Reasoning,
 	ReasoningContent,
@@ -22,10 +22,11 @@ import {
 import { I18nText, useI18n } from "@/lib/i18n";
 import { childrenStructurallyEqual } from "@/lib/structural-equality";
 import { cn } from "@/lib/utils";
-import { TodoList, WorkflowCard } from "./content-parts";
+import { SubagentStatusCard, TodoList, WorkflowCard } from "./content-parts";
 import { EditDiffTrigger } from "./edit-diff";
 import {
 	isLiveStreamingStatus,
+	isSubagentPart,
 	isTodoListPart,
 	isToolCallPart,
 	isWorkflowPart,
@@ -118,8 +119,19 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 		[result],
 	);
 	const hasChildren = (childParts?.length ?? 0) > 0;
+	// `Task`/`Agent` backgrounded via `run_in_background` return an internal
+	// launch acknowledgment ("Async agent launched successfully… Do NOT Read…")
+	// as their tool result. That's harness plumbing, never meant for the user —
+	// render the agent as "running in background" instead of dumping it raw.
+	const isAgentTool = toolName === "Task" || toolName === "Agent";
+	const isBackgroundLaunch =
+		isAgentTool &&
+		typeof result === "string" &&
+		/agent launched successfully|working in the background/i.test(result);
 	const resultText =
-		hasChildren || suppressGenericPatchResult ? null : (info.body ?? resultStr);
+		hasChildren || isBackgroundLaunch || suppressGenericPatchResult
+			? null
+			: (info.body ?? resultStr);
 	const hasOutput = resultText != null && resultText.length > 5;
 	const canExpand = hasOutput || hasFiles;
 	const isLiveTool = isLiveStreamingStatus(streamingStatus);
@@ -194,14 +206,16 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 		</>
 	);
 
-	if (hasChildren && childParts) {
+	if ((hasChildren && childParts) || isBackgroundLaunch) {
 		return (
 			<AgentChildrenBlock
 				toolName={toolName}
 				toolArgs={args}
 				streamingStatus={streamingStatus}
-				isRunning={result == null}
-				parts={childParts}
+				// A backgrounded agent keeps running after the launch ack returns,
+				// so treat the ack as "still running" (no terminal result yet).
+				isRunning={result == null || isBackgroundLaunch}
+				parts={childParts ?? []}
 			/>
 		);
 	}
@@ -458,8 +472,6 @@ const ToolCallErrorRow = memo(function ToolCallErrorRow({
 
 // --- AgentChildrenBlock ---
 
-const AGENT_PREVIEW_STEPS = 3;
-
 type AgentChildrenBlockProps = {
 	toolName: string;
 	toolArgs: Record<string, unknown>;
@@ -498,17 +510,34 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 		[parts],
 	);
 	const toolUseCount = toolCallParts.length;
-	// While the sub-agent is live, surface the trailing text/reasoning block
-	// (the part currently streaming) in the collapsed preview. The collapsed
-	// view otherwise lists only tool calls, so a streaming text turn nested
-	// into the card would render nothing until the user expands it.
-	const lastPart = parts[parts.length - 1];
-	const liveTail =
-		streaming && lastPart && !isToolCallPart(lastPart) ? lastPart : null;
+	const canExpand = parts.length > 0;
+	// Collapsed by default — the app's standard `<details>` convention for tool
+	// output. A sub-agent (esp. a backgrounded one) streams status/progress that
+	// changes height continuously; keeping the body collapsed means only the
+	// stable single-line summary is on screen while it runs, so the surrounding
+	// thread never jumps. The user expands to see the nested work.
+	const [open, setOpen] = useState(false);
+	const statusLabel =
+		parts.length === 0 && streaming
+			? t("panelRunningInBackground")
+			: toolUseCount > 0
+				? `${toolUseCount} tool ${toolUseCount === 1 ? "use" : "uses"}`
+				: `${parts.length} steps`;
 
 	return (
-		<div className="flex flex-col">
-			<div className="flex max-w-full items-center gap-1.5 py-0.5 text-small text-muted-foreground">
+		<details
+			className="group/agent flex flex-col"
+			onToggle={(event) => {
+				setOpen(event.currentTarget.open);
+			}}
+			open={open}
+		>
+			<summary
+				className={cn(
+					"flex max-w-full items-center gap-1.5 py-0.5 text-small text-muted-foreground [&::-webkit-details-marker]:hidden",
+					canExpand ? "cursor-interactive" : "cursor-default",
+				)}
+			>
 				<span className="shrink-0">{info.icon}</span>
 				<span className="font-medium">{info.action}</span>
 				{info.detail ? (
@@ -518,64 +547,83 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 				) : null}
 				{streaming ? (
 					<LoaderCircle
-						className="size-3 animate-spin text-muted-foreground/50"
+						className="size-3 shrink-0 animate-spin text-muted-foreground/50"
 						strokeWidth={2}
 					/>
 				) : null}
 				<span className="shrink-0 text-mini text-muted-foreground/40">
-					{toolUseCount > 0
-						? `${toolUseCount} tool ${toolUseCount === 1 ? "use" : "uses"}`
-						: `${parts.length} steps`}
+					{statusLabel}
 				</span>
-			</div>
-
-			<TruncatedToolList
-				items={parts}
-				previewCount={AGENT_PREVIEW_STEPS}
-				previewFilter={(part) => part.type === "tool-call"}
-				previewTail={liveTail}
-				getKey={partKey}
-				renderItem={(part, { expanded }) => {
-					if (isToolCallPart(part)) {
-						return (
-							<AssistantToolCall
-								toolName={part.toolName ?? "unknown"}
-								args={part.args ?? {}}
-								result={part.result}
-								isError={part.isError}
-								compact={!expanded}
-								childParts={part.children}
+				{canExpand ? (
+					<span className="shrink-0 cursor-interactive text-muted-foreground/40 hover:text-muted-foreground">
+						<svg
+							className="size-2.5 group-open/agent:rotate-90"
+							viewBox="0 0 12 12"
+							fill="none"
+						>
+							<path
+								d="M4.5 2.5L8.5 6L4.5 9.5"
+								stroke="currentColor"
+								strokeWidth="1.5"
+								strokeLinecap="round"
+								strokeLinejoin="round"
 							/>
-						);
-					}
-					if (part.type === "text" && part.text) {
-						return (
-							<div className="text-ui leading-6 text-muted-foreground">
-								{part.text.slice(0, 300)}
-								{part.text.length > 300 ? "…" : ""}
-							</div>
-						);
-					}
-					if (part.type === "reasoning" && part.text) {
-						return (
-							<Reasoning>
-								<ReasoningTrigger />
-								<ReasoningContent>{part.text}</ReasoningContent>
-							</Reasoning>
-						);
-					}
-					if (isTodoListPart(part)) {
-						return <TodoList part={part} />;
-					}
-					if (isWorkflowPart(part)) {
-						return <WorkflowCard part={part} />;
-					}
-					return null;
-				}}
-			/>
-		</div>
+						</svg>
+					</span>
+				) : null}
+			</summary>
+			{canExpand && open ? (
+				<div className="flex flex-col gap-1">
+					{parts.map((part) => (
+						<div key={partKey(part)}>{renderAgentChildPart(part)}</div>
+					))}
+				</div>
+			) : null}
+		</details>
 	);
 }, agentChildrenBlockPropsEqual);
+
+/** Render one nested part inside an expanded sub-agent block. Tool calls render
+ *  full (non-compact) since the user explicitly opened the block. */
+function renderAgentChildPart(part: ExtendedMessagePart): ReactNode {
+	if (isToolCallPart(part)) {
+		return (
+			<AssistantToolCall
+				toolName={part.toolName ?? "unknown"}
+				args={part.args ?? {}}
+				result={part.result}
+				isError={part.isError}
+				childParts={part.children}
+			/>
+		);
+	}
+	if (part.type === "text" && part.text) {
+		return (
+			<div className="text-ui leading-6 text-muted-foreground">
+				{part.text.slice(0, 300)}
+				{part.text.length > 300 ? "…" : ""}
+			</div>
+		);
+	}
+	if (part.type === "reasoning" && part.text) {
+		return (
+			<Reasoning>
+				<ReasoningTrigger />
+				<ReasoningContent>{part.text}</ReasoningContent>
+			</Reasoning>
+		);
+	}
+	if (isTodoListPart(part)) {
+		return <TodoList part={part} />;
+	}
+	if (isSubagentPart(part)) {
+		return <SubagentStatusCard part={part} />;
+	}
+	if (isWorkflowPart(part)) {
+		return <WorkflowCard part={part} />;
+	}
+	return null;
+}
 
 // --- CollapsedToolGroup ---
 

@@ -1,9 +1,67 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { WorkflowPart } from "@/lib/api";
-import { WorkflowCard } from "./content-parts";
+import type { SubagentPart, WorkflowPart } from "@/lib/api";
+import { SubagentStatusCard, WorkflowCard } from "./content-parts";
 
 afterEach(cleanup);
+
+function subagent(overrides: Partial<SubagentPart> = {}): SubagentPart {
+	return {
+		type: "subagent",
+		id: "subagent:toolu_1:m1",
+		status: "completed",
+		title: "Inspect the repo",
+		summary: "Inspected package.json and docs.",
+		...overrides,
+	};
+}
+
+describe("SubagentStatusCard", () => {
+	it("renders the title, summary, and status word", () => {
+		render(<SubagentStatusCard part={subagent()} />);
+		expect(screen.getByText("Inspect the repo")).toBeInTheDocument();
+		expect(
+			screen.getByText("Inspected package.json and docs."),
+		).toBeInTheDocument();
+		expect(screen.getByText("done")).toBeInTheDocument();
+	});
+
+	it("shimmers the header only while running", () => {
+		const { container: runningC } = render(
+			<SubagentStatusCard
+				part={subagent({ status: "running", summary: undefined })}
+			/>,
+		);
+		expect(runningC.querySelector(".helmor-shimmer-text")).not.toBeNull();
+
+		const { container: doneC } = render(
+			<SubagentStatusCard part={subagent()} />,
+		);
+		expect(doneC.querySelector(".helmor-shimmer-text")).toBeNull();
+	});
+
+	it("labels a process-restart as interrupted, not failed", () => {
+		render(
+			<SubagentStatusCard
+				part={subagent({
+					status: "interrupted",
+					summary: "the previous Claude Code process exited",
+				})}
+			/>,
+		);
+		expect(screen.getByText("interrupted")).toBeInTheDocument();
+		expect(screen.queryByText("failed")).not.toBeInTheDocument();
+	});
+
+	it("falls back to a neutral label when no title is present", () => {
+		render(
+			<SubagentStatusCard
+				part={subagent({ title: undefined, summary: undefined })}
+			/>,
+		);
+		expect(screen.getByText("Sub-agent")).toBeInTheDocument();
+	});
+});
 
 function workflow(overrides: Partial<WorkflowPart> = {}): WorkflowPart {
 	return {

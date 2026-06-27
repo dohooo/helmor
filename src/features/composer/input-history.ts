@@ -58,7 +58,7 @@ export function extractInputHistoryFromThread(
 	let lastKey: string | null = null;
 	for (let i = thread.length - 1; i >= 0; i--) {
 		const message = thread[i];
-		if (!message || message.role !== "user") continue;
+		if (message?.role !== "user") continue;
 		const entry = entryFromUserMessage(message);
 		if (!entry) continue;
 		const key = historyKey(entry);

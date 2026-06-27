@@ -6,6 +6,7 @@ import type {
 	PastedTextPart,
 	PlanReviewPart,
 	PromptSuggestionPart,
+	SubagentPart,
 	SystemNoticePart,
 	ThreadMessageLike,
 	TodoListPart,
@@ -90,6 +91,12 @@ export function isSystemNoticePart(part: unknown): part is SystemNoticePart {
 
 export function isTodoListPart(part: unknown): part is TodoListPart {
 	return isObj(part) && part.type === "todo-list" && Array.isArray(part.items);
+}
+
+export function isSubagentPart(part: unknown): part is SubagentPart {
+	return (
+		isObj(part) && part.type === "subagent" && typeof part.status === "string"
+	);
 }
 
 export function isWorkflowPart(part: unknown): part is WorkflowPart {

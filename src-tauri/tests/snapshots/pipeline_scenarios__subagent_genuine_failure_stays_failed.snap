@@ -1,0 +1,14 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: system
+  id: msg-1
+  content_length: 1
+  content:
+    - type: subagent
+      status: failed
+      title: ~
+      summary: "Tool error: command not found"
+  status: ~
+  streaming: ~

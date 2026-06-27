@@ -31,6 +31,7 @@ import type {
 	PastedTextPart,
 	PlanReviewPart,
 	PromptSuggestionPart,
+	SubagentPart,
 	SystemNoticePart,
 	ThreadMessageLike,
 	TodoListPart,
@@ -151,6 +152,15 @@ export function partStructurallyEqual(
 					return false;
 			}
 			return true;
+		}
+		case "subagent": {
+			const sb = b as SubagentPart;
+			return (
+				a.id === sb.id &&
+				a.status === sb.status &&
+				a.title === sb.title &&
+				a.summary === sb.summary
+			);
 		}
 		case "image": {
 			const ib = b as ImagePart;

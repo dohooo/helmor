@@ -102,12 +102,12 @@ describe("AssistantToolCall normalized provider tools", () => {
 	});
 });
 
-describe("AssistantToolCall sub-agent live tail", () => {
-	it("shows a streaming sub-agent's trailing text inside the collapsed card", () => {
-		// A running Agent (result == null) whose only child is the text it is
-		// currently streaming. The collapsed preview must surface it so the
-		// live tokens don't vanish into the card.
-		render(
+describe("AssistantToolCall sub-agent collapsible block", () => {
+	it("keeps sub-agent work collapsed by default so the thread doesn't jump", () => {
+		// A running Agent streaming nested work. The body stays collapsed so only
+		// the stable single-line summary shows — the surrounding thread can't
+		// shift as the sub-agent's content changes height.
+		const { container } = render(
 			<AssistantToolCall
 				toolName="Agent"
 				args={{ description: "Investigate" }}
@@ -116,24 +116,79 @@ describe("AssistantToolCall sub-agent live tail", () => {
 				]}
 			/>,
 		);
-		expect(screen.getByText("Looking into the repo...")).toBeInTheDocument();
+		// Summary (description) is visible; nested content is not.
+		expect(screen.getByText("Investigate")).toBeInTheDocument();
+		expect(
+			screen.queryByText("Looking into the repo..."),
+		).not.toBeInTheDocument();
+		const details = container.querySelector("details");
+		expect(details).not.toBeNull();
+		expect(details!.open).toBe(false);
 	});
 
-	it("keeps a finished sub-agent's text collapsed until expanded", () => {
-		// Same shape but finalized (result set) — the trailing text stays
-		// hidden in the collapsed preview, matching existing behavior.
-		render(
+	it("reveals the nested sub-agent work once expanded", () => {
+		const { container } = render(
 			<AssistantToolCall
 				toolName="Agent"
 				args={{ description: "Investigate" }}
-				result="done"
 				childParts={[
 					{ type: "text", id: "t0", text: "Looking into the repo." },
 				]}
 			/>,
 		);
-		expect(
-			screen.queryByText("Looking into the repo."),
-		).not.toBeInTheDocument();
+		const details = container.querySelector("details") as HTMLDetailsElement;
+		details.open = true;
+		fireEvent(details, new Event("toggle"));
+		expect(screen.getByText("Looking into the repo.")).toBeInTheDocument();
+	});
+});
+
+describe("AssistantToolCall backgrounded sub-agent launch", () => {
+	const LAUNCH_ACK =
+		"Async agent launched successfully.\nagentId: af0b09c774b3336ce (internal ID - do not mention to user.)\nThe agent is working in the background. You will be notified automatically when it completes.\noutput_file: /tmp/x/tasks/af0b09c774b3336ce.output\nDo NOT Read or tail this file via the shell tool — it is the full subagent JSONL transcript.";
+
+	it("never renders the raw launch acknowledgment, shows running instead", () => {
+		render(
+			<AssistantToolCall
+				toolName="Task"
+				args={{ description: "Research OpenAI latest news" }}
+				result={LAUNCH_ACK}
+			/>,
+		);
+		// The internal plumbing text must not leak into the chat.
+		expect(screen.queryByText(/Async agent launched/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/Do NOT Read/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/output_file/)).not.toBeInTheDocument();
+		// The agent reads as running in the background instead.
+		expect(screen.getByText("Research OpenAI latest news")).toBeInTheDocument();
+		expect(screen.getByText("running in background")).toBeInTheDocument();
+	});
+
+	it("reveals streamed children when expanded, still no raw ack", () => {
+		const { container } = render(
+			<AssistantToolCall
+				toolName="Task"
+				args={{ description: "Research SpaceX latest news" }}
+				result={LAUNCH_ACK}
+				childParts={[
+					{
+						type: "subagent",
+						id: "subagent:toolu_1:m1",
+						status: "running",
+						title: "Research SpaceX latest news",
+						summary: "Searching the web",
+					},
+				]}
+			/>,
+		);
+		expect(screen.queryByText(/Async agent launched/)).not.toBeInTheDocument();
+		// Nested status is collapsed until the user expands the block.
+		expect(screen.queryByText("Searching the web")).not.toBeInTheDocument();
+		const details = container.querySelector("details") as HTMLDetailsElement;
+		details.open = true;
+		fireEvent(details, new Event("toggle"));
+		expect(screen.getByText("Searching the web")).toBeInTheDocument();
+		// The raw ack stays suppressed even when expanded.
+		expect(screen.queryByText(/Async agent launched/)).not.toBeInTheDocument();
 	});
 });

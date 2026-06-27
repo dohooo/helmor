@@ -62,15 +62,31 @@ function taskArgs(description: string) {
 // "found multiple elements" errors that look like memo bugs.
 afterEach(cleanup);
 
+// The sub-agent block is collapsed by default (the app's standard `<details>`
+// convention) so the thread doesn't jump while it streams. Expand it before
+// asserting on nested children. `open` is component state that survives
+// rerenders, so we expand once and subsequent prop updates stay visible —
+// which is exactly what lets these tests still exercise the `React.memo`
+// comparator (`agentChildrenBlockPropsEqual`) on `childParts` changes.
+function expandAgentBlock(container: HTMLElement): void {
+	const details = container.querySelector("details") as HTMLDetailsElement;
+	expect(details).not.toBeNull();
+	details.open = true;
+	fireEvent(details, new Event("toggle"));
+}
+
 describe("AssistantToolCall — Task subagent children rendering", () => {
-	it("renders the tail preview row for the first child", () => {
-		const { queryByText } = render(
+	it("keeps children collapsed by default, reveals them on expand", () => {
+		const { container, queryByText } = render(
 			<AssistantToolCall
 				toolName="Task"
 				args={taskArgs("Explore frontend")}
 				childParts={[bashCall("call_1", "ls -la")]}
 			/>,
 		);
+		// Collapsed: only the stable summary shows, not the nested work.
+		expect(queryByText("ls -la")).not.toBeInTheDocument();
+		expandAgentBlock(container);
 		expect(queryByText("ls -la")).toBeInTheDocument();
 	});
 
@@ -84,13 +100,14 @@ describe("AssistantToolCall — Task subagent children rendering", () => {
 	 * appears in the DOM.
 	 */
 	it("re-renders when childParts grows across props updates", () => {
-		const { rerender, queryByText } = render(
+		const { container, rerender, queryByText } = render(
 			<AssistantToolCall
 				toolName="Task"
 				args={taskArgs("Explore frontend")}
 				childParts={[bashCall("call_1", "ls -la")]}
 			/>,
 		);
+		expandAgentBlock(container);
 		expect(queryByText("ls -la")).toBeInTheDocument();
 		expect(queryByText("cat README.md")).not.toBeInTheDocument();
 
@@ -115,13 +132,14 @@ describe("AssistantToolCall — Task subagent children rendering", () => {
 	 * for the rendered DOM to reflect the new content.
 	 */
 	it("re-renders when an existing child's content mutates", () => {
-		const { rerender, queryByText } = render(
+		const { container, rerender, queryByText } = render(
 			<AssistantToolCall
 				toolName="Task"
 				args={taskArgs("Explore frontend")}
 				childParts={[bashCall("call_1", "ls -la")]}
 			/>,
 		);
+		expandAgentBlock(container);
 		expect(queryByText("ls -la")).toBeInTheDocument();
 
 		rerender(
@@ -136,23 +154,24 @@ describe("AssistantToolCall — Task subagent children rendering", () => {
 	});
 
 	/**
-	 * Tail-window slide. After 3 children are present, a 4th arrives
-	 * and the visible window slides forward by one. The oldest child
-	 * disappears from the preview, the newest one appears.
+	 * Expanding shows the FULL child list (no tail window) — once the user
+	 * opts in, every step is visible, and a newly-arrived child appears
+	 * alongside the existing ones without dropping the oldest.
 	 */
-	it("slides the tail window forward when a 4th child arrives", () => {
+	it("shows every child when expanded as new ones arrive", () => {
 		const initial: ExtendedMessagePart[] = [
 			bashCall("call_1", "echo first"),
 			bashCall("call_2", "echo second"),
 			bashCall("call_3", "echo third"),
 		];
-		const { rerender, queryByText } = render(
+		const { container, rerender, queryByText } = render(
 			<AssistantToolCall
 				toolName="Task"
 				args={taskArgs("Explore frontend")}
 				childParts={initial}
 			/>,
 		);
+		expandAgentBlock(container);
 		expect(queryByText("echo first")).toBeInTheDocument();
 		expect(queryByText("echo third")).toBeInTheDocument();
 
@@ -163,7 +182,7 @@ describe("AssistantToolCall — Task subagent children rendering", () => {
 				childParts={[...initial, bashCall("call_4", "echo fourth")]}
 			/>,
 		);
-		expect(queryByText("echo first")).not.toBeInTheDocument();
+		expect(queryByText("echo first")).toBeInTheDocument();
 		expect(queryByText("echo second")).toBeInTheDocument();
 		expect(queryByText("echo third")).toBeInTheDocument();
 		expect(queryByText("echo fourth")).toBeInTheDocument();
@@ -176,7 +195,7 @@ describe("AssistantToolCall — Task subagent children rendering", () => {
 	 * happen to match.
 	 */
 	it("re-renders when childParts has the same length but different content", () => {
-		const { rerender, queryByText } = render(
+		const { container, rerender, queryByText } = render(
 			<AssistantToolCall
 				toolName="Task"
 				args={taskArgs("Explore frontend")}
@@ -186,6 +205,7 @@ describe("AssistantToolCall — Task subagent children rendering", () => {
 				]}
 			/>,
 		);
+		expandAgentBlock(container);
 		expect(queryByText("echo a")).toBeInTheDocument();
 		expect(queryByText("echo b")).toBeInTheDocument();
 

@@ -32,23 +32,38 @@ pub(crate) const AGENT_TOOL_NAMES: &[&str] = &["Agent", "Task"];
 
 use blocks::{
     assistant_has_recognized_blocks, late_merge_unresolved_tool_results, merge_tool_results,
-    merge_tool_results_extended, parse_assistant_parts_stateful, TaskListState,
-    WorkflowAccumulator, CLAUDE_TASK_LIST_ID_PREFIX,
+    merge_tool_results_extended, parse_assistant_parts_stateful, SubagentAccumulator,
+    TaskListState, WorkflowAccumulator, CLAUDE_TASK_LIST_ID_PREFIX,
 };
 use grouping::{
     convert_user_message, group_child_messages, merge_adjacent_assistants,
     settle_aborted_tool_calls,
 };
 use labels::{
-    build_error_label, build_rate_limit_notice, build_result_label, build_subagent_notice,
-    build_system_label, build_system_notice, extract_fallback, make_system, make_system_notice,
-    make_turn_result_system,
+    build_error_label, build_rate_limit_notice, build_result_label, build_system_label,
+    build_system_notice, extract_fallback, make_system, make_system_notice,
+    make_turn_result_system, subagent_snapshot,
 };
 
 use super::types::{
     ExtendedMessagePart, HistoricalRecord, IntermediateMessage, MessagePart, MessageRole,
-    MessageStatus, PlanAllowedPrompt, ThreadMessageLike,
+    MessageStatus, PlanAllowedPrompt, SubagentStatus, ThreadMessageLike,
 };
+
+/// Part-id prefix stamped onto a standalone (unanchored) `MessagePart::Subagent`
+/// when its spawning `Task` tool_use_id couldn't be resolved. Child-folded
+/// snapshots use the `child:<tool_use_id>:<msg_id>` message id instead, but the
+/// PART id always uses this prefix so `collapse_subagent_widgets` can recover
+/// the run key uniformly: `subagent:<run_key>:<msg_id>`.
+const SUBAGENT_PART_ID_PREFIX: &str = "subagent:";
+
+/// Recover the per-run merge key from a `subagent:<run_key>:<msg_id>` part id.
+fn subagent_run_key(part_id: &str) -> Option<&str> {
+    part_id
+        .strip_prefix(SUBAGENT_PART_ID_PREFIX)?
+        .rsplit_once(':')
+        .map(|(key, _msg)| key)
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -74,6 +89,11 @@ pub fn convert(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
     // Rewrite each Workflow widget (anchored at the Workflow tool_use) with
     // the final aggregated run state collected from its task_* events.
     finalize_workflow_widgets(&mut result, &workflow_acc);
+    // Merge a subagent run's repeated `task_*` snapshots (now `Subagent`
+    // parts, folded under the spawning Task card by `group_child_messages`)
+    // into one evolving status row. Runs AFTER grouping so child-folded
+    // snapshots are collapsed inside the Task tool call's `children`.
+    collapse_subagent_widgets(&mut result);
     result
 }
 
@@ -102,6 +122,98 @@ fn finalize_workflow_widgets(messages: &mut [ThreadMessageLike], acc: &WorkflowA
             }
         }
     }
+}
+
+/// Merge each subagent run's repeated `MessagePart::Subagent` snapshots into a
+/// single evolving row. A run emits one snapshot per `task_*` event; keeping
+/// them all would stack "running… running… done" rows. Instead: per run key
+/// (`subagent_run_key`), keep the FIRST occurrence (stable anchor + React key)
+/// and rewrite it with the merged final state (terminal status wins over
+/// running; first non-empty title; last non-empty summary), dropping the rest.
+/// Walks both top-level message content and folded `ToolCall.children`.
+fn collapse_subagent_widgets(messages: &mut [ThreadMessageLike]) {
+    for msg in messages.iter_mut() {
+        collapse_subagent_in_parts(&mut msg.content);
+    }
+}
+
+fn collapse_subagent_in_parts(parts: &mut Vec<ExtendedMessagePart>) {
+    use std::collections::HashMap;
+
+    // Recurse into Task tool-call children first (grouping folds the snapshots
+    // there for anchored runs).
+    for part in parts.iter_mut() {
+        if let ExtendedMessagePart::Basic(MessagePart::ToolCall { children, .. }) = part {
+            collapse_subagent_in_parts(children);
+        }
+    }
+
+    // Pass 1: compute the merged (status, title, summary) per run key.
+    let mut merged: HashMap<String, (SubagentStatus, Option<String>, Option<String>)> =
+        HashMap::new();
+    for part in parts.iter() {
+        let ExtendedMessagePart::Basic(MessagePart::Subagent {
+            id,
+            status,
+            title,
+            summary,
+        }) = part
+        else {
+            continue;
+        };
+        let Some(key) = subagent_run_key(id) else {
+            continue;
+        };
+        let entry = merged
+            .entry(key.to_string())
+            .or_insert((SubagentStatus::Running, None, None));
+        // Terminal status wins; never downgrade back to Running on a late/stale
+        // snapshot.
+        if *status != SubagentStatus::Running {
+            entry.0 = status.clone();
+        }
+        // Title: first non-empty.
+        if entry.1.is_none() {
+            if let Some(t) = title {
+                entry.1 = Some(t.clone());
+            }
+        }
+        // Summary: last non-empty.
+        if let Some(s) = summary {
+            entry.2 = Some(s.clone());
+        }
+    }
+    if merged.is_empty() {
+        return;
+    }
+
+    // Pass 2: keep the first snapshot per run (rewritten with merged state),
+    // drop the rest.
+    let mut written: std::collections::HashSet<String> = std::collections::HashSet::new();
+    parts.retain_mut(|part| {
+        let ExtendedMessagePart::Basic(MessagePart::Subagent {
+            id,
+            status,
+            title,
+            summary,
+        }) = part
+        else {
+            return true;
+        };
+        let Some(key) = subagent_run_key(id).map(str::to_string) else {
+            return true;
+        };
+        if written.contains(&key) {
+            return false;
+        }
+        written.insert(key.clone());
+        if let Some((st, ti, su)) = merged.get(&key) {
+            *status = st.clone();
+            *title = ti.clone();
+            *summary = su.clone();
+        }
+        true
+    });
 }
 
 /// Fold all Claude-Task-sourced `TodoList` parts (id prefix
@@ -203,6 +315,10 @@ fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, Wo
     // message) and its later task_* lifecycle events (separate system
     // messages) fold into the same run.
     let mut workflow_acc = WorkflowAccumulator::default();
+    // Shared across the whole walk so a subagent's `task_started` (which links
+    // task_id → tool_use_id) lets a later `task_notification` (often carrying
+    // only task_id) resolve back to the spawning Task tool call.
+    let mut subagent_acc = SubagentAccumulator::default();
 
     while i < messages.len() {
         let msg = &messages[i];
@@ -213,7 +329,7 @@ fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, Wo
         // render as SystemNotice banners; the rest fall through to the
         // generic system label.
         if msg_type == Some("system") {
-            convert_system_msg(msg, &mut result, &mut workflow_acc);
+            convert_system_msg(msg, &mut result, &mut workflow_acc, &mut subagent_acc);
             i += 1;
             continue;
         }
@@ -440,7 +556,12 @@ fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, Wo
                     .and_then(|p| p.get("type"))
                     .and_then(Value::as_str);
                 match dtype {
-                    Some("system") => convert_system_msg(deferred, &mut result, &mut workflow_acc),
+                    Some("system") => convert_system_msg(
+                        deferred,
+                        &mut result,
+                        &mut workflow_acc,
+                        &mut subagent_acc,
+                    ),
                     Some("rate_limit_event") => convert_rate_limit_msg(deferred, &mut result),
                     // The lookahead loop above only ever appends these
                     // two types — anything else would be a bug.
@@ -689,6 +810,7 @@ fn convert_system_msg(
     msg: &IntermediateMessage,
     out: &mut Vec<ThreadMessageLike>,
     workflow_acc: &mut WorkflowAccumulator,
+    subagent_acc: &mut SubagentAccumulator,
 ) {
     let parsed = msg.parsed.as_ref();
     let sub = parsed
@@ -716,21 +838,36 @@ fn convert_system_msg(
             return;
         }
     }
-    if let Some(part) = build_subagent_notice(sub, parsed, &msg.id) {
-        // Mark with `child:<tool_use_id>:<msg_id>` so the parent-grouping
-        // pass folds these notices into the corresponding Task tool
-        // call's children block. The tool_use_id field on the SDK
-        // system event is the id of the Task tool that spawned the
-        // subagent.
-        let mut notice = make_system_notice(msg, part);
-        if let Some(tool_use_id) = parsed
-            .and_then(|p| p.get("tool_use_id"))
-            .and_then(Value::as_str)
-        {
-            notice.id = Some(format!("child:{tool_use_id}:{}", msg.id));
+    // Subagent (`Task`/`Agent`) lifecycle: fold each `task_*` snapshot into a
+    // single evolving `MessagePart::Subagent` (merged later by
+    // `collapse_subagent_widgets`). Background runs only emit these coarse
+    // events, so this is the only signal of their status — render it as a
+    // legible card, not a stack of one-line notices.
+    if let Some(value) = parsed {
+        subagent_acc.note(value);
+        if let Some((status, title, summary)) = subagent_snapshot(sub, parsed) {
+            let resolved_tool_use = subagent_acc.resolve_tool_use(value);
+            let run_key = subagent_acc
+                .run_key(value)
+                .unwrap_or_else(|| msg.id.clone());
+            let part = MessagePart::Subagent {
+                id: format!("{SUBAGENT_PART_ID_PREFIX}{run_key}:{}", msg.id),
+                status,
+                title,
+                summary,
+            };
+            let mut message = make_system_notice(msg, part);
+            // Anchor under the spawning Task tool call when the parent
+            // tool_use_id is known: `group_child_messages` folds messages
+            // whose id is `child:<tool_use_id>:<msg_id>` into that tool call's
+            // children. Orphans (post-restart notifications whose task_started
+            // lived in a dead process) render standalone.
+            if let Some(tool_use_id) = resolved_tool_use {
+                message.id = Some(format!("child:{tool_use_id}:{}", msg.id));
+            }
+            out.push(message);
+            return;
         }
-        out.push(notice);
-        return;
     }
     // Subtypes with structured data (compact_boundary, api_retry,
     // tool_use_summary, local_command_output) flow through a single

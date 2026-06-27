@@ -3284,6 +3284,26 @@ export type SystemNoticePart = {
 	label: string;
 	body?: string;
 };
+export type SubagentStatus =
+	| "running"
+	| "completed"
+	| "failed"
+	| "cancelled"
+	/** Ended because the app/agent process restarted mid-run — not a real
+	 *  failure; rendered as a warning, not an error. */
+	| "interrupted";
+/** Aggregated lifecycle of a single `Task`/`Agent` subagent run. The repeated
+ *  `task_*` events fold into one evolving status row (esp. for backgrounded
+ *  subagents, whose only signal is these coarse events). */
+export type SubagentPart = {
+	type: "subagent";
+	id: string;
+	status: SubagentStatus;
+	/** What the subagent was asked to do (the Task `description`). */
+	title?: string;
+	/** Latest progress summary / final report. */
+	summary?: string;
+};
 export type TodoStatus = "pending" | "in_progress" | "completed";
 export type TodoItem = { text: string; status: TodoStatus };
 export type TodoListPart = {
@@ -3395,6 +3415,7 @@ export type MessagePart =
 	| ReasoningPart
 	| ToolCallPart
 	| SystemNoticePart
+	| SubagentPart
 	| TodoListPart
 	| WorkflowPart
 	| ImagePart

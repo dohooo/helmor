@@ -1,0 +1,44 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: msg-1
+  content_length: 2
+  content:
+    - type: tool-call
+      tool_name: Task
+      tool_call_id: toolu_a
+      args_keys:
+        - description
+      args_text_length: 25
+      has_result: false
+      result_kind: ~
+      result_preview: ~
+      streaming_status: ~
+      children_count: 1
+      children:
+        - type: subagent
+          status: completed
+          title: Agent A
+          summary: A finished
+    - type: tool-call
+      tool_name: Task
+      tool_call_id: toolu_b
+      args_keys:
+        - description
+      args_text_length: 25
+      has_result: false
+      result_kind: ~
+      result_preview: ~
+      streaming_status: ~
+      children_count: 1
+      children:
+        - type: subagent
+          status: failed
+          title: Agent B
+          summary: B hit an error
+  status:
+    type: complete
+    reason: stop
+  streaming: ~

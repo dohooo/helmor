@@ -1,10 +1,14 @@
 import {
+	AlertCircle,
+	AlertTriangle,
+	Bot,
 	Check,
 	Circle,
 	CircleDot,
 	ClipboardList,
 	Copy,
 	FolderOpen,
+	LoaderCircle,
 	MessageSquareText,
 	Workflow,
 } from "lucide-react";
@@ -18,6 +22,7 @@ import {
 	copyImageToClipboard,
 	type ImagePart,
 	type PlanReviewPart,
+	type SubagentPart,
 	showImageInFinder,
 	type TodoListPart,
 	type WorkflowPart,
@@ -165,6 +170,85 @@ export function WorkflowCard({ part }: { part: WorkflowPart }) {
 			{footer.length > 0 ? (
 				<div className="mt-0.5 text-mini text-muted-foreground/60">
 					{footer.join(" · ")}
+				</div>
+			) : null}
+		</div>
+	);
+}
+
+// Values are i18n catalog KEYS, resolved at render via t().
+const SUBAGENT_STATUS_LABEL: Record<SubagentPart["status"], string> = {
+	running: "panelSubagentStatusRunning",
+	completed: "panelSubagentStatusDone",
+	failed: "panelSubagentStatusFailed",
+	cancelled: "panelSubagentStatusCancelled",
+	interrupted: "panelSubagentStatusInterrupted",
+};
+
+/**
+ * One `Task`/`Agent` subagent run, aggregated from its repeated `task_*`
+ * lifecycle events. Backgrounded subagents emit only these coarse events
+ * (no inline tool-by-tool stream), so this card is the user's window into
+ * what the subagent is doing and how it ended. Mirrors `WorkflowCard`'s
+ * shell: a shimmering header while running, a status icon, and the latest
+ * progress / final summary. A process-restart interrupt shows as a warning,
+ * not a scary red failure.
+ */
+export function SubagentStatusCard({ part }: { part: SubagentPart }) {
+	const { t } = useI18n();
+	const running = part.status === "running";
+	const title = part.title?.trim() || t("panelSubAgent");
+	const Icon =
+		part.status === "running"
+			? LoaderCircle
+			: part.status === "completed"
+				? Check
+				: part.status === "failed"
+					? AlertCircle
+					: part.status === "interrupted" || part.status === "cancelled"
+						? AlertTriangle
+						: Bot;
+	const iconTone =
+		part.status === "failed"
+			? "text-destructive"
+			: part.status === "interrupted" || part.status === "cancelled"
+				? "text-chart-5"
+				: part.status === "completed"
+					? "text-chart-2"
+					: "text-muted-foreground/60";
+	const statusTone =
+		part.status === "failed"
+			? "text-destructive"
+			: part.status === "interrupted" || part.status === "cancelled"
+				? "text-chart-5"
+				: part.status === "completed"
+					? "text-chart-2"
+					: "text-muted-foreground";
+	return (
+		<div className="my-1 flex flex-col gap-0.5 rounded-md border border-border/40 bg-accent/35 px-3 py-2 text-ui leading-6 text-muted-foreground">
+			<div className="flex items-center gap-1.5 text-mini text-muted-foreground">
+				<Icon
+					className={cn(
+						"size-3 shrink-0",
+						iconTone,
+						running ? "animate-spin" : null,
+					)}
+					strokeWidth={1.8}
+				/>
+				{running ? (
+					<ShimmerText className="text-mini" durationMs={2400}>
+						{title}
+					</ShimmerText>
+				) : (
+					<span className="min-w-0 truncate">{title}</span>
+				)}
+				<span className={cn("ml-auto shrink-0 text-mini", statusTone)}>
+					{t(SUBAGENT_STATUS_LABEL[part.status])}
+				</span>
+			</div>
+			{part.summary?.trim() ? (
+				<div className="whitespace-pre-wrap break-words text-small leading-5 text-muted-foreground/80">
+					{part.summary.trim()}
 				</div>
 			) : null}
 		</div>

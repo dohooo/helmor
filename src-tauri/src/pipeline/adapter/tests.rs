@@ -5,7 +5,9 @@
 use super::blocks::parse_assistant_parts;
 use super::labels::{build_result_label, format_count};
 use super::*;
-use crate::pipeline::types::{NoticeSeverity, TodoStatus, WorkflowAgentStatus, WorkflowStatus};
+use crate::pipeline::types::{
+    NoticeSeverity, SubagentStatus, TodoStatus, WorkflowAgentStatus, WorkflowStatus,
+};
 use serde_json::json;
 
 fn im(id: &str, role: &str, content: Value) -> IntermediateMessage {
@@ -197,12 +199,15 @@ fn system_init_skipped_subagent_renders_as_notice() {
         ),
     ];
     let result = convert(&messages);
-    // task_progress renders as a SystemNotice; init stays silent.
+    // task_progress renders as a Subagent widget; init stays silent.
     assert_eq!(result.len(), 2);
     assert_eq!(result[0].role, MessageRole::System);
     assert!(matches!(
         &result[0].content[0],
-        ExtendedMessagePart::Basic(MessagePart::SystemNotice { .. })
+        ExtendedMessagePart::Basic(MessagePart::Subagent {
+            status: SubagentStatus::Running,
+            ..
+        })
     ));
     assert_eq!(result[1].role, MessageRole::Assistant);
 }
@@ -1560,10 +1565,10 @@ fn claude_workflow_aggregates_into_single_widget() {
 }
 
 #[test]
-fn non_workflow_subagent_task_still_renders_notice() {
-    // A task_* event WITHOUT task_type=local_workflow (a plain subagent) must
-    // keep rendering through the existing subagent-notice path — the workflow
-    // aggregation must not swallow it.
+fn non_workflow_subagent_task_renders_subagent_widget() {
+    // A task_* event WITHOUT task_type=local_workflow (a plain subagent) folds
+    // into a Subagent widget — the workflow aggregation must not swallow it,
+    // and it must not regress to a raw "Subagent started" notice.
     let messages = vec![sys(
         "s1",
         json!({
@@ -1573,16 +1578,23 @@ fn non_workflow_subagent_task_still_renders_notice() {
         }),
     )];
     let result = convert(&messages);
-    let has_notice = result.iter().flat_map(|m| m.content.iter()).any(|p| {
-        matches!(
-            p,
-            ExtendedMessagePart::Basic(MessagePart::SystemNotice { label, .. }) if label == "Subagent started"
-        )
-    });
-    assert!(
-        has_notice,
-        "plain subagent task_started should still be a notice"
-    );
+    let widget = result
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .find_map(|p| match p {
+            ExtendedMessagePart::Basic(part @ MessagePart::Subagent { .. }) => Some(part),
+            _ => None,
+        });
+    let Some(MessagePart::Subagent {
+        status, title, id, ..
+    }) = widget
+    else {
+        panic!("plain subagent task_started should render a Subagent widget");
+    };
+    assert_eq!(*status, SubagentStatus::Running);
+    assert_eq!(title.as_deref(), Some("review the code"));
+    // Run key embeds the resolved parent tool_use_id for collapse + folding.
+    assert!(id.starts_with("subagent:task_abc:"), "got id {id}");
 }
 
 fn workflow_tool_use(msg_id: &str, tool_use_id: &str) -> IntermediateMessage {
@@ -1722,7 +1734,7 @@ fn claude_workflow_completes_via_notification_without_task_updated() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn subagent_task_started_renders_as_notice_with_child_id() {
+fn subagent_task_started_renders_widget_with_child_id() {
     let messages = vec![im(
         "sn1",
         "assistant",
@@ -1737,18 +1749,20 @@ fn subagent_task_started_renders_as_notice_with_child_id() {
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].role, MessageRole::System);
     match &result[0].content[0] {
-        ExtendedMessagePart::Basic(MessagePart::SystemNotice {
-            severity,
-            label,
-            body,
+        ExtendedMessagePart::Basic(MessagePart::Subagent {
+            status,
+            title,
+            summary,
             ..
         }) => {
-            assert_eq!(*severity, NoticeSeverity::Info);
-            assert_eq!(label, "Subagent started");
-            assert_eq!(body.as_deref(), Some("scanning files"));
+            assert_eq!(*status, SubagentStatus::Running);
+            assert_eq!(title.as_deref(), Some("scanning files"));
+            assert_eq!(summary.as_deref(), None);
         }
-        other => panic!("expected SystemNotice, got {other:?}"),
+        other => panic!("expected Subagent widget, got {other:?}"),
     }
+    // The MESSAGE id carries the `child:<tool_use_id>:<msg_id>` encoding so the
+    // grouping pass folds the widget under the parent Task tool call.
     assert_eq!(result[0].id.as_deref(), Some("child:task_xyz:sn1"));
 }
 

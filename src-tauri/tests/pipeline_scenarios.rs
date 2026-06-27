@@ -2467,3 +2467,109 @@ fn auq_claude_split_rows_still_merge_answers() {
     ];
     assert_yaml_snapshot!(run_normalized(msgs));
 }
+
+// ============================================================================
+// Subagent (Task/Agent) lifecycle widget
+//
+// `task_started`/`task_progress`/`task_notification` (`task_type =
+// "local_agent"`, or untyped) fold into ONE evolving `Subagent` part instead
+// of a stack of one-line notices — so a backgrounded subagent shows coherent
+// status. A process-restart interrupt reads as "interrupted", not "failed".
+// ============================================================================
+
+// Full lifecycle folds into the spawning Task card as a single Subagent child
+// that ends "completed" with the final report. The progress/notification
+// events carry only `task_id` — they resolve to the parent Task via the
+// `task_id → tool_use_id` link recorded on `task_started`.
+#[test]
+fn subagent_lifecycle_folds_into_task_card() {
+    let msgs = vec![
+        assistant_json(
+            "a1",
+            json!([{
+                "type": "tool_use", "id": "toolu_1", "name": "Task",
+                "input": {"description": "Inspect the repo"}
+            }]),
+            None,
+        ),
+        system_json(
+            "s1",
+            json!({
+                "subtype": "task_started", "task_id": "task_1",
+                "task_type": "local_agent", "tool_use_id": "toolu_1",
+                "description": "Inspect the repo"
+            }),
+        ),
+        system_json(
+            "s2",
+            json!({"subtype": "task_progress", "task_id": "task_1", "summary": "Reading package.json"}),
+        ),
+        system_json(
+            "s3",
+            json!({"subtype": "task_notification", "task_id": "task_1", "message": "Inspected package.json and docs."}),
+        ),
+    ];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+// A lone post-restart `task_notification(failed)` whose body is the harness's
+// process-exit message renders as `interrupted` (a warning), not `failed` (an
+// error) — and stands alone because its `task_started` died with the old
+// process, so the parent tool_use_id can't be resolved.
+#[test]
+fn subagent_restart_notification_relabeled_interrupted() {
+    let msgs = vec![system_json(
+        "s1",
+        json!({
+            "subtype": "task_notification", "task_id": "task_9", "status": "failed",
+            "summary": "Background agent was running when the previous Claude Code process exited and did not complete. Its in-process state was lost."
+        }),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+// A genuine `task_notification(failed)` (not a restart) stays `failed`.
+#[test]
+fn subagent_genuine_failure_stays_failed() {
+    let msgs = vec![system_json(
+        "s1",
+        json!({
+            "subtype": "task_notification", "task_id": "task_x", "status": "failed",
+            "summary": "Tool error: command not found"
+        }),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+// Two parallel subagents (distinct tool_use_ids) each fold into their own Task
+// card with independent status — late events for one never bleed into the other.
+#[test]
+fn subagent_parallel_runs_isolated() {
+    let msgs = vec![
+        assistant_json(
+            "a1",
+            json!([
+                {"type": "tool_use", "id": "toolu_a", "name": "Task", "input": {"description": "Agent A"}},
+                {"type": "tool_use", "id": "toolu_b", "name": "Task", "input": {"description": "Agent B"}}
+            ]),
+            None,
+        ),
+        system_json(
+            "s1",
+            json!({"subtype": "task_started", "task_type": "local_agent", "task_id": "ta", "tool_use_id": "toolu_a", "description": "Agent A"}),
+        ),
+        system_json(
+            "s2",
+            json!({"subtype": "task_started", "task_type": "local_agent", "task_id": "tb", "tool_use_id": "toolu_b", "description": "Agent B"}),
+        ),
+        system_json(
+            "s3",
+            json!({"subtype": "task_notification", "task_id": "ta", "status": "completed", "summary": "A finished"}),
+        ),
+        system_json(
+            "s4",
+            json!({"subtype": "task_notification", "task_id": "tb", "status": "failed", "summary": "B hit an error"}),
+        ),
+    ];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}

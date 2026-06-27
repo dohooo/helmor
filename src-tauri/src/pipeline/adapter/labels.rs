@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::pipeline::types::{
     ExtendedMessagePart, IntermediateMessage, MessagePart, MessageRole, NoticeSeverity,
-    ThreadMessageLike,
+    SubagentStatus, ThreadMessageLike,
 };
 
 pub(super) fn make_system(msg: &IntermediateMessage, text: &str) -> ThreadMessageLike {
@@ -112,57 +112,79 @@ fn format_rate_limit_kind(kind: &str) -> String {
     }
 }
 
-/// Convert a Claude `system` event with `subtype = task_*` into a
-/// SystemNotice. Returns None for non-subagent system subtypes so the
-/// caller falls back to the regular system path.
-pub(super) fn build_subagent_notice(
+/// True when a subagent terminal body looks like a process-restart interrupt
+/// (the harness injects this text when a backgrounded agent's process exits
+/// before it finishes). These are NOT real failures — surface them as
+/// "interrupted" rather than a scary red "failed".
+pub(super) fn is_subagent_interrupt_body(body: Option<&str>) -> bool {
+    let Some(body) = body else { return false };
+    let body = body.to_ascii_lowercase();
+    body.contains("process exited")
+        || body.contains("did not complete")
+        || body.contains("in-process state was lost")
+}
+
+/// Snapshot one Claude `system` event with `subtype = task_*` into a
+/// `(status, title, summary)` triple for a [`MessagePart::Subagent`]. Returns
+/// `None` for non-subagent system subtypes so the caller falls back to the
+/// regular system path. The repeated snapshots of one run are merged into a
+/// single evolving widget by `collapse_subagent_widgets`.
+pub(super) fn subagent_snapshot(
     subtype: Option<&str>,
     parsed: Option<&Value>,
-    msg_id: &str,
-) -> Option<MessagePart> {
+) -> Option<(SubagentStatus, Option<String>, Option<String>)> {
     let parsed = parsed?;
     let description = parsed
         .get("description")
         .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
         .map(str::to_string);
+    // `local_agent` notifications report back via `message`; workflow-style
+    // events use `summary`. Accept either.
     let summary = parsed
         .get("summary")
         .and_then(Value::as_str)
+        .or_else(|| parsed.get("message").and_then(Value::as_str))
+        .filter(|s| !s.trim().is_empty())
         .map(str::to_string);
     let status = parsed.get("status").and_then(Value::as_str).unwrap_or("");
 
     match subtype {
-        Some("task_started") => Some(MessagePart::SystemNotice {
-            id: notice_part_id(msg_id),
-            severity: NoticeSeverity::Info,
-            label: "Subagent started".to_string(),
-            body: description,
-        }),
-        Some("task_progress") => Some(MessagePart::SystemNotice {
-            id: notice_part_id(msg_id),
-            severity: NoticeSeverity::Info,
-            label: "Subagent progress".to_string(),
-            body: summary.or(description),
-        }),
-        Some("task_completed") => Some(MessagePart::SystemNotice {
-            id: notice_part_id(msg_id),
-            severity: NoticeSeverity::Info,
-            label: "Subagent completed".to_string(),
-            body: summary.or(description),
-        }),
+        Some("task_started") => Some((SubagentStatus::Running, description, None)),
+        Some("task_progress") => Some((
+            SubagentStatus::Running,
+            description.clone(),
+            summary.or(description),
+        )),
+        Some("task_completed") => Some((
+            SubagentStatus::Completed,
+            description.clone(),
+            summary.or(description),
+        )),
         Some("task_notification") => {
-            let (severity, label) = match status {
-                "completed" => (NoticeSeverity::Info, "Subagent completed".to_string()),
-                "failed" => (NoticeSeverity::Error, "Subagent failed".to_string()),
-                "cancelled" => (NoticeSeverity::Warning, "Subagent cancelled".to_string()),
-                _ => (NoticeSeverity::Info, format!("Subagent {status}")),
+            let body = summary.clone().or_else(|| description.clone());
+            let resolved = match status {
+                "completed" => SubagentStatus::Completed,
+                "failed" => {
+                    if is_subagent_interrupt_body(body.as_deref()) {
+                        SubagentStatus::Interrupted
+                    } else {
+                        SubagentStatus::Failed
+                    }
+                }
+                "cancelled" => SubagentStatus::Cancelled,
+                // `local_agent` notifications often omit `status` and just
+                // carry a `message` report — treat the report as completion,
+                // but still flag process-restart bodies as interrupts.
+                _ => {
+                    if is_subagent_interrupt_body(body.as_deref()) {
+                        SubagentStatus::Interrupted
+                    } else {
+                        SubagentStatus::Completed
+                    }
+                }
             };
-            Some(MessagePart::SystemNotice {
-                id: notice_part_id(msg_id),
-                severity,
-                label,
-                body: summary.or(description),
-            })
+            Some((resolved, description, body))
         }
         _ => None,
     }

@@ -68,6 +68,16 @@ const SLASH_COMMANDS_TIMEOUT_MS = 20_000;
 const CONTEXT_USAGE_TIMEOUT_MS = 30_000;
 
 /**
+ * Safety cap for holding a turn open after the main agent finished but
+ * background subagents are still running. Reset on every SDK event, so it only
+ * fires after this long with NO activity at all — a backstop against a wedged
+ * subagent that never emits a completion. On expiry we gracefully close the
+ * input stream (not abort), letting the SDK wind down. Generous: research
+ * subagents can run for many minutes.
+ */
+const BACKGROUND_KEEPALIVE_IDLE_TIMEOUT_MS = 15 * 60_000;
+
+/**
  * Resolve the Claude Code native binary for `pathToClaudeCodeExecutable`.
  * Prefers `HELMOR_CLAUDE_CODE_BIN_PATH` (release), then the platform
  * sub-package (dev/test); falls back to the wrapper bin for `--omit=optional`.
@@ -687,6 +697,36 @@ export class ClaudeSessionManager implements SessionManager {
 		};
 		this.sessions.set(sessionId, live);
 
+		// Background subagents still running. While non-empty, a turn's terminal
+		// `result` is held (not forwarded as `end`) so the live subagents finish
+		// and the main agent resumes — see `shouldHoldTurnForBackground`.
+		const outstandingSubagents = new Set<string>();
+		let keepAliveTimer: ReturnType<typeof setTimeout> | undefined;
+		const clearKeepAlive = () => {
+			if (keepAliveTimer) {
+				clearTimeout(keepAliveTimer);
+				keepAliveTimer = undefined;
+			}
+		};
+		// Idle backstop: re-armed on every event while holding, so it only fires
+		// after a long silence. Closes the input stream gracefully (no abort) so
+		// the SDK winds the turn down instead of hanging forever.
+		const bumpKeepAlive = () => {
+			clearKeepAlive();
+			keepAliveTimer = setTimeout(() => {
+				logger.info(
+					`[${requestId}] background keep-alive idle timeout; closing input`,
+					{ outstanding: outstandingSubagents.size },
+				);
+				try {
+					promptSource.close();
+				} catch {
+					// already closed — nothing to do
+				}
+			}, BACKGROUND_KEEPALIVE_IDLE_TIMEOUT_MS);
+			keepAliveTimer.unref?.();
+		};
+
 		try {
 			let lastRateLimitInfo: RateLimitOverageInfo | undefined;
 			let fastModeNoticeEmitted = false;
@@ -698,6 +738,9 @@ export class ClaudeSessionManager implements SessionManager {
 				// `end` here would violate the "exactly one terminal event" contract.
 				if (this.turns.isAbortRequested(sessionId)) return;
 				logger.sdkEvent(requestId, message);
+				// Track background subagent starts/finishes so a turn-end `result`
+				// that arrives while they're still running holds the turn open.
+				updateOutstandingSubagents(outstandingSubagents, message);
 				if (message.type === "rate_limit_event") {
 					lastRateLimitInfo = (
 						message as { rate_limit_info?: RateLimitOverageInfo }
@@ -728,12 +771,19 @@ export class ClaudeSessionManager implements SessionManager {
 						uuid: randomUUID(),
 					});
 				}
-				// Backgrounded task pause: SDK keeps the SAME query() alive and
-				// resumes later via task_notification. Record usage, but keep the
-				// pause result OUT of the pipeline (accumulator assumes one result
-				// per turn) and do NOT end the turn — must intercept before the
-				// unconditional passthrough below.
-				if (isBackgroundPauseResult(message)) {
+				// Hold the turn open when:
+				//  (a) the SDK emits an explicit `background_requested` pause, OR
+				//  (b) a terminal `result` arrives while background subagents are
+				//      still running (this SDK version's real signal — it reports
+				//      `end_turn` and would otherwise let us close the query and
+				//      kill the live subagents).
+				// In both cases: record usage, keep the result OUT of the pipeline
+				// (accumulator assumes one result per turn), do NOT end — must
+				// intercept before the unconditional passthrough below.
+				if (
+					isBackgroundPauseResult(message) ||
+					shouldHoldTurnForBackground(message, outstandingSubagents.size)
+				) {
 					const meta = buildClaudeStoredMeta(message, model ?? "");
 					if (meta) {
 						emitter.contextUsageUpdated(
@@ -742,8 +792,17 @@ export class ClaudeSessionManager implements SessionManager {
 							JSON.stringify(meta),
 						);
 					}
+					logger.info(
+						`[${requestId}] holding turn open for background subagents`,
+						{ outstanding: outstandingSubagents.size },
+					);
+					bumpKeepAlive();
 					continue;
 				}
+				// Still waiting on background subagents but this wasn't a terminal
+				// result (e.g. a task_progress event) — keep the idle backstop fresh.
+				if (outstandingSubagents.size > 0) bumpKeepAlive();
+				else clearKeepAlive();
 				// AskUserQuestion tool_use blocks pass through INTACT — the Rust
 				// adapter renders them as the persistent Q&A card (and merges
 				// the tool_result answers into it), so stripping them here
@@ -763,6 +822,7 @@ export class ClaudeSessionManager implements SessionManager {
 							JSON.stringify(meta),
 						);
 					}
+					clearKeepAlive();
 					emitter.end(requestId);
 					return;
 				}
@@ -778,6 +838,7 @@ export class ClaudeSessionManager implements SessionManager {
 			}
 			throw err;
 		} finally {
+			clearKeepAlive();
 			// `abortController.abort()` alone leaves Node-level exit listeners,
 			// pending control/MCP promises, and the SDK's internal child handle
 			// dangling. `Query.close()` is the documented hard cleanup —
@@ -1322,6 +1383,59 @@ function isBackgroundPauseResult(message: SDKMessage): boolean {
  *  reaches this check is genuinely terminal for this turn. */
 function isTerminalResult(message: SDKMessage): boolean {
 	return message.type === "result";
+}
+
+/**
+ * Track the set of still-running background subagents by their `task_id`.
+ *
+ * A `Task`/`Agent` launched in the background streams a `system task_started`
+ * (`task_type === "local_agent"`) when it begins and a `system
+ * task_notification` (carrying the same `task_id`, any terminal status) when it
+ * finishes. Counting the open task_ids lets `sendMessage` tell whether a turn's
+ * terminal `result` arrived while subagents are still working — the SDK
+ * (claude-agent-sdk 0.3.x) does NOT emit a `background_requested` pause here; it
+ * just reports `end_turn`, and closing the query then would kill the live
+ * subagents ("interrupted, state lost").
+ *
+ * Only `local_agent` starts count: `local_bash` (Bash wrapper) and
+ * `local_workflow` (Dynamic Workflow) are not subagents we hold the turn for.
+ * Notifications delete by `task_id` regardless of type, so a non-tracked id is a
+ * harmless no-op.
+ */
+export function updateOutstandingSubagents(
+	outstanding: Set<string>,
+	message: SDKMessage,
+): void {
+	if (message.type !== "system") return;
+	const m = message as {
+		subtype?: string;
+		task_type?: string;
+		task_id?: string;
+	};
+	if (!m.task_id) return;
+	if (m.subtype === "task_started" && m.task_type === "local_agent") {
+		outstanding.add(m.task_id);
+	} else if (m.subtype === "task_notification") {
+		outstanding.delete(m.task_id);
+	}
+}
+
+/**
+ * True when a turn's terminal `result` arrived but background subagents are
+ * still running. The turn must be HELD open (don't `end`, don't close the
+ * query) so those subagents finish, emit their `task_notification`s, and the
+ * main agent resumes to summarize. Mirrors the `isBackgroundPauseResult`
+ * keep-alive path, but keyed on the signal this SDK version actually emits.
+ */
+export function shouldHoldTurnForBackground(
+	message: SDKMessage,
+	outstandingCount: number,
+): boolean {
+	return (
+		outstandingCount > 0 &&
+		isTerminalResult(message) &&
+		!isBackgroundPauseResult(message)
+	);
 }
 
 type FastModeState = "off" | "cooldown" | "on";

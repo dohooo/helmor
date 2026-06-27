@@ -343,6 +343,55 @@ impl WorkflowAccumulator {
     }
 }
 
+/// Cross-message helper for plain (non-workflow) subagent runs. The
+/// `task_notification` event that ends a `local_agent` run frequently carries
+/// only a `task_id` (no `tool_use_id`), so the spawning `Task` tool can only
+/// be resolved by remembering the `task_id → tool_use_id` link recorded on the
+/// earlier `task_started`. Threaded through `convert_flat` like
+/// `WorkflowAccumulator` so the whole message walk shares one map.
+#[derive(Default)]
+pub(super) struct SubagentAccumulator {
+    /// task_id → tool_use_id (recorded whenever both appear together).
+    task_to_tool: HashMap<String, String>,
+}
+
+impl SubagentAccumulator {
+    /// Record the `task_id → tool_use_id` link when an event carries both.
+    pub(super) fn note(&mut self, value: &Value) {
+        let task_id = value.get("task_id").and_then(Value::as_str);
+        let tool_use_id = value.get("tool_use_id").and_then(Value::as_str);
+        if let (Some(task), Some(tool)) = (task_id, tool_use_id) {
+            self.task_to_tool.insert(task.to_string(), tool.to_string());
+        }
+    }
+
+    /// Resolve the spawning `Task` tool_use_id for an event — directly when the
+    /// event carries it, else via the remembered `task_id` map. `None` when
+    /// neither is known (e.g. a post-restart orphan notification whose
+    /// `task_started` lived in a now-dead process).
+    pub(super) fn resolve_tool_use(&self, value: &Value) -> Option<String> {
+        if let Some(tool) = value.get("tool_use_id").and_then(Value::as_str) {
+            return Some(tool.to_string());
+        }
+        value
+            .get("task_id")
+            .and_then(Value::as_str)
+            .and_then(|task| self.task_to_tool.get(task).cloned())
+    }
+
+    /// Stable per-run key: the resolved parent tool_use_id when known, else the
+    /// raw task_id. Used to merge the run's repeated snapshots in
+    /// `collapse_subagent_widgets`.
+    pub(super) fn run_key(&self, value: &Value) -> Option<String> {
+        self.resolve_tool_use(value).or_else(|| {
+            value
+                .get("task_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+    }
+}
+
 fn merge_usage(run: &mut WorkflowRun, value: &Value) {
     let Some(usage) = value.get("usage") else {
         return;

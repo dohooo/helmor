@@ -193,6 +193,27 @@ pub enum MessagePart {
         duration_ms: Option<u64>,
     },
 
+    /// Aggregated lifecycle of a single Claude `Task` / `Agent` subagent run
+    /// (`task_type = "local_agent"`, or an untyped `task_*` lifecycle). The
+    /// repeated `task_started` / `task_progress` / `task_notification` events
+    /// fold into ONE evolving status row instead of a stack of raw notices —
+    /// so a backgrounded subagent shows coherent, legible running state
+    /// instead of (at best) a lone "Subagent failed" banner. Anchored as a
+    /// child of the spawning Task tool call when the parent `tool_use_id` is
+    /// known, otherwise rendered standalone.
+    #[serde(rename = "subagent", rename_all = "camelCase")]
+    Subagent {
+        id: String,
+        status: SubagentStatus,
+        /// The Task `description` — what the subagent was asked to do.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        /// Latest progress summary / final report text (from the event's
+        /// `summary` or `message` field).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        summary: Option<String>,
+    },
+
     /// Unified todo-list block. Both Claude (`TodoWrite` tool_use) and
     /// Codex (`item.completed` of `todo_list`) collapse into this single
     /// shape so the frontend renders identically across providers.
@@ -270,6 +291,7 @@ impl MessagePart {
             Self::Text { id, .. }
             | Self::Reasoning { id, .. }
             | Self::SystemNotice { id, .. }
+            | Self::Subagent { id, .. }
             | Self::TodoList { id, .. }
             | Self::Workflow { id, .. }
             | Self::Image { id, .. }
@@ -409,6 +431,20 @@ pub enum WorkflowStatus {
     Completed,
     Failed,
     Stopped,
+}
+
+/// State of a single [`MessagePart::Subagent`] run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentStatus {
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+    /// Ended because the Claude Code / app process restarted mid-run — the
+    /// subagent's in-process state was lost. This is NOT a genuine failure,
+    /// so the frontend renders it as a warning ("interrupted"), not an error.
+    Interrupted,
 }
 
 /// State of a single workflow agent row.

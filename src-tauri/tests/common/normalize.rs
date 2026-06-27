@@ -74,6 +74,11 @@ pub enum NormPart {
         item_count: usize,
         statuses: Vec<String>,
     },
+    Subagent {
+        status: String,
+        title: Option<String>,
+        summary: Option<String>,
+    },
     Workflow {
         name: String,
         status: String,
@@ -231,6 +236,16 @@ fn normalize_basic(part: &MessagePart) -> NormPart {
                 .iter()
                 .map(|i| format!("{:?}", i.status).to_lowercase())
                 .collect(),
+        },
+        MessagePart::Subagent {
+            status,
+            title,
+            summary,
+            ..
+        } => NormPart::Subagent {
+            status: format!("{status:?}").to_lowercase(),
+            title: title.as_deref().map(truncate),
+            summary: summary.as_deref().map(truncate),
         },
         MessagePart::Workflow {
             name,

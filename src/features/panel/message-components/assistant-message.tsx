@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import {
 	ImageBlock,
 	PlanReviewCard,
+	SubagentStatusCard,
 	TodoList,
 	WorkflowCard,
 } from "./content-parts";
@@ -32,6 +33,7 @@ import {
 	isImagePart,
 	isPlanReviewPart,
 	isReasoningPart,
+	isSubagentPart,
 	isSystemNoticePart,
 	isTextPart,
 	isTodoListPart,
@@ -290,6 +292,9 @@ export function ChatAssistantMessage({
 				}
 				if (isTodoListPart(part)) {
 					return <TodoList key={key} part={part} />;
+				}
+				if (isSubagentPart(part)) {
+					return <SubagentStatusCard key={key} part={part} />;
 				}
 				if (isWorkflowPart(part)) {
 					return <WorkflowCard key={key} part={part} />;
