@@ -33,6 +33,13 @@ use super::types::{
 };
 use streaming::StreamingBlock;
 
+fn is_claude_compact_lifecycle_event(value: &Value) -> bool {
+    let subtype = value.get("subtype").and_then(Value::as_str);
+    matches!(subtype, Some("compact_boundary"))
+        || (subtype == Some("status")
+            && value.get("status").and_then(Value::as_str) == Some("compacting"))
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -144,6 +151,7 @@ pub struct StreamAccumulator {
     /// parent Task/Agent tool call instead of flashing as a top-level bubble.
     pub(super) cur_streaming_parent_id: Option<String>,
     local_bash_task_refs: HashSet<String>,
+    compact_lifecycle_id: Option<String>,
     // ── Codex state ──────────────────────────────────────────────────
     /// Per-item delta accumulation for Codex App Server streaming.
     codex_items: HashMap<String, codex::CodexItemState>,
@@ -353,6 +361,7 @@ impl StreamAccumulator {
             cur_asst_block_count: 0,
             cur_streaming_parent_id: None,
             local_bash_task_refs: HashSet::new(),
+            compact_lifecycle_id: None,
             codex_items: codex::new_item_states(),
             codex_partial_idx: None,
             codex_turn_started_at: None,
@@ -1245,13 +1254,15 @@ impl StreamAccumulator {
     }
 
     fn handle_claude_system(&mut self, raw_line: &str, value: &Value) {
-        // Subtypes listed in `event_filter::SUPPRESSED_SYSTEM_SUBTYPES`
-        // never enter `collected[]` — they don't cross IPC, don't render,
-        // don't waste downstream work. Edit that file to toggle.
-        if let Some(subtype) = value.get("subtype").and_then(Value::as_str) {
-            if crate::pipeline::event_filter::is_suppressed_system_subtype(subtype) {
-                return;
-            }
+        // Suppressed system events never enter `collected[]` — they don't cross
+        // IPC, don't render, don't waste downstream work. Edit
+        // `event_filter` to toggle.
+        if crate::pipeline::event_filter::is_suppressed_system_event(value) {
+            return;
+        }
+        if is_claude_compact_lifecycle_event(value) {
+            self.collect_compact_lifecycle(raw_line, value);
+            return;
         }
         // `local_bash` task_* events duplicate the accompanying Bash tool.
         // Claude omits `task_type` on the later notification, so remember
@@ -1349,6 +1360,46 @@ impl StreamAccumulator {
 
         self.cur_asst_id = None;
         self.cur_asst_block_count = 0;
+    }
+
+    fn collect_compact_lifecycle(&mut self, raw: &str, parsed: &Value) {
+        let subtype = parsed.get("subtype").and_then(Value::as_str);
+        let id = match subtype {
+            Some("status") => {
+                let id = parsed
+                    .get("uuid")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                self.compact_lifecycle_id = Some(id.clone());
+                id
+            }
+            Some("compact_boundary") => self
+                .compact_lifecycle_id
+                .take()
+                .or_else(|| {
+                    parsed
+                        .get("uuid")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            _ => uuid::Uuid::new_v4().to_string(),
+        };
+
+        self.collect_or_replace(raw, parsed, MessageRole::System, Some(id.clone()));
+
+        if subtype == Some("compact_boundary") {
+            if let Some(pos) = self.turns.iter().rposition(|turn| turn.id == id) {
+                self.turns[pos].content_json = raw.to_string();
+            } else {
+                self.turns.push(CollectedTurn {
+                    id,
+                    role: MessageRole::System,
+                    content_json: raw.to_string(),
+                });
+            }
+        }
     }
 
     pub(super) fn collect_message(

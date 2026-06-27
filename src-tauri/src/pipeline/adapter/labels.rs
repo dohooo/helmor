@@ -217,6 +217,15 @@ pub(super) fn build_system_notice(parsed: Option<&Value>, msg_id: &str) -> Optio
             })
         }
         "compact_boundary" => Some(build_compact_boundary_notice(parsed, msg_id)),
+        "status" if parsed.get("status").and_then(Value::as_str) == Some("compacting") => {
+            Some(MessagePart::SystemNotice {
+                id: notice_part_id(msg_id),
+                severity: NoticeSeverity::Info,
+                label: "Compacting context".to_string(),
+                body: None,
+            })
+        }
+        "status" => None,
         "codex_compacting" => Some(MessagePart::SystemNotice {
             id: notice_part_id(msg_id),
             severity: NoticeSeverity::Info,

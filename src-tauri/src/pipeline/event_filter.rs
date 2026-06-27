@@ -3,9 +3,9 @@
 //! Single source of truth — three call sites consult this module:
 //! - `accumulator::push_event` reads `SUPPRESSED_EVENT_TYPES` and drops
 //!   matching top-level events before any handler runs (NoOp).
-//! - `accumulator::handle_claude_system` reads `SUPPRESSED_SYSTEM_SUBTYPES`
+//! - `accumulator::handle_claude_system` reads `is_suppressed_system_event`
 //!   + local-bash task helpers on live ingest.
-//! - `adapter::convert_system_msg` reads the same pair on historical
+//! - `adapter::convert_system_msg` reads the same helper on historical
 //!   reload, so old persisted noise rows from earlier code versions
 //!   render with the same rules as new turns.
 //!
@@ -46,8 +46,8 @@ pub(crate) const SUPPRESSED_SYSTEM_SUBTYPES: &[&str] = &[
     "session_state_changed",
     "files_persisted",
     "elicitation_complete",
-    // Status pings (`{status: 'compacting' | null}`) — comment out to
-    // surface the compacting indicator.
+    // Status pings. `status: "compacting"` is allowed by
+    // `is_suppressed_system_event`; null/other status values stay silent.
     "status",
     // Per-frame thinking-token estimate (sdk 0.3.x) — a progress signal, not
     // a message. We render no pill for it, so drop it.
@@ -72,6 +72,19 @@ pub(crate) fn is_suppressed_event_type(event_type: &str) -> bool {
 
 pub(crate) fn is_suppressed_system_subtype(subtype: &str) -> bool {
     SUPPRESSED_SYSTEM_SUBTYPES.contains(&subtype)
+}
+
+/// Same as `is_suppressed_system_subtype` but takes the full event value, so
+/// it can let `status: "compacting"` through (the compacting indicator) while
+/// still suppressing null/other status pings.
+pub(crate) fn is_suppressed_system_event(value: &Value) -> bool {
+    let Some(subtype) = value.get("subtype").and_then(Value::as_str) else {
+        return false;
+    };
+    if subtype == "status" && value.get("status").and_then(Value::as_str) == Some("compacting") {
+        return false;
+    }
+    is_suppressed_system_subtype(subtype)
 }
 
 /// `task_type: "local_bash"` lifecycle events are Claude wrapping a

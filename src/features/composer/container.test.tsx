@@ -1248,10 +1248,10 @@ describe("WorkspaceComposerContainer", () => {
 			});
 		});
 
-		it("suppresses the SDK-reported /compact command for Claude sessions", async () => {
-			// claude-code lists /compact among its slash commands, but the Agent
-			// SDK has no programmatic compaction path, so Helmor hides it for
-			// Claude (Codex/OpenCode keep their built-in /compact).
+		it("shows the SDK-reported /compact command for Claude sessions", async () => {
+			// /compact is now wired through to the Agent SDK as a bare root
+			// command (see normalizeRootSlashCommand), so show it rather than
+			// hiding it as a dead command.
 			apiMockState.listSlashCommands.mockResolvedValue({
 				commands: [
 					{
@@ -1275,12 +1275,10 @@ describe("WorkspaceComposerContainer", () => {
 					"add-dir",
 					"goal",
 					"workflows",
+					"compact",
 					"review",
 				]);
 			});
-			expect(
-				composerMockState.lastSlashCommands.some((c) => c.name === "compact"),
-			).toBe(false);
 		});
 
 		it("suppresses the SDK-reported /clear command (no-op for every provider)", async () => {

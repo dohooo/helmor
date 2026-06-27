@@ -144,15 +144,12 @@ const BUILTIN_CLIENT_COMMANDS: readonly SlashCommandEntry[] = [
 	CLAUDE_WORKFLOWS_COMMAND,
 ];
 
-// SDK-reported commands to hide per provider. claude-code lists /compact among
-// its slash commands, but the Agent SDK exposes no programmatic compaction path
-// (unlike Codex's thread/compact/start and OpenCode's session.summarize), so
-// sending it is a no-op — suppress it instead of showing a dead command.
+// SDK-reported commands to hide per provider. /compact is now wired through
+// to the Claude Agent SDK as a bare root command (see normalizeRootSlashCommand
+// in the sidecar), so it is no longer suppressed for Claude.
 const SUPPRESSED_AGENT_COMMANDS: Partial<
 	Record<AgentProvider, ReadonlySet<string>>
-> = {
-	claude: new Set(["compact"]),
-};
+> = {};
 
 // SDK-reported commands to hide for every provider. /clear is a REPL-only
 // command: sent through the SDK it's a literal no-op (the next turn still

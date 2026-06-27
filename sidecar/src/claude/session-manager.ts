@@ -47,6 +47,7 @@ import {
 	parseTitleAndBranchWithDiagnostics,
 	TITLE_GENERATION_TIMEOUT_MS,
 } from "../title.js";
+import { shouldSuppressCompactContextUsageMessage } from "./compact-filter.js";
 import { loadProjectMcpServers } from "./project-mcp.js";
 
 /**
@@ -66,6 +67,29 @@ const SLASH_COMMANDS_TIMEOUT_MS = 20_000;
  * workspace. Aborting returns an error the UI surfaces as "no data yet".
  */
 const CONTEXT_USAGE_TIMEOUT_MS = 30_000;
+
+/**
+ * Helmor wraps every user prompt as `{helmor preamble}\n\nUser request:\n{prompt}`
+ * (and may also prepend a `[Linked directories …]` block). The Claude Agent SDK
+ * only recognises a root slash command when the prompt it receives starts with
+ * `/<name>`, so a wrapped `/compact` or `/context` is treated as literal text
+ * and silently does nothing. Strip the wrapping and return the bare command the
+ * SDK needs; return `null` for any non-command prompt so the normal path runs.
+ */
+export function normalizeRootSlashCommand(prompt: string): string | null {
+	const marker = "\n\nUser request:\n";
+	const markerIndex = prompt.lastIndexOf(marker);
+	const text = (
+		markerIndex === -1 ? prompt : prompt.slice(markerIndex + marker.length)
+	).trim();
+	if (text === "/context" || text.startsWith("/context ")) {
+		return "/context all";
+	}
+	if (text === "/compact" || text.startsWith("/compact ")) {
+		return "/compact";
+	}
+	return null;
+}
 
 /**
  * Resolve the Claude Code native binary for `pathToClaudeCodeExecutable`.
@@ -408,10 +432,14 @@ export class ClaudeSessionManager implements SessionManager {
 			directories: additionalDirectories,
 			cwd: cwd ?? "(none)",
 		});
-		const promptWithContext = prependLinkedDirectoriesContext(
-			prompt,
-			additionalDirectories,
-		);
+		// Root slash commands (/compact, /context) must reach the SDK bare — any
+		// prepended context breaks the SDK's root-command detection. Strip the
+		// Helmor wrapping; for normal prompts keep the linked-dirs hint.
+		const rootSlashCommand = normalizeRootSlashCommand(prompt);
+		const promptForSdk = rootSlashCommand ?? prompt;
+		const promptWithContext = rootSlashCommand
+			? promptForSdk
+			: prependLinkedDirectoriesContext(promptForSdk, additionalDirectories);
 
 		const { text, imagePaths } = parseImageRefs(promptWithContext, images);
 		const promptSource = createPushable<SDKUserMessage>();
@@ -698,6 +726,13 @@ export class ClaudeSessionManager implements SessionManager {
 				// `end` here would violate the "exactly one terminal event" contract.
 				if (this.turns.isAbortRequested(sessionId)) return;
 				logger.sdkEvent(requestId, message);
+				// /compact: drop the redundant synthetic `## Context Usage` reply —
+				// `compact_boundary` already confirms the compact.
+				if (
+					shouldSuppressCompactContextUsageMessage(message, rootSlashCommand)
+				) {
+					continue;
+				}
 				if (message.type === "rate_limit_event") {
 					lastRateLimitInfo = (
 						message as { rate_limit_info?: RateLimitOverageInfo }
