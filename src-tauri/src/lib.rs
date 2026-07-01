@@ -11,7 +11,6 @@ pub mod forge;
 pub mod git;
 pub mod global_hotkey;
 pub mod image_store;
-mod import;
 pub mod local_llm;
 pub mod logging;
 pub mod maintenance;
@@ -650,10 +649,6 @@ pub fn run() {
             commands::workspace_commands::cleanup_archived_workspaces,
             commands::workspace_commands::restore_workspace,
             commands::editor_commands::stat_editor_file,
-            commands::conductor_commands::conductor_source_available,
-            commands::conductor_commands::list_conductor_repos,
-            commands::conductor_commands::list_conductor_workspaces,
-            commands::conductor_commands::import_conductor_workspaces,
             commands::feedback_commands::fork_helmor_upstream,
             commands::feedback_commands::create_helmor_issue,
             commands::feedback_commands::find_existing_helmor_repo,

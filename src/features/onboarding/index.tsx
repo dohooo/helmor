@@ -1,19 +1,14 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useState } from "react";
 import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
-import { ConductorOnboarding } from "@/components/conductor-onboarding";
 import { CloneFromUrlDialog } from "@/features/navigation/clone-from-url-dialog";
 import {
 	addRepositoryFromLocalPath,
-	type ConductorWorkspace,
 	cloneRepositoryFromUrl,
 	deleteRepository,
 	enterOnboardingWindowMode,
 	exitOnboardingWindowMode,
 	getAgentLoginStatus,
-	isConductorAvailable,
-	listConductorRepos,
-	listConductorWorkspaces,
 	loadAddRepositoryDefaults,
 } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -44,7 +39,6 @@ export function AppOnboarding({ onComplete }: AppOnboardingProps) {
 	const { t } = useI18n();
 	const [step, setStep] = useState<OnboardingStep>("intro");
 	const [loginItems, setLoginItems] = useState(() => buildAgentLoginItems());
-	const [isRoutingImport, setIsRoutingImport] = useState(false);
 	const [importedRepositories, setImportedRepositories] = useState<
 		ImportedRepository[]
 	>([]);
@@ -60,9 +54,6 @@ export function AppOnboarding({ onComplete }: AppOnboardingProps) {
 		string | null
 	>(null);
 	const [repoImportError, setRepoImportError] = useState<string | null>(null);
-	const [conductorWorkspaces, setConductorWorkspaces] = useState<
-		ConductorWorkspace[]
-	>([]);
 
 	const refreshLoginItems = useCallback(() => {
 		void getAgentLoginStatus()
@@ -101,45 +92,6 @@ export function AppOnboarding({ onComplete }: AppOnboardingProps) {
 			);
 		};
 	}, []);
-
-	const handleSkillsNext = useCallback(async () => {
-		if (isRoutingImport) {
-			return;
-		}
-		setIsRoutingImport(true);
-		try {
-			const conductorAvailable = await isConductorAvailable();
-			if (!conductorAvailable) {
-				setConductorWorkspaces([]);
-				setStep("repoImport");
-				return;
-			}
-
-			const repos = await listConductorRepos();
-			const workspaceGroups = await Promise.all(
-				repos
-					.filter((repo) => repo.workspaceCount > repo.alreadyImportedCount)
-					.map((repo) => listConductorWorkspaces(repo.id)),
-			);
-			const importableWorkspaces = workspaceGroups
-				.flat()
-				.filter((workspace) => !workspace.alreadyImported);
-
-			if (importableWorkspaces.length > 0) {
-				setConductorWorkspaces(importableWorkspaces);
-				setStep("conductor");
-				return;
-			}
-
-			setConductorWorkspaces([]);
-			setStep("repoImport");
-		} catch {
-			setConductorWorkspaces([]);
-			setStep("repoImport");
-		} finally {
-			setIsRoutingImport(false);
-		}
-	}, [isRoutingImport]);
 
 	const rememberImportedRepository = useCallback(
 		({
@@ -269,15 +221,6 @@ export function AppOnboarding({ onComplete }: AppOnboardingProps) {
 		window.setTimeout(onComplete, 1100);
 	}, [onComplete]);
 
-	if (step === "conductor") {
-		return (
-			<ConductorOnboarding
-				onComplete={onComplete}
-				workspaces={conductorWorkspaces}
-			/>
-		);
-	}
-
 	return (
 		<main
 			aria-label={t("helmorOnboarding")}
@@ -343,9 +286,8 @@ export function AppOnboarding({ onComplete }: AppOnboardingProps) {
 					setStep("corner");
 				}}
 				onNext={() => {
-					void handleSkillsNext();
+					setStep("repoImport");
 				}}
-				isRoutingImport={isRoutingImport}
 			/>
 			<RepoImportStep
 				step={step}

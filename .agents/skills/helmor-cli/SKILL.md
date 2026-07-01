@@ -1,6 +1,6 @@
 ---
 name: helmor-cli
-description: Use the Helmor CLI to remote-control Helmor from the terminal. Use when the user asks to inspect Helmor data/settings, manage repositories/workspaces/sessions/files, send prompts to agents, list models, use GitHub integration, inspect scripts, migrate from Conductor, run Helmor as an MCP server, generate shell completions, quit a running app, check/install/update the Helmor CLI beta, install/update Helmor skills through the beta app flow, or needs the Helmor command reference. Also plan and build a large change as a stack of dependent PRs (`/helmor-cli stack`), split a change you've already written into a stack (`/helmor-cli break`), and re-sync a stack after lower layers change or merge (`/helmor-cli restack`).
+description: Use the Helmor CLI to remote-control Helmor from the terminal. Use when the user asks to inspect Helmor data/settings, manage repositories/workspaces/sessions/files, send prompts to agents, list models, use GitHub integration, inspect scripts, run Helmor as an MCP server, generate shell completions, quit a running app, check/install/update the Helmor CLI beta, install/update Helmor skills through the beta app flow, or needs the Helmor command reference. Also plan and build a large change as a stack of dependent PRs (`/helmor-cli stack`), split a change you've already written into a stack (`/helmor-cli break`), and re-sync a stack after lower layers change or merge (`/helmor-cli restack`).
 ---
 
 # Helmor CLI

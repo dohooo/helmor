@@ -97,7 +97,6 @@ export const defaultInvokeHandlers: Record<string, InvokeHandler> = {
 	write_forge_cli_auth_terminal_stdin: () => false,
 	resize_forge_cli_auth_terminal: () => false,
 	drain_pending_cli_sends: () => [],
-	conductor_source_available: () => false,
 	detect_installed_editors: () => [],
 };
 

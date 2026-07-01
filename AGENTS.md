@@ -56,7 +56,7 @@ Feature-based layout. Each feature folder follows: `index.tsx` (main) + `contain
 | `features/navigation/` | Sidebar workspace groups. |
 | `features/commit/` | Commit button + lifecycle hook. |
 | `features/terminal/` | Terminal Mode session panel, presets (boot command builders), session store with PTY lifecycle. |
-| `features/settings/` | Settings dialog + panels (CLI install, repo settings, Conductor import). |
+| `features/settings/` | Settings dialog + panels (CLI install, repo settings). |
 | `shell/` | Top-level layout, GitHub identity gate, panel resize hooks. State orchestration in `hooks/`: `use-app-shell-state.tsx` (central hub), `use-selection-controllers.ts` (selection/context/start TDZ ring), `use-editor-edit-mode.ts`, `use-global-shortcut-handlers.ts`, and `use-app-bootstrap.ts` (app initialization). All <300 lines/file. |
 | `components/ai/` | AI-specific components (code block, file tree, reasoning). |
 | `components/ui/` | shadcn/ui primitives (base-nova). |
@@ -70,7 +70,7 @@ Feature-based layout. Each feature folder follows: `index.tsx` (main) + `contain
 | Module | Role |
 | --- | --- |
 | `lib.rs` | Tauri app builder. Registers commands, runs setup hook. |
-| `commands/` | Tauri command handlers split by domain (session, repository, workspace, editor, github, conductor, settings, system). `terminal_commands.rs` includes `set_terminal_session_busy` and `create_session` (now accepts `session_kind` and `agent_type` parameters). |
+| `commands/` | Tauri command handlers split by domain (session, repository, workspace, editor, github, settings, system). `terminal_commands.rs` includes `set_terminal_session_busy` and `create_session` (now accepts `session_kind` and `agent_type` parameters). |
 | `agents/` | Agent streaming + persistence (catalog, persistence, queries, streaming, support). |
 | `cli/` | CLI entry point + subcommands. `terminal_hook.rs` provides the hidden `terminal-hook` command used by agent CLIs to communicate PTY lifecycle events (session id, busy/idle, prompt capture). |
 | `pipeline/` | Message pipeline: `accumulator/` -> `adapter/` + `collapse` -> `ThreadMessageLike[]`. Includes `event_filter.rs`, `classify.rs`, `types.rs`. |

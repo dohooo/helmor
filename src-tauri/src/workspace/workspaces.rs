@@ -983,7 +983,7 @@ fn stabilize_pr_sync_state(current: PrSyncState, next: PrSyncState) -> PrSyncSta
 // ---- Linked directories (the /add-dir feature) ----
 //
 // Stored as a JSON array of absolute paths in `workspaces.linked_directory_paths`.
-// Schema pre-dates the feature (Conductor import compatibility); we own it now.
+// Schema pre-dates the feature; we own it now.
 
 pub fn get_workspace_linked_directories(workspace_id: &str) -> Result<Vec<String>> {
     let connection = db::read_conn()?;

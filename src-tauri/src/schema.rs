@@ -1,7 +1,7 @@
 //! Database schema initialization for Helmor.
 //!
-//! Creates all required tables if they don't exist, matching the Conductor
-//! schema for data compatibility.
+//! Creates all required tables if they don't exist, matching Helmor's
+//! current schema.
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
@@ -501,8 +501,7 @@ fn run_migrations(connection: &Connection) -> Result<()> {
     // creation. Default 1 (on) — preserves the pre-feature behavior for
     // existing repos and is the most common case. Users opt out per-repo
     // when they prefer to run setup manually from the inspector.
-    // Nullable so the conductor-import path (which copies rows without
-    // specifying this column) can leave it NULL; reads treat NULL as on.
+    // Nullable for legacy rows; reads treat NULL as on.
     if has_table(connection, "repos") && !has_column(connection, "repos", "auto_run_setup") {
         connection
             .execute_batch("ALTER TABLE repos ADD COLUMN auto_run_setup INTEGER DEFAULT 1")
@@ -813,9 +812,8 @@ fn run_migrations(connection: &Connection) -> Result<()> {
 
     // Workspace `mode`: 'worktree' (existing — own dir, own branch) or
     // 'local' (operates on the source repo's root, no separate worktree).
-    // Nullable + COALESCE'd at read sites so the conductor import flow
-    // (which copies columns directly without applying NOT NULL defaults)
-    // keeps working — NULL is treated as 'worktree' on read.
+    // Nullable + COALESCE'd at read sites for legacy rows — NULL is treated
+    // as 'worktree' on read.
     if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "mode") {
         connection
             .execute_batch("ALTER TABLE workspaces ADD COLUMN mode TEXT DEFAULT 'worktree'")

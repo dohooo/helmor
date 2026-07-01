@@ -201,7 +201,7 @@ export const LLAMA_SHA256: Readonly<{ arm64: string; x64: string }> = {
 };
 
 // Node runtime that runs the cursor worker. Pinned to the Node 24 line to match
-// Conductor's bundled runtime and to satisfy @cursor/sdk's engines floor
+// the bundled worker runtime and to satisfy @cursor/sdk's engines floor
 // (>=22.13). Since @cursor/sdk 1.0.19 the SDK's SQLite store uses Node's
 // built-in `node:sqlite` (stable + unflagged on Node 24) instead of a native
 // sqlite3 addon, so there is no Node↔native-addon ABI concern. Bumping: pull

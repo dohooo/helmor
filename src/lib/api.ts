@@ -3906,64 +3906,6 @@ export async function respondToUserInput(
 }
 
 // ---------------------------------------------------------------------------
-// Conductor import
-// ---------------------------------------------------------------------------
-
-export type ConductorRepo = {
-	id: string;
-	name: string;
-	remoteUrl: string | null;
-	workspaceCount: number;
-	alreadyImportedCount: number;
-};
-
-export type ConductorWorkspace = {
-	id: string;
-	directoryName: string;
-	state: string;
-	branch: string | null;
-	status: string | null;
-	prTitle: string | null;
-	sessionCount: number;
-	messageCount: number;
-	alreadyImported: boolean;
-	iconSrc: string | null;
-};
-
-export type ImportWorkspacesResult = {
-	success: boolean;
-	importedCount: number;
-	skippedCount: number;
-	errors: string[];
-};
-
-export async function isConductorAvailable(): Promise<boolean> {
-	try {
-		return await invoke<boolean>("conductor_source_available");
-	} catch {
-		return false;
-	}
-}
-
-export async function listConductorRepos(): Promise<ConductorRepo[]> {
-	return invoke<ConductorRepo[]>("list_conductor_repos");
-}
-
-export async function listConductorWorkspaces(
-	repoId: string,
-): Promise<ConductorWorkspace[]> {
-	return invoke<ConductorWorkspace[]>("list_conductor_workspaces", { repoId });
-}
-
-export async function importConductorWorkspaces(
-	workspaceIds: string[],
-): Promise<ImportWorkspacesResult> {
-	return invoke<ImportWorkspacesResult>("import_conductor_workspaces", {
-		workspaceIds,
-	});
-}
-
-// ---------------------------------------------------------------------------
 // Session hide / delete
 // ---------------------------------------------------------------------------
 

@@ -400,24 +400,20 @@ async fn dispatch(
             Ok(Value::Null)
         }
 
-        // ============ data domains: slack / local-llm / feedback / conductor ============
+        // ============ data domains: slack / local-llm / feedback ============
         "activate_local_llm_model" => to_value(crate::commands::local_llm_commands::activate_local_llm_model(app.clone(), arg_string(&args, "entryId")?).await?),
         "cancel_local_llm_download" => {
             crate::commands::local_llm_commands::cancel_local_llm_download(app.state::<crate::downloads::DownloadsManager>(), arg_string(&args, "entryId")?).await?;
             Ok(Value::Null)
         }
-        "conductor_source_available" => to_value(crate::commands::conductor_commands::conductor_source_available()),
         "create_helmor_issue" => to_value(crate::commands::feedback_commands::create_helmor_issue(arg_string(&args, "title")?, arg_string(&args, "body")?).await?),
         "detect_local_llm_hardware" => to_value(crate::commands::local_llm_commands::detect_local_llm_hardware().await?),
         "find_existing_helmor_repo" => to_value(crate::commands::feedback_commands::find_existing_helmor_repo().await?),
         "fork_helmor_upstream" => to_value(crate::commands::feedback_commands::fork_helmor_upstream().await?),
         "get_local_llm_endpoint" => to_value(crate::commands::local_llm_commands::get_local_llm_endpoint(app.state::<crate::local_llm::Manager>()).await?),
         "get_local_llm_status" => to_value(crate::commands::local_llm_commands::get_local_llm_status(app.state::<crate::local_llm::Manager>()).await?),
-        "import_conductor_workspaces" => to_value(crate::commands::conductor_commands::import_conductor_workspaces(app.clone(), arg_json(&args, "workspaceIds")?).await?),
         "inspect_local_llm_catalog_entry" => to_value(crate::commands::local_llm_commands::inspect_local_llm_catalog_entry(arg_string(&args, "entryId")?).await?),
         "inspect_local_llm_model" => to_value(crate::commands::local_llm_commands::inspect_local_llm_model(arg_string(&args, "path")?).await?),
-        "list_conductor_repos" => to_value(crate::commands::conductor_commands::list_conductor_repos().await?),
-        "list_conductor_workspaces" => to_value(crate::commands::conductor_commands::list_conductor_workspaces(arg_string(&args, "repoId")?).await?),
         "list_local_llm_catalog" => to_value(crate::commands::local_llm_commands::list_local_llm_catalog().await?),
         "list_local_llm_downloads" => to_value(crate::commands::local_llm_commands::list_local_llm_downloads(app.state::<crate::downloads::DownloadsManager>()).await?),
         "pause_local_llm_download" => {

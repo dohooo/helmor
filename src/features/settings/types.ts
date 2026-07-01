@@ -9,7 +9,6 @@ export type SettingsSection =
 	| "model"
 	| "providers"
 	| "experimental"
-	| "import"
 	| "developer"
 	| "account"
 	| "inbox"

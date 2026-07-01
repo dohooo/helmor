@@ -1,16 +1,5 @@
-import {
-	cleanup,
-	fireEvent,
-	render,
-	screen,
-	waitFor,
-} from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-	isConductorAvailable,
-	listConductorRepos,
-	listConductorWorkspaces,
-} from "@/lib/api";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, it, vi } from "vitest";
 import { AppOnboarding } from ".";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -24,9 +13,6 @@ vi.mock("@/lib/api", () => ({
 	enterOnboardingWindowMode: vi.fn(async () => undefined),
 	exitOnboardingWindowMode: vi.fn(async () => undefined),
 	getAgentLoginStatus: vi.fn(async () => undefined),
-	isConductorAvailable: vi.fn(async () => false),
-	listConductorRepos: vi.fn(async () => []),
-	listConductorWorkspaces: vi.fn(async () => []),
 	loadAddRepositoryDefaults: vi.fn(async () => ({
 		lastCloneDirectory: null,
 	})),
@@ -34,14 +20,6 @@ vi.mock("@/lib/api", () => ({
 
 vi.mock("@/components/chrome/traffic-light-spacer", () => ({
 	TrafficLightSpacer: () => null,
-}));
-
-vi.mock("@/components/conductor-onboarding", () => ({
-	ConductorOnboarding: ({ workspaces }: { workspaces: { id: string }[] }) => (
-		<div aria-label="Conductor onboarding">
-			Conductor workspaces: {workspaces.length}
-		</div>
-	),
 }));
 
 vi.mock("@/features/navigation/clone-from-url-dialog", () => ({
@@ -82,17 +60,9 @@ vi.mock("./steps/repository-cli-step", () => ({
 }));
 
 vi.mock("./steps/skills-step", () => ({
-	SkillsStep: ({
-		step,
-		onNext,
-		isRoutingImport,
-	}: {
-		step: string;
-		onNext: () => void;
-		isRoutingImport: boolean;
-	}) =>
+	SkillsStep: ({ step, onNext }: { step: string; onNext: () => void }) =>
 		step === "skills" ? (
-			<button type="button" disabled={isRoutingImport} onClick={onNext}>
+			<button type="button" onClick={onNext}>
 				Continue skills
 			</button>
 		) : null,
@@ -120,69 +90,11 @@ function renderAtSkillsStep() {
 	);
 }
 
-const importableWorkspace = {
-	id: "workspace-1",
-	directoryName: "workspace-one",
-	state: "ready",
-	branch: "main",
-	status: null,
-	prTitle: null,
-	sessionCount: 2,
-	messageCount: 12,
-	alreadyImported: false,
-	iconSrc: null,
-};
-
-describe("AppOnboarding conductor routing", () => {
-	it("routes to repository import when Conductor is unavailable", async () => {
-		vi.mocked(isConductorAvailable).mockResolvedValue(false);
-
+describe("AppOnboarding repository import routing", () => {
+	it("routes to repository import after the skills step", async () => {
 		renderAtSkillsStep();
 		fireEvent.click(screen.getByRole("button", { name: "Continue skills" }));
 
 		await screen.findByLabelText("Repository import");
-		expect(listConductorRepos).not.toHaveBeenCalled();
-	});
-
-	it("routes to Conductor onboarding when importable workspaces exist", async () => {
-		vi.mocked(isConductorAvailable).mockResolvedValue(true);
-		vi.mocked(listConductorRepos).mockResolvedValue([
-			{
-				id: "repo-1",
-				name: "Repo 1",
-				remoteUrl: null,
-				workspaceCount: 1,
-				alreadyImportedCount: 0,
-			},
-		]);
-		vi.mocked(listConductorWorkspaces).mockResolvedValue([importableWorkspace]);
-
-		renderAtSkillsStep();
-		fireEvent.click(screen.getByRole("button", { name: "Continue skills" }));
-
-		await screen.findByLabelText("Conductor onboarding");
-		expect(screen.getByText("Conductor workspaces: 1")).toBeInTheDocument();
-		expect(listConductorWorkspaces).toHaveBeenCalledWith("repo-1");
-	});
-
-	it("falls back to repository import when Conductor has no new workspaces", async () => {
-		vi.mocked(isConductorAvailable).mockResolvedValue(true);
-		vi.mocked(listConductorRepos).mockResolvedValue([
-			{
-				id: "repo-1",
-				name: "Repo 1",
-				remoteUrl: null,
-				workspaceCount: 1,
-				alreadyImportedCount: 1,
-			},
-		]);
-
-		renderAtSkillsStep();
-		fireEvent.click(screen.getByRole("button", { name: "Continue skills" }));
-
-		await waitFor(() => {
-			expect(screen.getByLabelText("Repository import")).toBeInTheDocument();
-		});
-		expect(listConductorWorkspaces).not.toHaveBeenCalled();
 	});
 });

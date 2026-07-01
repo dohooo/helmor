@@ -77,14 +77,7 @@ describe("SkillsStep", () => {
 			command: "",
 		});
 
-		render(
-			<SkillsStep
-				step="skills"
-				onBack={vi.fn()}
-				onNext={vi.fn()}
-				isRoutingImport={false}
-			/>,
-		);
+		render(<SkillsStep step="skills" onBack={vi.fn()} onNext={vi.fn()} />);
 
 		const cliItem = screen.getByRole("group", { name: "Helmor CLI" });
 
@@ -115,14 +108,7 @@ describe("SkillsStep", () => {
 			installState: "managed",
 		});
 
-		render(
-			<SkillsStep
-				step="skills"
-				onBack={vi.fn()}
-				onNext={vi.fn()}
-				isRoutingImport={false}
-			/>,
-		);
+		render(<SkillsStep step="skills" onBack={vi.fn()} onNext={vi.fn()} />);
 
 		const cliItem = screen.getByRole("group", { name: "Helmor CLI" });
 
@@ -147,14 +133,7 @@ describe("SkillsStep", () => {
 			installState: "managed",
 		});
 
-		render(
-			<SkillsStep
-				step="skills"
-				onBack={vi.fn()}
-				onNext={vi.fn()}
-				isRoutingImport={false}
-			/>,
-		);
+		render(<SkillsStep step="skills" onBack={vi.fn()} onNext={vi.fn()} />);
 
 		const skillsItem = screen.getByRole("group", {
 			name: "Helmor Skills (Beta)",
@@ -190,14 +169,7 @@ describe("SkillsStep", () => {
 				command: "",
 			});
 
-		render(
-			<SkillsStep
-				step="skills"
-				onBack={vi.fn()}
-				onNext={vi.fn()}
-				isRoutingImport={false}
-			/>,
-		);
+		render(<SkillsStep step="skills" onBack={vi.fn()} onNext={vi.fn()} />);
 
 		const skillsItem = screen.getByRole("group", {
 			name: "Helmor Skills (Beta)",

@@ -58,13 +58,11 @@ export function IntroPreview({
 							? "translate-x-[28vw] translate-y-0"
 							: step === "completeTransition"
 								? "translate-x-[52vw] -translate-y-[18vh] opacity-0"
-								: step === "conductorTransition"
-									? "translate-x-[44vw] -translate-y-[12vh] opacity-0"
-									: step === "corner"
-										? "-translate-x-[86vw] translate-y-[57vh]"
-										: step === "agents"
-											? "-translate-x-[22vw] -translate-y-[51vh]"
-											: "translate-x-0 translate-y-0"
+								: step === "corner"
+									? "-translate-x-[86vw] translate-y-[57vh]"
+									: step === "agents"
+										? "-translate-x-[22vw] -translate-y-[51vh]"
+										: "translate-x-0 translate-y-0"
 				}`}
 			>
 				<div
@@ -85,13 +83,11 @@ export function IntroPreview({
 									? "scale-[1.64]"
 									: step === "completeTransition"
 										? "scale-[1.95]"
-										: step === "conductorTransition"
-											? "scale-[1.95]"
-											: step === "corner"
-												? "scale-[2.24]"
-												: step === "agents"
-													? "scale-[1.5]"
-													: "scale-100"
+										: step === "corner"
+											? "scale-[2.24]"
+											: step === "agents"
+												? "scale-[1.5]"
+												: "scale-100"
 					}`}
 				>
 					<HelmorOnboardingMockup
