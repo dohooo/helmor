@@ -1386,10 +1386,10 @@ pub fn resolve_repository_from_local_path(folder_path: &str) -> Result<ResolvedR
             )
         })?;
 
+    // A git repo with no remote is supported (local-only). Its default
+    // branch comes from local HEAD; push/pull/PR/forge features are gated
+    // off downstream by the absent `remote`.
     let remote = resolve_repository_remote(normalized_root)?;
-    if remote.is_none() {
-        bail!("Local-only repositories are not supported.");
-    }
     let remote_url = match remote.as_deref() {
         Some(remote_name) => Some(resolve_repository_remote_url(normalized_root, remote_name)?),
         None => None,
@@ -1397,17 +1397,19 @@ pub fn resolve_repository_from_local_path(folder_path: &str) -> Result<ResolvedR
     let default_branch = resolve_repository_default_branch(normalized_root, remote.as_deref())
         .with_context(|| {
             format!(
-                "Unable to resolve a default branch for repository {}",
+                "Unable to resolve a default branch for repository {} \
+                 (no remote HEAD and no local branch could be determined)",
                 normalized_root.display()
             )
         })?;
 
-    // Keep repo creation local: no network probes or CLI calls here.
-    let (provider, _) = crate::forge::detect_provider_for_repo_offline(
-        remote_url.as_deref(),
-        Some(normalized_root),
-    );
-    let forge_provider = Some(provider.as_storage_str().to_string());
+    // Forge classification only applies to repos with a remote. Keep repo
+    // creation local: no network probes or CLI calls here.
+    let forge_provider = remote_url.as_deref().map(|url| {
+        let (provider, _) =
+            crate::forge::detect_provider_for_repo_offline(Some(url), Some(normalized_root));
+        provider.as_storage_str().to_string()
+    });
 
     Ok(ResolvedRepositoryInput {
         name,
@@ -1520,21 +1522,13 @@ fn infer_repo_name_from_url(url: &str) -> Option<String> {
 }
 
 pub fn add_repository_from_local_path(folder_path: &str) -> Result<AddRepositoryResponse> {
-    add_repository_from_local_path_with_options(folder_path, false)
-}
-
-pub fn add_repository_from_local_path_with_options(
-    folder_path: &str,
-    allow_non_git_directory: bool,
-) -> Result<AddRepositoryResponse> {
-    // Fast duplicate check: only needs git root path, no network calls.
+    // Fast duplicate check: only needs the root path, no network calls.
+    // A git repo resolves to its toplevel; a plain folder falls back to
+    // itself (non-git directories are always supported).
     let resolved_git_root = resolve_git_root_path(folder_path);
     let is_git_repository = resolved_git_root.is_ok();
-    let normalized_root_path = if allow_non_git_directory {
-        resolved_git_root.or_else(|_| resolve_local_directory_path(folder_path))?
-    } else {
-        resolved_git_root?
-    };
+    let normalized_root_path =
+        resolved_git_root.or_else(|_| resolve_local_directory_path(folder_path))?;
 
     let last_clone_directory = Path::new(&normalized_root_path)
         .parent()
@@ -1559,10 +1553,10 @@ pub fn add_repository_from_local_path_with_options(
     }
 
     // Only do the expensive remote/branch resolution for truly new repos.
-    let resolved_repository = if allow_non_git_directory && !is_git_repository {
-        resolve_directory_from_local_path(folder_path)?
-    } else {
+    let resolved_repository = if is_git_repository {
         resolve_repository_from_local_path(folder_path)?
+    } else {
+        resolve_directory_from_local_path(folder_path)?
     };
 
     let repository_id = insert_repository(&resolved_repository)
@@ -1720,8 +1714,25 @@ fn resolve_repository_remote_url(repo_root: &Path, remote: &str) -> Result<Strin
 }
 
 fn resolve_repository_default_branch(repo_root: &Path, remote: Option<&str>) -> Option<String> {
-    let remote = remote?;
-    resolve_default_branch_from_remote_head(repo_root, remote).ok()
+    if let Some(remote) = remote {
+        if let Ok(branch) = resolve_default_branch_from_remote_head(repo_root, remote) {
+            return Some(branch);
+        }
+    }
+    // No remote (or its HEAD is unavailable): use the local current branch,
+    // falling back to the first local branch for a detached/unborn HEAD.
+    resolve_local_default_branch(repo_root)
+}
+
+/// The repo's local default branch: current branch, else the first local
+/// branch. `None` only for an empty repo with no branches at all.
+fn resolve_local_default_branch(repo_root: &Path) -> Option<String> {
+    if let Ok(branch) = git_ops::current_branch_name(repo_root) {
+        return Some(branch);
+    }
+    git_ops::list_local_branches(repo_root)
+        .ok()
+        .and_then(|branches| branches.into_iter().next())
 }
 
 fn resolve_default_branch_from_remote_head(repo_root: &Path, remote: &str) -> Result<String> {

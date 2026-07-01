@@ -87,6 +87,10 @@ const DEAD_COLUMNS: &[(&str, &str)] = &[
 /// Columns whose drop must be preceded by an index drop. Listed
 /// separately so the table above stays a single shape.
 const DEAD_INDEXED_COLUMNS: &[(&str, &str, &str)] = &[
+    // Retired with Smart Triage; `mode` ('chat'/'non_git') is now the single
+    // source of truth for no-git workspace categories. Indexed, so the index
+    // must be dropped before the column.
+    ("workspaces", "kind", "idx_workspaces_kind"),
     (
         "session_messages",
         "cancelled_at",
@@ -117,9 +121,9 @@ const DEAD_TABLES: &[(&str, &[&str])] = &[
     // that ran the intermediate code so they don't carry an orphan table.
     ("terminal_history", &["idx_terminal_history_workspace"]),
     // Smart Triage ("ai-tasks") was removed. Its two owned tables are dropped
-    // from legacy DBs; the workspaces.kind / triage_source_* and
-    // session_messages.is_ai_priming columns are intentionally retained as
-    // inert because their archive/import plumbing is shared.
+    // from legacy DBs, and `workspaces.kind` is dropped (see DEAD_COLUMNS).
+    // The triage_source_* and session_messages.is_ai_priming columns are
+    // retained inert because their archive/import plumbing is shared.
     (
         "triage_candidate",
         &["idx_triage_candidate_open", "idx_triage_candidate_source"],
@@ -203,6 +207,44 @@ fn backfill_stacked_target_branches(connection: &Connection) -> Result<()> {
             [],
         )
         .context("Failed to re-point stacked target branches")?;
+    Ok(())
+}
+
+/// Startup reconcile for stacks whose base merged under an older build, before
+/// merge-time splicing existed. Every workspace still stacked on a merged layer
+/// is spliced out via the shared write-layer primitive
+/// [`crate::models::workspaces::splice_out_stack_layer`], re-homing its
+/// children onto the nearest surviving base — the exact end state a live merge
+/// now produces. Iterating over *all* merged layers converges even for chained
+/// merges (a child of a merged layer always ends on a non-merged ancestor or
+/// the repo default). Idempotent: once every merged layer is childless it's a
+/// no-op, so this can run on every startup like the backfill above.
+fn heal_children_of_merged_stack_layers(connection: &Connection) -> Result<()> {
+    if !has_table(connection, "workspaces")
+        || !has_column(connection, "workspaces", "parent_workspace_id")
+        || !has_column(connection, "workspaces", "pr_sync_state")
+    {
+        return Ok(());
+    }
+    let merged_layers: Vec<String> = {
+        let mut stmt = connection
+            .prepare("SELECT id FROM workspaces WHERE pr_sync_state = 'merged'")
+            .context("Failed to prepare merged-layer query")?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .context("Failed to query merged layers")?;
+        rows.collect::<rusqlite::Result<Vec<String>>>()
+            .context("Failed to read merged layers")?
+    };
+    // Splice directly on `connection` rather than opening our own transaction:
+    // `ensure_schema` / `run_migrations` can run inside a caller's transaction,
+    // where an `unchecked_transaction()` here would fail with "cannot start a
+    // transaction within a transaction". Each splice is a single idempotent
+    // UPDATE, so a crash mid-loop just heals on the next run.
+    for layer_id in &merged_layers {
+        crate::models::workspaces::splice_out_stack_layer(connection, layer_id)
+            .with_context(|| format!("Failed to splice merged stack layer {layer_id}"))?;
+    }
     Ok(())
 }
 
@@ -555,6 +597,13 @@ fn run_migrations(connection: &Connection) -> Result<()> {
     backfill_stacked_target_branches(connection)
         .context("Failed to backfill stacked-PR target branches")?;
 
+    // A stacked base that merged under an older build never spliced its children
+    // out (merge-time splicing is newer). Re-home any workspace still stacked on
+    // a merged layer so its parent/target point past the merged base — the same
+    // end state a live merge now produces.
+    heal_children_of_merged_stack_layers(connection)
+        .context("Failed to heal children of merged stack layers")?;
+
     let had_workspace_status =
         has_table(connection, "workspaces") && has_column(connection, "workspaces", "status");
     if has_table(connection, "workspaces") && !had_workspace_status {
@@ -835,19 +884,9 @@ fn run_migrations(connection: &Connection) -> Result<()> {
     materialize_review_pr_model_defaults(connection)?;
 
     // Smart Triage columns (idempotent ALTERs for pre-triage upgrades).
+    // `kind` was dropped after Smart Triage removal (see DEAD_COLUMNS);
+    // the rest are retained inert because archive/import plumbing is shared.
     if has_table(connection, "workspaces") {
-        // Match the fresh schema so a manual INSERT (which omits `kind`)
-        // resolves to 'manual' on upgraded and fresh DBs alike.
-        add_column_if_missing(
-            connection,
-            "workspaces",
-            "kind",
-            "TEXT NOT NULL DEFAULT 'manual'",
-        )?;
-        // Backfill rows the earlier nullable-`TEXT` migration left as NULL.
-        connection
-            .execute_batch("UPDATE workspaces SET kind = 'manual' WHERE kind IS NULL")
-            .context("Failed to backfill workspaces.kind NULLs")?;
         add_column_if_missing(
             connection,
             "workspaces",
@@ -859,10 +898,6 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         add_column_if_missing(connection, "workspaces", "triage_source_ref", "TEXT")?;
         // User-set display name. NULL = fall back to the auto-derived title.
         add_column_if_missing(connection, "workspaces", "custom_name", "TEXT")?;
-        // Index goes after the ALTER above — else old DBs would index a missing column.
-        connection
-            .execute_batch("CREATE INDEX IF NOT EXISTS idx_workspaces_kind ON workspaces(kind)")
-            .context("Failed to create idx_workspaces_kind")?;
         connection
             .execute_batch(
                 "CREATE INDEX IF NOT EXISTS idx_workspaces_triage_source
@@ -1118,7 +1153,6 @@ CREATE TABLE IF NOT EXISTS workspaces (
     port_count INTEGER,
     branch_intent TEXT DEFAULT 'from_branch',
     active_run_action_id TEXT,
-    kind TEXT NOT NULL DEFAULT 'manual',
     ai_priming_consumed INTEGER NOT NULL DEFAULT 0,
     triage_source_type TEXT,
     triage_source_ref TEXT,
@@ -1402,6 +1436,97 @@ mod tests {
             target_of(&connection, "orphan").as_deref(),
             Some("stale-base")
         );
+    }
+
+    fn parent_of(connection: &Connection, id: &str) -> Option<String> {
+        connection
+            .query_row(
+                "SELECT parent_workspace_id FROM workspaces WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn heal_splices_children_off_a_merged_base() {
+        let (connection, _dir) = open_test_db();
+        ensure_schema(&connection).unwrap();
+
+        // root(bottom) -> mid -> tip; the bottom's PR is already merged.
+        insert_ws(&connection, "root", "feat/root", Some("main"), None);
+        insert_ws(
+            &connection,
+            "mid",
+            "feat/mid",
+            Some("feat/root"),
+            Some("root"),
+        );
+        insert_ws(
+            &connection,
+            "tip",
+            "feat/tip",
+            Some("feat/mid"),
+            Some("mid"),
+        );
+        connection
+            .execute(
+                "UPDATE workspaces SET pr_sync_state = 'merged' WHERE id = 'root'",
+                [],
+            )
+            .unwrap();
+
+        heal_children_of_merged_stack_layers(&connection).unwrap();
+
+        // mid detaches to a root: it no longer points at the merged root, and
+        // its target falls back to "main" (this fixture has no `repos` row, so
+        // the repo-default lookup misses — the real default_branch path is
+        // covered by the models-layer test).
+        assert_eq!(parent_of(&connection, "mid"), None);
+        assert_eq!(target_of(&connection, "mid").as_deref(), Some("main"));
+
+        // tip is untouched: still stacked on mid, still targeting mid's branch.
+        assert_eq!(parent_of(&connection, "tip").as_deref(), Some("mid"));
+        assert_eq!(target_of(&connection, "tip").as_deref(), Some("feat/mid"));
+
+        // The merged root itself survives as a standalone row.
+        assert_eq!(parent_of(&connection, "root"), None);
+
+        // Idempotent: a second pass changes nothing.
+        heal_children_of_merged_stack_layers(&connection).unwrap();
+        assert_eq!(parent_of(&connection, "mid"), None);
+        assert_eq!(target_of(&connection, "tip").as_deref(), Some("feat/mid"));
+    }
+
+    #[test]
+    fn heal_runs_inside_an_ambient_transaction_without_nesting() {
+        // Regression: `ensure_schema` / `run_migrations` can run inside a
+        // caller's transaction. The heal must NOT open its own transaction, or it
+        // aborts with "cannot start a transaction within a transaction".
+        let (connection, _dir) = open_test_db();
+        ensure_schema(&connection).unwrap();
+        insert_ws(&connection, "root", "feat/root", Some("main"), None);
+        insert_ws(
+            &connection,
+            "mid",
+            "feat/mid",
+            Some("feat/root"),
+            Some("root"),
+        );
+        connection
+            .execute(
+                "UPDATE workspaces SET pr_sync_state = 'merged' WHERE id = 'root'",
+                [],
+            )
+            .unwrap();
+
+        // Mirror the import flow: a transaction is already open on this conn.
+        connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+        heal_children_of_merged_stack_layers(&connection).unwrap();
+        connection.execute_batch("COMMIT").unwrap();
+
+        assert_eq!(parent_of(&connection, "mid"), None);
+        assert_eq!(target_of(&connection, "mid").as_deref(), Some("main"));
     }
 
     #[test]
@@ -1830,8 +1955,10 @@ mod tests {
                     linked_workspace_ids TEXT,
                     notes TEXT,
                     pr_description TEXT,
-                    secondary_directory_name TEXT
+                    secondary_directory_name TEXT,
+                    kind TEXT NOT NULL DEFAULT 'manual'
                 );
+                CREATE INDEX idx_workspaces_kind ON workspaces(kind);
                 CREATE TABLE sessions (
                     id TEXT PRIMARY KEY,
                     effort_level TEXT,

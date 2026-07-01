@@ -77,9 +77,6 @@ pub struct WorkspaceSidebarRow {
     pub created_at: String,
     pub updated_at: String,
     pub last_user_message_at: Option<String>,
-    /// "manual" (legacy "ai_triage" rows are archived on upgrade). Retained
-    /// inert after Smart Triage removal.
-    pub kind: String,
     /// Stacked PRs: `id` of the workspace one layer below this in a PR stack
     /// (its base). `None` for non-stacked rows. Drives sidebar stack grouping.
     pub parent_workspace_id: Option<String>,
@@ -817,18 +814,20 @@ fn next_order_for_target(transaction: &Transaction<'_>, target: &MoveTarget) -> 
 /// `Merged` in this call — combined with the absorbing-state guarantee
 /// in `stabilize_pr_sync_state`, this means it fires at most once per
 /// workspace per merge.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PrSyncOutcome {
     pub changed: bool,
     pub transitioned_to_merged: bool,
+    /// Ids of stacked children re-homed when this layer's PR merged (empty
+    /// otherwise). The command layer republishes each so the sidebar re-nests
+    /// and the child's header retargets onto the new base. See
+    /// [`crate::models::workspaces::splice_out_stack_layer`].
+    pub retargeted_children: Vec<String>,
 }
 
 impl PrSyncOutcome {
     fn unchanged() -> Self {
-        Self {
-            changed: false,
-            transitioned_to_merged: false,
-        }
+        Self::default()
     }
 }
 
@@ -878,6 +877,7 @@ pub fn sync_workspace_pr_state(
         None
     };
 
+    let mut retargeted_children: Vec<String> = Vec::new();
     let mut connection = db::write_conn()?;
     if let Some(status) = target_status {
         let transaction = connection
@@ -925,6 +925,14 @@ pub fn sync_workspace_pr_state(
                 )
                 .context("Failed to sync workspace PR state")?;
         }
+        // A layer leaving the stack (its PR just merged) pops its children onto
+        // its own base. Same transaction as the merge flip so it's atomic, and
+        // before auto-archive so the children are re-homed while the layer row
+        // still exists.
+        if transitioned_to_merged {
+            retargeted_children =
+                workspace_models::splice_out_stack_layer(&transaction, workspace_id)?;
+        }
         transaction
             .commit()
             .context("Failed to commit PR-sync workspace transaction")?;
@@ -946,6 +954,7 @@ pub fn sync_workspace_pr_state(
     Ok(PrSyncOutcome {
         changed: true,
         transitioned_to_merged,
+        retargeted_children,
     })
 }
 
@@ -1313,7 +1322,6 @@ pub fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
         last_user_message_at: record.last_user_message_at,
         parent_workspace_id: record.parent_workspace_id,
         custom_name: record.custom_name,
-        kind: record.kind,
     }
 }
 
@@ -1501,59 +1509,6 @@ pub fn purge_orphaned_workspaces() -> Result<usize> {
     Ok(count)
 }
 
-/// One-time reconcile for the retired Smart Triage feature: archive the
-/// auto-generated `ai_triage` workspaces the user never started, so their
-/// orphaned "proposed task" worktrees don't resurface as ordinary sidebar
-/// rows now that the dedicated triage group is gone.
-///
-/// "Never started" mirrors the old triage reaper's touched-guard: the priming
-/// message is still unconsumed AND no real (non-priming) message was ever
-/// sent. A workspace the user actually opened and messaged is left as a normal
-/// workspace. Each match goes through the full reversible archive
-/// ([`archive_workspace_impl`]) — worktree torn down, branch removed, chat
-/// history preserved in the archive list — exactly as dismissing a proposal
-/// did when triage was live.
-///
-/// Idempotent: archived rows are excluded, so repeat runs are no-ops.
-/// Best-effort per workspace; one failure is logged and never aborts the rest.
-pub fn archive_unstarted_triage_workspaces() -> Result<usize> {
-    let ids: Vec<String> = {
-        let connection = db::read_conn()?;
-        let mut stmt = connection.prepare(
-            "SELECT w.id
-             FROM workspaces w
-             WHERE w.kind = 'ai_triage'
-               AND w.state != 'archived'
-               AND COALESCE(w.ai_priming_consumed, 0) = 0
-               AND NOT EXISTS (
-                   SELECT 1
-                   FROM sessions s
-                   JOIN session_messages sm ON sm.session_id = s.id
-                   WHERE s.workspace_id = w.id
-                     AND COALESCE(sm.is_ai_priming, 0) = 0
-               )",
-        )?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        // `stmt` + the read connection drop at the end of this block, before
-        // the archive path below takes a write connection — SQLite would
-        // otherwise deadlock on the open read.
-        rows.filter_map(|r| r.ok()).collect()
-    };
-
-    let mut archived = 0usize;
-    for id in &ids {
-        match archive_workspace_impl(id) {
-            Ok(_) => archived += 1,
-            Err(error) => tracing::warn!(
-                workspace_id = %id,
-                error = %format!("{error:#}"),
-                "Triage cleanup: failed to archive unstarted workspace"
-            ),
-        }
-    }
-    Ok(archived)
-}
-
 /// Flip a single workspace row from its current operational state to
 /// `archived`, without touching sessions / session_messages. Used by
 /// [`purge_orphaned_workspaces`] to reconcile workspaces whose worktree
@@ -1584,14 +1539,14 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
     // --- Stacked-PR deletion guard: tip free / root = pop-bottom / middle
     // blocked. A middle layer (a live parent below AND layers stacked above)
     // can't be deleted — it would leave an unrebaseable hole in the stack.
-    let (parent_id, default_branch): (Option<String>, Option<String>) = connection
+    let parent_id: Option<String> = connection
         .query_row(
-            "SELECT w.parent_workspace_id, r.default_branch
-               FROM workspaces w JOIN repos r ON r.id = w.repository_id WHERE w.id = ?1",
+            "SELECT parent_workspace_id FROM workspaces WHERE id = ?1",
             [workspace_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| row.get(0),
         )
-        .unwrap_or((None, None));
+        .ok()
+        .flatten();
     let has_children: bool = connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM workspaces WHERE parent_workspace_id = ?1)",
@@ -1659,27 +1614,20 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
             [workspace_id],
         )
         .context("Failed to delete workspace sessions")?;
+    // Pop this layer out of the stack before deleting it: its direct children
+    // re-home onto the layer's own base (the grandparent branch, or the repo
+    // default when this is a stack root — a deleted-with-children layer is
+    // guaranteed rootless by the guard above). Shared with merge-driven
+    // splicing so both paths keep the stack consistent. Must run while the row
+    // still exists so the base can be resolved from it.
+    workspace_models::splice_out_stack_layer(&transaction, workspace_id)?;
+
     let deleted_rows = transaction
         .execute("DELETE FROM workspaces WHERE id = ?1", [workspace_id])
         .context("Failed to delete workspace row")?;
 
     if deleted_rows != 1 {
         bail!("Workspace delete affected {deleted_rows} rows for {workspace_id}");
-    }
-
-    // Root pop: a deleted stack root's direct children become new roots
-    // targeting the repo default branch (they'll need a restack onto it).
-    if has_children {
-        transaction
-            .execute(
-                "UPDATE workspaces
-                   SET parent_workspace_id = NULL,
-                       intended_target_branch = ?2,
-                       updated_at = datetime('now')
-                 WHERE parent_workspace_id = ?1",
-                (workspace_id, default_branch.as_deref().unwrap_or("main")),
-            )
-            .context("Failed to reparent stack children after root delete")?;
     }
 
     transaction
@@ -1712,7 +1660,8 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
                     }
                 }
             }
-            crate::workspace_state::WorkspaceMode::Local => {
+            crate::workspace_state::WorkspaceMode::Local
+            | crate::workspace_state::WorkspaceMode::NonGit => {
                 // User-owned dir — never touch.
             }
         }

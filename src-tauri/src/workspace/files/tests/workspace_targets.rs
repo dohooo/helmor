@@ -32,28 +32,38 @@ fn parse_workspace_path_single_component_returns_none() {
 fn query_target_returns_intended_target_branch() {
     let conn = test_db_with_workspace(Some("origin"), Some("develop"), "main");
     let result = query_workspace_target(&conn, "test-repo", "ws-dir");
-    assert_eq!(result, Some(("origin".into(), "develop".into())));
+    assert_eq!(
+        result,
+        Some((Some("origin".to_string()), "develop".to_string()))
+    );
 }
 
 #[test]
 fn query_target_falls_back_to_default_branch() {
     let conn = test_db_with_workspace(Some("origin"), None, "main");
     let result = query_workspace_target(&conn, "test-repo", "ws-dir");
-    assert_eq!(result, Some(("origin".into(), "main".into())));
+    assert_eq!(
+        result,
+        Some((Some("origin".to_string()), "main".to_string()))
+    );
 }
 
 #[test]
-fn query_target_defaults_remote_to_origin() {
+fn query_target_preserves_absent_remote() {
     let conn = test_db_with_workspace(None, Some("develop"), "main");
     let result = query_workspace_target(&conn, "test-repo", "ws-dir");
-    assert_eq!(result, Some(("origin".into(), "develop".into())));
+    // No remote configured → remote stays None (no fake "origin" default).
+    assert_eq!(result, Some((None, "develop".to_string())));
 }
 
 #[test]
 fn query_target_custom_remote() {
     let conn = test_db_with_workspace(Some("upstream"), Some("release"), "main");
     let result = query_workspace_target(&conn, "test-repo", "ws-dir");
-    assert_eq!(result, Some(("upstream".into(), "release".into())));
+    assert_eq!(
+        result,
+        Some((Some("upstream".to_string()), "release".to_string()))
+    );
 }
 
 #[test]
@@ -102,7 +112,10 @@ fn query_local_target_matches_repo_root_path() {
 	.unwrap();
 
     let result = query_local_workspace_target(&conn, repo_root.path());
-    assert_eq!(result, Some(("origin".into(), "dev_ov21".into())));
+    assert_eq!(
+        result,
+        Some((Some("origin".to_string()), "dev_ov21".to_string()))
+    );
 }
 
 #[test]
@@ -172,7 +185,10 @@ fn query_target_by_id_disambiguates_local_workspaces_on_same_repo_root() {
     }
 
     let result = query_workspace_target_by_id(&conn, "w2", repo_root.path());
-    assert_eq!(result, Some(("origin".into(), "dev_alt".into())));
+    assert_eq!(
+        result,
+        Some((Some("origin".to_string()), "dev_alt".to_string()))
+    );
 }
 
 #[test]

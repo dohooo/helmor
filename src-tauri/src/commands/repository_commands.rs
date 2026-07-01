@@ -22,16 +22,9 @@ pub async fn get_add_repository_defaults() -> CmdResult<repos::AddRepositoryDefa
 #[tauri::command]
 pub async fn add_repository_from_local_path(
     folder_path: String,
-    allow_non_git_directory: Option<bool>,
 ) -> CmdResult<repos::AddRepositoryResponse> {
     let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
-    run_blocking(move || {
-        repos::add_repository_from_local_path_with_options(
-            &folder_path,
-            allow_non_git_directory.unwrap_or(false),
-        )
-    })
-    .await
+    run_blocking(move || repos::add_repository_from_local_path(&folder_path)).await
 }
 
 #[tauri::command]

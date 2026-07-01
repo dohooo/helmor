@@ -18,7 +18,9 @@ type EstimateOptions = {
 
 const ROW_SHELL_BOTTOM_PADDING = 6;
 const ASSISTANT_PART_GAP = 4;
-const ASSISTANT_LINE_HEIGHT = 24;
+// Paragraphs and list items render at --assistant-paragraph-line-height (1.82)
+// ≈ 25.5px on the live 14px DOM; the old 24 under-shot every wrapped text line.
+const ASSISTANT_LINE_HEIGHT = 25.5;
 const USER_LINE_HEIGHT = 28;
 const SYSTEM_LINE_HEIGHT = 18;
 const TOOL_SUMMARY_HEIGHT = 24;
@@ -30,6 +32,11 @@ const REASONING_EXPANDED_CHROME_HEIGHT = 50;
 const REASONING_EXPANDED_CONTENT_HORIZONTAL_PADDING = 24;
 const COLLAPSED_GROUP_HEIGHT = 24;
 const USER_BUBBLE_VERTICAL_PADDING = 16;
+// The bubble column reserves a fixed bottom gutter (pb-5 = 20px) for the
+// absolutely-positioned hover actions (copy / timestamp) under every user
+// message — measured on the live DOM. Omitting it under-shot every user row by
+// 20px, so each popped down on measurement.
+const USER_MESSAGE_ACTION_GUTTER = 20;
 const USER_BUBBLE_HORIZONTAL_PADDING = 24;
 const USER_BUBBLE_WIDTH_RATIO = 0.75;
 // A user message taller than this many VISUAL lines renders line-clamped
@@ -46,10 +53,22 @@ const MIN_TEXT_WIDTH = 64;
 const MARKDOWN_BLOCK_GAP = 12;
 const MARKDOWN_HEADING_MARGIN_TOP = 10;
 const MARKDOWN_HEADING_MARGIN_BOTTOM = 8;
-const MARKDOWN_CODE_BLOCK_PADDING = 28;
-const MARKDOWN_CODE_LINE_HEIGHT = 22;
-const MARKDOWN_TABLE_TOOLBAR_HEIGHT = 32;
-const MARKDOWN_TABLE_ROW_HEIGHT = 40;
+// Each <li> line-box renders ~3.5px taller than the bare wrapped text (marker
+// baseline / leading); the text-block measure alone under-shot long lists.
+const LIST_ITEM_SPACING = 3.5;
+// Code-block chrome, measured against the live DOM: a language header bar
+// (~30px, only when a fenced language is present), plus border + padding + the
+// permanent horizontal-scrollbar gutter (~33px), wrapping lines at the real
+// `leading-5` = 20px each. The old 28 + lines×22 had the wrong shape (no header,
+// 22px lines), so short blocks under-shot and long blocks over-shot — the main
+// source of the assistant-row estimate variance that popped on measurement.
+const MARKDOWN_CODE_BLOCK_HEADER_HEIGHT = 30;
+const MARKDOWN_CODE_BLOCK_PADDING = 33;
+const MARKDOWN_CODE_LINE_HEIGHT = 20;
+// Measured against the live DOM: the toolbar/copy gutter is ~30px and each row
+// (header + body) ~30px, not 32 + 40. The old values over-shot tables by ~30px.
+const MARKDOWN_TABLE_TOOLBAR_HEIGHT = 30;
+const MARKDOWN_TABLE_ROW_HEIGHT = 30;
 const MARKDOWN_QUOTE_PADDING = 12;
 
 /**
@@ -321,6 +340,8 @@ function estimateAssistantTextHeight(
 
 		if (trimmed.startsWith("```")) {
 			flushParagraph();
+			// A fenced language (```ts) renders the header bar; bare ``` does not.
+			const hasLanguageHeader = trimmed.slice(3).trim().length > 0;
 			let codeLineCount = 0;
 			index += 1;
 			while (
@@ -331,7 +352,8 @@ function estimateAssistantTextHeight(
 				index += 1;
 			}
 			appendBlock(
-				MARKDOWN_CODE_BLOCK_PADDING +
+				(hasLanguageHeader ? MARKDOWN_CODE_BLOCK_HEADER_HEIGHT : 0) +
+					MARKDOWN_CODE_BLOCK_PADDING +
 					Math.max(1, codeLineCount) * MARKDOWN_CODE_LINE_HEIGHT,
 			);
 			continue;
@@ -341,8 +363,21 @@ function estimateAssistantTextHeight(
 		if (headingMatch) {
 			flushParagraph();
 			const headingLevel = headingMatch[1].length;
+			// Measured: h2 line-height ≈ 22 (was 34 — a ~12px over-shoot on every
+			// "## …" header). Only level 2 is re-tuned; other levels are unmeasured
+			// and left as-is.
 			const headingLineHeight =
-				headingLevel <= 2 ? 34 : headingLevel === 3 ? 30 : 26;
+				headingLevel === 2
+					? 23
+					: headingLevel <= 2
+						? 34
+						: headingLevel === 3
+							? 30
+							: 26;
+			// A heading that OPENS the message is `:first-child`, so its top margin
+			// collapses to 0 (the estimator otherwise over-counts it by 10px).
+			const headingMarginTop =
+				totalHeight === 0 ? 0 : MARKDOWN_HEADING_MARGIN_TOP;
 			appendBlock(
 				measureTextHeight(headingMatch[2], {
 					fontSize: options.fontSize,
@@ -350,7 +385,7 @@ function estimateAssistantTextHeight(
 					maxWidth: options.contentWidth,
 					whiteSpace: "normal",
 				}) +
-					MARKDOWN_HEADING_MARGIN_TOP +
+					headingMarginTop +
 					MARKDOWN_HEADING_MARGIN_BOTTOM,
 			);
 			continue;
@@ -397,13 +432,17 @@ function estimateAssistantTextHeight(
 				listLines.push(nextLine);
 				index += 1;
 			}
+			const listItemCount = listLines.filter((line) =>
+				isMarkdownListLine(line.trim()),
+			).length;
 			appendBlock(
 				measureTextHeight(listLines.join("\n"), {
 					fontSize: options.fontSize,
 					lineHeight: ASSISTANT_LINE_HEIGHT,
 					maxWidth: options.contentWidth,
 					whiteSpace: "pre-wrap",
-				}),
+				}) +
+					listItemCount * LIST_ITEM_SPACING,
 			);
 			continue;
 		}
@@ -481,7 +520,10 @@ function estimateUserMessageHeight(
 	}
 
 	return (
-		contentHeight + USER_BUBBLE_VERTICAL_PADDING + ROW_SHELL_BOTTOM_PADDING
+		contentHeight +
+		USER_BUBBLE_VERTICAL_PADDING +
+		USER_MESSAGE_ACTION_GUTTER +
+		ROW_SHELL_BOTTOM_PADDING
 	);
 }
 

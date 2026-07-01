@@ -192,7 +192,7 @@ export function RepoImportStep({
 						onClick={onComplete}
 						className="h-11 gap-2 px-4 text-title"
 					>
-						<I18nText source="letAposSShip" />
+						<I18nText source="letsShip" />
 						<ArrowRight data-icon="inline-end" className="size-4" />
 					</Button>
 				</div>

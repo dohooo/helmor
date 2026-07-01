@@ -378,6 +378,11 @@ export function useStartSurfaceController(
 				return;
 			}
 
+			// `non_git` isn't a user-selectable start mode — it's derived
+			// from the repo being a plain directory. The picker never emits
+			// it; guard so `mode` narrows to a `StartSurfaceWorkMode`.
+			if (mode === "non_git") return;
+
 			// Leaving chat back into a repo-bound mode requires a repo.
 			if (!startRepository) return;
 			void updateSettings({

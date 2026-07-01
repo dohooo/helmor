@@ -169,12 +169,14 @@ describe("buildCommitButtonPrompt", () => {
 			null,
 			null,
 			GITHUB_FORGE,
+			"origin",
 		);
 		const gitlabPrompt = buildCommitButtonPrompt(
 			"commit-and-push",
 			null,
 			null,
 			GITLAB_FORGE,
+			"origin",
 		);
 		expect(githubPrompt).toBe(gitlabPrompt);
 		expect(githubPrompt).toContain("Commit and push all uncommitted work");
@@ -193,9 +195,11 @@ describe("buildCommitButtonPrompt", () => {
 		expect(prompt).not.toContain("<remote>");
 	});
 
-	it("falls back to `origin` when the workspace remote is missing", () => {
+	it("emits a commit-only prompt (no push) when the workspace has no remote", () => {
 		const prompt = buildCommitButtonPrompt("commit-and-push", null, null);
-		expect(prompt).toContain("`git push -u origin HEAD`");
+		expect(prompt).toContain("Commit all uncommitted work");
+		expect(prompt).toContain("This repository has no remote");
+		expect(prompt).not.toContain("git push");
 		expect(prompt).not.toContain("<remote>");
 	});
 

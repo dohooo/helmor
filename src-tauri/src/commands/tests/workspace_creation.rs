@@ -96,6 +96,85 @@ fn stack_deletion_constraint_tip_free_root_pops_middle_blocked() {
 }
 
 #[test]
+fn stack_bottom_merge_pops_children_to_default_and_keeps_merged_row() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+
+    // root -> mid -> tip
+    let root = workspaces::create_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    let mid = workspaces::create_stacked_workspace_impl(&root.created_workspace_id).unwrap();
+    let tip = workspaces::create_stacked_workspace_impl(&mid.created_workspace_id).unwrap();
+
+    // The bottom layer's PR merges.
+    let merged = crate::forge::ChangeRequestInfo {
+        url: "https://example.test/pr/1".to_string(),
+        number: 1,
+        state: "MERGED".to_string(),
+        title: "root PR".to_string(),
+        is_merged: true,
+    };
+    let outcome =
+        workspaces::sync_workspace_pr_state(&root.created_workspace_id, Some(&merged)).unwrap();
+    assert!(outcome.transitioned_to_merged);
+    // Only the direct child (mid) is re-homed; the tip stays put.
+    assert_eq!(
+        outcome.retargeted_children,
+        vec![mid.created_workspace_id.clone()]
+    );
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+
+    // The merged bottom layer SURVIVES (not deleted) and is marked done/merged.
+    let (root_pr_state, root_status): (String, String) = connection
+        .query_row(
+            "SELECT pr_sync_state, status FROM workspaces WHERE id = ?1",
+            [&root.created_workspace_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(root_pr_state, "merged");
+    assert_eq!(root_status, "done");
+
+    // mid detaches to a root, retargeting the repo default branch — exactly the
+    // "upper layer auto-points to main once the bottom merged" behaviour.
+    let (mid_parent, mid_target): (Option<String>, Option<String>) = connection
+        .query_row(
+            "SELECT parent_workspace_id, intended_target_branch FROM workspaces WHERE id = ?1",
+            [&mid.created_workspace_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        mid_parent, None,
+        "mid should detach to a root after the bottom merged"
+    );
+    let default_branch: String = connection
+        .query_row(
+            "SELECT default_branch FROM repos WHERE id = ?1",
+            [&harness.repo_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(mid_target.as_deref(), Some(default_branch.as_str()));
+
+    // tip is untouched: still stacked on mid, still targeting mid's branch.
+    let (tip_parent, tip_target): (Option<String>, Option<String>) = connection
+        .query_row(
+            "SELECT parent_workspace_id, intended_target_branch FROM workspaces WHERE id = ?1",
+            [&tip.created_workspace_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        tip_parent.as_deref(),
+        Some(mid.created_workspace_id.as_str())
+    );
+    assert_eq!(tip_target.as_deref(), Some(mid.branch.as_str()));
+}
+
+#[test]
 fn load_workspace_stack_returns_root_to_tip_chain() {
     let _guard = TEST_LOCK
         .lock()
@@ -1041,6 +1120,67 @@ fn finalize_workspace_transitions_initializing_to_ready_and_creates_worktree() {
         )
         .unwrap();
     assert_eq!(state, "ready");
+}
+
+#[test]
+fn worktree_for_no_remote_repo_forks_from_local_branch() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+
+    // A git repo with commits but NO remote configured.
+    let repo_dir = harness.root.join("local-only-repo");
+    fs::create_dir_all(&repo_dir).unwrap();
+    let root = repo_dir.to_str().unwrap();
+    git_ops::run_git(["init", "-b", "main", root], None).unwrap();
+    fs::write(repo_dir.join("README.md"), "hi").unwrap();
+    git_ops::run_git(["-C", root, "add", "README.md"], None).unwrap();
+    git_ops::run_git(
+        [
+            "-C",
+            root,
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "user.name=Helmor",
+            "-c",
+            "user.email=helmor@example.com",
+            "commit",
+            "-m",
+            "initial",
+        ],
+        None,
+    )
+    .unwrap();
+
+    let response = repos::add_repository_from_local_path(root).unwrap();
+    let repo = repos::load_repository_by_id(&response.repository_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(repo.remote, None);
+    assert_eq!(repo.default_branch.as_deref(), Some("main"));
+
+    // Worktree mode forks a new branch off the local default — no remote.
+    let prepared = workspaces::prepare_workspace_from_repo_impl(
+        &response.repository_id,
+        None,
+        WorkspaceBranchIntent::FromBranch,
+        WorkspaceStatus::InProgress,
+        None,
+    )
+    .unwrap();
+    let finalized = workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
+    assert_eq!(finalized.final_state, WorkspaceState::Ready);
+
+    let workspace_dir = std::path::PathBuf::from(&finalized.working_directory);
+    assert!(
+        workspace_dir.join(".git").exists(),
+        "worktree should be materialised from the local branch"
+    );
+    // The worktree checked out the freshly forked branch.
+    let head = git_ops::current_branch_name(&workspace_dir).unwrap();
+    assert_eq!(head, prepared.branch);
 }
 
 #[test]
@@ -2321,7 +2461,7 @@ fn list_branch_picker_entries_tags_local_and_remote_correctly() {
     let root = harness.source_repo_root.to_str().unwrap();
     git_ops::run_git(["-C", root, "branch", "wip/local-only"], None).unwrap();
 
-    let entries = workspaces::list_branch_picker_entries(&harness.source_repo_root, "origin");
+    let entries = workspaces::list_branch_picker_entries(&harness.source_repo_root, Some("origin"));
 
     let by_name: std::collections::HashMap<&str, (bool, bool)> = entries
         .iter()

@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.44.0
+
+### Minor Changes
+
+- [#896](https://github.com/dohooo/helmor/pull/896) [`d172b5b`](https://github.com/dohooo/helmor/commit/d172b5bbb37270f3e9bb2eb8251011d057076b91) Thanks [@natllian](https://github.com/natllian)! - Support local git repositories that have no remote, including worktree workspaces.
+
+  - Open a git repo with no remote configured — branches, diffs, commits, and worktrees all work, with the default branch read from local HEAD.
+  - Push, pull, fetch, pull requests, and the forge Connect prompts are hidden for these local-only repos; repo settings show a "Local-only repository" notice and a local-branch picker.
+
+### Patch Changes
+
+- [#897](https://github.com/dohooo/helmor/pull/897) [`fe6108d`](https://github.com/dohooo/helmor/commit/fe6108d1ca42b7b637234e698c25b83aae62da7a) Thanks [@natllian](https://github.com/natllian)! - Fix Claude turns ending prematurely after a subagent is moved to the background — the main agent now stays paused and resumes once the background task completes.
+
+- [#900](https://github.com/dohooo/helmor/pull/900) [`ba5cee8`](https://github.com/dohooo/helmor/commit/ba5cee89b44ce0f3edf98dcdf4da561c9bcd3b7b) Thanks [@dohooo](https://github.com/dohooo)! - Update the bundled Claude Code, Cursor, OpenCode, and Kimi coding agents to their latest versions.
+
+- [#898](https://github.com/dohooo/helmor/pull/898) [`ebf63e4`](https://github.com/dohooo/helmor/commit/ebf63e4c534bf1f9a74c1235f7161d1b3436b09c) Thanks [@natllian](https://github.com/natllian)! - Hide the `/compact` (Claude) and `/clear` (all agents) slash commands, which showed up in the command menu but did nothing when run.
+
+## 0.43.0
+
+### Minor Changes
+
+- [#825](https://github.com/dohooo/helmor/pull/825) [`4d07a72`](https://github.com/dohooo/helmor/commit/4d07a7263ef08e057c430f39bde0a6a2b77a25ac) Thanks [@JRBusiness](https://github.com/JRBusiness)! - Add opt-in support for attaching sessions to plain local folders that are not git repositories.
+
+  - New "Non-git directories" setting (Settings → General). When enabled, Open project can attach a session to any local folder; these run as local-mode sessions with no branch/worktree actions.
+  - Harden agent process environment resolution so bundled CLIs find their PATH reliably (Windows PATH is rebuilt from the registry), and resolve git pointer paths correctly for Windows absolute and UNC paths.
+
+### Patch Changes
+
+- [#894](https://github.com/dohooo/helmor/pull/894) [`e0beec2`](https://github.com/dohooo/helmor/commit/e0beec205189d17ee48b33528663cda9c86c2d4e) Thanks [@dohooo](https://github.com/dohooo)! - Scrolling up in a chat thread and stopping no longer makes the conversation jump or shake — row heights now settle into place while the scroll is still moving, so your reading position stays put.
+
+- [#895](https://github.com/dohooo/helmor/pull/895) [`d176c6d`](https://github.com/dohooo/helmor/commit/d176c6dcebdae3d99dcf1da189a647ae822b0ce4) Thanks [@dohooo](https://github.com/dohooo)! - Fix in-review workspaces sometimes opening to an empty "No session selected" panel instead of their conversation.
+
+- [#893](https://github.com/dohooo/helmor/pull/893) [`c56bb1b`](https://github.com/dohooo/helmor/commit/c56bb1b98e3667a30ea35648f1f40472df598c59) Thanks [@natllian](https://github.com/natllian)! - Refine non-git directory workspace support:
+  - Non-git folders now work out of the box — removed the opt-in "Non-git directories" setting.
+  - Non-git workspaces use the chat-style layout (no diff/inspector panel or branch pickers), and their repo settings page shows a "Non-git repository" notice instead of account and git options.
+
 ## 0.42.0
 
 ### Minor Changes

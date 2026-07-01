@@ -165,10 +165,10 @@ interface LiveSession {
 	 * Streaming-input source. The initial prompt is pushed up front in
 	 * `sendMessage`; each `steer()` call pushes one more user message.
 	 * The SDK folds every pushed message into ONE extended turn and
-	 * emits a SINGLE terminal `result` when the whole trajectory is
-	 * done — verified empirically (steer mid-stream yields one merged
-	 * assistant message and one result, not per-push results). The
-	 * for-await loop therefore bails on the first result it sees.
+	 * emits a SINGLE *terminal* `result` when the whole trajectory is
+	 * done. Backgrounded tasks add intermediate `background_requested`
+	 * results mid-turn (filtered out, see `isBackgroundPauseResult`), so
+	 * the for-await loop bails on the first *genuinely terminal* result.
 	 */
 	readonly promptSource: Pushable<SDKUserMessage>;
 	/** Request id owning this session; needed by `steer()` to synthesize
@@ -690,6 +690,13 @@ export class ClaudeSessionManager implements SessionManager {
 		try {
 			let lastRateLimitInfo: RateLimitOverageInfo | undefined;
 			let fastModeNoticeEmitted = false;
+			// In-flight `run_in_background` tasks (subagents / background Bash),
+			// keyed by task_id. They settle asynchronously via `task_notification`
+			// AFTER the agent ends its turn; closing the query on the turn's
+			// `completed` while any are still pending would `q.close()` the
+			// claude-code subprocess and kill them before they notify, so we keep
+			// draining the SAME query until they all settle (see deferral below).
+			const pendingBgTasks = new Set<string>();
 			for await (const message of q) {
 				// stopSession already emitted the terminal `aborted` and tore the
 				// session down. The new SDK keeps the child alive ~2s after abort,
@@ -727,6 +734,52 @@ export class ClaudeSessionManager implements SessionManager {
 						session_id: sessionId,
 						uuid: randomUUID(),
 					});
+				}
+				// Backgrounded task pause: SDK keeps the SAME query() alive and
+				// resumes later via task_notification. Record usage, but keep the
+				// pause result OUT of the pipeline (accumulator assumes one result
+				// per turn) and do NOT end the turn — must intercept before the
+				// unconditional passthrough below.
+				if (isBackgroundPauseResult(message)) {
+					const meta = buildClaudeStoredMeta(message, model ?? "");
+					if (meta) {
+						emitter.contextUsageUpdated(
+							requestId,
+							sessionId,
+							JSON.stringify(meta),
+						);
+					}
+					continue;
+				}
+				// Track in-flight background tasks (run_in_background subagents /
+				// Bash) by task_id: `task_started` opens one, `task_notification`
+				// settles it. These system events still pass through below.
+				if (message.type === "system") {
+					const subtype = (message as { subtype?: string }).subtype;
+					const taskId = (message as { task_id?: string }).task_id;
+					if (taskId) {
+						if (subtype === "task_started") pendingBgTasks.add(taskId);
+						else if (subtype === "task_notification")
+							pendingBgTasks.delete(taskId);
+					}
+				}
+				// A `completed` result while background tasks are still pending is
+				// NOT terminal: ending here closes the query and kills the
+				// in-flight subagents before they emit `task_notification`. Keep it
+				// OUT of the pipeline (one-result-per-turn) and keep draining the
+				// SAME query — mirror of the `background_requested` pause above.
+				// The final `completed` (pending drained) and any error terminal
+				// fall through to the terminal branch below.
+				if (isCompletedResult(message) && pendingBgTasks.size > 0) {
+					const meta = buildClaudeStoredMeta(message, model ?? "");
+					if (meta) {
+						emitter.contextUsageUpdated(
+							requestId,
+							sessionId,
+							JSON.stringify(meta),
+						);
+					}
+					continue;
 				}
 				// AskUserQuestion tool_use blocks pass through INTACT — the Rust
 				// adapter renders them as the persistent Q&A card (and merges
@@ -1287,10 +1340,35 @@ function isResultMessage(
 	);
 }
 
+/** Intermediate `result` the SDK emits when a task is backgrounded — the
+ *  same `query()` stays alive and resumes via `task_notification`. NOT
+ *  terminal: must be filtered before passthrough so it never reaches the
+ *  accumulator (one-result-per-turn) and never fires `end`. */
+function isBackgroundPauseResult(message: SDKMessage): boolean {
+	return (
+		message.type === "result" &&
+		(message as { terminal_reason?: string }).terminal_reason ===
+			"background_requested"
+	);
+}
+
+/** A turn's natural `completed` result. While `run_in_background` tasks are
+ *  still pending it is filtered (like `background_requested`) so the query —
+ *  and the claude-code subprocess hosting the in-flight subagents — stays
+ *  alive until their `task_notification`s arrive. Only `completed` is
+ *  deferred; error / aborted terminals end the turn immediately. */
+function isCompletedResult(message: SDKMessage): boolean {
+	return (
+		message.type === "result" &&
+		(message as { terminal_reason?: string }).terminal_reason === "completed"
+	);
+}
+
 /** Terminal result — success OR error. Both shapes carry
  *  `usage`/`modelUsage`, so both should update the ring. AskUserQuestion
- *  pauses live inside `canUseTool` instead of producing a result event,
- *  so any `result` we see here is genuinely terminal for this turn. */
+ *  pauses live inside `canUseTool` instead of producing a result event, and
+ *  `background_requested` pauses are filtered upstream, so any `result` that
+ *  reaches this check is genuinely terminal for this turn. */
 function isTerminalResult(message: SDKMessage): boolean {
 	return message.type === "result";
 }

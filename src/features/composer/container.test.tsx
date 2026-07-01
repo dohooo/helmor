@@ -1216,13 +1216,13 @@ describe("WorkspaceComposerContainer", () => {
 			apiMockState.listSlashCommands.mockResolvedValue({
 				commands: [
 					{
-						name: "compact",
-						description: "Compact the context",
+						name: "review",
+						description: "Review the diff",
 						source: "builtin",
 					},
 					{
-						name: "clear",
-						description: "Clear history",
+						name: "status",
+						description: "Show status",
 						source: "builtin",
 					},
 				],
@@ -1237,8 +1237,8 @@ describe("WorkspaceComposerContainer", () => {
 					"add-dir",
 					"goal",
 					"workflows",
-					"compact",
-					"clear",
+					"review",
+					"status",
 				]);
 			});
 			expect(composerMockState.lastSlashCommands[0]).toEqual({
@@ -1246,6 +1246,75 @@ describe("WorkspaceComposerContainer", () => {
 				description: "Link extra directories to this workspace",
 				source: "client-action",
 			});
+		});
+
+		it("suppresses the SDK-reported /compact command for Claude sessions", async () => {
+			// claude-code lists /compact among its slash commands, but the Agent
+			// SDK has no programmatic compaction path, so Helmor hides it for
+			// Claude (Codex/OpenCode keep their built-in /compact).
+			apiMockState.listSlashCommands.mockResolvedValue({
+				commands: [
+					{
+						name: "compact",
+						description: "Compact the context",
+						source: "builtin",
+					},
+					{
+						name: "review",
+						description: "Review the diff",
+						source: "builtin",
+					},
+				],
+				isComplete: true,
+			});
+
+			renderWithLinkedDirs([]);
+
+			await waitFor(() => {
+				expect(composerMockState.lastSlashCommands.map((c) => c.name)).toEqual([
+					"add-dir",
+					"goal",
+					"workflows",
+					"review",
+				]);
+			});
+			expect(
+				composerMockState.lastSlashCommands.some((c) => c.name === "compact"),
+			).toBe(false);
+		});
+
+		it("suppresses the SDK-reported /clear command (no-op for every provider)", async () => {
+			// claude-code lists /clear, but sent through the SDK it never clears
+			// context (the next turn resumes the same session), so Helmor hides it.
+			apiMockState.listSlashCommands.mockResolvedValue({
+				commands: [
+					{
+						name: "clear",
+						description: "Clear history",
+						source: "builtin",
+					},
+					{
+						name: "review",
+						description: "Review the diff",
+						source: "builtin",
+					},
+				],
+				isComplete: true,
+			});
+
+			renderWithLinkedDirs([]);
+
+			await waitFor(() => {
+				expect(composerMockState.lastSlashCommands.map((c) => c.name)).toEqual([
+					"add-dir",
+					"goal",
+					"workflows",
+					"review",
+				]);
+			});
+			expect(
+				composerMockState.lastSlashCommands.some((c) => c.name === "clear"),
+			).toBe(false);
 		});
 
 		it("adds built-in /compact and /goal commands for Codex sessions", async () => {
@@ -1310,8 +1379,8 @@ describe("WorkspaceComposerContainer", () => {
 						source: "builtin",
 					},
 					{
-						name: "clear",
-						description: "Clear history",
+						name: "review",
+						description: "Review the diff",
 						source: "builtin",
 					},
 				],
@@ -1325,7 +1394,7 @@ describe("WorkspaceComposerContainer", () => {
 					"add-dir",
 					"goal",
 					"workflows",
-					"clear",
+					"review",
 				]);
 			});
 			expect(composerMockState.lastSlashCommands[1]).toEqual({
