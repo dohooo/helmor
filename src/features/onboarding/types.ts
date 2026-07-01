@@ -10,8 +10,6 @@ export type OnboardingStep =
 	| "agents"
 	| "corner"
 	| "skills"
-	| "conductorTransition"
-	| "conductor"
 	| "repoImport"
 	| "completeTransition";
 

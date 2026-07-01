@@ -18,7 +18,6 @@ Commands:
   models       List available AI models
   github       GitHub integration — auth, PR lookup, merge
   scripts      Inspect repo-level setup/run/archive scripts
-  conductor    Migrate from Helmor v1 (Conductor)
   completions  Shell completion scripts
   cli-status   Report whether the current Helmor CLI entrypoint is installed to PATH and which data mode it uses
   quit         Ask a running Helmor app to quit (noop when it isn't running)

@@ -55,11 +55,6 @@ Yes — the `helmor` CLI covers repositories, workspaces, sessions, prompts, and
 ship actions, and `helmor mcp` exposes Helmor to other agents over MCP. See
 [CLI & MCP](../reference/cli-and-mcp.md).
 
-### I'm coming from Conductor — do I start over?
-
-No. **Settings → Conductor import** migrates your repositories, workspaces,
-and session history.
-
 ### A keyboard shortcut clashes with another app
 
 Every binding is rebindable in **Settings → Shortcuts**, with conflict
