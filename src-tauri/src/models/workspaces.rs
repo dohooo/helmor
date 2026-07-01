@@ -794,6 +794,99 @@ pub(crate) fn update_workspace_branch(workspace_id: &str, new_branch: &str) -> R
     Ok(())
 }
 
+/// Splice a stack layer out from under its children.
+///
+/// Every direct child of `layer_id` is reparented onto that layer's OWN parent
+/// (the grandparent) and its cached `intended_target_branch` is repointed to the
+/// grandparent's branch — or, when `layer_id` was the bottom of the stack (no
+/// live grandparent), the child detaches to a root targeting the repo default
+/// branch. The `layer_id` row itself is left untouched, so a merged layer
+/// survives as a standalone workspace.
+///
+/// This is the shared primitive behind every event that removes a layer from the
+/// active stack: a lower layer's PR merged, or the stack root was deleted. In
+/// both cases the layer stops being part of the stack and its children must
+/// re-home onto whatever is now below them. Crucially the post-splice state still
+/// satisfies the stack invariant (`child.intended_target_branch ==
+/// parent(child).branch`), so the startup backfill and the rename cascade leave
+/// it alone.
+///
+/// Runs directly on the caller's connection, so it participates in whatever
+/// transaction (if any) the caller already holds: pass a `&Transaction` (it
+/// deref-coerces to `&Connection`) to make it atomic with a surrounding change
+/// like the merge flip or a delete, or a bare `&Connection` to autocommit each
+/// UPDATE. It deliberately does NOT open its own transaction — the startup
+/// reconcile calls it from inside `run_migrations`, which can itself run inside
+/// a caller's transaction where a nested `BEGIN` would fail. Must run while the
+/// `layer_id` row still exists
+/// (the base is resolved from it). Returns the reparented child ids for UI
+/// refresh; empty when `layer_id` has no children (a tip or non-stacked layer).
+pub(crate) fn splice_out_stack_layer(
+    conn: &rusqlite::Connection,
+    layer_id: &str,
+) -> Result<Vec<String>> {
+    let children: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT id FROM workspaces WHERE parent_workspace_id = ?1")
+            .context("Failed to prepare stack-children query")?;
+        let rows = stmt
+            .query_map([layer_id], |row| row.get::<_, String>(0))
+            .context("Failed to query stack children")?;
+        rows.collect::<rusqlite::Result<Vec<String>>>()
+            .context("Failed to read stack children")?
+    };
+    if children.is_empty() {
+        return Ok(children);
+    }
+
+    // The layer's own parent becomes the children's new base. Resolve it to a
+    // LIVE row so a dangling parent id degrades to "detach to root".
+    let grandparent: Option<(String, Option<String>)> = conn
+        .query_row(
+            "SELECT p.id, p.branch
+               FROM workspaces layer
+               JOIN workspaces p ON p.id = layer.parent_workspace_id
+              WHERE layer.id = ?1",
+            [layer_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .ok();
+
+    // Fallback target when there is no grandparent (the layer was the bottom).
+    let default_branch: Option<String> = conn
+        .query_row(
+            "SELECT r.default_branch
+               FROM workspaces w JOIN repos r ON r.id = w.repository_id
+              WHERE w.id = ?1",
+            [layer_id],
+            |row| row.get(0),
+        )
+        .ok()
+        .flatten();
+
+    let (new_parent, new_target): (Option<String>, String) = match grandparent {
+        Some((grandparent_id, grandparent_branch)) => (
+            Some(grandparent_id),
+            grandparent_branch
+                .or_else(|| default_branch.clone())
+                .unwrap_or_else(|| "main".to_string()),
+        ),
+        None => (None, default_branch.unwrap_or_else(|| "main".to_string())),
+    };
+
+    conn.execute(
+        "UPDATE workspaces
+            SET parent_workspace_id = ?2,
+                intended_target_branch = ?3,
+                updated_at = datetime('now')
+          WHERE parent_workspace_id = ?1",
+        (layer_id, new_parent.as_deref(), new_target.as_str()),
+    )
+    .context("Failed to reparent stack children")?;
+
+    Ok(children)
+}
+
 /// Set (or clear) the user's custom display name for a workspace. `Some(name)`
 /// overrides the auto-derived title; `None` clears it back to the derived one.
 pub(crate) fn update_workspace_custom_name(
