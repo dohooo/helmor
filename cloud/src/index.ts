@@ -43,6 +43,21 @@ export class Sandbox extends CloudflareSandbox<Env> {
 		this.sleepAfter = env.SANDBOX_IDLE_TIMEOUT ?? "15m";
 	}
 
+	/** Arm the idle countdown on every container start. A rollout / platform
+	 *  restart does NOT go through a request, so the base never arms the timer and
+	 *  the container would run forever. `renewActivityTimeout` is the documented
+	 *  "renew even without a request" call. */
+	async onStart(): Promise<void> {
+		await super.onStart();
+		try {
+			await (
+				this as unknown as { renewActivityTimeout: () => Promise<void> | void }
+			).renewActivityTimeout();
+		} catch (error) {
+			console.error("arm idle timer on start failed", error);
+		}
+	}
+
 	async fetch(request: Request): Promise<Response> {
 		const url = new URL(request.url);
 		const match = url.pathname.match(/^\/__helmor-companion\/(\d+)(\/.*)?$/);
@@ -134,21 +149,51 @@ export class Sandbox extends CloudflareSandbox<Env> {
 	 *  sleep (cold start just restores the prior post-turn snapshot). */
 	async onActivityExpired(): Promise<void> {
 		await this.backupBeforeSleep();
-		await super.onActivityExpired();
+		// destroy() (SIGKILL), NOT super/stop() (SIGTERM). `helmor serve` does NOT
+		// exit on SIGTERM, so stop() leaves the VM running (health active:1) forever
+		// — VERIFIED: the clean super/stop build stayed active:1 with the desktop
+		// fully KILLED and zero traffic. destroy() force-kills the VM → it actually
+		// stops (active:0 = scaled to zero, billing stops). backupBeforeSleep has
+		// already snapshotted to R2, so a hard kill is safe — the next request
+		// cold-starts and restores. (Do NOT revert this to super/stop.)
+		await this.destroy();
 	}
 
 	private async backupBeforeSleep(): Promise<void> {
+		// HARD rule: this must NEVER block the stop. `onActivityExpired` runs this
+		// THEN calls `super` (the SIGTERM). If `createBackup` HANGS, `super` never
+		// runs, the base renews the activity tracker, and the container never
+		// sleeps — `@cloudflare/containers`: "if you don't stop the container here,
+		// the activity tracker will be renewed, and this lifecycle hook will be
+		// called again when the timer re-expires." The old try/catch only guarded
+		// against THROWS, not hangs. Bound the whole backup: if it can't finish in
+		// budget, skip it and let the stop proceed (cold start restores the prior
+		// post-turn snapshot).
+		const BACKUP_BUDGET_MS = 15_000;
+		let timer: ReturnType<typeof setTimeout> | undefined;
 		try {
-			const handle = await this.createBackup({
-				dir: "/home/helmor",
-				localBucket: true,
-				name: `helmor-idle-${new Date().toISOString()}`,
-				ttl: 259200, // 3 days
-				excludes: ["workspaces", "cache", "logs", "run", "local-llm"],
-			});
-			await writeBackupHandle(this.helmorEnv, handle);
+			await Promise.race([
+				(async () => {
+					const handle = await this.createBackup({
+						dir: "/home/helmor",
+						localBucket: true,
+						name: `helmor-idle-${new Date().toISOString()}`,
+						ttl: 259200, // 3 days
+						excludes: ["workspaces", "cache", "logs", "run", "local-llm"],
+					});
+					await writeBackupHandle(this.helmorEnv, handle);
+				})(),
+				new Promise<never>((_, reject) => {
+					timer = setTimeout(
+						() => reject(new Error("idle-sleep backup timed out")),
+						BACKUP_BUDGET_MS,
+					);
+				}),
+			]);
 		} catch (error) {
-			console.error("idle-sleep backup failed", error);
+			console.error("idle-sleep backup skipped", error);
+		} finally {
+			if (timer) clearTimeout(timer);
 		}
 	}
 }
@@ -222,6 +267,7 @@ const HEALTH_CHECK_TIMEOUT_MS = 1_500;
 const RESTORE_BACKUP_TIMEOUT_MS = 15_000;
 const START_PROCESS_TIMEOUT_MS = 90_000;
 const IDENTITY_MINT_TIMEOUT_MS = 15_000;
+const FORGE_INJECT_TIMEOUT_MS = 15_000;
 const SERVE_READY_TIMEOUT_MS = 180_000;
 const SERVE_POLL_INTERVAL_MS = 500;
 
@@ -863,34 +909,37 @@ export async function ensureServe(
 
 	if (await healthOk(sandbox, port, healthCheckTimeoutMs)) return;
 
-	// Phase 2b sleep persistence: restore the last DB snapshot BEFORE serve
-	// binds. Restore must precede serve (serve not yet running = no open handle
-	// on helmor.db, safe to overwrite). A missing/failed restore is non-fatal —
-	// the container cold-starts with an empty DB, exactly like a brand-new team.
-	try {
-		const handle = await readBackupHandle(env);
-		if (handle) {
-			await withTimeout(
-				sandbox.restoreBackup(handle),
-				restoreBackupTimeoutMs,
-				"restoreBackup",
-			);
+	// Phase 2b sleep persistence: restore the last DB snapshot BEFORE serve binds.
+	// Restore must precede serve (serve not yet running = no open handle on
+	// helmor.db, safe to overwrite). A missing/failed restore is non-fatal — the
+	// container cold-starts with an empty DB, like a brand-new team. Run it
+	// CONCURRENTLY with the identity mints below: both must finish before
+	// startProcess (the serve opens the DB + receives the tokens), but they hit
+	// independent backends, so overlapping shaves the mint off the critical path.
+	const restorePromise = (async () => {
+		try {
+			const handle = await readBackupHandle(env);
+			if (handle) {
+				await withTimeout(
+					sandbox.restoreBackup(handle),
+					restoreBackupTimeoutMs,
+					"restoreBackup",
+				);
+			}
+		} catch (error) {
+			console.error("Phase 2b restore failed (cold-starting empty)", error);
 		}
-	} catch (error) {
-		console.error("Phase 2b restore failed (cold-starting empty)", error);
-	}
+	})();
 
 	// Phase 1 token brokers: mint a fresh, short-lived Codex auth.json
 	// (CODEX_AUTH_JSON) and the Claude OAuth token (CLAUDE_CODE_OAUTH_TOKEN) from
 	// the team's identity DOs and inject them for THIS cold start (design §3.3 /
-	// VERIFIED §1.5). Computed per startProcess — never static bindings — so a
-	// wake never replays a stale token. Run CONCURRENTLY: they hit independent
-	// identity DOs, so serializing them needlessly added up to ~15s to every cold
-	// start; failures stay isolated (one null never sinks the other). A missing
-	// identity / brick / refresh failure starts serve WITHOUT that agent's auth
-	// (it runs un-authenticated until re-authorize); we log only a NON-SENSITIVE
-	// marker, never any token.
-	const [codexAuthJson, claudeToken] = await Promise.all([
+	// VERIFIED §1.5). Computed per startProcess — never static bindings — so a wake
+	// never replays a stale token. The two mints run concurrently (independent DOs);
+	// failures stay isolated (one null never sinks the other). A missing identity /
+	// brick / refresh failure starts serve WITHOUT that agent's auth (it runs
+	// un-authenticated until re-authorize); we log only a NON-SENSITIVE marker.
+	const mintPromise = Promise.all([
 		withTimeout(
 			mintCodexAuthJson(env),
 			identityMintTimeoutMs,
@@ -913,6 +962,11 @@ export async function ensureServe(
 			);
 			return null;
 		}),
+	]);
+
+	const [, [codexAuthJson, claudeToken]] = await Promise.all([
+		restorePromise,
+		mintPromise,
 	]);
 
 	await withTimeout(
@@ -960,9 +1014,18 @@ export async function ensureServe(
 
 	// True per-member forge: snapshot every member's gh/glab creds from their
 	// ForgeIdentity DOs and write them into the container (OUTSIDE the backed-up
-	// /home tree, so plaintext tokens never land in an R2 backup). Best-effort —
-	// a failure just leaves the forge layer on its repo-bound fallback.
-	await injectForgeMembers(sandbox, env).catch((error) => {
+	// /home tree, so plaintext tokens never land in an R2 backup). These creds are
+	// needed only for a LATER git push/clone, NOT for the serve to bind — so fire
+	// it WITHOUT awaiting and let it land while the readiness poll runs below,
+	// rather than gating the cold start on it (~0.7s off the critical path). The
+	// in-container loader reads the file lazily on the first forge op, so it's in
+	// time; best-effort + timeout-bounded (so the dangling promise can't outlive
+	// the request), and a failure/stall just leaves the repo-bound fallback.
+	void withTimeout(
+		injectForgeMembers(sandbox, env),
+		FORGE_INJECT_TIMEOUT_MS,
+		"forge members inject",
+	).catch((error) => {
 		console.error(
 			"forge members inject failed",
 			error instanceof Error ? error.message : "unknown",
