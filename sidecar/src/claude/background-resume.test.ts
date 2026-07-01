@@ -14,7 +14,7 @@
  * `end`. The loop keeps draining until the genuinely terminal result.
  */
 
-import { beforeAll, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { SendMessageParams } from "../session-manager.js";
 
@@ -22,13 +22,28 @@ import type { SendMessageParams } from "../session-manager.js";
 // mocked binding (resolved at session-manager import time) reads this mutable
 // outer variable so each test can swap the SDK message stream.
 let scenario: SDKMessage[] = [];
+let hangAfterScenario = false;
+const previousBgDrainTimeout = process.env.HELMOR_CLAUDE_BG_DRAIN_TIMEOUT_MS;
 
 function makeQuery(messages: SDKMessage[]) {
+	let closed = false;
+	let releaseHang: (() => void) | null = null;
 	return {
 		async *[Symbol.asyncIterator]() {
-			for (const m of messages) yield m;
+			for (const m of messages) {
+				if (closed) return;
+				yield m;
+			}
+			if (hangAfterScenario && !closed) {
+				await new Promise<void>((resolve) => {
+					releaseHang = resolve;
+				});
+			}
 		},
-		close() {},
+		close() {
+			closed = true;
+			releaseHang?.();
+		},
 	};
 }
 
@@ -147,6 +162,16 @@ let ClaudeSessionManager: typeof import("./session-manager.js").ClaudeSessionMan
 
 beforeAll(async () => {
 	({ ClaudeSessionManager } = await import("./session-manager.js"));
+});
+
+afterEach(() => {
+	scenario = [];
+	hangAfterScenario = false;
+	if (previousBgDrainTimeout === undefined) {
+		delete process.env.HELMOR_CLAUDE_BG_DRAIN_TIMEOUT_MS;
+	} else {
+		process.env.HELMOR_CLAUDE_BG_DRAIN_TIMEOUT_MS = previousBgDrainTimeout;
+	}
 });
 
 describe("ClaudeSessionManager backgrounded-task resume (#891)", () => {
@@ -299,6 +324,25 @@ describe("ClaudeSessionManager run_in_background drain (completed with pending b
 		// Loop exits naturally → post-loop end fires once; no hang, no double end.
 		expect(spy.ends).toBe(1);
 		expect(completedResultCount(spy)).toBe(0); // deferred, never reached pipeline
+	});
+
+	test("forces end after the background drain timeout if a pending task never notifies", async () => {
+		process.env.HELMOR_CLAUDE_BG_DRAIN_TIMEOUT_MS = "5";
+		hangAfterScenario = true;
+		scenario = [
+			assistant("dispatching"),
+			taskStarted("bg1"),
+			result("completed"), // deferred; query then stays open forever
+		];
+		const spy = makeSpyEmitter();
+		await new ClaudeSessionManager().sendMessage(
+			"req-bg-timeout",
+			baseParams(),
+			spy.emitter,
+		);
+
+		expect(spy.ends).toBe(1);
+		expect(completedResultCount(spy)).toBe(0);
 	});
 
 	test("error terminal is NOT deferred even with a bg task pending", async () => {
