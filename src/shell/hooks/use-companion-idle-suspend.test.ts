@@ -1,3 +1,4 @@
+import { focusManager } from "@tanstack/react-query";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -73,6 +74,22 @@ describe("useCompanionIdleSuspend", () => {
 		// Re-armed: idling again suspends again.
 		act(() => vi.advanceTimersByTime(VISIBLE_IDLE_MS));
 		expect(mocks.suspendEventStream).toHaveBeenCalledTimes(2);
+	});
+
+	it("pauses React Query polling on idle-suspend, resumes on activity", () => {
+		const setFocused = vi.spyOn(focusManager, "setFocused");
+		renderHook(() => useCompanionIdleSuspend());
+
+		// Idle-suspend must ALSO pause the polls (git-status @10s etc.); otherwise
+		// they keep waking the container and it never sleeps.
+		act(() => vi.advanceTimersByTime(VISIBLE_IDLE_MS));
+		expect(setFocused).toHaveBeenCalledWith(false);
+
+		// Activity re-focuses React Query so the intervals resume.
+		setFocused.mockClear();
+		act(() => window.dispatchEvent(new Event("pointerdown")));
+		expect(setFocused).toHaveBeenCalledWith(true);
+		setFocused.mockRestore();
 	});
 
 	it("never suspends mid-turn; retries once the turn settles", () => {

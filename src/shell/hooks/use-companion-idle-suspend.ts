@@ -1,3 +1,4 @@
+import { focusManager } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { useStreamingStore } from "@/features/conversation/state/streaming-store";
 import { resumeEventStream, suspendEventStream } from "@/lib/ipc";
@@ -53,6 +54,12 @@ export function useCompanionIdleSuspend(): void {
 			}
 			suspended = true;
 			suspendEventStream();
+			// Dropping the SSE alone isn't enough: the React Query polls (git-status
+			// @10s, forge, change-request) keep hitting the container and re-arm its
+			// idle timer, so it never sleeps. Pause them too — interval refetches are
+			// foreground-only, so flipping focusManager off globally suspends them
+			// (matching the SSE drop). Resumed on the next activity/re-focus.
+			focusManager.setFocused(false);
 		};
 
 		/** (Re)arm the visible-idle countdown — called on activity + re-focus. */
@@ -70,6 +77,7 @@ export function useCompanionIdleSuspend(): void {
 				// already live), clear any idle-suspend, and re-arm the idle timer.
 				suspended = false;
 				resumeEventStream();
+				focusManager.setFocused(true);
 				reArm();
 			}
 		};
@@ -79,6 +87,7 @@ export function useCompanionIdleSuspend(): void {
 			if (suspended) {
 				suspended = false;
 				resumeEventStream();
+				focusManager.setFocused(true);
 			}
 			reArm();
 		};
@@ -90,6 +99,8 @@ export function useCompanionIdleSuspend(): void {
 
 		return () => {
 			clearTimer();
+			// Restore React Query's default focus tracking on unmount.
+			focusManager.setFocused(undefined);
 			document.removeEventListener("visibilitychange", onVisibilityChange);
 			window.removeEventListener("pointerdown", onActivity);
 			window.removeEventListener("keydown", onActivity);
