@@ -811,16 +811,21 @@ pub(crate) fn update_workspace_branch(workspace_id: &str, new_branch: &str) -> R
 /// parent(child).branch`), so the startup backfill and the rename cascade leave
 /// it alone.
 ///
-/// Runs on the caller's transaction so it commits atomically with the state
-/// change that triggered it, and must run while the `layer_id` row still exists
+/// Runs directly on the caller's connection, so it participates in whatever
+/// transaction (if any) the caller already holds: pass a `&Transaction` (it
+/// deref-coerces to `&Connection`) to make it atomic with a surrounding change
+/// like the merge flip or a delete, or a bare `&Connection` to autocommit each
+/// UPDATE. It deliberately does NOT open its own transaction — the startup heal
+/// calls it while the Conductor import already holds a `BEGIN IMMEDIATE`, where
+/// a nested `BEGIN` would fail. Must run while the `layer_id` row still exists
 /// (the base is resolved from it). Returns the reparented child ids for UI
 /// refresh; empty when `layer_id` has no children (a tip or non-stacked layer).
-pub(crate) fn splice_out_stack_layer_tx(
-    tx: &rusqlite::Transaction<'_>,
+pub(crate) fn splice_out_stack_layer(
+    conn: &rusqlite::Connection,
     layer_id: &str,
 ) -> Result<Vec<String>> {
     let children: Vec<String> = {
-        let mut stmt = tx
+        let mut stmt = conn
             .prepare("SELECT id FROM workspaces WHERE parent_workspace_id = ?1")
             .context("Failed to prepare stack-children query")?;
         let rows = stmt
@@ -835,7 +840,7 @@ pub(crate) fn splice_out_stack_layer_tx(
 
     // The layer's own parent becomes the children's new base. Resolve it to a
     // LIVE row so a dangling parent id degrades to "detach to root".
-    let grandparent: Option<(String, Option<String>)> = tx
+    let grandparent: Option<(String, Option<String>)> = conn
         .query_row(
             "SELECT p.id, p.branch
                FROM workspaces layer
@@ -847,7 +852,7 @@ pub(crate) fn splice_out_stack_layer_tx(
         .ok();
 
     // Fallback target when there is no grandparent (the layer was the bottom).
-    let default_branch: Option<String> = tx
+    let default_branch: Option<String> = conn
         .query_row(
             "SELECT r.default_branch
                FROM workspaces w JOIN repos r ON r.id = w.repository_id
@@ -868,7 +873,7 @@ pub(crate) fn splice_out_stack_layer_tx(
         None => (None, default_branch.unwrap_or_else(|| "main".to_string())),
     };
 
-    tx.execute(
+    conn.execute(
         "UPDATE workspaces
             SET parent_workspace_id = ?2,
                 intended_target_branch = ?3,

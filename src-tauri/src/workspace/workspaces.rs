@@ -821,7 +821,7 @@ pub struct PrSyncOutcome {
     /// Ids of stacked children re-homed when this layer's PR merged (empty
     /// otherwise). The command layer republishes each so the sidebar re-nests
     /// and the child's header retargets onto the new base. See
-    /// [`crate::models::workspaces::splice_out_stack_layer_tx`].
+    /// [`crate::models::workspaces::splice_out_stack_layer`].
     pub retargeted_children: Vec<String>,
 }
 
@@ -931,7 +931,7 @@ pub fn sync_workspace_pr_state(
         // still exists.
         if transitioned_to_merged {
             retargeted_children =
-                workspace_models::splice_out_stack_layer_tx(&transaction, workspace_id)?;
+                workspace_models::splice_out_stack_layer(&transaction, workspace_id)?;
         }
         transaction
             .commit()
@@ -1617,7 +1617,7 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
     // guaranteed rootless by the guard above). Shared with merge-driven
     // splicing so both paths keep the stack consistent. Must run while the row
     // still exists so the base can be resolved from it.
-    workspace_models::splice_out_stack_layer_tx(&transaction, workspace_id)?;
+    workspace_models::splice_out_stack_layer(&transaction, workspace_id)?;
 
     let deleted_rows = transaction
         .execute("DELETE FROM workspaces WHERE id = ?1", [workspace_id])

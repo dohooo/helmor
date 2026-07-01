@@ -213,7 +213,7 @@ fn backfill_stacked_target_branches(connection: &Connection) -> Result<()> {
 /// Startup reconcile for stacks whose base merged under an older build, before
 /// merge-time splicing existed. Every workspace still stacked on a merged layer
 /// is spliced out via the shared write-layer primitive
-/// [`crate::models::workspaces::splice_out_stack_layer_tx`], re-homing its
+/// [`crate::models::workspaces::splice_out_stack_layer`], re-homing its
 /// children onto the nearest surviving base — the exact end state a live merge
 /// now produces. Iterating over *all* merged layers converges even for chained
 /// merges (a child of a merged layer always ends on a non-merged ancestor or
@@ -236,17 +236,16 @@ fn heal_children_of_merged_stack_layers(connection: &Connection) -> Result<()> {
         rows.collect::<rusqlite::Result<Vec<String>>>()
             .context("Failed to read merged layers")?
     };
-    if merged_layers.is_empty() {
-        return Ok(());
-    }
-    let tx = connection
-        .unchecked_transaction()
-        .context("Failed to open merged-stack heal transaction")?;
+    // Splice directly on `connection` rather than opening our own transaction:
+    // the Conductor import calls `ensure_schema` / `run_migrations` inside a
+    // `BEGIN IMMEDIATE` (see `import.rs`), so an `unchecked_transaction()` here
+    // would fail with "cannot start a transaction within a transaction". Each
+    // splice is a single idempotent UPDATE, so a crash mid-loop just heals on the
+    // next run.
     for layer_id in &merged_layers {
-        crate::models::workspaces::splice_out_stack_layer_tx(&tx, layer_id)
+        crate::models::workspaces::splice_out_stack_layer(connection, layer_id)
             .with_context(|| format!("Failed to splice merged stack layer {layer_id}"))?;
     }
-    tx.commit().context("Failed to commit merged-stack heal")?;
     Ok(())
 }
 
@@ -1474,6 +1473,38 @@ mod tests {
         heal_children_of_merged_stack_layers(&connection).unwrap();
         assert_eq!(parent_of(&connection, "mid"), None);
         assert_eq!(target_of(&connection, "tip").as_deref(), Some("feat/mid"));
+    }
+
+    #[test]
+    fn heal_runs_inside_an_ambient_transaction_without_nesting() {
+        // Regression: the Conductor import runs ensure_schema / run_migrations
+        // inside a `BEGIN IMMEDIATE` (import.rs). The heal must NOT open its own
+        // transaction, or it aborts with "cannot start a transaction within a
+        // transaction" and breaks the import for anyone with a merged workspace.
+        let (connection, _dir) = open_test_db();
+        ensure_schema(&connection).unwrap();
+        insert_ws(&connection, "root", "feat/root", Some("main"), None);
+        insert_ws(
+            &connection,
+            "mid",
+            "feat/mid",
+            Some("feat/root"),
+            Some("root"),
+        );
+        connection
+            .execute(
+                "UPDATE workspaces SET pr_sync_state = 'merged' WHERE id = 'root'",
+                [],
+            )
+            .unwrap();
+
+        // Mirror the import flow: a transaction is already open on this conn.
+        connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+        heal_children_of_merged_stack_layers(&connection).unwrap();
+        connection.execute_batch("COMMIT").unwrap();
+
+        assert_eq!(parent_of(&connection, "mid"), None);
+        assert_eq!(target_of(&connection, "mid").as_deref(), Some("main"));
     }
 
     #[test]
