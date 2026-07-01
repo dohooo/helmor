@@ -63,6 +63,17 @@ fn to_opencode(p: CustomProvider) -> OpencodeCustomProvider {
                 id: m.slug,
                 name: m.label,
                 reasoning: true,
+                tool_call: false,
+                temperature: false,
+                attachment: false,
+                family: None,
+                release_date: None,
+                status: None,
+                cost: None,
+                interleaved: None,
+                variants: None,
+                limit: None,
+                modalities: None,
             })
             .collect(),
     }

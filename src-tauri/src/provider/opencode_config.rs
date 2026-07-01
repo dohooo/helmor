@@ -27,6 +27,55 @@ const OPENCODE_FAMILY: FamilyConfig = FamilyConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct ModelLimit {
+    pub context: u64,
+    pub output: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCost {
+    pub input: f64,
+    pub output: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_over_200k: Option<Box<ModelCost>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelModalities {
+    #[serde(default)]
+    pub input: Vec<String>,
+    #[serde(default)]
+    pub output: Vec<String>,
+}
+
+/// interleaved: `true` | `{ field: "reasoning" | "reasoning_content" | "reasoning_details" }`
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum InterleavedConfig {
+    Flag(bool),
+    Object { field: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ModelStatus {
+    #[serde(rename = "alpha")]
+    Alpha,
+    #[serde(rename = "beta")]
+    Beta,
+    #[serde(rename = "deprecated")]
+    Deprecated,
+    #[serde(rename = "active")]
+    Active,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct OpencodeCustomModel {
     pub id: String,
     #[serde(default)]
@@ -34,9 +83,31 @@ pub struct OpencodeCustomModel {
     // `reasoning: true` makes opencode compute effort variants.
     #[serde(default)]
     pub reasoning: bool,
+    #[serde(default)]
+    pub tool_call: bool,
+    #[serde(default)]
+    pub temperature: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<ModelLimit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modalities: Option<ModelModalities>,
+    #[serde(default)]
+    pub attachment: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<ModelStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<ModelCost>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interleaved: Option<InterleavedConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variants: Option<BTreeMap<String, serde_json::Value>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct OpencodeCustomProvider {
     pub id: String,
@@ -195,17 +266,82 @@ fn read_models(models: Option<&serde_json::Value>) -> Vec<OpencodeCustomModel> {
         return Vec::new();
     };
     map.iter()
-        .map(|(model_id, block)| OpencodeCustomModel {
-            id: model_id.clone(),
-            name: block
-                .get("name")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or(model_id)
-                .to_string(),
-            reasoning: block
-                .get("reasoning")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false),
+        .map(|(model_id, block)| {
+            OpencodeCustomModel {
+                id: model_id.clone(),
+                name: block
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(model_id)
+                    .to_string(),
+                reasoning: block
+                    .get("reasoning")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                tool_call: block
+                    .get("tool_call")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                temperature: block
+                    .get("temperature")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                attachment: block
+                    .get("attachment")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                family: block
+                    .get("family")
+                    .and_then(serde_json::Value::as_str)
+                    .map(String::from),
+                release_date: block
+                    .get("release_date")
+                    .and_then(serde_json::Value::as_str)
+                    .map(String::from),
+                status: block
+                    .get("status")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok()),
+                cost: block
+                    .get("cost")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok()),
+                interleaved: block
+                    .get("interleaved")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok()),
+                variants: block
+                    .get("variants")
+                    .and_then(serde_json::Value::as_object)
+                    .map(|obj| {
+                        obj.iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect()
+                    }),
+                limit: block.get("limit").and_then(|v| {
+                    let obj = v.as_object()?;
+                    Some(ModelLimit {
+                        context: obj.get("context")?.as_u64()?,
+                        output: obj.get("output")?.as_u64()?,
+                    })
+                }),
+                modalities: block.get("modalities").and_then(|v| {
+                    let obj = v.as_object()?;
+                    Some(ModelModalities {
+                        input: obj
+                            .get("input")
+                            .and_then(|a| a.as_array())
+                            .map(|a| {
+                                a.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+                            })
+                            .unwrap_or_default(),
+                        output: obj
+                            .get("output")
+                            .and_then(|a| a.as_array())
+                            .map(|a| {
+                                a.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+                            })
+                            .unwrap_or_default(),
+                    })
+                }),
+            }
         })
         .collect()
 }
@@ -303,29 +439,150 @@ fn models_to_cst(models: &[OpencodeCustomModel]) -> CstInputValue {
                 if m.reasoning {
                     fields.push(("reasoning".to_string(), CstInputValue::Bool(true)));
                 }
+                if m.tool_call {
+                    fields.push(("tool_call".to_string(), CstInputValue::Bool(true)));
+                }
+                if m.temperature {
+                    fields.push(("temperature".to_string(), CstInputValue::Bool(true)));
+                }
+                if m.attachment {
+                    fields.push(("attachment".to_string(), CstInputValue::Bool(true)));
+                }
+                if let Some(family) = &m.family {
+                    fields.push(("family".to_string(), CstInputValue::String(family.clone())));
+                }
+                if let Some(release_date) = &m.release_date {
+                    fields.push(("release_date".to_string(), CstInputValue::String(release_date.clone())));
+                }
+                if let Some(status) = &m.status {
+                    let s = serde_json::to_string(status).unwrap_or_default();
+                    fields.push(("status".to_string(), CstInputValue::String(s.trim_matches('"').to_string())));
+                }
+                if let Some(cost) = &m.cost {
+                    if let Ok(json) = serde_json::to_value(cost) {
+                        if let Some(obj) = json.as_object() {
+                            let cost_fields: Vec<(String, CstInputValue)> = obj.iter().map(|(k, v)| {
+                                (k.clone(), json_to_cst(v))
+                            }).collect();
+                            fields.push(("cost".to_string(), CstInputValue::Object(cost_fields)));
+                        }
+                    }
+                }
+                if let Some(interleaved) = &m.interleaved {
+                    match interleaved {
+                        InterleavedConfig::Flag(true) => {
+                            fields.push(("interleaved".to_string(), CstInputValue::Bool(true)));
+                        }
+                        InterleavedConfig::Flag(false) => {}
+                        InterleavedConfig::Object { field } => {
+                            fields.push(("interleaved".to_string(), CstInputValue::Object(
+                                vec![("field".to_string(), CstInputValue::String(field.clone()))],
+                            )));
+                        }
+                    }
+                }
+                if let Some(variants) = &m.variants {
+                    if let Ok(json) = serde_json::to_value(variants) {
+                        if let Some(obj) = json.as_object() {
+                            let var_fields: Vec<(String, CstInputValue)> = obj.iter()
+                                .map(|(k, v)| (k.clone(), json_to_cst(v)))
+                                .collect();
+                            fields.push(("variants".to_string(), CstInputValue::Object(var_fields)));
+                        }
+                    }
+                }
+                if let Some(limit) = &m.limit {
+                    fields.push((
+                        "limit".to_string(),
+                        CstInputValue::Object(vec![
+                            (
+                                "context".to_string(),
+                                CstInputValue::Number(limit.context.to_string()),
+                            ),
+                            (
+                                "output".to_string(),
+                                CstInputValue::Number(limit.output.to_string()),
+                            ),
+                        ]),
+                    ));
+                }
+                if let Some(modalities) = &m.modalities {
+                    let mut mod_fields: Vec<(String, CstInputValue)> = Vec::new();
+                    if !modalities.input.is_empty() {
+                        mod_fields.push((
+                            "input".to_string(),
+                            CstInputValue::Array(
+                                modalities
+                                    .input
+                                    .iter()
+                                    .map(|s| CstInputValue::String(s.clone()))
+                                    .collect(),
+                            ),
+                        ));
+                    }
+                    if !modalities.output.is_empty() {
+                        mod_fields.push((
+                            "output".to_string(),
+                            CstInputValue::Array(
+                                modalities
+                                    .output
+                                    .iter()
+                                    .map(|s| CstInputValue::String(s.clone()))
+                                    .collect(),
+                            ),
+                        ));
+                    }
+                    if !mod_fields.is_empty() {
+                        fields.push(("modalities".to_string(), CstInputValue::Object(mod_fields)));
+                    }
+                }
                 (m.id.clone(), CstInputValue::Object(fields))
             })
             .collect(),
     )
 }
 
+// Convert a serde_json::Value to CstInputValue for models_to_cst
+fn json_to_cst(value: &serde_json::Value) -> CstInputValue {
+    match value {
+        serde_json::Value::Null => CstInputValue::Null,
+        serde_json::Value::Bool(b) => CstInputValue::Bool(*b),
+        serde_json::Value::Number(n) => CstInputValue::Number(n.to_string()),
+        serde_json::Value::String(s) => CstInputValue::String(s.clone()),
+        serde_json::Value::Array(arr) => {
+            CstInputValue::Array(arr.iter().map(json_to_cst).collect())
+        }
+        serde_json::Value::Object(obj) => {
+            CstInputValue::Object(
+                obj.iter().map(|(k, v)| (k.clone(), json_to_cst(v))).collect(),
+            )
+        }
+    }
+}
+
 // Order-independent equality.
 fn models_equal(a: &[OpencodeCustomModel], b: &[OpencodeCustomModel]) -> bool {
-    let key = |models: &[OpencodeCustomModel]| {
-        let mut out: Vec<(String, String, bool)> = models
-            .iter()
-            .map(|m| {
-                (
-                    m.id.trim().to_string(),
-                    m.name.trim().to_string(),
-                    m.reasoning,
-                )
-            })
-            .collect();
-        out.sort();
-        out
-    };
-    key(a) == key(b)
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut a_sorted: Vec<&OpencodeCustomModel> = a.iter().collect();
+    let mut b_sorted: Vec<&OpencodeCustomModel> = b.iter().collect();
+    a_sorted.sort_by_key(|m| m.id.clone());
+    b_sorted.sort_by_key(|m| m.id.clone());
+    a_sorted.into_iter().zip(b_sorted).all(|(a, b)| {
+        a.id == b.id
+            && a.name == b.name
+            && a.reasoning == b.reasoning
+            && a.tool_call == b.tool_call
+            && a.temperature == b.temperature
+            && a.attachment == b.attachment
+            && a.family == b.family
+            && a.release_date == b.release_date
+            && a.status == b.status
+            && a.limit == b.limit
+            && a.modalities == b.modalities
+            && a.interleaved == b.interleaved
+    })
 }
 
 // Preset providers only need an apiKey; set just that, preserve the rest.
@@ -392,8 +649,279 @@ mod tests {
                 id: "deepseek-v4-pro".to_string(),
                 name: "DeepSeek V4 Pro".to_string(),
                 reasoning: true,
+                tool_call: true,
+                temperature: true,
+                attachment: false,
+                family: None,
+                release_date: None,
+                status: None,
+                cost: None,
+                interleaved: None,
+                variants: None,
+                limit: Some(ModelLimit {
+                    context: 1000000,
+                    output: 384000,
+                }),
+                modalities: None,
             }],
         }
+    }
+
+    #[test]
+    fn roundtrip_with_all_capabilities() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.jsonc");
+
+        let provider = OpencodeCustomProvider {
+            id: "acme".to_string(),
+            name: "Acme".to_string(),
+            npm: "@ai-sdk/openai-compatible".to_string(),
+            base_url: "https://acme.example.com/v1".to_string(),
+            api_key: "{env:MY_KEY}".to_string(),
+            headers: BTreeMap::new(),
+            models: vec![
+                OpencodeCustomModel {
+                    id: "deepseek-v4-pro-fusion".to_string(),
+                    name: "DeepSeek V4 Pro Fusion".to_string(),
+                    reasoning: true,
+                    tool_call: true,
+                    temperature: true,
+                    attachment: false,
+                    family: None,
+                    release_date: None,
+                    status: None,
+                    cost: None,
+                    interleaved: None,
+                    variants: None,
+                    limit: Some(ModelLimit {
+                        context: 1000000,
+                        output: 384000,
+                    }),
+                    modalities: Some(ModelModalities {
+                        input: vec!["text".to_string(), "image".to_string()],
+                        output: vec!["text".to_string()],
+                    }),
+                },
+                OpencodeCustomModel {
+                    id: "deepseek-v4-flash-fusion".to_string(),
+                    name: "DeepSeek V4 Flash Fusion".to_string(),
+                    reasoning: true,
+                    tool_call: true,
+                    temperature: true,
+                    attachment: false,
+                    family: None,
+                    release_date: None,
+                    status: None,
+                    cost: None,
+                    interleaved: None,
+                    variants: None,
+                    limit: Some(ModelLimit {
+                        context: 1000000,
+                        output: 384000,
+                    }),
+                    modalities: Some(ModelModalities {
+                        input: vec!["text".to_string(), "image".to_string()],
+                        output: vec!["text".to_string()],
+                    }),
+                },
+            ],
+        };
+
+        upsert_custom_provider_at(&path, &provider).unwrap();
+
+        // Verify written JSON contains all capability fields
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains("\"tool_call\": true"));
+        assert!(written.contains("\"temperature\": true"));
+        assert!(written.contains("\"context\": 1000000"));
+        assert!(written.contains("\"output\": 384000"));
+        assert!(written.contains("\"input\""));
+        assert!(written.contains("\"image\""));
+
+        // Verify read matches the original
+        let read = read_custom_providers_at(&path).unwrap();
+        assert_eq!(read, vec![provider]);
+    }
+
+    #[test]
+    fn roundtrip_vision_model_with_modalities() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.jsonc");
+
+        let provider = OpencodeCustomProvider {
+            id: "acme".to_string(),
+            name: "Acme".to_string(),
+            npm: "@ai-sdk/openai-compatible".to_string(),
+            base_url: "https://acme.example.com/v1".to_string(),
+            api_key: "{env:MY_KEY}".to_string(),
+            headers: BTreeMap::new(),
+            models: vec![OpencodeCustomModel {
+                id: "cmc/xiaomi/mimo-v2.5".to_string(),
+                name: "MiMo V2.5".to_string(),
+                reasoning: true,
+                tool_call: true,
+                temperature: true,
+                attachment: false,
+                family: None,
+                release_date: None,
+                status: None,
+                cost: None,
+                interleaved: None,
+                variants: None,
+                limit: Some(ModelLimit {
+                    context: 1000000,
+                    output: 128000,
+                }),
+                modalities: Some(ModelModalities {
+                    input: vec!["text".to_string(), "image".to_string()],
+                    output: vec!["text".to_string()],
+                }),
+            }],
+        };
+
+        upsert_custom_provider_at(&path, &provider).unwrap();
+        let read = read_custom_providers_at(&path).unwrap();
+        assert_eq!(read, vec![provider]);
+    }
+
+    #[test]
+    fn read_model_without_optional_fields_defaults_to_false() {
+        let json = serde_json::json!({
+            "m": { "name": "M" }
+        });
+        let models = read_models(Some(&json));
+        assert_eq!(models.len(), 1);
+        let m = &models[0];
+        assert_eq!(m.id, "m");
+        assert_eq!(m.name, "M");
+        assert!(!m.reasoning);
+        assert!(!m.tool_call);
+        assert!(!m.temperature);
+        assert_eq!(m.limit, None);
+        assert_eq!(m.modalities, None);
+    }
+
+    #[test]
+    fn read_model_with_partial_limit_defaults_missing_fields() {
+        let json = serde_json::json!({
+            "m": {
+                "name": "M",
+                "limit": { "context": 256000 }
+            }
+        });
+        let models = read_models(Some(&json));
+        assert_eq!(models.len(), 1);
+        // missing "output" in limit → None because the inner `?` short-circuits
+        assert_eq!(models[0].limit, None);
+    }
+
+    #[test]
+    fn read_model_from_jsonc_text() {
+        let text = r#"{
+  "provider": {
+    "acme": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Acme",
+      "options": {
+        "baseURL": "https://acme.example.com/v1",
+        "apiKey": "{env:MY_KEY}"
+      },
+      "models": {
+        "deepseek-v4-pro": {
+          "name": "DeepSeek V4 Pro",
+          "reasoning": true,
+          "tool_call": true,
+          "temperature": true,
+          "limit": { "context": 1000000, "output": 384000 }
+        },
+        "mimo-v2.5": {
+          "name": "MiMo V2.5",
+          "reasoning": true,
+          "tool_call": true,
+          "temperature": true,
+          "limit": { "context": 1000000, "output": 128000 },
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        }
+      }
+    }
+  }
+}
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.jsonc");
+        std::fs::write(&path, text).unwrap();
+
+        let providers = read_custom_providers_at(&path).unwrap();
+        assert_eq!(providers.len(), 1);
+        let m0 = &providers[0].models[0];
+        assert_eq!(m0.id, "deepseek-v4-pro");
+        assert!(m0.reasoning);
+        assert!(m0.tool_call);
+        assert!(m0.temperature);
+        let limit = m0.limit.as_ref().unwrap();
+        assert_eq!(limit.context, 1_000_000);
+        assert_eq!(limit.output, 384_000);
+        assert_eq!(m0.modalities, None);
+
+        let m1 = &providers[0].models[1];
+        assert_eq!(m1.id, "mimo-v2.5");
+        let mods = m1.modalities.as_ref().unwrap();
+        assert_eq!(mods.input, vec!["text", "image"]);
+        assert_eq!(mods.output, vec!["text"]);
+    }
+
+    #[test]
+    fn models_equal_compares_new_fields() {
+        let a = vec![OpencodeCustomModel {
+            id: "m".to_string(),
+            name: "M".to_string(),
+            reasoning: true,
+            tool_call: true,
+            temperature: false,
+            attachment: false,
+            family: None,
+            release_date: None,
+            status: None,
+            cost: None,
+            interleaved: None,
+            variants: None,
+            limit: Some(ModelLimit { context: 1000, output: 500 }),
+            modalities: None,
+        }];
+        let b = vec![OpencodeCustomModel {
+            id: "m".to_string(),
+            name: "M".to_string(),
+            reasoning: true,
+            tool_call: true,
+            temperature: false,
+            attachment: false,
+            family: None,
+            release_date: None,
+            status: None,
+            cost: None,
+            interleaved: None,
+            variants: None,
+            limit: Some(ModelLimit { context: 1000, output: 500 }),
+            modalities: None,
+        }];
+        let c = vec![OpencodeCustomModel {
+            id: "m".to_string(),
+            name: "M".to_string(),
+            reasoning: true,
+            tool_call: true,
+            temperature: true,
+            attachment: false,
+            family: None,
+            release_date: None,
+            status: None,
+            cost: None,
+            interleaved: None,
+            variants: None,
+            limit: Some(ModelLimit { context: 1000, output: 500 }),
+            modalities: None,
+        }];
+        assert!(models_equal(&a, &b), "identical models should be equal");
+        assert!(!models_equal(&a, &c), "different temperature should not match");
     }
 
     #[test]
@@ -557,6 +1085,17 @@ mod tests {
                 id: "deepseek-v4-pro".to_string(),
                 name: "DeepSeek V4 Pro".to_string(),
                 reasoning: false,
+                tool_call: false,
+                temperature: false,
+                attachment: false,
+                family: None,
+                release_date: None,
+                status: None,
+                cost: None,
+                interleaved: None,
+                variants: None,
+                limit: None,
+                modalities: None,
             }],
         };
         upsert_custom_provider_at(&path, &edited).unwrap();
