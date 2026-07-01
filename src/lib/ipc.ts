@@ -596,6 +596,7 @@ async function companionInvoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
 		);
 		if (channelEntry) {
 			const [, channel] = channelEntry;
+			const chan = channel as CompanionChannel<unknown>;
 			const rest = Object.fromEntries(
 				Object.entries(record).filter(
 					([, value]) => !(value instanceof CompanionChannel),
@@ -605,16 +606,58 @@ async function companionInvoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
 			// teardown (see `closeChannel`). Without this, every stream leaks a
 			// connection until the per-origin cap stalls all new streams.
 			const controller = new AbortController();
-			(channel as CompanionChannel<unknown>).close = () => controller.abort();
-			// Tauri's invoke resolves immediately while the channel emits
-			// asynchronously — mirror that. Failures (e.g. a streaming endpoint
-			// not wired yet) degrade to "no events" rather than rejecting.
-			void companionStream(
-				cmd,
-				rest,
-				channel as CompanionChannel<unknown>,
-				controller.signal,
-			).catch(() => {});
+			chan.close = () => controller.abort();
+			// WP2: AWAIT the stream OPEN (HTTP status), bounded by a client timeout.
+			// A non-2xx (e.g. 503 "serve host not ready") or a wedged open now
+			// REJECTS to the caller instead of being swallowed, so use-streaming's
+			// catch can roll the message back to a draft + surface the error. The
+			// @agent open waits on ensureServe (normally ~6s; the Worker's own
+			// ceiling is 180s) — but we never block unbounded: openCompanionStream
+			// aborts + rejects a retryable error after STREAM_OPEN_TIMEOUT_MS.
+			const body = await openCompanionStream(cmd, rest, controller);
+			// Open OK → pump the body in the BACKGROUND (mirroring Tauri's immediate
+			// invoke resolve). A mid-stream drop (throw) synthesizes a NON-persisted
+			// terminal error event (aligned with the api.ts watchdog) so the
+			// dispatcher clears `sending` + surfaces it — never a silent stall. An
+			// abort is teardown (closeChannel), not a failure.
+			// Only the agent stream always terminates with a done/error event; room
+			// chat closes silently on success (its Update goes to the hub), so don't
+			// synthesize a "closed early" error for it.
+			const isAgentStream = cmd === "send_agent_message_stream";
+			let sawTerminal = false;
+			void pumpNdjson(body, (event) => {
+				const kind = (event as { kind?: string }).kind;
+				if (kind === "done" || kind === "aborted" || kind === "error") {
+					sawTerminal = true;
+				}
+				chan.onmessage?.(event);
+			})
+				.then(() => {
+					// Body closed WITHOUT a terminal event → the container-side task
+					// failed / ended abnormally (the agent run errored and dropped the
+					// channel). Synthesize a NON-persisted terminal error so the
+					// dispatcher clears `sending` + surfaces it, instead of waiting out
+					// the api.ts first-event watchdog.
+					if (sawTerminal || controller.signal.aborted || !isAgentStream) {
+						return;
+					}
+					chan.onmessage?.({
+						kind: "error",
+						message:
+							"The message stream ended before completing. Please try again.",
+						persisted: false,
+						internal: false,
+					});
+				})
+				.catch((error) => {
+					if (controller.signal.aborted) return;
+					chan.onmessage?.({
+						kind: "error",
+						message: streamErrorMessage(error),
+						persisted: false,
+						internal: false,
+					});
+				});
 			return undefined as T;
 		}
 	}
@@ -647,30 +690,59 @@ function isPlainArgs(args?: InvokeArgs): args is Record<string, unknown> {
 	);
 }
 
+/** Client-side bound on the stream OPEN. A cold @agent open waits on the
+ *  Worker's ensureServe (normally ~6s; its own ceiling is 180s) — we never block
+ *  the caller unbounded: after this we abort the fetch + reject a retryable error
+ *  so the message rolls back to a draft and the user can retry. */
+const STREAM_OPEN_TIMEOUT_MS = 30_000;
+
 /**
- * POST a streaming command and feed each newline-delimited JSON event to the
- * channel's `onmessage`, resolving when the stream closes.
+ * POST a streaming command and AWAIT only the OPEN (HTTP status), bounded by
+ * {@link STREAM_OPEN_TIMEOUT_MS}. Returns the response body for the caller to
+ * pump in the background. Throws on a non-2xx open OR the client timeout, so the
+ * caller can reject to ITS caller instead of swallowing a failed stream start
+ * (WP2).
  */
-async function companionStream(
+async function openCompanionStream(
 	cmd: string,
 	args: Record<string, unknown>,
-	channel: CompanionChannel<unknown>,
-	signal?: AbortSignal,
-): Promise<void> {
-	const res = await fetch(
-		`${baseUrl()}/rpc-stream/${encodeURIComponent(cmd)}`,
-		{
-			method: "POST",
-			headers: jsonHeaders(),
-			body: JSON.stringify(args),
-			signal,
-		},
-	);
-	if (!res.ok || !res.body) throw await parseHttpError(res);
+	controller: AbortController,
+): Promise<ReadableStream<Uint8Array>> {
+	let timedOut = false;
+	const timer = setTimeout(() => {
+		timedOut = true;
+		controller.abort();
+	}, STREAM_OPEN_TIMEOUT_MS);
+	try {
+		const res = await fetch(
+			`${baseUrl()}/rpc-stream/${encodeURIComponent(cmd)}`,
+			{
+				method: "POST",
+				headers: jsonHeaders(),
+				body: JSON.stringify(args),
+				signal: controller.signal,
+			},
+		);
+		if (!res.ok || !res.body) throw await parseHttpError(res);
+		return res.body;
+	} catch (error) {
+		if (timedOut) {
+			throw new Error(
+				"The cloud sandbox didn't respond in time — it may still be waking up. Please try again.",
+			);
+		}
+		throw error;
+	} finally {
+		clearTimeout(timer);
+	}
+}
 
-	await pumpNdjson(res.body, (event) => {
-		channel.onmessage?.(event);
-	});
+/** Normalize a stream-pump failure into a user-facing message (never the
+ *  `[object Object]` you get from stringifying a plain IPC error object). */
+function streamErrorMessage(error: unknown): string {
+	if (error instanceof Error) return error.message;
+	if (typeof error === "string") return error;
+	return "The message stream was interrupted. Please try again.";
 }
 
 // ---------------------------------------------------------------------------
