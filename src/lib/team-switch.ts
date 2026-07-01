@@ -18,6 +18,7 @@ import {
 	setTeamModeActive,
 	type TeamConfig,
 } from "./team-mode";
+import { beginTeamReadinessProbe, resetTeamReadiness } from "./team-readiness";
 import { bumpTransportGeneration } from "./transport-generation";
 
 /**
@@ -49,4 +50,12 @@ export function switchTeamMode(config: TeamConfig | null): void {
 	}
 	applyTransportSwitch();
 	bumpTransportGeneration();
+	// WP1: entering Team always runs the readiness probe (health → ready |
+	// degraded); leaving Team stops it. Every team gate derives from the
+	// resulting `useTeamReadiness()` — no more stale-config "instant connect".
+	if (config) {
+		beginTeamReadinessProbe();
+	} else {
+		resetTeamReadiness();
+	}
 }

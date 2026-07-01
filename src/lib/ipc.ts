@@ -939,9 +939,6 @@ async function runEventStream(
 			await pump(signal, isCurrent, () => {
 				setCompanionConnectionState("online");
 				attempt = 0;
-				// First successful team connect → future Local↔Team switches are
-				// instant (D1-backed sidebar shows without the connecting overlay).
-				if (transport.team) markTeamEstablished();
 			});
 		} catch {
 			// Connection dropped (sleeping sandbox cold start, backgrounded tab,
@@ -1003,35 +1000,11 @@ export function applyTransportSwitch(): void {
 	recomputeTransportMode();
 	companionAuthState = initialCompanionAuthState();
 	for (const listener of companionAuthListeners) listener();
-	// Seed "connecting" (blocking overlay) only on the FIRST team setup or a
-	// companion connect; a re-entry into an already-established team shows the
-	// D1-backed sidebar instantly ("online") and reconnects the stream in the bg.
-	setCompanionConnectionState(
-		transport.remote
-			? transport.team && teamEverEstablished()
-				? "online"
-				: "connecting"
-			: "online",
-	);
-}
-
-/** Set once a team event stream first connects. Lets a later Local↔Team switch
- *  skip the blocking "connecting" overlay — the D1-backed sidebar shows instantly
- *  and the stream reconnects in the background. */
-const TEAM_ESTABLISHED_KEY = "helmor.team.established";
-function markTeamEstablished(): void {
-	try {
-		localStorage.setItem(TEAM_ESTABLISHED_KEY, "1");
-	} catch {
-		// localStorage can throw in some embedded contexts; harmless to skip
-	}
-}
-function teamEverEstablished(): boolean {
-	try {
-		return localStorage.getItem(TEAM_ESTABLISHED_KEY) === "1";
-	} catch {
-		return false;
-	}
+	// WP1: entering a remote transport always seeds "connecting" — the
+	// team-readiness probe (team-switch.ts) decides ready vs degraded, so a stale
+	// config or a previously-established team can no longer skip the connect check
+	// (the "instant connect" of S1). Local is synchronous → "online".
+	setCompanionConnectionState(transport.remote ? "connecting" : "online");
 }
 
 // ---------------------------------------------------------------------------

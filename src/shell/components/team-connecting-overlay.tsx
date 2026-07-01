@@ -1,52 +1,50 @@
+import { useEffect } from "react";
 import { HelmorLogoAnimated } from "@/components/helmor-logo-animated";
 import { Button } from "@/components/ui/button";
 import { isTeamModeActive } from "@/lib/team-mode";
+import {
+	ensureTeamReadinessProbe,
+	retryTeamReadiness,
+	useTeamReadiness,
+} from "@/lib/team-readiness";
 import { switchTeamMode } from "@/lib/team-switch";
 import { useTransportGeneration } from "@/lib/transport-generation";
 import { publishShellEvent } from "@/shell/event-bus";
-import { useCompanionConnectionStatus } from "@/shell/hooks/use-companion-connection-status";
-import { useTeamConnectStage } from "@/shell/hooks/use-team-connect-stage";
 
 /**
- * Full-window frosted-glass overlay shown while Team mode is connecting to the
- * shared cloud backend. A cold Cloudflare sandbox can take ~1–2 min to wake, so
- * the Local→Team switch needs to FEEL like a real connection instead of a dead
- * UI — this replaces the removed reconnecting banner with a clear "connecting"
- * surface (animated Helmor mark + status). Gated on Team mode + a non-online
- * connection phase: renders null in Local mode and the moment we're online.
+ * Full-window frosted-glass gate shown until Team readiness reaches `ready`.
  *
- * Always offers a "Back to Local" escape so the user is never trapped behind the
- * blur; once the connect has clearly stalled (`disconnected`) it also points at
- * Team settings.
+ * WP1 (team-cloud-stabilize): derives ENTIRELY from the single team-readiness
+ * state machine ({@link useTeamReadiness}). A stale config or a
+ * previously-established team can no longer skip it ("秒连" / S1) — every entry
+ * runs the health probe, and the overlay stays up until `ready`. A cold
+ * Cloudflare sandbox can take ~1–2 min to wake, so this shows the live connecting
+ * stage; a `degraded` verdict shows a terminal (`unauthorized`) or retryable
+ * error with a Retry, and always a "Back to Local" escape so the user is never
+ * trapped behind the blur.
  */
 export function TeamConnectingOverlay() {
 	// Re-render after a Local↔Team switch so `isTeamModeActive()` re-reads the
 	// flipped state (same subscription the team switch/panel use).
 	useTransportGeneration();
-	const { phase } = useCompanionConnectionStatus();
+	const readiness = useTeamReadiness();
 	const teamActive = isTeamModeActive();
-	// Live cold-start stage from the Worker's /v1/health (waking → starting →
-	// up). Polls only while the overlay is up (team mode + not yet online).
-	const stage = useTeamConnectStage(teamActive && phase !== "online");
 
-	if (!teamActive || phase === "online") return null;
+	// A reload straight into team mode never calls `switchTeamMode`, so no probe
+	// was kicked — start one on mount (idempotent: a no-op while one is live or
+	// we're already `ready`) so the gate resolves instead of spinning forever.
+	useEffect(() => {
+		if (teamActive) ensureTeamReadinessProbe();
+	}, [teamActive]);
 
-	// A 401/403 from the cold-start probe is a TERMINAL auth failure (invalid
-	// team token), not a slow wake — surface it as such, not endless "connecting".
-	const unauthorized = stage?.unauthorized === true;
-	const stalled = phase === "disconnected";
-	const headline = unauthorized
-		? "Team access not authorized"
-		: stalled
-			? "Can't reach the team cloud"
-			: (stage?.label ?? "Connecting to team cloud…");
-	const detail = unauthorized
-		? (stage?.detail ??
-			"Your team token is no longer valid. Re-join the team, or go back to Local.")
-		: stalled
-			? "The cloud sandbox isn't responding. It may still be waking — wait a little, or switch back to Local."
-			: (stage?.detail ??
-				"Waking your team's Cloudflare sandbox. A cold start can take a minute.");
+	if (!teamActive || readiness.state === "ready") return null;
+
+	const degraded = readiness.state === "degraded";
+	const unauthorized = readiness.unauthorized;
+	const headline = readiness.label || "Connecting to team cloud…";
+	const detail =
+		readiness.detail ||
+		"Waking your team's Cloudflare sandbox. A cold start can take a minute.";
 
 	return (
 		<div
@@ -69,8 +67,14 @@ export function TeamConnectingOverlay() {
 				>
 					Back to Local
 				</Button>
-				{stalled || unauthorized ? (
+				{degraded && !unauthorized ? (
+					<Button size="sm" onClick={() => retryTeamReadiness()}>
+						Retry
+					</Button>
+				) : null}
+				{degraded ? (
 					<Button
+						variant={unauthorized ? "default" : "outline"}
 						size="sm"
 						onClick={() =>
 							publishShellEvent({ type: "open-settings", section: "team" })

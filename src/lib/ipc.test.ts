@@ -176,21 +176,19 @@ describe("ipc transport switch", () => {
 		expect(states).toEqual(["connecting", "online"]);
 	});
 
-	it("re-entry into an ESTABLISHED team switches instantly (online, no connecting overlay)", async () => {
+	it("always enters connecting on a team switch — a prior 'established' flag no longer skips the connect check (WP1)", async () => {
 		const ipc = await freshIpc();
-		const states: string[] = [];
-		ipc.subscribeCompanionConnection(() => {
-			states.push(ipc.getCompanionConnectionState());
-		});
 
-		// The team event stream has connected successfully before.
+		// Even if the team event stream connected successfully before, entering
+		// team mode must go through `connecting`: the team-readiness probe (not a
+		// stale localStorage flag) decides ready vs degraded, so a stale config can
+		// no longer "instantly connect" into an unhealthy backend (S1).
 		localStorage.setItem("helmor.team.established", "1");
 		configureTeamBackend();
 		activateTeamMode();
-		ipc.applyTransportSwitch(); // established → instant "online", no blocking "connecting"
+		ipc.applyTransportSwitch();
 
-		expect(ipc.getCompanionConnectionState()).toBe("online");
-		expect(states).not.toContain("connecting");
+		expect(ipc.getCompanionConnectionState()).toBe("connecting");
 	});
 });
 
