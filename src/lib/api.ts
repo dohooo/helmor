@@ -4010,13 +4010,50 @@ export async function getLocalLlmEndpoint(): Promise<LocalLlmEndpoint | null> {
  * The returned promise resolves when the stream has been successfully handed
  * off. The callback continues to fire until a `done` or `error` event arrives.
  */
+/** A cold team sandbox can take up to the backend cold-start ceiling (~180s) to
+ *  serve the first token; this is the client-side backstop so a stalled stream
+ *  (or a stream POST that failed and was swallowed in the IPC layer) can never
+ *  spin forever. Must exceed the backend ceiling + margin. */
+const FIRST_AGENT_EVENT_TIMEOUT_MS = 210_000;
+
 export async function startAgentMessageStream(
 	request: AgentSendRequest,
 	callback: (event: AgentStreamEvent) => void,
 ): Promise<void> {
 	const onEvent = new Channel<AgentStreamEvent>();
-	onEvent.onmessage = (event) => callback(event);
-	await invoke("send_agent_message_stream", { request, onEvent });
+	// Watchdog: if NOTHING streams back within the cold-start ceiling + margin
+	// (a wedged cold start, or a stream POST that failed and got swallowed in the
+	// IPC layer), synthesize a terminal `error` so the dispatcher clears the
+	// sending state and the user can retry, instead of an infinite spinner.
+	// Cleared on the first real event; late events after a timeout are ignored.
+	let firstSeen = false;
+	let timedOut = false;
+	const watchdog = setTimeout(() => {
+		if (firstSeen) return;
+		timedOut = true;
+		closeChannel(onEvent);
+		callback({
+			kind: "error",
+			message:
+				"The cloud sandbox didn't respond in time — it may still be waking up. Please try again.",
+			persisted: false,
+			internal: false,
+		});
+	}, FIRST_AGENT_EVENT_TIMEOUT_MS);
+	onEvent.onmessage = (event) => {
+		if (timedOut) return;
+		if (!firstSeen) {
+			firstSeen = true;
+			clearTimeout(watchdog);
+		}
+		callback(event);
+	};
+	try {
+		await invoke("send_agent_message_stream", { request, onEvent });
+	} catch (error) {
+		clearTimeout(watchdog);
+		throw error;
+	}
 }
 
 /** Wire shape for `post_room_chat_message`. `author_id` is intentionally

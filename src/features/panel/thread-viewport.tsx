@@ -25,6 +25,7 @@ import { hasUnresolvedPlanReview } from "@/lib/plan-review";
 import { expandSessionThread } from "@/lib/query-client";
 import { useSessionThreadPagination } from "@/lib/session-thread-pagination";
 import { useSettings } from "@/lib/settings";
+import { isTeamModeActive } from "@/lib/team-mode";
 import {
 	normalizeThreadMessagesForDisplay,
 	resolveStreamingFooterMessageIndex,
@@ -1440,6 +1441,12 @@ function ConversationBottomSpacer() {
 	);
 }
 
+// In team mode this footer renders only BEFORE the agent's first token, so a
+// wait past a couple seconds means the cloud sandbox is cold-starting (a warm
+// reply streams its first token well under this). Show a distinct "waking" line
+// so a cold start doesn't masquerade as the agent "thinking".
+const TEAM_COLD_START_HINT_SECONDS = 2;
+
 function StreamingFooter({ startTime }: { startTime: number }) {
 	// Derive elapsed from a ticking clock so a startTime change (e.g. workspace
 	// switch) reflects immediately instead of waiting for the next tick.
@@ -1459,13 +1466,15 @@ function StreamingFooter({ startTime }: { startTime: number }) {
 					.toString()
 					.padStart(2, "0")}s`;
 
+	const waking = isTeamModeActive() && elapsed >= TEAM_COLD_START_HINT_SECONDS;
+
 	return (
 		<div
 			data-testid="streaming-footer"
 			className="flex items-center gap-1.5 px-5 py-3 text-small tabular-nums text-muted-foreground"
 		>
 			<HelmorLogoAnimated size={14} className="opacity-80" />
-			{display}
+			{waking ? `Waking the container… ${display}` : display}
 		</div>
 	);
 }
