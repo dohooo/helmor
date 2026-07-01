@@ -73,6 +73,10 @@ export const CODEX_SHA256: Readonly<
 		arm64: "775a564ea8a15a2959cd2bd5c5540ded68e35af2aa246f7d7e3e87b7a530aaae",
 		x64: "34a6e122ce6ce810f3f4dda43592d8f294f0722aa836809f2ed320b7b19b04a6",
 	},
+	"0.142.4": {
+		arm64: "3c11cfcf3bd46771421ba820a224c856b1167d094715d26f1da55f47c7b8726c",
+		x64: "27c89c8f8c682e8d7db72919186b0fed4bb45c947500b5a77e05d7bed89d0b9c",
+	},
 };
 
 export const CLAUDE_CODE_SHA256: Readonly<
@@ -102,6 +106,10 @@ export const CLAUDE_CODE_SHA256: Readonly<
 		arm64: "4abdd760857cc2f48d79e2c23dbef82b27369ce13840dab977c33e53608b56ee",
 		x64: "d33fc94637a6524dfe986d5d895c76b9d80f4c1554315ca20c1c57d8bc5ea35c",
 	},
+	"2.1.197": {
+		arm64: "f5a7b05f69c3ab84c224be287c1859781f7abf77c08dff48fb100efffa76be6e",
+		x64: "8b70562c29fcc6b0b521106125b08a9e012a6cd05d5c7b87b0314f0ad3dae2b1",
+	},
 };
 
 export const OPENCODE_SHA256: Readonly<
@@ -123,6 +131,10 @@ export const OPENCODE_SHA256: Readonly<
 		arm64: "8837811a5bb35b9a52bfe6e943f7881b95bcfa4a7444a5292181fb651ef9f18e",
 		x64: "48242614bb5b551bc854f8eff2992cd808c11be7454544c4e69e7a2dbd0f637a",
 	},
+	"1.17.11": {
+		arm64: "77e58d109987351dc0283c7c2df561328c8c9a42af99a529dd016be8da9e56f5",
+		x64: "ed5ea40abc3af12d885f6055ddaadd87028c1ad3c1f42faf38de5d69a06c8876",
+	},
 };
 
 // Kimi Code CLI ships per-platform native binaries (Node SEA) as zip release
@@ -130,7 +142,7 @@ export const OPENCODE_SHA256: Readonly<
 // release URL rather than from node_modules. Bumping: pull each platform's
 // SHA256 from the release's `*.zip.sha256` sidecar (or the GitHub asset
 // `digest`) and wipe sidecar/.bundle-cache. Keyed `version → platformSlug`.
-export const KIMI_VERSION = "0.19.2";
+export const KIMI_VERSION = "0.20.3";
 export const KIMI_SHA256: Readonly<Record<string, Record<string, string>>> = {
 	"0.19.1": {
 		"darwin-arm64":
@@ -151,6 +163,16 @@ export const KIMI_SHA256: Readonly<Record<string, Record<string, string>>> = {
 			"58c947886ad4aacf7604bf5f35abf161d77dcbd050900170c4fd49da9234865c",
 		"win32-x64":
 			"6967aca6daa7a61ea1601e1bc0a64cc22512a6f449b4cabd5a08fa1f1ffb4dda",
+	},
+	"0.20.3": {
+		"darwin-arm64":
+			"8d49227050498a23f11ce660c622e4be94d2a07f22950bb277269f951530ed87",
+		"darwin-x64":
+			"8152a43d7a2208b5ee9a1aab7b1344082df6df49ed4ed66156a2fa356b9ea396",
+		"win32-arm64":
+			"270e44215fb89112135dfb8bbbbe54beb1269031ca20311b4cc4d9a5b267b35a",
+		"win32-x64":
+			"fbd2c89b61cfd48474f99aeaee536b3f34c1da3879588dbd1150f80b34064535",
 	},
 };
 
