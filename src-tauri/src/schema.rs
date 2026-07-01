@@ -237,11 +237,10 @@ fn heal_children_of_merged_stack_layers(connection: &Connection) -> Result<()> {
             .context("Failed to read merged layers")?
     };
     // Splice directly on `connection` rather than opening our own transaction:
-    // the Conductor import calls `ensure_schema` / `run_migrations` inside a
-    // `BEGIN IMMEDIATE` (see `import.rs`), so an `unchecked_transaction()` here
-    // would fail with "cannot start a transaction within a transaction". Each
-    // splice is a single idempotent UPDATE, so a crash mid-loop just heals on the
-    // next run.
+    // `ensure_schema` / `run_migrations` can run inside a caller's transaction,
+    // where an `unchecked_transaction()` here would fail with "cannot start a
+    // transaction within a transaction". Each splice is a single idempotent
+    // UPDATE, so a crash mid-loop just heals on the next run.
     for layer_id in &merged_layers {
         crate::models::workspaces::splice_out_stack_layer(connection, layer_id)
             .with_context(|| format!("Failed to splice merged stack layer {layer_id}"))?;
@@ -1477,10 +1476,9 @@ mod tests {
 
     #[test]
     fn heal_runs_inside_an_ambient_transaction_without_nesting() {
-        // Regression: the Conductor import runs ensure_schema / run_migrations
-        // inside a `BEGIN IMMEDIATE` (import.rs). The heal must NOT open its own
-        // transaction, or it aborts with "cannot start a transaction within a
-        // transaction" and breaks the import for anyone with a merged workspace.
+        // Regression: `ensure_schema` / `run_migrations` can run inside a
+        // caller's transaction. The heal must NOT open its own transaction, or it
+        // aborts with "cannot start a transaction within a transaction".
         let (connection, _dir) = open_test_db();
         ensure_schema(&connection).unwrap();
         insert_ws(&connection, "root", "feat/root", Some("main"), None);

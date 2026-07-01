@@ -815,9 +815,10 @@ pub(crate) fn update_workspace_branch(workspace_id: &str, new_branch: &str) -> R
 /// transaction (if any) the caller already holds: pass a `&Transaction` (it
 /// deref-coerces to `&Connection`) to make it atomic with a surrounding change
 /// like the merge flip or a delete, or a bare `&Connection` to autocommit each
-/// UPDATE. It deliberately does NOT open its own transaction — the startup heal
-/// calls it while the Conductor import already holds a `BEGIN IMMEDIATE`, where
-/// a nested `BEGIN` would fail. Must run while the `layer_id` row still exists
+/// UPDATE. It deliberately does NOT open its own transaction — the startup
+/// reconcile calls it from inside `run_migrations`, which can itself run inside
+/// a caller's transaction where a nested `BEGIN` would fail. Must run while the
+/// `layer_id` row still exists
 /// (the base is resolved from it). Returns the reparented child ids for UI
 /// refresh; empty when `layer_id` has no children (a tip or non-stacked layer).
 pub(crate) fn splice_out_stack_layer(
