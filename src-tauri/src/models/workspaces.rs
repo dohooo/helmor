@@ -206,10 +206,14 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
 
 /// Team mode: per-workspace count of sessions that are unread FOR `member_id`.
 /// A session is unread when it holds a message newer than that member's
-/// `last_read_at` (absent row ⇒ never read ⇒ unread if it has any messages).
-/// Only workspaces with ≥1 such session appear in the map. Used to override the
-/// global `has_unread` / `unread_session_count` for one member; local mode never
-/// calls this.
+/// `last_read_at` (absent row ⇒ never read ⇒ unread if it has any messages)
+/// that `member_id` did NOT author. Rows with `author_id IS NULL`
+/// (agent/assistant/system output) are always "not mine" and still count; only
+/// the member's own rows (`author_id = member_id`, e.g. their room-chat or
+/// @agent prompt) are excluded, so self-sent messages never light one's own
+/// unread dot (S5). Only workspaces with ≥1 such session appear in the map.
+/// Used to override the global `has_unread` / `unread_session_count` for one
+/// member; local mode never calls this.
 pub fn load_member_unread_counts(member_id: &str) -> Result<HashMap<String, i64>> {
     let connection = db::read_conn()?;
     let mut statement = connection.prepare(
@@ -224,6 +228,11 @@ pub fn load_member_unread_counts(member_id: &str) -> Result<HashMap<String, i64>
                   (SELECT last_read_at FROM session_read_state
                    WHERE member_id = ?1 AND session_id = s.id),
                   '')
+              -- S5: a member's own rows never count as unread for themselves.
+              -- `author_id IS NULL` (agent/assistant/system) is "not mine" and
+              -- still counts; `NULL <> ?1` is NULL(false) in SQL, so it must be
+              -- spelled `IS NULL OR <>` or agent replies would be excluded too.
+              AND (m.author_id IS NULL OR m.author_id <> ?1)
           )
         GROUP BY s.workspace_id
         "#,
