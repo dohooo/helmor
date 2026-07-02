@@ -16,6 +16,7 @@ import {
 import { useStickToBottom } from "use-stick-to-bottom";
 import { HelmorLogoAnimated } from "@/components/helmor-logo-animated";
 import { Button } from "@/components/ui/button";
+import { useAgentStreamOpened } from "@/lib/agent-stream-open";
 import type { ThreadMessageLike } from "@/lib/api";
 import { HelmorProfiler } from "@/lib/dev-react-profiler";
 import { useI18n } from "@/lib/i18n";
@@ -568,12 +569,18 @@ function ConversationViewport({
 											{itemContent(index, message)}
 										</ConversationRowShell>
 										{streamingFooterMessageIndex === index ? (
-											<StreamingFooter startTime={sendingStartTime} />
+											<StreamingFooter
+												sessionId={sessionId}
+												startTime={sendingStartTime}
+											/>
 										) : null}
 									</Fragment>
 								))}
 						{showStreamingFooter && streamingFooterMessageIndex == null ? (
-							<StreamingFooter startTime={sendingStartTime} />
+							<StreamingFooter
+								sessionId={sessionId}
+								startTime={sendingStartTime}
+							/>
 						) : null}
 						<ConversationBottomSpacer />
 					</div>
@@ -1242,7 +1249,10 @@ function ProgressiveConversationViewport({
 									// synced value.
 								}}
 							>
-								<StreamingFooter startTime={row.startTime} />
+								<StreamingFooter
+									sessionId={sessionId}
+									startTime={row.startTime}
+								/>
 							</div>
 						);
 					}
@@ -1447,7 +1457,13 @@ function ConversationBottomSpacer() {
 // so a cold start doesn't masquerade as the agent "thinking".
 const TEAM_COLD_START_HINT_SECONDS = 2;
 
-function StreamingFooter({ startTime }: { startTime: number }) {
+function StreamingFooter({
+	sessionId,
+	startTime,
+}: {
+	sessionId: string;
+	startTime: number;
+}) {
 	// Derive elapsed from a ticking clock so a startTime change (e.g. workspace
 	// switch) reflects immediately instead of waiting for the next tick.
 	const [now, setNow] = useState(() => Date.now());
@@ -1466,7 +1482,19 @@ function StreamingFooter({ startTime }: { startTime: number }) {
 					.toString()
 					.padStart(2, "0")}s`;
 
-	const waking = isTeamModeActive() && elapsed >= TEAM_COLD_START_HINT_SECONDS;
+	// WP8: the stream POST's awaited open (WP2) tells us the container is
+	// connected — flip to "Thinking…" the moment it lands instead of labelling
+	// the whole pre-first-token wait as waking. Before open (a real cold start)
+	// keep the waking line; timeout/failure paths are unchanged (the footer
+	// unmounts when the WP2 error path clears `sending`).
+	const streamOpened = useAgentStreamOpened(sessionId);
+	const teamWait =
+		isTeamModeActive() && elapsed >= TEAM_COLD_START_HINT_SECONDS;
+	const label = !teamWait
+		? display
+		: streamOpened
+			? `Thinking… ${display}`
+			: `Waking the container… ${display}`;
 
 	return (
 		<div
@@ -1474,7 +1502,7 @@ function StreamingFooter({ startTime }: { startTime: number }) {
 			className="flex items-center gap-1.5 px-5 py-3 text-small tabular-nums text-muted-foreground"
 		>
 			<HelmorLogoAnimated size={14} className="opacity-80" />
-			{waking ? `Waking the container… ${display}` : display}
+			{label}
 		</div>
 	);
 }

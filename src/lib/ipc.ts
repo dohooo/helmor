@@ -34,6 +34,10 @@ import {
 	listen as tauriListen,
 	type UnlistenFn,
 } from "@tauri-apps/api/event";
+import {
+	beginAgentStreamOpen,
+	markAgentStreamOpened,
+} from "./agent-stream-open";
 import { isTauriRuntime } from "./platform";
 import { getTeamConfig, isTeamModeActive } from "./team-mode";
 
@@ -607,6 +611,20 @@ async function companionInvoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
 			// connection until the per-origin cap stalls all new streams.
 			const controller = new AbortController();
 			chan.close = () => controller.abort();
+			// WP8: expose the open as a per-session signal so the streaming footer
+			// can flip "Waking the container…" → "Thinking…" the moment the
+			// container accepts the turn (well before the first token).
+			// NOTE: the UI keys sessions by the HELMOR session id
+			// (`request.helmorSessionId`) — `request.sessionId` is the PROVIDER
+			// session id and can be null on a fresh session.
+			const isAgentStream = cmd === "send_agent_message_stream";
+			const agentSessionId = isAgentStream
+				? (rest as { request?: { helmorSessionId?: unknown } }).request
+						?.helmorSessionId
+				: undefined;
+			if (typeof agentSessionId === "string") {
+				beginAgentStreamOpen(agentSessionId);
+			}
 			// WP2: AWAIT the stream OPEN (HTTP status), bounded by a client timeout.
 			// A non-2xx (e.g. 503 "serve host not ready") or a wedged open now
 			// REJECTS to the caller instead of being swallowed, so use-streaming's
@@ -615,6 +633,9 @@ async function companionInvoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
 			// ceiling is 180s) — but we never block unbounded: openCompanionStream
 			// aborts + rejects a retryable error after STREAM_OPEN_TIMEOUT_MS.
 			const body = await openCompanionStream(cmd, rest, controller);
+			if (typeof agentSessionId === "string") {
+				markAgentStreamOpened(agentSessionId);
+			}
 			// Open OK → pump the body in the BACKGROUND (mirroring Tauri's immediate
 			// invoke resolve). A mid-stream drop (throw) synthesizes a NON-persisted
 			// terminal error event (aligned with the api.ts watchdog) so the
@@ -623,7 +644,6 @@ async function companionInvoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
 			// Only the agent stream always terminates with a done/error event; room
 			// chat closes silently on success (its Update goes to the hub), so don't
 			// synthesize a "closed early" error for it.
-			const isAgentStream = cmd === "send_agent_message_stream";
 			let sawTerminal = false;
 			void pumpNdjson(body, (event) => {
 				const kind = (event as { kind?: string }).kind;
