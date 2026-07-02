@@ -93,6 +93,7 @@ fn migrate_v1(v1: ClaudeV1Settings) -> Vec<CustomProvider> {
                     label: slug.clone(),
                     slug,
                     effort_levels: Vec::new(),
+                    ..Default::default()
                 })
                 .collect(),
             ..Default::default()

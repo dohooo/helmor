@@ -2,11 +2,47 @@
 
 export type ProviderFamily = "claude" | "codex" | "opencode" | "kimi";
 
+export type ModelLimit = {
+	context: number;
+	output: number;
+};
+
+export type ModelCost = {
+	input: number;
+	output: number;
+	cacheRead?: number;
+	cacheWrite?: number;
+	contextOver200k?: ModelCost;
+};
+
+export type ModelModalities = {
+	input?: string[];
+	output?: string[];
+};
+
+export type ModelStatus = "alpha" | "beta" | "deprecated" | "active";
+
+export type InterleavedConfig =
+	| boolean
+	| { field: "reasoning" | "reasoning_content" | "reasoning_details" };
+
 export type CustomProviderModel = {
 	slug: string;
 	label: string;
 	/** Non-empty ⟺ the composer shows an effort switch. */
 	effortLevels?: string[];
+	reasoning?: boolean;
+	toolCall?: boolean;
+	temperature?: boolean;
+	attachment?: boolean;
+	limit?: ModelLimit;
+	modalities?: ModelModalities;
+	cost?: ModelCost;
+	family?: string;
+	releaseDate?: string;
+	status?: ModelStatus;
+	interleaved?: InterleavedConfig;
+	variants?: Record<string, unknown>;
 };
 
 export type ApiStyle = "chat" | "responses";

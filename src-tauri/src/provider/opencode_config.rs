@@ -10,6 +10,10 @@ use jsonc_parser::cst::{CstInputValue, CstObject, CstRootNode};
 use jsonc_parser::ParseOptions;
 use serde::{Deserialize, Serialize};
 
+pub use super::types::{
+    InterleavedConfig, ModelCost, ModelLimit, ModelModalities, ModelStatus,
+};
+
 const SCHEMA_URL: &str = "https://opencode.ai/config.json";
 const DEFAULT_NPM: &str = "@ai-sdk/openai-compatible";
 
@@ -24,55 +28,6 @@ const OPENCODE_FAMILY: FamilyConfig = FamilyConfig {
     xdg_dir: "opencode",
     file_candidates: ["opencode.jsonc", "opencode.json", "config.json"],
 };
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelLimit {
-    pub context: u64,
-    pub output: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelCost {
-    pub input: f64,
-    pub output: f64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_read: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_write: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context_over_200k: Option<Box<ModelCost>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelModalities {
-    #[serde(default)]
-    pub input: Vec<String>,
-    #[serde(default)]
-    pub output: Vec<String>,
-}
-
-/// interleaved: `true` | `{ field: "reasoning" | "reasoning_content" | "reasoning_details" }`
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum InterleavedConfig {
-    Flag(bool),
-    Object { field: String },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ModelStatus {
-    #[serde(rename = "alpha")]
-    Alpha,
-    #[serde(rename = "beta")]
-    Beta,
-    #[serde(rename = "deprecated")]
-    Deprecated,
-    #[serde(rename = "active")]
-    Active,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -349,6 +304,9 @@ fn read_models(models: Option<&serde_json::Value>) -> Vec<OpencodeCustomModel> {
 fn upsert_custom_provider_at(path: &Path, provider: &OpencodeCustomProvider) -> Result<()> {
     let text = std::fs::read_to_string(path)
         .unwrap_or_else(|_| format!("{{\n  \"$schema\": \"{SCHEMA_URL}\"\n}}\n"));
+
+    let provider = provider.clone();
+
     // Only rewrite `models` when changed, to preserve comments in it.
     let models_unchanged = read_custom_providers_at(path)
         .ok()
@@ -567,11 +525,11 @@ fn models_equal(a: &[OpencodeCustomModel], b: &[OpencodeCustomModel]) -> bool {
     }
     let mut a_sorted: Vec<&OpencodeCustomModel> = a.iter().collect();
     let mut b_sorted: Vec<&OpencodeCustomModel> = b.iter().collect();
-    a_sorted.sort_by_key(|m| m.id.clone());
-    b_sorted.sort_by_key(|m| m.id.clone());
+    a_sorted.sort_by(|a, b| a.id.trim().cmp(b.id.trim()));
+    b_sorted.sort_by(|a, b| a.id.trim().cmp(b.id.trim()));
     a_sorted.into_iter().zip(b_sorted).all(|(a, b)| {
-        a.id == b.id
-            && a.name == b.name
+        a.id.trim() == b.id.trim()
+            && a.name.trim() == b.name.trim()
             && a.reasoning == b.reasoning
             && a.tool_call == b.tool_call
             && a.temperature == b.temperature
@@ -579,9 +537,11 @@ fn models_equal(a: &[OpencodeCustomModel], b: &[OpencodeCustomModel]) -> bool {
             && a.family == b.family
             && a.release_date == b.release_date
             && a.status == b.status
+            && a.cost == b.cost
             && a.limit == b.limit
             && a.modalities == b.modalities
             && a.interleaved == b.interleaved
+            && a.variants == b.variants
     })
 }
 
@@ -819,6 +779,81 @@ mod tests {
     }
 
     #[test]
+    fn upsert_overwrites_with_provider_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.jsonc");
+        std::fs::write(
+            &path,
+            r#"{
+  "provider": {
+    "acme": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": { "baseURL": "https://acme.example.com/v1", "apiKey": "old" },
+      "models": {
+        "deepseek-v4-pro": {
+          "name": "DeepSeek V4 Pro",
+          "reasoning": true,
+          "tool_call": true,
+          "temperature": true,
+          "attachment": true,
+          "modalities": { "input": ["text", "image"], "output": ["text"] },
+          "limit": { "context": 1000000, "output": 384000 },
+          "cost": { "input": 1.74, "output": 3.48, "cache_read": 0.17 },
+          "family": "claude",
+          "status": "active"
+        }
+      }
+    }
+  }
+}"#,
+        )
+        .unwrap();
+
+        let updated = OpencodeCustomProvider {
+            id: "acme".to_string(),
+            name: "Acme".to_string(),
+            npm: "@ai-sdk/openai-compatible".to_string(),
+            base_url: "https://acme.example.com/v2".to_string(),
+            api_key: "new".to_string(),
+            headers: BTreeMap::new(),
+            models: vec![OpencodeCustomModel {
+                id: "deepseek-v4-pro".to_string(),
+                name: "DeepSeek V4 Pro".to_string(),
+                reasoning: false,
+                tool_call: false,
+                temperature: false,
+                attachment: false,
+                family: None,
+                release_date: None,
+                status: None,
+                cost: None,
+                interleaved: None,
+                variants: None,
+                limit: None,
+                modalities: None,
+            }],
+        };
+        upsert_custom_provider_at(&path, &updated).unwrap();
+
+        let read = read_custom_providers_at(&path).unwrap();
+        let model = &read[0].models[0];
+
+        assert!(!model.tool_call, "tool_call should be false (provider value)");
+        assert!(!model.temperature, "temperature should be false (provider value)");
+        assert!(!model.attachment, "attachment should be false (provider value)");
+        assert!(!model.reasoning, "reasoning should be false (provider value)");
+        assert!(model.family.is_none());
+        assert!(model.limit.is_none());
+        assert!(model.modalities.is_none());
+        assert!(model.cost.is_none());
+        assert!(model.status.is_none());
+        assert_eq!(read[0].base_url, "https://acme.example.com/v2");
+        assert_eq!(read[0].api_key, "new");
+    }
+
+
+
+    #[test]
     fn read_model_from_jsonc_text() {
         let text = r#"{
   "provider": {
@@ -892,8 +927,8 @@ mod tests {
             modalities: None,
         }];
         let b = vec![OpencodeCustomModel {
-            id: "m".to_string(),
-            name: "M".to_string(),
+            id: " m ".to_string(),
+            name: " M ".to_string(),
             reasoning: true,
             tool_call: true,
             temperature: false,

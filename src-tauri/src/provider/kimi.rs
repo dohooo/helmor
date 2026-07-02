@@ -198,6 +198,7 @@ fn read_custom_providers() -> Result<Vec<CustomProvider>> {
                     slug,
                     label,
                     effort_levels: Vec::new(),
+                    ..Default::default()
                 });
         }
     }
@@ -511,6 +512,7 @@ keep = true
                 slug: "deepseek-v4-pro".into(),
                 label: "DeepSeek V4 Pro".into(),
                 effort_levels: Vec::new(),
+                ..Default::default()
             }],
             ..Default::default()
         }
