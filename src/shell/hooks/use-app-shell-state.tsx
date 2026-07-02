@@ -57,8 +57,13 @@ export function useAppShellState({
 		isLoaded: areSettingsLoaded,
 		updateSettings,
 	} = useSettings();
-	const { repositories, workspaceGroups, archivedRows } =
-		useNavigationSidebar(appSettings);
+	const {
+		repositories,
+		workspaceGroups,
+		archivedRows,
+		workspaceGroupsSettled,
+		hasAnyWorkspace,
+	} = useNavigationSidebar(appSettings);
 	const [feedbackOpen, setFeedbackOpen] = useState(false);
 
 	const sel = useSelectionControllers({
@@ -279,6 +284,9 @@ export function useAppShellState({
 		selectedWorkspaceId,
 		displayedWorkspaceId,
 		startRepositoryId: startRepository?.id,
+		lastWorkspaceId: appSettings.lastWorkspaceId ?? null,
+		workspaceGroupsSettled,
+		hasAnyWorkspace,
 		openWorkspaceStart: handleOpenWorkspaceStart,
 		closeStartContextPreview: handleStartContextPreviewClose,
 	});

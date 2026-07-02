@@ -6,7 +6,12 @@ import { Input } from "@/components/ui/input";
 import { useTeamSetupStore } from "@/features/navigation/state/team-setup-store";
 import { useInviteAccept } from "@/features/team/use-invite-accept";
 import { useTeamIdentity } from "@/features/team/use-team-identity";
-import { parseInviteLink } from "@/lib/team-mode";
+import {
+	getTeamConfig,
+	isTeamModeRequested,
+	parseInviteLink,
+	setTeamModeActive,
+} from "@/lib/team-mode";
 import { TeamCreateFlow } from "./team-create-flow";
 
 /**
@@ -21,6 +26,22 @@ import { TeamCreateFlow } from "./team-create-flow";
 export function TeamSetupCard() {
 	const open = useTeamSetupStore((s) => s.open);
 	const close = useTeamSetupStore((s) => s.close);
+	// WP7 Gate 1: a lingering team-mode flag with NO saved config (wiped/corrupt
+	// localStorage after a Reset) used to fall back to local silently — surface
+	// setup instead of dumping the user into the main UI unexplained.
+	useEffect(() => {
+		if (isTeamModeRequested() && !getTeamConfig()) {
+			useTeamSetupStore.getState().requestSetup();
+		}
+	}, []);
+	// Dismissing the card from that zombie state must ALSO clear the mode flag
+	// (= an explicit "back to Local"), otherwise "flag set + no config" would
+	// re-trigger this gate on every boot. Join/Create paths persist a config
+	// before closing, so the guard is a no-op for them.
+	const dismiss = () => {
+		if (isTeamModeRequested() && !getTeamConfig()) setTeamModeActive(false);
+		close();
+	};
 	const [view, setView] = useState<"choose" | "create">("choose");
 	const [inviteLink, setInviteLink] = useState("");
 	const { identity, isLoading: identityLoading } = useTeamIdentity();
@@ -65,7 +86,7 @@ export function TeamSetupCard() {
 				<Button
 					variant="ghost"
 					size="icon-xs"
-					onClick={close}
+					onClick={dismiss}
 					aria-label="Close"
 					className="absolute top-3 right-3 text-muted-foreground"
 				>
@@ -138,7 +159,7 @@ export function TeamSetupCard() {
 						</div>
 
 						<div className="mt-5 flex justify-end">
-							<Button variant="ghost" size="sm" onClick={close}>
+							<Button variant="ghost" size="sm" onClick={dismiss}>
 								Cancel
 							</Button>
 						</div>

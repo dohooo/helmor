@@ -356,6 +356,7 @@
 	"connectAccounts": "Connect accounts",
 	"connectBrowserHelmorDesktopSoCan": "Connect this browser to your Helmor desktop so you can open your workspaces, sessions, and agents from here. Only continue if you started this pairing yourself.",
 	"connectGithub": "Connect GitHub in",
+	"connectRepoToBuild": "Connect a repository to start building — or just chat.",
 	"connectSlackWorkspace": "Connect a Slack workspace",
 	"connected": "Connected",
 	"connecting": "Connecting",

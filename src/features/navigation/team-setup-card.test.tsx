@@ -8,6 +8,9 @@ const mocks = vi.hoisted(() => ({
 		identity: null as null | { githubId: string; login: string },
 		isLoading: false,
 	},
+	teamModeRequested: false,
+	teamConfig: null as null | { url: string; token: string },
+	setTeamModeActive: vi.fn(),
 }));
 
 vi.mock("@/features/team/use-invite-accept", () => ({
@@ -22,6 +25,9 @@ vi.mock("sonner", () => ({
 vi.mock("@/lib/team-mode", () => ({
 	parseInviteLink: (value: string) =>
 		value.includes("invite=") ? { url: "https://x", token: "tok" } : null,
+	isTeamModeRequested: () => mocks.teamModeRequested,
+	getTeamConfig: () => mocks.teamConfig,
+	setTeamModeActive: (active: boolean) => mocks.setTeamModeActive(active),
 }));
 // Isolate the card from the deploy flow — that logic is unit-tested separately
 // in team-create-flow.test.tsx.
@@ -36,6 +42,8 @@ afterEach(() => {
 	cleanup();
 	useTeamSetupStore.getState().close();
 	mocks.identity.identity = null;
+	mocks.teamModeRequested = false;
+	mocks.teamConfig = null;
 	vi.clearAllMocks();
 });
 
@@ -69,5 +77,36 @@ describe("TeamSetupCard", () => {
 		render(<TeamSetupCard />);
 		fireEvent.click(screen.getByRole("button", { name: "Create" }));
 		expect(screen.getByTestId("create-flow")).toBeInTheDocument();
+	});
+
+	// WP7 Gate 1: team-mode flag set with NO saved config (zombie state).
+	describe("zombie team-mode gate (WP7 Gate 1)", () => {
+		it("auto-opens setup on mount when the flag is set but config is missing", () => {
+			mocks.teamModeRequested = true;
+			render(<TeamSetupCard />);
+			expect(screen.getByText("Set up team cloud")).toBeInTheDocument();
+		});
+
+		it("does NOT auto-open when a config exists", () => {
+			mocks.teamModeRequested = true;
+			mocks.teamConfig = { url: "https://x", token: "t" };
+			const { container } = render(<TeamSetupCard />);
+			expect(container.firstChild).toBeNull();
+		});
+
+		it("dismissing from the zombie state clears the mode flag (back to Local)", () => {
+			mocks.teamModeRequested = true;
+			render(<TeamSetupCard />);
+			fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+			expect(mocks.setTeamModeActive).toHaveBeenCalledWith(false);
+			expect(useTeamSetupStore.getState().open).toBe(false);
+		});
+
+		it("a normal dismissal (flag not set) leaves the mode flag alone", () => {
+			useTeamSetupStore.getState().requestSetup();
+			render(<TeamSetupCard />);
+			fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+			expect(mocks.setTeamModeActive).not.toHaveBeenCalled();
+		});
 	});
 });

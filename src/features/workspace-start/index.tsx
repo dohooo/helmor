@@ -494,7 +494,36 @@ export function WorkspaceStartPage({
 								composerAtBottom ? "top-1/2 -translate-y-1/2" : "top-0",
 							)}
 						>
-							{mode === "chat" ? (
+							{repositories.length === 0 ? (
+								// WP7 Gate 2: zero repositories — replace the heading in
+								// place with a guide + Add-repository CTA (the controller
+								// locks `mode` to chat here, so this is THE no-repo start
+								// state). The composer below stays fully usable: chat is a
+								// legal no-repo path and must never be blocked.
+								<span
+									data-testid="start-no-repo-guide"
+									className={cn(
+										"flex items-center gap-3 overflow-hidden text-[20px] transition-[max-width,opacity,transform] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
+										previewCard
+											? "max-w-0 -translate-y-1 opacity-0"
+											: "max-w-[44rem] translate-y-0 opacity-100",
+									)}
+								>
+									<I18nText source="connectRepoToBuild" />
+									<Button
+										type="button"
+										variant="outline"
+										size="sm"
+										className="shrink-0 gap-1.5"
+										onClick={() =>
+											publishShellEvent({ type: "open-add-repository" })
+										}
+									>
+										<FolderPlus className="size-3.5" strokeWidth={1.8} />
+										<I18nText source="addRepository2" />
+									</Button>
+								</span>
+							) : mode === "chat" ? (
 								<span
 									className={cn(
 										"inline-block overflow-hidden transition-[max-width,opacity,transform] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",

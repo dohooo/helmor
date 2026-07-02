@@ -94,6 +94,18 @@ export function getDevTeamDefault(): TeamConfig | null {
 	return { url: "http://127.0.0.1:8787", token: "hlm_dev_team_local" };
 }
 
+/**
+ * True when the team-mode flag is set, regardless of whether a config exists.
+ * `isTeamModeActive()` requires BOTH — so a wiped/corrupt config with a
+ * lingering flag ("zombie" state) silently falls back to local. WP7 Gate 1
+ * uses this to detect that state and route the user into setup instead.
+ */
+export function isTeamModeRequested(): boolean {
+	const store = storage();
+	if (!store) return false;
+	return store.getItem(MODE_KEY) === "1";
+}
+
 /** True when team mode is switched on AND a Worker URL is configured. */
 export function isTeamModeActive(): boolean {
 	const store = storage();

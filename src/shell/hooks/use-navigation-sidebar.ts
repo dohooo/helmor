@@ -66,5 +66,17 @@ export function useNavigationSidebar(appSettings: AppSettings) {
 		repositories,
 		workspaceGroups: navigationSidebar.groups,
 		archivedRows: navigationSidebar.archivedRows,
+		// WP7 Gate 4 inputs. "Settled" must mean a REAL fetch completed
+		// successfully this mount: the query ships `initialData` (an empty
+		// placeholder), so `isSuccess` alone is true from the first render and
+		// would let the boot "no workspaces → land on Start" fallback fire before
+		// the backend answered (hijacking returning users). `isFetchedAfterMount`
+		// gates on the network round-trip; `isSuccess` keeps errors excluded.
+		// Emptiness reads the RAW groups, not the projection: a sidebar repo
+		// filter must not make existing workspaces look like a brand-new install.
+		workspaceGroupsSettled:
+			navigationGroupsQuery.isSuccess &&
+			navigationGroupsQuery.isFetchedAfterMount,
+		hasAnyWorkspace: baseWorkspaceGroups.some((group) => group.rows.length > 0),
 	};
 }
