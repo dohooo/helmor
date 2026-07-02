@@ -132,9 +132,6 @@ export function KeychainStoreDialog({
 						<span className="truncate">
 							<I18nText source="vertexKeychainDialogTitle" />
 						</span>
-						<span className="truncate text-muted-foreground/80">
-							· {service} / {account}
-						</span>
 					</div>
 					<div className="ml-auto">
 						<Button

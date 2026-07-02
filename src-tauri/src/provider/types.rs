@@ -60,13 +60,9 @@ pub struct CustomProvider {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vertex_region: Option<String>,
     /// "token" (default — `api_key` holds the gateway token) | "keychain".
+    /// Keychain item names are fixed (see `claude::VERTEX_KEYCHAIN_SERVICE`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vertex_auth_mode: Option<String>,
-    /// macOS Keychain item read via apiKeyHelper (keychain mode).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub vertex_keychain_service: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub vertex_keychain_account: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub headers: Option<HashMap<String, String>>,
     #[serde(default)]

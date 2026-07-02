@@ -27,11 +27,10 @@ export type CustomProvider = {
 	vertexProjectId?: string;
 	/** CLOUD_ML_REGION; empty → "global". */
 	vertexRegion?: string;
-	/** "token" (default — `apiKey` holds the gateway token) | "keychain". */
+	/** "token" (default — `apiKey` holds the gateway token) | "keychain".
+	 *  Keychain item names are fixed: service `helmor-anthropic-auth-token`,
+	 *  account = provider id. */
 	vertexAuthMode?: string;
-	/** macOS Keychain item read via apiKeyHelper (keychain mode). */
-	vertexKeychainService?: string;
-	vertexKeychainAccount?: string;
 	headers?: Record<string, string>;
 	models: CustomProviderModel[];
 	/** Codex: per-provider enabled models (`null` = all). Merged families: unused. */

@@ -12,8 +12,11 @@ const MODEL_ID_PREFIX: &str = "claude-custom|";
 
 pub const VERTEX_API_STYLE: &str = "vertex";
 pub const VERTEX_AUTH_KEYCHAIN: &str = "keychain";
-pub const VERTEX_DEFAULT_KEYCHAIN_SERVICE: &str = "anthropic-auth-token";
-pub const VERTEX_DEFAULT_KEYCHAIN_ACCOUNT: &str = "default";
+/// Fixed Keychain item names — not user-configurable. Namespaced under
+/// `helmor-` so `security … -U` can never clobber a user's own
+/// `anthropic-auth-token` item; the account is the provider id so multiple
+/// Vertex providers keep separate tokens.
+pub const VERTEX_KEYCHAIN_SERVICE: &str = "helmor-anthropic-auth-token";
 
 /// How Claude Code authenticates to the Vertex gateway once
 /// `CLAUDE_CODE_SKIP_VERTEX_AUTH` disables GCP request signing.
@@ -146,22 +149,9 @@ fn vertex_config(provider: &CustomProvider) -> Option<ClaudeVertexConfig> {
     let keychain = cfg!(target_os = "macos")
         && provider.vertex_auth_mode.as_deref() == Some(VERTEX_AUTH_KEYCHAIN);
     let auth = if keychain {
-        let or_default = |v: String, default: &str| {
-            if v.is_empty() {
-                default.to_string()
-            } else {
-                v
-            }
-        };
         ClaudeVertexAuth::Keychain {
-            service: or_default(
-                trimmed(&provider.vertex_keychain_service),
-                VERTEX_DEFAULT_KEYCHAIN_SERVICE,
-            ),
-            account: or_default(
-                trimmed(&provider.vertex_keychain_account),
-                VERTEX_DEFAULT_KEYCHAIN_ACCOUNT,
-            ),
+            service: VERTEX_KEYCHAIN_SERVICE.to_string(),
+            account: provider.id().to_string(),
         }
     } else {
         let token = provider.api_key.trim();
@@ -361,15 +351,16 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn vertex_keychain_mode_needs_no_api_key_and_fills_defaults() {
+    fn vertex_keychain_mode_needs_no_api_key_and_uses_fixed_item_names() {
         let models = expand_models(&[vertex_provider(Some("keychain"), "")]);
         assert_eq!(models.len(), 1);
         let vertex = models[0].vertex.as_ref().expect("vertex config");
         assert_eq!(
             vertex.auth,
             ClaudeVertexAuth::Keychain {
-                service: VERTEX_DEFAULT_KEYCHAIN_SERVICE.to_string(),
-                account: VERTEX_DEFAULT_KEYCHAIN_ACCOUNT.to_string(),
+                service: VERTEX_KEYCHAIN_SERVICE.to_string(),
+                // Account is the provider id — per-provider token isolation.
+                account: "gw".to_string(),
             }
         );
     }

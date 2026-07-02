@@ -322,10 +322,12 @@ const VERTEX_AUTH_OPTIONS: StyleOption[] = [
 	},
 ];
 
-const VERTEX_DEFAULT_KEYCHAIN_SERVICE = "anthropic-auth-token";
-const VERTEX_DEFAULT_KEYCHAIN_ACCOUNT = "default";
+// Fixed Keychain item names (mirror of provider/claude.rs) — namespaced so
+// Helmor can never clobber a user's own `anthropic-auth-token` item, with
+// the provider id as account for per-provider isolation. Not configurable.
+const VERTEX_KEYCHAIN_SERVICE = "helmor-anthropic-auth-token";
 
-/** Vertex extras: project id, auth mode, keychain item names. */
+/** Vertex extras: project id + auth mode. */
 function VertexFields({
 	draft,
 	patch,
@@ -341,10 +343,6 @@ function VertexFields({
 	// Keychain auth (and its mode selector) is macOS-only.
 	const macOS = isMac();
 	const keychain = macOS && draft.vertexAuthMode === "keychain";
-	const service =
-		draft.vertexKeychainService?.trim() || VERTEX_DEFAULT_KEYCHAIN_SERVICE;
-	const account =
-		draft.vertexKeychainAccount?.trim() || VERTEX_DEFAULT_KEYCHAIN_ACCOUNT;
 
 	return (
 		<>
@@ -365,22 +363,6 @@ function VertexFields({
 			) : null}
 			{keychain ? (
 				<>
-					<div className="flex items-center gap-2">
-						<Input
-							value={draft.vertexKeychainService ?? ""}
-							onChange={(e) => patch({ vertexKeychainService: e.target.value })}
-							onBlur={commitText}
-							placeholder="vertexKeychainService"
-							className="h-8 min-w-0 flex-1 border-border/50 bg-background/40 text-[13px]"
-						/>
-						<Input
-							value={draft.vertexKeychainAccount ?? ""}
-							onChange={(e) => patch({ vertexKeychainAccount: e.target.value })}
-							onBlur={commitText}
-							placeholder="vertexKeychainAccount"
-							className="h-8 w-40 border-border/50 bg-background/40 text-[13px]"
-						/>
-					</div>
 					<Button
 						type="button"
 						variant="outline"
@@ -394,8 +376,8 @@ function VertexFields({
 					<KeychainStoreDialog
 						open={storeDialogOpen}
 						onOpenChange={setStoreDialogOpen}
-						service={service}
-						account={account}
+						service={VERTEX_KEYCHAIN_SERVICE}
+						account={draft.id}
 					/>
 				</>
 			) : null}
