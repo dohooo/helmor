@@ -21,6 +21,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { I18nText, useI18n } from "@/lib/i18n";
+import { isMac } from "@/lib/platform";
 import { openUrl } from "@/lib/platform-bridge";
 import type {
 	CustomProvider,
@@ -91,9 +92,12 @@ export function CustomProviderCard({
 	const canFetch = draft.baseUrl.trim().length > 0;
 	// Vertex-type Claude provider: gateway URL + project id/region, and the
 	// token may live in the macOS Keychain instead of Helmor settings.
+	// Keychain auth is macOS-only — other platforms always use token mode
+	// (mirrors the backend fallback in provider/claude.rs).
 	const isVertex =
 		adapter.family === "claude" && isManual && draft.apiStyle === "vertex";
-	const vertexKeychain = isVertex && draft.vertexAuthMode === "keychain";
+	const vertexKeychain =
+		isVertex && isMac() && draft.vertexAuthMode === "keychain";
 	// Claude endpoints are Anthropic-style (base must NOT end in /v1 — the SDK
 	// appends /v1/messages and fetch appends /v1/models). Others are /v1.
 	const baseUrlPlaceholder = isVertex
@@ -334,7 +338,9 @@ function VertexFields({
 	commitText: () => void;
 }) {
 	const [storeDialogOpen, setStoreDialogOpen] = useState(false);
-	const keychain = draft.vertexAuthMode === "keychain";
+	// Keychain auth (and its mode selector) is macOS-only.
+	const macOS = isMac();
+	const keychain = macOS && draft.vertexAuthMode === "keychain";
 	const service =
 		draft.vertexKeychainService?.trim() || VERTEX_DEFAULT_KEYCHAIN_SERVICE;
 	const account =
@@ -349,12 +355,14 @@ function VertexFields({
 				placeholder="vertexProjectId"
 				className="h-8 border-border/50 bg-background/40 text-[13px]"
 			/>
-			<StyleSelect
-				label="vertexAuthMode"
-				options={VERTEX_AUTH_OPTIONS}
-				value={keychain ? "keychain" : "token"}
-				onChange={(vertexAuthMode) => commit({ vertexAuthMode })}
-			/>
+			{macOS ? (
+				<StyleSelect
+					label="vertexAuthMode"
+					options={VERTEX_AUTH_OPTIONS}
+					value={keychain ? "keychain" : "token"}
+					onChange={(vertexAuthMode) => commit({ vertexAuthMode })}
+				/>
+			) : null}
 			{keychain ? (
 				<>
 					<div className="flex items-center gap-2">

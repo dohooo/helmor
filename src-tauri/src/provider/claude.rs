@@ -140,7 +140,11 @@ fn vertex_config(provider: &CustomProvider) -> Option<ClaudeVertexConfig> {
         return None;
     }
     let trimmed = |v: &Option<String>| v.as_deref().unwrap_or_default().trim().to_string();
-    let keychain = provider.vertex_auth_mode.as_deref() == Some(VERTEX_AUTH_KEYCHAIN);
+    // Keychain auth is macOS-only (`security` + apiKeyHelper). Elsewhere a
+    // keychain-flagged provider degrades to token mode: usable once a token
+    // is set, skipped otherwise.
+    let keychain = cfg!(target_os = "macos")
+        && provider.vertex_auth_mode.as_deref() == Some(VERTEX_AUTH_KEYCHAIN);
     let auth = if keychain {
         let or_default = |v: String, default: &str| {
             if v.is_empty() {
@@ -355,6 +359,7 @@ mod tests {
         assert_eq!(vertex.project_id, "acme");
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn vertex_keychain_mode_needs_no_api_key_and_fills_defaults() {
         let models = expand_models(&[vertex_provider(Some("keychain"), "")]);
@@ -366,6 +371,19 @@ mod tests {
                 service: VERTEX_DEFAULT_KEYCHAIN_SERVICE.to_string(),
                 account: VERTEX_DEFAULT_KEYCHAIN_ACCOUNT.to_string(),
             }
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn vertex_keychain_mode_degrades_to_token_off_macos() {
+        // No token → unusable; with a token → plain token auth.
+        assert!(expand_models(&[vertex_provider(Some("keychain"), "")]).is_empty());
+        let models = expand_models(&[vertex_provider(Some("keychain"), "sk-gw")]);
+        assert_eq!(models.len(), 1);
+        assert_eq!(
+            models[0].vertex.as_ref().expect("vertex config").auth,
+            ClaudeVertexAuth::Token("sk-gw".to_string())
         );
     }
 
