@@ -137,6 +137,11 @@ export interface LocalTeamRegistry {
 		createdAt?: string;
 	}): Promise<void>;
 	syncTeamData(input: TeamSyncInput): Promise<{ ok: true }>;
+	/** WP5: model-catalog cache (local analog of the Worker's D1 `model_catalog`
+	 *  row). Ephemeral in-memory by design — a proxy restart is a "fresh Worker"
+	 *  and re-seeds on the first live pass of the RPC. */
+	getModelCatalog(): string | null;
+	setModelCatalog(payload: string): void;
 	listSessions(workspaceId: string): Promise<LocalSessionRow[]>;
 	listSessionMessages(sessionId: string): Promise<LocalMessageRow[]>;
 	putCodexIdentity(
@@ -160,6 +165,17 @@ export interface LocalTeamRegistry {
 export class InMemoryLocalTeamRegistry implements LocalTeamRegistry {
 	private snapshotState: LocalTeamSnapshot;
 	private readonly onChange?: (snapshot: LocalTeamSnapshot) => void;
+	/** WP5 model-catalog cache — deliberately NOT part of the snapshot (it is a
+	 *  derived cache, not team state; the Worker's D1 row is likewise disposable). */
+	private modelCatalog: string | null = null;
+
+	getModelCatalog(): string | null {
+		return this.modelCatalog;
+	}
+
+	setModelCatalog(payload: string): void {
+		this.modelCatalog = payload;
+	}
 
 	constructor(
 		initial?: Partial<LocalTeamSnapshot>,

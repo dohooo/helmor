@@ -110,3 +110,16 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, sent_at)
 --
 -- Phase 1 (cloud_identity_member_id): for a team D1 that predates Phase 1, run:
 --   wrangler d1 execute helmor-team --remote --command "ALTER TABLE teams ADD COLUMN cloud_identity_member_id TEXT"
+
+-- WP5 (D2): control-plane model-catalog cache. One row per sandbox holding the
+-- verbatim `list_agent_model_sections` JSON (AgentModelSection[] — catalog
+-- METADATA only, never credentials). Lets the Worker answer the composer's
+-- model list + the desktop readiness probe with the container ASLEEP; refreshed
+-- on every container cold start and on every live pass of the RPC (no TTL).
+-- The Worker's write path also runs this CREATE (self-healing), so a pre-WP5
+-- D1 that never re-ran this file gains the table on the first write.
+CREATE TABLE IF NOT EXISTS model_catalog (
+  sandbox_id TEXT PRIMARY KEY,
+  payload    TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);

@@ -1,4 +1,9 @@
 import {
+	cachedCatalogResponse,
+	MODEL_CATALOG_RPC,
+	parseModelCatalogPayload,
+} from "../model-catalog";
+import {
 	deriveGatewayForwardedRequest,
 	handleTeamGatewayRoute,
 	inferRepoName,
@@ -145,9 +150,26 @@ export function createLocalTeamProxy(options: LocalTeamProxyOptions): {
 			});
 		}
 
+		// WP5: answer the model-catalog RPC from the registry cache (same
+		// semantics as the Worker's D1 intercept — auth mirrors /admin/*, a miss
+		// falls through to the companion and the live answer is written through).
+		if (url.pathname === MODEL_CATALOG_RPC) {
+			const authed =
+				forwarded.headers.get("X-Helmor-Member-Id") !== null ||
+				forwarded.headers.get("Authorization") ===
+					`Bearer ${options.companionToken}`;
+			if (!authed) return json({ code: "Unauthorized" }, 401);
+			const cached = options.registry.getModelCatalog();
+			if (cached !== null) return cachedCatalogResponse(cached);
+		}
+
 		const response = await proxyToCompanion(forwarded, fetchCompanion);
 		if (url.pathname === "/rpc/clone_repository_from_url" && response.ok) {
 			await mirrorCloneWorkspace(cloneRepoName, response.clone());
+		}
+		if (url.pathname === MODEL_CATALOG_RPC && response.ok) {
+			const payload = parseModelCatalogPayload(await response.clone().text());
+			if (payload) options.registry.setModelCatalog(payload);
 		}
 		return response;
 	}

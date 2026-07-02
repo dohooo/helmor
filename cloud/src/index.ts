@@ -14,6 +14,13 @@ import {
 } from "@cloudflare/sandbox";
 import { parseGlabTokens } from "./forge-config";
 import {
+	cachedCatalogResponse,
+	MODEL_CATALOG_RPC,
+	parseModelCatalogPayload,
+	readModelCatalog,
+	writeModelCatalog,
+} from "./model-catalog";
+import {
 	createWorkerTeamGatewayStore,
 	handleTeamRoute,
 	readBackupHandle,
@@ -419,10 +426,36 @@ async function route(
 	if (forwarded instanceof Response) return forwarded;
 
 	const port = Number(env.HELMOR_COMPANION_PORT ?? "8080");
-	const sandbox = getSandbox(
-		env.Sandbox,
-		env.HELMOR_SANDBOX_ID ?? "helmor-team-0",
-	);
+	const sandboxId = env.HELMOR_SANDBOX_ID ?? "helmor-team-0";
+	const sandbox = getSandbox(env.Sandbox, sandboxId);
+
+	// WP5 (D2): the model catalog lives in the CONTROL PLANE. Answer
+	// `list_agent_model_sections` from the D1 cache BEFORE ensureServe so the
+	// composer + the team-readiness probe get models in milliseconds while the
+	// container sleeps; only a real @agent send (`/rpc-stream/*`) wakes it. A
+	// cache MISS falls through to the normal ensureServe+proxy path below (the
+	// one legitimate non-@agent wake: brand-new/reset teams — provision's WP6
+	// verify normally seeds the cache at setup) and the live response is
+	// written through. Auth mirrors /admin/*: derived member or admin token —
+	// the cached answer must never be weaker-gated than the container's own
+	// /rpc 401.
+	if (url.pathname === MODEL_CATALOG_RPC) {
+		const authed =
+			forwarded.headers.get("X-Helmor-Member-Id") !== null ||
+			forwarded.headers.get("Authorization") ===
+				`Bearer ${env.HELMOR_COMPANION_TOKEN}`;
+		if (!authed) {
+			return new Response(
+				JSON.stringify({
+					code: "Unauthorized",
+					message: "member or admin token required",
+				}),
+				{ status: 401, headers: { "content-type": "application/json" } },
+			);
+		}
+		const cached = await readModelCatalog(env.DB, sandboxId);
+		if (cached !== null) return cachedCatalogResponse(cached);
+	}
 
 	// Admin/member op: restart the sandbox so the NEXT request cold-starts and
 	// re-mints the Codex auth.json — needed to apply a re-authorization or a
@@ -473,7 +506,12 @@ async function route(
 			);
 		}
 		ctx.waitUntil(
-			ensureServe(sandbox, env, port, { syncUrl: url.origin }).catch(() => {}),
+			ensureServe(sandbox, env, port, { syncUrl: url.origin })
+				// WP5: a warm-up cold start refreshes the catalog cache too.
+				.then((r) =>
+					r.coldStarted ? refreshModelCatalog(sandbox, env, port) : undefined,
+				)
+				.catch(() => {}),
 		);
 		return new Response(null, { status: 202 });
 	}
@@ -486,7 +524,15 @@ async function route(
 	}
 
 	try {
-		await ensureServe(sandbox, env, port, { syncUrl: url.origin });
+		const { coldStarted } = await ensureServe(sandbox, env, port, {
+			syncUrl: url.origin,
+		});
+		// WP5 invalidation: EVERY cold start refreshes the catalog cache in the
+		// background, so an image update (new/removed models) is picked up on the
+		// first real wake after it — no TTL, no image-tag plumbing.
+		if (coldStarted) {
+			ctx.waitUntil(refreshModelCatalog(sandbox, env, port));
+		}
 	} catch (error) {
 		// A PERMANENT container-start failure (bad image / limits / crash-loop) is
 		// terminal: retries won't help. Surface it as a STRUCTURED `permanent` 503
@@ -534,6 +580,21 @@ async function route(
 	// pass straight through; headers carry the derived member id + shared
 	// companion token (see `deriveForwardedRequest`).
 	const response = await containerFetchThroughPort(sandbox, forwarded, port);
+
+	// WP5 write-through: a LIVE pass of the model-catalog RPC (cache miss above,
+	// or a pre-seed by provision's WP6 verify) stores the container's answer so
+	// every later call — probe or composer — is a no-wake cache hit.
+	if (url.pathname === MODEL_CATALOG_RPC && response.ok) {
+		const clone = response.clone();
+		ctx.waitUntil(
+			(async () => {
+				const payload = parseModelCatalogPayload(await clone.text());
+				if (payload) await writeModelCatalog(env.DB, sandboxId, payload);
+			})().catch((error) => {
+				console.error("model-catalog write-through failed", error);
+			}),
+		);
+	}
 
 	// Phase 2b sleep persistence: ONLY for the agent-stream path, snapshot
 	// /home/helmor to R2 after the turn so the session survives sandbox
@@ -1034,6 +1095,49 @@ async function permanentFromResponse(
 	return null;
 }
 
+/** WP5: whether `ensureServe` had to cold-start (vs found a warm serve). A cold
+ *  start triggers a background model-catalog cache refresh — the "every wake
+ *  refreshes" invalidation leg. */
+export interface EnsureServeResult {
+	coldStarted: boolean;
+}
+
+/** WP5 invalidation leg 2: after a cold start, re-pull the model catalog from
+ *  the now-live container and upsert the D1 cache in the background, so an
+ *  image update (new/removed models) is reflected after the first real wake.
+ *  Best-effort — a failure just leaves the previous cache row. */
+export async function refreshModelCatalog(
+	sandbox: CloudflareSandbox,
+	env: Env,
+	port: number,
+): Promise<void> {
+	try {
+		const res = await containerFetchThroughPort(
+			sandbox,
+			new Request(`http://localhost:${port}${MODEL_CATALOG_RPC}`, {
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${env.HELMOR_COMPANION_TOKEN}`,
+					"content-type": "application/json",
+				},
+				body: "{}",
+			}),
+			port,
+		);
+		if (!res.ok) return;
+		const payload = parseModelCatalogPayload(await res.text());
+		if (payload) {
+			await writeModelCatalog(
+				env.DB,
+				env.HELMOR_SANDBOX_ID ?? "helmor-team-0",
+				payload,
+			);
+		}
+	} catch (error) {
+		console.error("model-catalog refresh after wake failed", error);
+	}
+}
+
 /** Belt-and-suspenders for `startProcess`, which THROWS (rather than returning a
  *  classified Response) when it hits the permanent-start error. */
 function isPermanentContainerError(error: unknown): boolean {
@@ -1046,7 +1150,7 @@ export async function ensureServe(
 	env: Env,
 	port: number,
 	options: EnsureServeOptions = {},
-): Promise<void> {
+): Promise<EnsureServeResult> {
 	const healthCheckTimeoutMs =
 		options.healthCheckTimeoutMs ?? HEALTH_CHECK_TIMEOUT_MS;
 	const restoreBackupTimeoutMs =
@@ -1062,7 +1166,7 @@ export async function ensureServe(
 	// PERMANENT start failure fast-fails here (no wasted restore/mint/180s poll);
 	// anything else falls through to the cold-start path below.
 	const initial = await probeContainer(sandbox, port, healthCheckTimeoutMs);
-	if (initial.state === "healthy") return;
+	if (initial.state === "healthy") return { coldStarted: false };
 	if (initial.state === "permanent") {
 		throw new PermanentContainerError(initial.phase, initial.detail);
 	}
@@ -1195,7 +1299,7 @@ export async function ensureServe(
 	const deadline = Date.now() + readyTimeoutMs;
 	do {
 		const probe = await probeContainer(sandbox, port, healthCheckTimeoutMs);
-		if (probe.state === "healthy") return;
+		if (probe.state === "healthy") return { coldStarted: true };
 		// A container that flips to PERMANENT mid-poll won't recover — stop early
 		// instead of waiting out the 180s ceiling.
 		if (probe.state === "permanent") {

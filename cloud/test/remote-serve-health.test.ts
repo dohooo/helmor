@@ -54,7 +54,7 @@ describe("remote sandbox serve health", () => {
 			},
 		} as unknown as Sandbox;
 
-		await ensureServe(sandbox, makeEnv(), 8080, {
+		const result = await ensureServe(sandbox, makeEnv(), 8080, {
 			healthCheckTimeoutMs: 5,
 			restoreBackupTimeoutMs: 5,
 			startProcessTimeoutMs: 20,
@@ -65,6 +65,33 @@ describe("remote sandbox serve health", () => {
 
 		expect(startCalls).toBe(1);
 		expect(fetchCalls).toBeGreaterThanOrEqual(2);
+		// WP5: a cold start is reported so the caller can refresh the catalog cache.
+		expect(result).toEqual({ coldStarted: true });
+	});
+
+	it("reports coldStarted=false for an already-healthy serve (WP5 no-refresh)", async () => {
+		let startCalls = 0;
+		const sandbox = {
+			containerFetch: async () =>
+				new Response(JSON.stringify({ ok: true }), {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				}),
+			startProcess: async () => {
+				startCalls += 1;
+			},
+		} as unknown as Sandbox;
+
+		const result = await ensureServe(sandbox, makeEnv(), 8080, {
+			healthCheckTimeoutMs: 50,
+			restoreBackupTimeoutMs: 5,
+			startProcessTimeoutMs: 20,
+			identityMintTimeoutMs: 20,
+			readyTimeoutMs: 50,
+			pollIntervalMs: 1,
+		});
+		expect(result).toEqual({ coldStarted: false });
+		expect(startCalls).toBe(0);
 	});
 
 	it("fast-fails a PERMANENT container-start error before restore/mint/startProcess", async () => {
