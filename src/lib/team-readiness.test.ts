@@ -37,15 +37,27 @@ describe("team-readiness", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("connecting → ready on a healthy /v1/health", async () => {
-		vi.stubGlobal(
-			"fetch",
-			vi.fn(async () => healthResponse(200)),
-		);
+	it("connecting → ready on a 200 model-catalog answer (WP5 probe)", async () => {
+		const fetchMock = vi.fn(async () => healthResponse(200));
+		vi.stubGlobal("fetch", fetchMock);
 		beginTeamReadinessProbe();
 		expect(getTeamReadiness().state).toBe("connecting");
 		await vi.advanceTimersByTimeAsync(100);
 		expect(getTeamReadiness().state).toBe("ready");
+		// WP5: the probe is the model-catalog RPC — answered by the Worker's D1
+		// cache with the container asleep — NOT /v1/health (which proxied through
+		// ensureServe and itself woke the container).
+		const [probeUrl, probeInit] = fetchMock.mock.calls[0] as unknown as [
+			string,
+			RequestInit,
+		];
+		expect(probeUrl).toBe(
+			"https://team.example.workers.dev/rpc/list_agent_model_sections",
+		);
+		expect(probeInit.method).toBe("POST");
+		expect((probeInit.headers as Record<string, string>).Authorization).toBe(
+			"Bearer tok",
+		);
 	});
 
 	it("degrades terminally (unauthorized) on 401", async () => {

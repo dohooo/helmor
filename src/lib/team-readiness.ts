@@ -10,9 +10,13 @@
  *   unconfigured → connecting → ready
  *                            -> degraded (retryable, or terminal `unauthorized`)
  *
- * The probe polls the Worker's public `/v1/health` (WP5 will fold the model
- * catalog into the same probe as a stronger readiness signal). It never throws:
- *   - 200            → ready (the Worker + container are up).
+ * The probe polls the Worker's `/rpc/list_agent_model_sections` (WP5): the
+ * Worker answers it from its control-plane D1 cache WITHOUT waking the
+ * container, so one request answers three things — Worker reachable, token
+ * valid, model catalog available — and a sleeping container is `ready` in
+ * milliseconds (the previous `/v1/health` probe proxied through ensureServe
+ * and itself triggered a cold start). It never throws:
+ *   - 200            → ready (control plane answered; models are available).
  *   - 401/403        → degraded + `unauthorized` (invalid token; terminal).
  *   - 503 "not ready"→ connecting (a legit cold start) until the cold-start
  *                       ceiling, then degraded.
@@ -163,10 +167,19 @@ async function runProbe(gen: number): Promise<void> {
 			const controller = new AbortController();
 			const abort = setTimeout(() => controller.abort(), POLL_TIMEOUT_MS);
 			try {
-				const res = await fetch(`${base}/v1/health`, {
-					headers: config.token
-						? { Authorization: `Bearer ${config.token}` }
-						: {},
+				// WP5 readiness probe: answered by the Worker's D1 model-catalog
+				// cache with the container ASLEEP (no ensureServe). A cache miss
+				// (brand-new/reset team) falls through to a real cold start on the
+				// Worker side — the 503 staging below covers that path.
+				const res = await fetch(`${base}/rpc/list_agent_model_sections`, {
+					method: "POST",
+					headers: {
+						"content-type": "application/json",
+						...(config.token
+							? { Authorization: `Bearer ${config.token}` }
+							: {}),
+					},
+					body: "{}",
 					signal: controller.signal,
 				});
 				if (gen !== probeGen) return;
