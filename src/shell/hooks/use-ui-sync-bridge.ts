@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { buildTitleSeed } from "@/features/conversation/hooks/seed-session-title";
 import { useStreamingStore } from "@/features/conversation/state/streaming-store";
+import { useTeamIdentity } from "@/features/team/use-team-identity";
 import {
 	generateSessionTitle,
 	subscribeUiMutations,
@@ -31,10 +32,11 @@ function invalidateAllWorkspaceChanges(queryClient: QueryClient) {
 	});
 }
 
-function handleUiMutation(
+export function handleUiMutation(
 	event: UiMutationEvent,
 	queryClient: QueryClient,
 	options: Omit<Options, "queryClient">,
+	ownMemberId: string | null,
 ) {
 	switch (event.type) {
 		case "workspaceListChanged":
@@ -110,6 +112,33 @@ function handleUiMutation(
 			// Mark stale without an active refetch: background sessions have
 			// no observers anyway, and a late event for the on-screen session
 			// must not flash it. The next mount refetches.
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.sessionMessages(event.sessionId),
+				refetchType: "none",
+			});
+			return;
+		}
+		case "roomChatMessageAppended": {
+			// Room chat's live content is delivered by the session-stream watcher
+			// (Plane 1); the sidebar "new content" update rides the
+			// WorkspaceListChanged this room chat also publishes. This event's only
+			// job here is to mark the thread stale so the NEXT mount/focus
+			// reconciles from the D1 mirror once Stage B has written the row —
+			// NEVER an active refetch, which could read the not-yet-mirrored D1 and
+			// clobber the optimistic row (the S4/S6 race).
+			//
+			// Sender-aware: `authorId` is the server-derived member id;
+			// `ownMemberId` is our GitHub numeric id (same source, mirroring the
+			// presence self-filter). Our own echo is a pure ack — the optimistic
+			// row + Plane 1 echo already show the canonical row — so skip even the
+			// mark-stale. A teammate's message marks the thread stale so a
+			// background (unwatched) session picks it up from the mirror on its next
+			// mount.
+			const isSelfOrigin =
+				ownMemberId !== null &&
+				event.authorId !== null &&
+				event.authorId === ownMemberId;
+			if (isSelfOrigin) return;
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.sessionMessages(event.sessionId),
 				refetchType: "none",
@@ -338,12 +367,20 @@ export function useUiSyncBridge({
 	const processPendingCliSendsRef = useRef(processPendingCliSends);
 	const reloadSettingsRef = useRef(reloadSettings);
 	const onWorkspaceRevealRef = useRef(onWorkspaceReveal);
+	// Our own team member id (GitHub numeric id — the same value the server
+	// stamps as room-chat author_id). Ref'd so the once-registered listener below
+	// always reads the latest even if identity resolves after mount. `null` until
+	// resolved → no event is treated as self-origin (a brief redundant reconcile
+	// is harmless), mirroring the presence self-filter's fallback.
+	const ownMemberId = useTeamIdentity().identity?.githubId ?? null;
+	const ownMemberIdRef = useRef(ownMemberId);
 
 	useEffect(() => {
 		processPendingCliSendsRef.current = processPendingCliSends;
 		reloadSettingsRef.current = reloadSettings;
 		onWorkspaceRevealRef.current = onWorkspaceReveal;
-	}, [processPendingCliSends, reloadSettings, onWorkspaceReveal]);
+		ownMemberIdRef.current = ownMemberId;
+	}, [processPendingCliSends, reloadSettings, onWorkspaceReveal, ownMemberId]);
 
 	useEffect(() => {
 		let disposed = false;
@@ -354,12 +391,17 @@ export function useUiSyncBridge({
 				return;
 			}
 
-			handleUiMutation(event, queryClient, {
-				processPendingCliSends: () => processPendingCliSendsRef.current(),
-				reloadSettings: () => reloadSettingsRef.current(),
-				onWorkspaceReveal: (workspaceId, sessionId) =>
-					onWorkspaceRevealRef.current?.(workspaceId, sessionId),
-			});
+			handleUiMutation(
+				event,
+				queryClient,
+				{
+					processPendingCliSends: () => processPendingCliSendsRef.current(),
+					reloadSettings: () => reloadSettingsRef.current(),
+					onWorkspaceReveal: (workspaceId, sessionId) =>
+						onWorkspaceRevealRef.current?.(workspaceId, sessionId),
+				},
+				ownMemberIdRef.current,
+			);
 		}).then((cleanup) => {
 			if (disposed) {
 				cleanup();

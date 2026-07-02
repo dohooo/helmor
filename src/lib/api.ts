@@ -2489,6 +2489,11 @@ export type UiMutationEvent =
 	| { type: "sessionPlanChanged"; sessionId: string }
 	| { type: "sessionMessagesAppended"; sessionId: string }
 	| { type: "sessionTurnPersisted"; sessionId: string }
+	| {
+			type: "roomChatMessageAppended";
+			sessionId: string;
+			authorId: string | null;
+	  }
 	| { type: "workspaceFilesChanged"; workspaceId: string }
 	| { type: "workspaceGitStateChanged"; workspaceId: string }
 	| { type: "workspaceForgeChanged"; workspaceId: string }
