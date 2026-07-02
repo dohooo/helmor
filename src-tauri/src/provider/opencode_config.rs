@@ -738,9 +738,12 @@ mod tests {
         assert!(written.contains("\"input\""));
         assert!(written.contains("\"image\""));
 
-        // Verify read matches the original
-        let read = read_custom_providers_at(&path).unwrap();
-        assert_eq!(read, vec![provider]);
+        // Verify read matches the original (models may reorder by id during JSON round-trip)
+        let mut original = provider;
+        let mut read = read_custom_providers_at(&path).unwrap();
+        original.models.sort_by(|a, b| a.id.cmp(&b.id));
+        read[0].models.sort_by(|a, b| a.id.cmp(&b.id));
+        assert_eq!(read, vec![original]);
     }
 
     #[test]
