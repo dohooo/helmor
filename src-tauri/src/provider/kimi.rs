@@ -234,6 +234,7 @@ fn read_custom_providers() -> Result<Vec<CustomProvider>> {
                 headers: None,
                 models: models_by_provider.remove(id).unwrap_or_default(),
                 enabled_model_ids: None,
+                ..Default::default()
             });
         }
     }

@@ -2,6 +2,7 @@
 
 import {
 	ChevronDown,
+	KeyRound,
 	Pencil,
 	Plus,
 	RefreshCcw,
@@ -26,6 +27,7 @@ import type {
 	CustomProviderModel,
 } from "@/lib/provider-config";
 import { cn } from "@/lib/utils";
+import { KeychainStoreDialog } from "./keychain-store-dialog";
 import type {
 	ProviderConfigAdapter,
 	ProviderPreset,
@@ -87,10 +89,18 @@ export function CustomProviderCard({
 	const apiKeyOnly = Boolean(preset?.apiKeyOnly);
 	const hasModels = draft.models.length > 0;
 	const canFetch = draft.baseUrl.trim().length > 0;
+	// Vertex-type Claude provider: gateway URL + project id/region, and the
+	// token may live in the macOS Keychain instead of Helmor settings.
+	const isVertex =
+		adapter.family === "claude" && isManual && draft.apiStyle === "vertex";
+	const vertexKeychain = isVertex && draft.vertexAuthMode === "keychain";
 	// Claude endpoints are Anthropic-style (base must NOT end in /v1 — the SDK
 	// appends /v1/messages and fetch appends /v1/models). Others are /v1.
-	const baseUrlPlaceholder =
-		adapter.family === "claude" ? "baseUrlHttpsAnthropic" : "baseUrlHttpsV1";
+	const baseUrlPlaceholder = isVertex
+		? "baseUrlVertexGateway"
+		: adapter.family === "claude"
+			? "baseUrlHttpsAnthropic"
+			: "baseUrlHttpsV1";
 
 	function patch(next: Partial<CustomProvider>) {
 		setDraft((current) => ({ ...current, ...next }));
@@ -221,28 +231,30 @@ export function CustomProviderCard({
 				/>
 			) : null}
 
-			<div className="flex items-center gap-2">
-				<Input
-					type="password"
-					value={draft.apiKey}
-					onChange={(e) => patch({ apiKey: e.target.value })}
-					onBlur={commitText}
-					placeholder="apiKey"
-					className="h-8 min-w-0 flex-1 border-border/50 bg-background/40 text-[13px]"
-				/>
-				{preset?.apiKeyUrl && !draft.apiKey ? (
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						aria-label="getApiKey"
-						onClick={() => preset.apiKeyUrl && void openUrl(preset.apiKeyUrl)}
-					>
-						<I18nText source="getKey" />
-						<SquareArrowOutUpRight className="size-3.5" />
-					</Button>
-				) : null}
-			</div>
+			{vertexKeychain ? null : (
+				<div className="flex items-center gap-2">
+					<Input
+						type="password"
+						value={draft.apiKey}
+						onChange={(e) => patch({ apiKey: e.target.value })}
+						onBlur={commitText}
+						placeholder="apiKey"
+						className="h-8 min-w-0 flex-1 border-border/50 bg-background/40 text-[13px]"
+					/>
+					{preset?.apiKeyUrl && !draft.apiKey ? (
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							aria-label="getApiKey"
+							onClick={() => preset.apiKeyUrl && void openUrl(preset.apiKeyUrl)}
+						>
+							<I18nText source="getKey" />
+							<SquareArrowOutUpRight className="size-3.5" />
+						</Button>
+					) : null}
+				</div>
+			)}
 
 			{adapter.caps.apiStyleSelectable && isManual ? (
 				<StyleSelect
@@ -254,6 +266,15 @@ export function CustomProviderCard({
 						"chat"
 					}
 					onChange={(apiStyle) => commit({ apiStyle })}
+				/>
+			) : null}
+
+			{isVertex ? (
+				<VertexFields
+					draft={draft}
+					patch={patch}
+					commit={commit}
+					commitText={commitText}
 				/>
 			) : null}
 
@@ -285,6 +306,92 @@ export function CustomProviderCard({
 				</div>
 			)}
 		</div>
+	);
+}
+
+const VERTEX_AUTH_OPTIONS: StyleOption[] = [
+	{ value: "token", label: "vertexAuthToken", hint: "vertexAuthTokenHint" },
+	{
+		value: "keychain",
+		label: "vertexAuthKeychain",
+		hint: "vertexAuthKeychainHint",
+	},
+];
+
+const VERTEX_DEFAULT_KEYCHAIN_SERVICE = "anthropic-auth-token";
+const VERTEX_DEFAULT_KEYCHAIN_ACCOUNT = "default";
+
+/** Vertex extras: project id, auth mode, keychain item names. */
+function VertexFields({
+	draft,
+	patch,
+	commit,
+	commitText,
+}: {
+	draft: CustomProvider;
+	patch: (next: Partial<CustomProvider>) => void;
+	commit: (next: Partial<CustomProvider>) => void;
+	commitText: () => void;
+}) {
+	const [storeDialogOpen, setStoreDialogOpen] = useState(false);
+	const keychain = draft.vertexAuthMode === "keychain";
+	const service =
+		draft.vertexKeychainService?.trim() || VERTEX_DEFAULT_KEYCHAIN_SERVICE;
+	const account =
+		draft.vertexKeychainAccount?.trim() || VERTEX_DEFAULT_KEYCHAIN_ACCOUNT;
+
+	return (
+		<>
+			<Input
+				value={draft.vertexProjectId ?? ""}
+				onChange={(e) => patch({ vertexProjectId: e.target.value })}
+				onBlur={commitText}
+				placeholder="vertexProjectId"
+				className="h-8 border-border/50 bg-background/40 text-[13px]"
+			/>
+			<StyleSelect
+				label="vertexAuthMode"
+				options={VERTEX_AUTH_OPTIONS}
+				value={keychain ? "keychain" : "token"}
+				onChange={(vertexAuthMode) => commit({ vertexAuthMode })}
+			/>
+			{keychain ? (
+				<>
+					<div className="flex items-center gap-2">
+						<Input
+							value={draft.vertexKeychainService ?? ""}
+							onChange={(e) => patch({ vertexKeychainService: e.target.value })}
+							onBlur={commitText}
+							placeholder="vertexKeychainService"
+							className="h-8 min-w-0 flex-1 border-border/50 bg-background/40 text-[13px]"
+						/>
+						<Input
+							value={draft.vertexKeychainAccount ?? ""}
+							onChange={(e) => patch({ vertexKeychainAccount: e.target.value })}
+							onBlur={commitText}
+							placeholder="vertexKeychainAccount"
+							className="h-8 w-40 border-border/50 bg-background/40 text-[13px]"
+						/>
+					</div>
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						className="self-start"
+						onClick={() => setStoreDialogOpen(true)}
+					>
+						<KeyRound className="size-3.5" />
+						<I18nText source="vertexKeychainStoreCta" />
+					</Button>
+					<KeychainStoreDialog
+						open={storeDialogOpen}
+						onOpenChange={setStoreDialogOpen}
+						service={service}
+						account={account}
+					/>
+				</>
+			) : null}
+		</>
 	);
 }
 

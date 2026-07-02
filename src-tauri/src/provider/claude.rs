@@ -10,6 +10,33 @@ use super::CustomProviderBackend;
 const SETTINGS_KEY: &str = "app.claude_custom_providers";
 const MODEL_ID_PREFIX: &str = "claude-custom|";
 
+pub const VERTEX_API_STYLE: &str = "vertex";
+pub const VERTEX_AUTH_KEYCHAIN: &str = "keychain";
+pub const VERTEX_DEFAULT_KEYCHAIN_SERVICE: &str = "anthropic-auth-token";
+pub const VERTEX_DEFAULT_KEYCHAIN_ACCOUNT: &str = "default";
+
+/// How Claude Code authenticates to the Vertex gateway once
+/// `CLAUDE_CODE_SKIP_VERTEX_AUTH` disables GCP request signing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClaudeVertexAuth {
+    /// Plaintext gateway token → `ANTHROPIC_AUTH_TOKEN`.
+    Token(String),
+    /// macOS Keychain item, read by the CLI itself via `apiKeyHelper`
+    /// (`security find-generic-password`) — the token never enters Helmor.
+    Keychain { service: String, account: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaudeVertexConfig {
+    /// Gateway endpoint → `ANTHROPIC_VERTEX_BASE_URL`.
+    pub base_url: String,
+    /// `ANTHROPIC_VERTEX_PROJECT_ID`; empty → CLI-side fallbacks apply.
+    pub project_id: String,
+    /// `CLOUD_ML_REGION`; empty → "global".
+    pub region: String,
+    pub auth: ClaudeVertexAuth,
+}
+
 #[derive(Debug, Clone)]
 pub struct ClaudeProviderModel {
     pub id: String,
@@ -18,6 +45,8 @@ pub struct ClaudeProviderModel {
     pub cli_model: String,
     pub base_url: String,
     pub api_key: String,
+    /// Some → Vertex-type provider (`apiStyle == "vertex"`).
+    pub vertex: Option<ClaudeVertexConfig>,
 }
 
 /// Legacy single-slot shape.
@@ -105,12 +134,57 @@ pub fn configured_models() -> Vec<ClaudeProviderModel> {
     expand_models(&list())
 }
 
+/// Some ⟺ the provider is Vertex-type and complete enough to use.
+fn vertex_config(provider: &CustomProvider) -> Option<ClaudeVertexConfig> {
+    if provider.api_style.as_deref() != Some(VERTEX_API_STYLE) {
+        return None;
+    }
+    let trimmed = |v: &Option<String>| v.as_deref().unwrap_or_default().trim().to_string();
+    let keychain = provider.vertex_auth_mode.as_deref() == Some(VERTEX_AUTH_KEYCHAIN);
+    let auth = if keychain {
+        let or_default = |v: String, default: &str| {
+            if v.is_empty() {
+                default.to_string()
+            } else {
+                v
+            }
+        };
+        ClaudeVertexAuth::Keychain {
+            service: or_default(
+                trimmed(&provider.vertex_keychain_service),
+                VERTEX_DEFAULT_KEYCHAIN_SERVICE,
+            ),
+            account: or_default(
+                trimmed(&provider.vertex_keychain_account),
+                VERTEX_DEFAULT_KEYCHAIN_ACCOUNT,
+            ),
+        }
+    } else {
+        let token = provider.api_key.trim();
+        if token.is_empty() {
+            return None;
+        }
+        ClaudeVertexAuth::Token(token.to_string())
+    };
+    Some(ClaudeVertexConfig {
+        base_url: provider.base_url.trim().to_string(),
+        project_id: trimmed(&provider.vertex_project_id),
+        region: trimmed(&provider.vertex_region),
+        auth,
+    })
+}
+
 fn expand_models(providers: &[CustomProvider]) -> Vec<ClaudeProviderModel> {
     let mut models = Vec::new();
     for provider in providers {
         let base_url = provider.base_url.trim();
         let api_key = provider.api_key.trim();
-        if base_url.is_empty() || api_key.is_empty() {
+        if base_url.is_empty() {
+            continue;
+        }
+        let vertex = vertex_config(provider);
+        // Keychain-auth Vertex providers legitimately have no stored key.
+        if api_key.is_empty() && vertex.is_none() {
             continue;
         }
         let mut seen = std::collections::HashSet::new();
@@ -131,6 +205,7 @@ fn expand_models(providers: &[CustomProvider]) -> Vec<ClaudeProviderModel> {
                 cli_model: slug.to_string(),
                 base_url: base_url.to_string(),
                 api_key: api_key.to_string(),
+                vertex: vertex.clone(),
             });
         }
     }
@@ -250,6 +325,57 @@ mod tests {
         assert_eq!(custom.models.len(), 2);
         let models = expand_models(&list);
         assert_eq!(models[0].id, "claude-custom|custom|m1");
+    }
+
+    fn vertex_provider(auth_mode: Option<&str>, api_key: &str) -> CustomProvider {
+        CustomProvider {
+            id: "gw".to_string(),
+            base_url: "https://gateway.example.ai/api".to_string(),
+            api_key: api_key.to_string(),
+            api_style: Some("vertex".to_string()),
+            vertex_project_id: Some("acme".to_string()),
+            vertex_auth_mode: auth_mode.map(str::to_string),
+            models: vec![CustomProviderModel {
+                slug: "claude-opus-4-8".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn vertex_token_mode_requires_api_key() {
+        // Token mode with no key is unusable — skipped like plain providers.
+        assert!(expand_models(&[vertex_provider(None, "")]).is_empty());
+
+        let models = expand_models(&[vertex_provider(None, "sk-gw")]);
+        assert_eq!(models.len(), 1);
+        let vertex = models[0].vertex.as_ref().expect("vertex config");
+        assert_eq!(vertex.auth, ClaudeVertexAuth::Token("sk-gw".to_string()));
+        assert_eq!(vertex.project_id, "acme");
+    }
+
+    #[test]
+    fn vertex_keychain_mode_needs_no_api_key_and_fills_defaults() {
+        let models = expand_models(&[vertex_provider(Some("keychain"), "")]);
+        assert_eq!(models.len(), 1);
+        let vertex = models[0].vertex.as_ref().expect("vertex config");
+        assert_eq!(
+            vertex.auth,
+            ClaudeVertexAuth::Keychain {
+                service: VERTEX_DEFAULT_KEYCHAIN_SERVICE.to_string(),
+                account: VERTEX_DEFAULT_KEYCHAIN_ACCOUNT.to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn non_vertex_provider_has_no_vertex_config() {
+        let mut provider = vertex_provider(None, "sk");
+        provider.api_style = None;
+        let models = expand_models(&[provider]);
+        assert_eq!(models.len(), 1);
+        assert!(models[0].vertex.is_none());
     }
 
     #[test]

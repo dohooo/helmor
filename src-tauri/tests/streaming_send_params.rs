@@ -15,6 +15,7 @@ use helmor_lib::agents::{
 };
 use helmor_lib::data_dir;
 use helmor_lib::db;
+use helmor_lib::provider::claude::{ClaudeVertexAuth, ClaudeVertexConfig};
 use helmor_lib::workspace::sidebar_order;
 use insta::assert_yaml_snapshot;
 use serde_json::Value;
@@ -108,6 +109,7 @@ fn base_input<'a>(session_id: Option<&'a str>) -> BuildSendMessageParamsInput<'a
         helmor_session_id: session_id,
         claude_base_url: None,
         claude_auth_token: None,
+        claude_vertex: None,
         agent_proxy: None,
         claude_thinking_display: None,
         images: &[],
@@ -171,6 +173,51 @@ fn includes_claude_environment_for_custom_provider() {
 
     let params = build(input);
     assert_yaml_snapshot!("params_with_claude_environment", &params);
+}
+
+#[test]
+fn includes_vertex_environment_with_plaintext_token() {
+    let env = TestEnv::new();
+    seed_workspace_session(&env.connection(), "w-v1", "s-v1", None);
+
+    let vertex = ClaudeVertexConfig {
+        base_url: "https://gateway.example.ai/api".to_string(),
+        project_id: "acme-project".to_string(),
+        region: String::new(), // empty → defaults to "global"
+        auth: ClaudeVertexAuth::Token("sk-gateway".to_string()),
+    };
+    let mut input = base_input(Some("s-v1"));
+    input.claude_vertex = Some(&vertex);
+
+    let params = build(input);
+    assert_yaml_snapshot!("params_with_vertex_token", &params);
+}
+
+#[test]
+fn includes_vertex_keychain_api_key_helper_settings() {
+    let env = TestEnv::new();
+    seed_workspace_session(&env.connection(), "w-v2", "s-v2", None);
+
+    let vertex = ClaudeVertexConfig {
+        base_url: "https://gateway.example.ai/api".to_string(),
+        project_id: "acme-project".to_string(),
+        region: "us-east5".to_string(),
+        auth: ClaudeVertexAuth::Keychain {
+            service: "anthropic-auth-token".to_string(),
+            // Hostile account name: must be shell-quoted in the helper.
+            account: "it's me".to_string(),
+        },
+    };
+    let mut input = base_input(Some("s-v2"));
+    input.claude_vertex = Some(&vertex);
+
+    let params = build(input);
+    // Keychain mode must NOT emit ANTHROPIC_AUTH_TOKEN — the env token
+    // would outrank the apiKeyHelper in the CLI's credential precedence.
+    assert!(params["claudeEnvironment"]
+        .get("ANTHROPIC_AUTH_TOKEN")
+        .is_none());
+    assert_yaml_snapshot!("params_with_vertex_keychain", &params);
 }
 
 #[test]

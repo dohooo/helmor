@@ -40,6 +40,7 @@ fn to_custom(p: OpencodeCustomProvider) -> CustomProvider {
             })
             .collect(),
         enabled_model_ids: None,
+        ..Default::default()
     }
 }
 
@@ -118,6 +119,7 @@ mod tests {
                 effort_levels: Vec::new(),
             }],
             enabled_model_ids: None,
+            ..Default::default()
         };
         let oc = to_opencode(custom);
         assert_eq!(oc.npm, NPM_RESPONSES);

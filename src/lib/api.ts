@@ -1046,6 +1046,54 @@ export async function resizeAgentLoginTerminal(
 	});
 }
 
+// ── Keychain store terminal (Vertex provider keychain auth) ────────────────
+// In-app terminal that runs `security add-generic-password … -U -w`; the
+// user types the token straight into macOS Keychain.
+
+export async function spawnKeychainStoreTerminal(
+	service: string,
+	account: string,
+	instanceId: string,
+	onEvent: (event: ScriptEvent) => void,
+): Promise<void> {
+	const channel = new Channel<ScriptEvent>();
+	channel.onmessage = onEvent;
+	await invoke("spawn_keychain_store_terminal", {
+		service,
+		account,
+		instanceId,
+		channel,
+	});
+}
+
+export async function stopKeychainStoreTerminal(
+	instanceId: string,
+): Promise<boolean> {
+	return invoke<boolean>("stop_keychain_store_terminal", { instanceId });
+}
+
+export async function writeKeychainStoreTerminalStdin(
+	instanceId: string,
+	data: string,
+): Promise<boolean> {
+	return invoke<boolean>("write_keychain_store_terminal_stdin", {
+		instanceId,
+		data,
+	});
+}
+
+export async function resizeKeychainStoreTerminal(
+	instanceId: string,
+	cols: number,
+	rows: number,
+): Promise<boolean> {
+	return invoke<boolean>("resize_keychain_store_terminal", {
+		instanceId,
+		cols,
+		rows,
+	});
+}
+
 export type DevResetResult = {
 	reposDeleted: number;
 	workspacesDeleted: number;

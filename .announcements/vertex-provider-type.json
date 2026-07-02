@@ -1,0 +1,11 @@
+{
+	"items": [
+		{
+			"text": "Claude Code custom providers now support a Vertex AI type — connect through your LLM gateway with the token kept in macOS Keychain.",
+			"action": {
+				"label": "Open Providers",
+				"value": { "type": "openSettings", "section": "providers" }
+			}
+		}
+	]
+}

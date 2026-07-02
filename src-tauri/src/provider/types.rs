@@ -50,9 +50,23 @@ pub struct CustomProvider {
     pub base_url: String,
     #[serde(default)]
     pub api_key: String,
-    /// OpenCode only — "chat" | "responses".
+    /// OpenCode: "chat" | "responses". Claude: "anthropic" (default) | "vertex".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_style: Option<String>,
+    /// Vertex-type Claude providers (`api_style == "vertex"`) only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertex_project_id: Option<String>,
+    /// CLOUD_ML_REGION; empty → "global".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertex_region: Option<String>,
+    /// "token" (default — `api_key` holds the gateway token) | "keychain".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertex_auth_mode: Option<String>,
+    /// macOS Keychain item read via apiKeyHelper (keychain mode).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertex_keychain_service: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertex_keychain_account: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub headers: Option<HashMap<String, String>>,
     #[serde(default)]
