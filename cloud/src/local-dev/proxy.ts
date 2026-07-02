@@ -23,6 +23,12 @@ export interface LocalTeamProxyOptions {
 export interface LocalTeamGatewayStoreOptions {
 	registry: LocalTeamRegistry;
 	adminToken: string;
+	/** The shared companion token the in-container Stage B write-through
+	 *  authenticates with. The real Worker treats this token as admin (companion
+	 *  and admin are one shared secret), so the local gateway must too — otherwise
+	 *  PUT /team/sync 401s and team-mode history never populates locally. Optional:
+	 *  callers that don't run a mirroring container (e.g. contract tests) omit it. */
+	companionToken?: string;
 	publicBaseUrl: string;
 	sandboxId?: string;
 }
@@ -33,7 +39,9 @@ export function createLocalTeamGatewayStore(
 	const sandboxId = options.sandboxId ?? "local-docker";
 	return {
 		classifyBearer: (token) =>
-			options.registry.classify(token, options.adminToken),
+			options.companionToken && token === options.companionToken
+				? Promise.resolve({ caller: "admin" as const, memberId: null })
+				: options.registry.classify(token, options.adminToken),
 		bootstrap: () => options.registry.bootstrap(sandboxId),
 		createInvite: (input) =>
 			options.registry.createInvite({

@@ -125,7 +125,10 @@ const proxy = createLocalTeamProxy({
 });
 
 Bun.serve({
-	hostname: proxyHost,
+	// Bind all interfaces (not just proxyHost) so the container can reach this
+	// proxy via host.docker.internal for the Stage B write-through (PUT /team/sync).
+	// The desktop still connects on 127.0.0.1 — publicBaseUrl is unchanged.
+	hostname: "0.0.0.0",
 	port: proxyPort,
 	// Long-lived subscription streams (e.g. /rpc-stream/subscribe_ui_mutations)
 	// sit idle between sparse events. Bun's default ~10s idleTimeout would close
@@ -223,6 +226,14 @@ function ensureDockerContainer() {
 		`127.0.0.1:${companionPort}:8080`,
 		"-e",
 		`HELMOR_COMPANION_TOKEN=${secrets.companionToken}`,
+		// Stage B write-through target: the in-container TeamSync mirrors
+		// sessions/messages to this proxy's PUT /team/sync so team-mode history
+		// (GET /team/messages) populates even while the sandbox is "asleep".
+		// `host.docker.internal` reaches the host proxy from inside the container.
+		// Without this the mirror stays inert locally — matching the real Worker,
+		// which injects HELMOR_SYNC_URL via ensureServe when it starts the process.
+		"-e",
+		`HELMOR_SYNC_URL=http://host.docker.internal:${proxyPort}`,
 		"-e",
 		"HELMOR_CLOUD_AUTOPUSH=0",
 		"-e",
