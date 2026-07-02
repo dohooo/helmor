@@ -347,6 +347,39 @@ export default {
 	},
 };
 
+/** WP6.1: force-DESTROY the running container so the NEXT request cold-starts
+ *  fresh and picks up the just-rotated `HELMOR_COMPANION_TOKEN`. `stop()` (SIGTERM)
+ *  can't do this — `helmor serve` ignores SIGTERM and the VM stays up caching the
+ *  OLD token (see `onActivityExpired`), so a re-provision against a WARM container
+ *  401s every proxied request until an idle sleep. `destroy()` (SIGKILL) scales it
+ *  to zero. ADMIN-token only (provision holds it): the derived hop gives an admin
+ *  bearer the companion token with NO member id, a member gets an
+ *  `X-Helmor-Member-Id` — so we require companion-token AND no member id. */
+export async function handleAdminDestroySandbox(
+	forwarded: Request,
+	env: Env,
+	sandbox: { destroy: () => Promise<void> },
+): Promise<Response> {
+	const adminAuthed =
+		forwarded.headers.get("Authorization") ===
+			`Bearer ${env.HELMOR_COMPANION_TOKEN}` &&
+		forwarded.headers.get("X-Helmor-Member-Id") === null;
+	if (!adminAuthed) {
+		return new Response(
+			JSON.stringify({ code: "Unauthorized", message: "admin token required" }),
+			{ status: 401, headers: { "content-type": "application/json" } },
+		);
+	}
+	await sandbox.destroy();
+	return new Response(
+		JSON.stringify({
+			ok: true,
+			message: "sandbox destroyed; the next request cold-starts fresh",
+		}),
+		{ headers: { "content-type": "application/json" } },
+	);
+}
+
 /** The request handler proper. `fetch` (above) wraps this with CORS. */
 async function route(
 	request: Request,
@@ -443,6 +476,13 @@ async function route(
 			ensureServe(sandbox, env, port, { syncUrl: url.origin }).catch(() => {}),
 		);
 		return new Response(null, { status: 202 });
+	}
+
+	// Provision-time reset (WP6.1): force-destroy the warm container so the NEXT
+	// request cold-starts and injects the just-rotated companion token. Handled
+	// BEFORE ensureServe so it never triggers a cold start itself.
+	if (url.pathname === "/admin/destroy-sandbox") {
+		return handleAdminDestroySandbox(forwarded, env, sandbox);
 	}
 
 	try {

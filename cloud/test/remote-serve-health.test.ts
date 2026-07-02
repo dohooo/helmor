@@ -1,6 +1,11 @@
 import type { Sandbox } from "@cloudflare/sandbox";
 import { describe, expect, it } from "vitest";
-import { type Env, ensureServe, healthOk } from "../src/index";
+import {
+	type Env,
+	ensureServe,
+	handleAdminDestroySandbox,
+	healthOk,
+} from "../src/index";
 
 describe("remote sandbox serve health", () => {
 	it("treats a hung health check as unhealthy", async () => {
@@ -160,3 +165,64 @@ function identityNamespace() {
 		get: () => ({}),
 	} as unknown as Env["CODEX_IDENTITY"];
 }
+
+describe("admin destroy-sandbox (WP6.1 token-confound fix)", () => {
+	const env = { HELMOR_COMPANION_TOKEN: "companion-token" } as unknown as Env;
+	const req = (headers: Record<string, string>) =>
+		new Request("https://team.example/admin/destroy-sandbox", {
+			method: "POST",
+			headers,
+		});
+	const spySandbox = () => {
+		let calls = 0;
+		return {
+			get calls() {
+				return calls;
+			},
+			destroy: async () => {
+				calls += 1;
+			},
+		};
+	};
+
+	it("destroys the container for an ADMIN bearer (companion token, no member id)", async () => {
+		const sandbox = spySandbox();
+		const res = await handleAdminDestroySandbox(
+			req({ Authorization: "Bearer companion-token" }),
+			env,
+			sandbox,
+		);
+		expect(res.status).toBe(200);
+		expect(await res.json()).toMatchObject({ ok: true });
+		// destroy() — SIGKILL — is what actually resets the warm container so the
+		// next cold start injects the freshly-rotated token.
+		expect(sandbox.calls).toBe(1);
+	});
+
+	it("rejects (401) and does NOT destroy without the admin token", async () => {
+		const sandbox = spySandbox();
+		const res = await handleAdminDestroySandbox(
+			req({ Authorization: "Bearer wrong-token" }),
+			env,
+			sandbox,
+		);
+		expect(res.status).toBe(401);
+		expect(sandbox.calls).toBe(0);
+	});
+
+	it("rejects (401) a MEMBER bearer (has X-Helmor-Member-Id) — admin only", async () => {
+		const sandbox = spySandbox();
+		const res = await handleAdminDestroySandbox(
+			// A member's derived hop carries the companion token AND a member id;
+			// destroy is admin-only, so it must still be rejected.
+			req({
+				Authorization: "Bearer companion-token",
+				"X-Helmor-Member-Id": "member-1",
+			}),
+			env,
+			sandbox,
+		);
+		expect(res.status).toBe(401);
+		expect(sandbox.calls).toBe(0);
+	});
+});

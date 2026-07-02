@@ -243,6 +243,35 @@ async function probeVerify(
  *  step was a no-op progress marker). Agent-identity readiness isn't checked here
  *  (this runs pre-authorize on the admin token); the create-flow's Finish gate
  *  owns that. */
+/** WP6.1: POST `/admin/destroy-sandbox` so any WARM container (holding the
+ *  PREVIOUS companion token) is scaled to zero before verify — the next request
+ *  cold-starts and injects the freshly-rotated token, so a Reset→re-provision no
+ *  longer 401s and recovery needs no manual `wrangler`. Best-effort: a non-2xx or
+ *  network error is logged and swallowed (verify still catches a token mismatch). */
+async function destroyWarmContainer(
+	workerUrl: string,
+	token: string,
+): Promise<void> {
+	const base = workerUrl.replace(/\/+$/, "");
+	try {
+		const res = await fetch(`${base}/admin/destroy-sandbox`, {
+			method: "POST",
+			headers: { Authorization: `Bearer ${token}` },
+		});
+		log(
+			res.ok
+				? "[provision] destroyed any warm container (next request cold-starts fresh)"
+				: `[provision] destroy-sandbox HTTP ${res.status} (non-fatal; verify is the backstop)`,
+		);
+	} catch (error) {
+		log(
+			`[provision] destroy-sandbox failed (non-fatal): ${
+				error instanceof Error ? error.message : error
+			}`,
+		);
+	}
+}
+
 async function verifyLive(
 	workerUrl: string,
 	token: string,
@@ -390,6 +419,13 @@ async function main(): Promise<void> {
 	}
 	const workerUrl = urlMatch[0];
 	progress("deploy", "done", `Deployed at ${workerUrl}`);
+
+	// 4.5) RESET WARM CONTAINER (WP6.1): a re-provision just rotated
+	//      HELMOR_COMPANION_TOKEN, but a container still WARM from a prior run
+	//      caches the OLD token (injected at its startProcess) and 401s every
+	//      proxied rpc. Force-destroy it so verify's cold-start injects the NEW
+	//      token. Best-effort — never blocks provision; verify is the backstop.
+	await destroyWarmContainer(workerUrl, adminToken);
 
 	// 5) VERIFY — REAL end-to-end (WP6, fixes S3 "green but broken"): the Worker
 	//    must auth, the container must actually START, and the model catalog must
