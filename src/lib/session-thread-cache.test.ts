@@ -201,6 +201,114 @@ describe("session-thread-cache", () => {
 		});
 	});
 
+	it("shareMessagesWithRoomChatReconciliation keeps an optimistic room-chat row when the mirror is still EMPTY (S4)", () => {
+		const optimistic: ThreadMessageLike = {
+			...makeMessage("client-1", "user", "你好"),
+			isRoomChat: true,
+			author: { id: "pending-self" },
+		};
+		// D1 mirror hasn't caught up (Stage B still in flight) → next is empty.
+		const shared = shareMessagesWithRoomChatReconciliation([optimistic], []);
+		expect(shared).toHaveLength(1);
+		expect(shared[0]?.id).toBe("client-1");
+	});
+
+	it("shareMessagesWithRoomChatReconciliation replaces the optimistic row with the canonical mirror row once acked (same id)", () => {
+		const optimistic: ThreadMessageLike = {
+			...makeMessage("client-1", "user", "你好"),
+			isRoomChat: true,
+			author: { id: "pending-self" },
+		};
+		const canonical: ThreadMessageLike = {
+			...makeMessage("client-1", "user", "你好"),
+			createdAt: "2026-04-08T00:00:05Z",
+			isRoomChat: true,
+			author: { id: "4040" },
+		};
+		const shared = shareMessagesWithRoomChatReconciliation(
+			[optimistic],
+			[canonical],
+		);
+		expect(shared).toHaveLength(1);
+		expect(shared[0]?.id).toBe("client-1");
+		expect(shared[0]?.author?.id).toBe("4040");
+		expect(shared[0]?.createdAt).toBe("2026-04-08T00:00:05Z");
+	});
+
+	it("shareMessagesWithRoomChatReconciliation acks an earlier row while preserving a later still-pending one", () => {
+		const m1opt: ThreadMessageLike = {
+			...makeMessage("m1", "user", "one"),
+			isRoomChat: true,
+			author: { id: "pending-self" },
+		};
+		const m2opt: ThreadMessageLike = {
+			...makeMessage("m2", "user", "two"),
+			isRoomChat: true,
+			author: { id: "pending-self" },
+		};
+		const m1canonical: ThreadMessageLike = {
+			...makeMessage("m1", "user", "one"),
+			// Canonical row carries the server timestamp (distinct from the
+			// client's optimistic one), so the ack actually swaps in the trusted
+			// author instead of keeping the prev reference as structurally equal.
+			createdAt: "2026-04-08T00:00:03Z",
+			isRoomChat: true,
+			author: { id: "4040" },
+		};
+		const shared = shareMessagesWithRoomChatReconciliation(
+			[m1opt, m2opt],
+			[m1canonical],
+		);
+		expect(shared.map((m) => m.id)).toEqual(["m1", "m2"]);
+		expect(shared[0]?.author?.id).toBe("4040"); // acked
+		expect(shared[1]?.author?.id).toBe("pending-self"); // still pending
+	});
+
+	it("shareMessagesWithRoomChatReconciliation drops a prev row the mirror lacks when it is BEFORE the anchor (authoritative prune)", () => {
+		const a = makeMessage("a", "user", "a");
+		const b = makeMessage("b", "user", "b");
+		const c = makeMessage("c", "user", "c");
+		// Mirror has a and c but not b (a real deletion, not a lagging tail).
+		const shared = shareMessagesWithRoomChatReconciliation([a, b, c], [a, c]);
+		expect(shared.map((m) => m.id)).toEqual(["a", "c"]);
+	});
+
+	it("shareMessagesWithRoomChatReconciliation keeps a teammate's live room-chat row when the mirror is behind", () => {
+		const teammate: ThreadMessageLike = {
+			...makeMessage("peer-1", "user", "hi"),
+			isRoomChat: true,
+			author: { id: "9999" },
+		};
+		const shared = shareMessagesWithRoomChatReconciliation([teammate], []);
+		expect(shared).toHaveLength(1);
+		expect(shared[0]?.id).toBe("peer-1");
+	});
+
+	it("shareMessagesWithRoomChatReconciliation does not resurrect an older user row that fell out of a shrunk tail window", () => {
+		const old = makeMessage("old", "user", "ancient");
+		const u1 = makeMessage("u1", "user", "recent-1");
+		const u2 = makeMessage("u2", "user", "recent-2");
+		// Local windowed refetch dropped the oldest row from the front.
+		const shared = shareMessagesWithRoomChatReconciliation(
+			[old, u1, u2],
+			[u1, u2],
+		);
+		expect(shared.map((m) => m.id)).toEqual(["u1", "u2"]);
+	});
+
+	it("shareMessagesWithRoomChatReconciliation does NOT preserve a pending assistant tail (owned by the streaming path)", () => {
+		const u1: ThreadMessageLike = {
+			...makeMessage("u1", "user", "hi"),
+			author: { id: "pending-self" },
+		};
+		const a1 = makeMessage("a1", "assistant", "streaming…");
+		// Preservation is scoped to user rows; assistant tails rely on
+		// replaceStreamingTail + the watcher's refetch-timing guards, matching
+		// today's behavior (non-regression).
+		const shared = shareMessagesWithRoomChatReconciliation([u1, a1], [u1]);
+		expect(shared.map((m) => m.id)).toEqual(["u1"]);
+	});
+
 	it("appendUserMessage seeds an empty cache and returns the prior snapshot", () => {
 		const client = makeClient();
 		const userMsg = makeMessage("u1", "user", "hello");

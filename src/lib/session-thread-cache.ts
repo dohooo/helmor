@@ -74,13 +74,45 @@ function mergeUserMessageAuthor(
 	return { ...incoming, author };
 }
 
+/**
+ * Reconcile an authoritative snapshot (`next` — the D1 mirror in team mode, or
+ * the DB tail locally) into the cached thread (`prev`) WITHOUT dropping local
+ * rows the authoritative source hasn't caught up to yet.
+ *
+ * Two jobs:
+ *  1. Echo fold: a room-chat row in `next` that matches an optimistic `prev`
+ *     row (by id, or a close content/time echo for older backends that ignored
+ *     `clientMessageId`) keeps the optimistic row's id + trusted fields, so
+ *     React doesn't remount the row.
+ *  2. Un-acked tail preservation (the S4/S6 "message flashes then disappears"
+ *     fix): the mirror is append-only and lags the just-sent optimistic write,
+ *     so preserve the contiguous tail of pending USER rows — those AFTER the
+ *     newest `prev` row `next` already knows (the "anchor") whose ids aren't in
+ *     `next`. When the mirror later contains the id (ack), the row IS in `next`
+ *     and the canonical row replaces it (job 1 / `shareMessages` id-match).
+ *     Rows BEFORE the anchor that `next` lacks are genuinely gone (an
+ *     authoritative prune, or a shrunk local tail window) and are dropped.
+ *
+ * Pure. Clock-free: preservation is decided by id membership, never timestamps,
+ * so client/container clock skew can't drop a pending row. Scoped to `role ===
+ * "user"` — streaming assistant tails stay owned by `replaceStreamingTail` and
+ * the watcher's refetch-timing guards.
+ */
 export function shareMessagesWithRoomChatReconciliation(
 	prev: ThreadMessageLike[],
 	next: ThreadMessageLike[],
 ): ThreadMessageLike[] {
-	if (prev.length === 0 || next.length === 0) {
-		return shareMessages(prev, next);
+	if (prev.length === 0) return shareMessages(prev, next);
+
+	const nextIds = new Set<string>();
+	for (const message of next) {
+		if (message.id != null) nextIds.add(message.id);
 	}
+
+	// Job 1 — echo fold. `consumedPrevIds` tracks prev rows already represented
+	// in `reconciled` via an old-backend echo match, so job 2 doesn't also
+	// preserve them (which would duplicate the row).
+	const consumedPrevIds = new Set<string>();
 	let changed = false;
 	const reconciled = next.map((message) => {
 		if (!isRoomChatUserMessage(message)) return message;
@@ -95,11 +127,54 @@ export function shareMessagesWithRoomChatReconciliation(
 		const existing = prev[echoIndex];
 		if (!existing) return message;
 		changed = true;
+		if (existing.id != null) consumedPrevIds.add(existing.id);
 		return mergeRoomChatReplacement(existing, message, {
 			preserveExistingId: true,
 		});
 	});
-	return shareMessages(prev, changed ? reconciled : next);
+
+	// Job 2 — un-acked tail preservation.
+	const preservedTail = collectPendingUserTail(prev, nextIds, consumedPrevIds);
+	const base = changed ? reconciled : next;
+	const merged = preservedTail.length > 0 ? [...base, ...preservedTail] : base;
+	return shareMessages(prev, merged);
+}
+
+/**
+ * The contiguous tail of pending USER rows in `prev` the authoritative snapshot
+ * hasn't acked: rows AFTER the last `prev` row present in `next` (the anchor)
+ * whose ids are neither in `next` nor already folded into it. `anchor === -1`
+ * when `prev` and `next` share no row (e.g. an empty/behind mirror) — then the
+ * whole `prev` user tail is pending. Returns the ORIGINAL `prev` references so
+ * `shareMessages` reuses them (no spurious remount).
+ */
+function collectPendingUserTail(
+	prev: readonly ThreadMessageLike[],
+	nextIds: ReadonlySet<string>,
+	consumedPrevIds: ReadonlySet<string>,
+): ThreadMessageLike[] {
+	let anchor = -1;
+	for (let index = prev.length - 1; index >= 0; index -= 1) {
+		const id = prev[index]?.id;
+		if (id != null && nextIds.has(id)) {
+			anchor = index;
+			break;
+		}
+	}
+	const preserved: ThreadMessageLike[] = [];
+	for (let index = anchor + 1; index < prev.length; index += 1) {
+		const message = prev[index];
+		if (!message) continue;
+		if (message.role !== "user") continue;
+		if (
+			message.id != null &&
+			(nextIds.has(message.id) || consumedPrevIds.has(message.id))
+		) {
+			continue;
+		}
+		preserved.push(message);
+	}
+	return preserved;
 }
 
 /** Snapshot of the cached thread for a session, used for rollback. */
