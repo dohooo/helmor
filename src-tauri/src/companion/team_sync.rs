@@ -309,15 +309,7 @@ pub fn on_ui_mutation<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: &UiMu
     }
 
     // Stage B — data mirror: only the session/message subset hits D1.
-    let session_id = match event {
-        UiMutationEvent::SessionTurnPersisted { session_id }
-        | UiMutationEvent::SessionMessagesAppended { session_id } => Some(session_id.clone()),
-        _ => None,
-    };
-    let workspace_id = match event {
-        UiMutationEvent::SessionListChanged { workspace_id } => Some(workspace_id.clone()),
-        _ => None,
-    };
+    let (session_id, workspace_id) = stage_b_targets(event);
     if session_id.is_none() && workspace_id.is_none() {
         return;
     }
@@ -338,6 +330,24 @@ pub fn on_ui_mutation<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: &UiMu
             }
         }
     });
+}
+
+/// Classify which Stage B mirror target(s) a ui-mutation drives: `(session_id,
+/// workspace_id)`. Pure, so the routing is unit-testable without a Tauri app
+/// handle — in particular that room-chat appends mirror like an appended message
+/// (session target), which `WorkspaceListChanged` (neither target) never did.
+fn stage_b_targets(event: &UiMutationEvent) -> (Option<String>, Option<String>) {
+    let session_id = match event {
+        UiMutationEvent::SessionTurnPersisted { session_id }
+        | UiMutationEvent::SessionMessagesAppended { session_id }
+        | UiMutationEvent::RoomChatMessageAppended { session_id, .. } => Some(session_id.clone()),
+        _ => None,
+    };
+    let workspace_id = match event {
+        UiMutationEvent::SessionListChanged { workspace_id } => Some(workspace_id.clone()),
+        _ => None,
+    };
+    (session_id, workspace_id)
 }
 
 /// Read a session row + its messages with `rowid > after_rowid` (append-only),
@@ -552,5 +562,57 @@ mod tests {
         assert_eq!(json["event"], "ui-mutation");
         assert_eq!(json["data"]["type"], "sessionListChanged");
         assert_eq!(json["data"]["workspaceId"], "w1");
+    }
+
+    /// WP3 fix: a room-chat append must mirror to D1 keyed by `session_id`,
+    /// exactly like `SessionMessagesAppended`. Before WP3, room chat only
+    /// published `WorkspaceListChanged` (see the next test) so it never reached
+    /// the mirror — the root cause of "message flashes then disappears".
+    #[test]
+    fn room_chat_appended_routes_to_session_mirror() {
+        let (session_id, workspace_id) =
+            stage_b_targets(&UiMutationEvent::RoomChatMessageAppended {
+                session_id: "s1".into(),
+                author_id: Some("42".into()),
+            });
+        assert_eq!(session_id.as_deref(), Some("s1"));
+        assert_eq!(workspace_id, None);
+    }
+
+    /// Regression guard on the OLD behaviour: `WorkspaceListChanged` maps to
+    /// NEITHER Stage B target, which is exactly why room chat never hit D1.
+    #[test]
+    fn workspace_list_changed_routes_to_no_stage_b_target() {
+        let (session_id, workspace_id) = stage_b_targets(&UiMutationEvent::WorkspaceListChanged);
+        assert_eq!(session_id, None);
+        assert_eq!(workspace_id, None);
+    }
+
+    /// The pre-existing session-mirror events still route unchanged (no
+    /// regression from folding room chat into the same arm).
+    #[test]
+    fn session_appended_and_turn_persisted_still_route_to_session_mirror() {
+        for event in [
+            UiMutationEvent::SessionMessagesAppended {
+                session_id: "s".into(),
+            },
+            UiMutationEvent::SessionTurnPersisted {
+                session_id: "s".into(),
+            },
+        ] {
+            let (session_id, workspace_id) = stage_b_targets(&event);
+            assert_eq!(session_id.as_deref(), Some("s"));
+            assert_eq!(workspace_id, None);
+        }
+    }
+
+    /// `SessionListChanged` still routes to the workspace mirror (metadata).
+    #[test]
+    fn session_list_changed_routes_to_workspace_mirror() {
+        let (session_id, workspace_id) = stage_b_targets(&UiMutationEvent::SessionListChanged {
+            workspace_id: "w1".into(),
+        });
+        assert_eq!(session_id, None);
+        assert_eq!(workspace_id.as_deref(), Some("w1"));
     }
 }

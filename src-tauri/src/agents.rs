@@ -444,6 +444,10 @@ pub async fn post_room_chat_message(
     let raw_json = payload.to_string();
     let now = crate::models::db::current_timestamp()
         .unwrap_or_else(|_| "1970-01-01T00:00:00.000Z".to_string());
+    // Clone before `author_id` is moved into the IntermediateMessage below — the
+    // typed room-chat event carries the SERVER-derived member id so frontends can
+    // handle their own echo sender-aware.
+    let author_id_for_event = author_id.clone();
     let intermediate = crate::pipeline::types::IntermediateMessage {
         id: msg_id,
         role: crate::pipeline::types::MessageRole::User,
@@ -459,6 +463,17 @@ pub async fn post_room_chat_message(
 
     // Signal that the session has new content (sidebar unread, etc.).
     crate::ui_sync::publish(&app, crate::ui_sync::UiMutationEvent::WorkspaceListChanged);
+    // Typed room-chat event, published ADDITIVELY (WorkspaceListChanged stays for
+    // the sidebar). Stage B keys off `session_id` to mirror the row to D1 — which
+    // WorkspaceListChanged does NOT trigger — and frontends compare `author_id`
+    // against the local identity to treat their own echo as ack-only.
+    crate::ui_sync::publish(
+        &app,
+        crate::ui_sync::UiMutationEvent::RoomChatMessageAppended {
+            session_id: session_id.clone(),
+            author_id: author_id_for_event,
+        },
+    );
 
     Ok(())
 }

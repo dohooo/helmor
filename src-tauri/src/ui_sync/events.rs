@@ -45,6 +45,23 @@ pub enum UiMutationEvent {
     SessionTurnPersisted {
         session_id: String,
     },
+    /// A team room-chat message (a human teammate message NOT dispatched to an
+    /// agent) was just persisted by `post_room_chat_message`. Published
+    /// ADDITIVELY alongside `WorkspaceListChanged` (which stays for the sidebar).
+    /// Two consumers:
+    ///   - Stage B mirror keys off `session_id` to write the row through to D1
+    ///     — exactly like `SessionMessagesAppended` — so room chat reaches the
+    ///     history mirror (`WorkspaceListChanged` triggers no message mirror).
+    ///   - Frontends compare `author_id` (the SERVER-derived member id, same
+    ///     source as room-chat `author_id` / presence `member_id`) against the
+    ///     local identity, so a self-origin echo is handled ack-only (mark
+    ///     stale, never an active refetch that could clobber the optimistic
+    ///     row). `author_id` is `None` only on the desktop-local path; room
+    ///     chat is team-only, so it is `Some` in practice.
+    RoomChatMessageAppended {
+        session_id: String,
+        author_id: Option<String>,
+    },
     WorkspaceFilesChanged {
         workspace_id: String,
     },
@@ -307,6 +324,33 @@ mod tests {
     }
 
     #[test]
+    fn room_chat_message_appended_uses_camel_case_type_and_fields() {
+        let event = UiMutationEvent::RoomChatMessageAppended {
+            session_id: "abc".into(),
+            author_id: Some("42".into()),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "roomChatMessageAppended");
+        assert_eq!(json["sessionId"], "abc");
+        assert_eq!(json["authorId"], "42");
+        assert!(json.get("session_id").is_none());
+        assert!(json.get("author_id").is_none());
+    }
+
+    #[test]
+    fn room_chat_message_appended_serializes_absent_author_as_null() {
+        // Desktop-local path leaves author_id None; it must go over the wire as
+        // an explicit null (not omitted), so the frontend reads `authorId` as
+        // null and treats origin as unknown (not self).
+        let event = UiMutationEvent::RoomChatMessageAppended {
+            session_id: "abc".into(),
+            author_id: None,
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert!(json["authorId"].is_null());
+    }
+
+    #[test]
     fn variant_names_are_camel_case() {
         let cases = [
             (
@@ -429,6 +473,7 @@ mod tests {
             E::SessionPlanChanged { .. } => "SessionPlanChanged",
             E::SessionMessagesAppended { .. } => "SessionMessagesAppended",
             E::SessionTurnPersisted { .. } => "SessionTurnPersisted",
+            E::RoomChatMessageAppended { .. } => "RoomChatMessageAppended",
             E::WorkspaceFilesChanged { .. } => "WorkspaceFilesChanged",
             E::WorkspaceGitStateChanged { .. } => "WorkspaceGitStateChanged",
             E::WorkspaceForgeChanged { .. } => "WorkspaceForgeChanged",
@@ -465,6 +510,10 @@ mod tests {
             E::SessionPlanChanged { session_id: s() },
             E::SessionMessagesAppended { session_id: s() },
             E::SessionTurnPersisted { session_id: s() },
+            E::RoomChatMessageAppended {
+                session_id: s(),
+                author_id: None,
+            },
             E::WorkspaceFilesChanged { workspace_id: w() },
             E::WorkspaceGitStateChanged { workspace_id: w() },
             E::WorkspaceForgeChanged { workspace_id: w() },
