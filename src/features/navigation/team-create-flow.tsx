@@ -128,6 +128,10 @@ export function TeamCreateFlow({
 		setMemberError(null);
 		setMemberToken(null);
 		setStepStatus(ALL_PENDING);
+		// Capture the specific failing stage (e.g. verify's "Container start: …")
+		// so the error phase names WHICH step failed and why — not a generic line
+		// (WP6: "verify 任一步失败 → UI 指出具体哪一步").
+		let stageError: string | null = null;
 		try {
 			const result = await deployTeamCloud({
 				onProgress: (event: TeamDeployProgress) => {
@@ -140,6 +144,11 @@ export function TeamCreateFlow({
 									? "done"
 									: "active",
 					}));
+					if (event.status === "error") {
+						const label =
+							STEPS.find((s) => s.key === event.step)?.label ?? event.step;
+						stageError = `${label}: ${event.message}`;
+					}
 				},
 			});
 			if (result.kind === "needs-upgrade") {
@@ -157,7 +166,10 @@ export function TeamCreateFlow({
 			// otherwise cloud runs would have nothing to authenticate with.
 			setPhase("authorize");
 		} catch (caught) {
-			setError(describeUnknownError(caught, "Cloud setup didn't finish."));
+			setError(
+				stageError ??
+					describeUnknownError(caught, "Cloud setup didn't finish."),
+			);
 			setPhase("error");
 		}
 	}, [registerMember]);
@@ -175,6 +187,11 @@ export function TeamCreateFlow({
 	const registered = memberToken !== null;
 	const codexAuthorized = codex.status?.hasToken ?? false;
 	const claudeAuthorized = claude.status?.hasToken ?? false;
+	// Finish gate (WP6): a team with NO authorized agent identity can't run a
+	// single @agent turn, so finishing into it lands the user in the exact broken
+	// state this sprint is closing. Require a registered member + at least one
+	// authorized agent; otherwise Finish stays disabled with an explicit reason.
+	const canFinish = registered && (codexAuthorized || claudeAuthorized);
 
 	return (
 		<div>
@@ -287,7 +304,7 @@ export function TeamCreateFlow({
 						</p>
 					) : null}
 					<div className="mt-1 flex justify-end">
-						<Button size="sm" onClick={finish}>
+						<Button size="sm" onClick={finish} disabled={!canFinish}>
 							Finish
 						</Button>
 					</div>

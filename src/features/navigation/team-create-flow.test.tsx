@@ -16,6 +16,10 @@ const mocks = vi.hoisted(() => ({
 	publishShellEvent: vi.fn(),
 	codexAuthorize: vi.fn(),
 	claudeAuthorize: vi.fn(),
+	// Mutable authorized-state for the Finish gate (WP6): at least one agent
+	// identity must be authorized before Finish is enabled.
+	codexHasToken: false,
+	claudeHasToken: false,
 	// Mutable so a test can simulate an unresolved GitHub identity. `refetch`
 	// returns null by default (no roster) — overridden per test as needed.
 	teamIdentity: {
@@ -51,7 +55,7 @@ vi.mock("@/lib/workspace-helpers", () => ({
 // the create-flow logic is tested in isolation (no QueryClientProvider needed).
 vi.mock("@/features/settings/panels/cloud-identity/use-cloud-identity", () => ({
 	useCloudIdentity: () => ({
-		status: { hasToken: false },
+		status: { hasToken: mocks.codexHasToken },
 		isLoading: false,
 		isError: false,
 		isAuthorizing: false,
@@ -65,7 +69,7 @@ vi.mock(
 	"@/features/settings/panels/cloud-identity/use-cloud-claude-identity",
 	() => ({
 		useCloudClaudeIdentity: () => ({
-			status: { hasToken: false },
+			status: { hasToken: mocks.claudeHasToken },
 			isLoading: false,
 			isError: false,
 			isAuthorizing: false,
@@ -85,6 +89,10 @@ afterEach(() => {
 	vi.clearAllMocks();
 	// Restore the default resolvable identity for the next test.
 	mocks.teamIdentity.identity = { githubId: "123", login: "admin" };
+	// Reset the Finish-gate authorized-state (a plain primitive, untouched by
+	// clearAllMocks).
+	mocks.codexHasToken = false;
+	mocks.claudeHasToken = false;
 });
 
 describe("TeamCreateFlow", () => {
@@ -94,6 +102,8 @@ describe("TeamCreateFlow", () => {
 			workerUrl: "https://team.example.workers.dev",
 			adminToken: "admin-tok",
 		});
+		// Codex is authorized, so the Finish gate (WP6: ≥1 agent identity) is open.
+		mocks.codexHasToken = true;
 		const onDone = vi.fn();
 		render(<TeamCreateFlow onBack={vi.fn()} onDone={onDone} />);
 
@@ -122,6 +132,26 @@ describe("TeamCreateFlow", () => {
 			token: "member-tok",
 		});
 		expect(onDone).toHaveBeenCalled();
+	});
+
+	it("gates Finish until at least one agent identity is authorized (WP6)", async () => {
+		mocks.deployTeamCloud.mockResolvedValue({
+			kind: "deployed",
+			workerUrl: "https://team.example.workers.dev",
+			adminToken: "admin-tok",
+		});
+		// No agent authorized (both hasToken false — the afterEach default).
+		render(<TeamCreateFlow onBack={vi.fn()} onDone={vi.fn()} />);
+		fireEvent.click(screen.getByRole("button", { name: CONNECT }));
+
+		const finish = await screen.findByRole("button", { name: /^Finish$/i });
+		// A team with no agent identity can't run a turn — Finish stays disabled
+		// and clicking it must not switch in.
+		expect((finish as HTMLButtonElement).disabled).toBe(true);
+		fireEvent.click(finish);
+		expect(mocks.switchTeamMode).not.toHaveBeenCalled();
+		// …with the explicit reason shown.
+		expect(screen.getByText(/Authorize at least one/i)).toBeTruthy();
 	});
 
 	it("surfaces a membership error + Retry (no silent companion-token fallback) when the GitHub identity can't be resolved", async () => {

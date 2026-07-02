@@ -63,7 +63,7 @@ import { getTeamConfig, isTeamModeActive } from "@/lib/team-mode";
 import { cn } from "@/lib/utils";
 import { clampEffort } from "@/lib/workspace-helpers";
 import { ComposerButton } from "./button";
-import { classifyCloudError } from "./cloud-error-cta";
+import { classifyCloudError, describeCloudError } from "./cloud-error-cta";
 import { ContextBar } from "./context-bar";
 import { ContextUsageRing } from "./context-usage-ring";
 import { clearPersistedDraft } from "./draft-storage";
@@ -554,6 +554,12 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const cloudErrorCta = isTeamModeActive()
 		? classifyCloudError(sendError)
 		: null;
+	// In team mode, map raw fetch/stream errors ("Load failed", the Worker's
+	// permanent container error) to friendly copy; single-user shows the message
+	// verbatim (byte-identical to today).
+	const displaySendError = isTeamModeActive()
+		? describeCloudError(sendError)
+		: sendError;
 	const handleOpenTeamSettings = useCallback(() => {
 		window.dispatchEvent(
 			new CustomEvent(OPEN_SETTINGS_EVENT, {
@@ -1062,7 +1068,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 
 						{sendError ? (
 							<div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-small text-muted-foreground">
-								{sendError}
+								{displaySendError}
 								{cloudErrorCta ? (
 									<div className="mt-2">
 										<Button
@@ -1555,7 +1561,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 
 				{sendError && hasPendingUserInput ? (
 					<div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-small text-muted-foreground">
-						{sendError}
+						{displaySendError}
 						{cloudErrorCta ? (
 							<div className="mt-2">
 								<Button

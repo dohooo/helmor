@@ -448,6 +448,27 @@ async function route(
 	try {
 		await ensureServe(sandbox, env, port, { syncUrl: url.origin });
 	} catch (error) {
+		// A PERMANENT container-start failure (bad image / limits / crash-loop) is
+		// terminal: retries won't help. Surface it as a STRUCTURED `permanent` 503
+		// (with the failing phase) so the desktop degrades FAST to a "re-run setup"
+		// state instead of polling the 180s cold-start ceiling. Match both the typed
+		// error (from ensureServe's probes) and a raw startProcess throw by message.
+		if (
+			error instanceof PermanentContainerError ||
+			isPermanentContainerError(error)
+		) {
+			const phase =
+				error instanceof PermanentContainerError ? error.phase : "startup";
+			return new Response(
+				JSON.stringify({
+					code: "ContainerPermanentError",
+					message: (error as Error).message,
+					phase,
+					permanent: true,
+				}),
+				{ status: 503, headers: { "content-type": "application/json" } },
+			);
+		}
 		return new Response(
 			JSON.stringify({
 				code: "Unavailable",
@@ -890,6 +911,96 @@ export interface EnsureServeOptions {
 	syncUrl?: string;
 }
 
+/** A container-start failure the CF Sandbox SDK marks PERMANENT (bad image tag,
+ *  resource limits, a boot that crash-loops) — retries won't fix it. We classify
+ *  it so `ensureServe` FAST-FAILS with a stage-tagged error instead of burning
+ *  the ~15s restore/mint + a 180s readiness poll on a backend that can't run; the
+ *  Worker turns it into a structured `permanent` 503 the desktop maps to a
+ *  "re-run setup" surface rather than an endless "connecting". */
+export class PermanentContainerError extends Error {
+	readonly phase: string;
+	constructor(phase: string, detail?: string) {
+		super(
+			`Container failed to start due to a permanent error (${phase}). Check the sandbox image tag + Cloudflare Containers plan/limits.${
+				detail ? ` [${detail}]` : ""
+			}`,
+		);
+		this.name = "PermanentContainerError";
+		this.phase = phase;
+	}
+}
+
+type ContainerProbe =
+	| { state: "healthy" }
+	| { state: "permanent"; phase: string; detail: string }
+	| { state: "starting" };
+
+/** Probe the container's `/v1/health` and CLASSIFY the outcome. The Sandbox SDK
+ *  RETURNS (never throws) a proxied `500` with `context.phase === "startup"` for
+ *  a permanent start failure, and a `503` for provisioning/transient. Reading the
+ *  body lets `ensureServe` distinguish "permanently broken" (fast-fail) from
+ *  "still cold-starting" (keep polling) instead of treating every non-200 as a
+ *  cold start. Never throws — a network/timeout error is a transient "starting".
+ *  Kept short (health-check timeout) so an asleep container just times out to
+ *  "starting" while a known-failed instance returns its 500 well within it. */
+async function probeContainer(
+	sandbox: CloudflareSandbox,
+	port: number,
+	timeoutMs: number,
+): Promise<ContainerProbe> {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), timeoutMs);
+	try {
+		const res = await withTimeout(
+			containerFetchThroughPort(
+				sandbox,
+				new Request(`http://localhost:${port}/v1/health`, {
+					signal: controller.signal,
+				}),
+				port,
+			),
+			timeoutMs,
+			"health check",
+		);
+		if (res.ok) return { state: "healthy" };
+		return (await permanentFromResponse(res)) ?? { state: "starting" };
+	} catch {
+		return { state: "starting" };
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
+/** Recognize the SDK's PERMANENT container-start error from a proxied Response
+ *  (`500` + `context.phase === "startup"`, or the known message). Best-effort
+ *  JSON parse; returns null for anything else (provisioning/transient/our own
+ *  serve 5xx are all treated as "still starting"). */
+async function permanentFromResponse(
+	res: Response,
+): Promise<{ state: "permanent"; phase: string; detail: string } | null> {
+	if (res.status !== 500) return null;
+	const body = (await res.json().catch(() => null)) as {
+		message?: string;
+		context?: { phase?: string; error?: string };
+	} | null;
+	const phase = body?.context?.phase ?? "startup";
+	const message = body?.message ?? "";
+	if (
+		phase === "startup" ||
+		message.toLowerCase().includes("permanent error")
+	) {
+		return { state: "permanent", phase, detail: body?.context?.error ?? "" };
+	}
+	return null;
+}
+
+/** Belt-and-suspenders for `startProcess`, which THROWS (rather than returning a
+ *  classified Response) when it hits the permanent-start error. */
+function isPermanentContainerError(error: unknown): boolean {
+	const m = error instanceof Error ? error.message : String(error);
+	return m.toLowerCase().includes("permanent error");
+}
+
 export async function ensureServe(
 	sandbox: CloudflareSandbox,
 	env: Env,
@@ -907,7 +1018,14 @@ export async function ensureServe(
 	const readyTimeoutMs = options.readyTimeoutMs ?? SERVE_READY_TIMEOUT_MS;
 	const pollIntervalMs = options.pollIntervalMs ?? SERVE_POLL_INTERVAL_MS;
 
-	if (await healthOk(sandbox, port, healthCheckTimeoutMs)) return;
+	// Classify BEFORE the ~15s restore/mint: a healthy container returns; a
+	// PERMANENT start failure fast-fails here (no wasted restore/mint/180s poll);
+	// anything else falls through to the cold-start path below.
+	const initial = await probeContainer(sandbox, port, healthCheckTimeoutMs);
+	if (initial.state === "healthy") return;
+	if (initial.state === "permanent") {
+		throw new PermanentContainerError(initial.phase, initial.detail);
+	}
 
 	// Phase 2b sleep persistence: restore the last DB snapshot BEFORE serve binds.
 	// Restore must precede serve (serve not yet running = no open handle on
@@ -1036,7 +1154,13 @@ export async function ensureServe(
 	// (WebKitGTK init is heavy on a fresh container's first boot).
 	const deadline = Date.now() + readyTimeoutMs;
 	do {
-		if (await healthOk(sandbox, port, healthCheckTimeoutMs)) return;
+		const probe = await probeContainer(sandbox, port, healthCheckTimeoutMs);
+		if (probe.state === "healthy") return;
+		// A container that flips to PERMANENT mid-poll won't recover — stop early
+		// instead of waiting out the 180s ceiling.
+		if (probe.state === "permanent") {
+			throw new PermanentContainerError(probe.phase, probe.detail);
+		}
 		await sleep(pollIntervalMs);
 	} while (Date.now() < deadline);
 	throw new Error("companion /v1/health did not respond in time");

@@ -49,13 +49,23 @@ const WRANGLER =
 	process.env.HELMOR_WRANGLER_BIN ||
 	resolve(cloudRoot, "node_modules/.bin/wrangler");
 
-/** Public image the deployed Container references (Docker Hub by default — CF
- *  pulls public Docker Hub with no registry auth). MUST be a PINNED tag: CF
- *  Containers reject `:latest` ("Latest tags are not allowed"). Parameterised so
- *  the registry/namespace/tag stays a deploy-time choice, not hard-coded. */
-const TEAM_IMAGE =
-	process.env.HELMOR_TEAM_IMAGE ||
-	"docker.io/caspianzhao/helmor-team-sandbox:0.1.0";
+/** Optional image OVERRIDE. Empty ⇒ deploy the tag committed in `wrangler.toml`
+ *  — the SINGLE source of truth, kept in lockstep with publish-team-image.yml.
+ *  A hard-coded default here previously OVERWROTE wrangler.toml's tag, so every
+ *  in-app provision shipped a STALE image (a `:0.1.0` frozen while the repo /
+ *  Worker moved to `:0.1.1`), diverging the container from the Worker it runs
+ *  under (team-cloud-stabilize WP6). CF Containers still reject `:latest`, so an
+ *  override MUST be a pinned tag. */
+const TEAM_IMAGE_OVERRIDE = process.env.HELMOR_TEAM_IMAGE || "";
+
+/** The image tag actually deployed: the override, else wrangler.toml's committed
+ *  `image = "…"`. Used for logging + kept identical to what `writeAccountConfig`
+ *  writes so the two never drift. */
+function resolveImage(): string {
+	if (TEAM_IMAGE_OVERRIDE) return TEAM_IMAGE_OVERRIDE;
+	const template = readFileSync(join(cloudRoot, "wrangler.toml"), "utf8");
+	return template.match(/image\s*=\s*"([^"]*)"/)?.[1] ?? "(from wrangler.toml)";
+}
 
 /** Optional gh token to inject as the Worker's GITHUB_TOKEN secret (clone/push
  *  for the cloud sandbox). Absent → skipped; basic chat doesn't need it. */
@@ -63,7 +73,11 @@ const GITHUB_TOKEN = process.env.HELMOR_TEAM_GITHUB_TOKEN || "";
 
 type Step = "login" | "plan" | "provision" | "deploy" | "verify";
 
-function progress(step: Step, status: "start" | "done", message: string): void {
+function progress(
+	step: Step,
+	status: "start" | "done" | "error",
+	message: string,
+): void {
 	process.stdout.write(
 		`${JSON.stringify({ kind: "progress", step, status, message })}\n`,
 	);
@@ -142,13 +156,20 @@ function writeAccountConfig(): string {
 	const blocks = template
 		.split(/\n\n+/)
 		.filter((b) => !b.includes("[[d1_databases]]"));
-	const rewritten = blocks
+	let rewritten = blocks
 		.join("\n\n")
-		.replace(/image\s*=\s*"[^"]*"/, `image = "${TEAM_IMAGE}"`)
 		.replace(
 			/^main\s*=\s*"[^"]*"/m,
 			`main = "${join(cloudRoot, "src/index.ts")}"`,
 		);
+	// Keep wrangler.toml's committed image tag UNLESS explicitly overridden — the
+	// tag is the single source of truth (WP6). Only rewrite for HELMOR_TEAM_IMAGE.
+	if (TEAM_IMAGE_OVERRIDE) {
+		rewritten = rewritten.replace(
+			/image\s*=\s*"[^"]*"/,
+			`image = "${TEAM_IMAGE_OVERRIDE}"`,
+		);
+	}
 	const dir = mkdtempSync(join(tmpdir(), "helmor-team-deploy-"));
 	const path = join(dir, "wrangler.toml");
 	writeFileSync(path, rewritten, "utf8");
@@ -171,9 +192,98 @@ function findD1Id(name: string): string {
 	}
 }
 
-function main(): void {
+/** Cold-start ceiling for the REAL verify below (matches the Worker's own
+ *  SERVE_READY_TIMEOUT_MS). A first boot of the GTK/WebKit stack is slow. */
+const VERIFY_TIMEOUT_MS = 180_000;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** One authenticated probe. Never throws — a network error is `{ ok:false }` so
+ *  the caller keeps polling (cold start) or reports the failing stage. Reads the
+ *  Worker's structured body so a `permanent` container error is surfaced. */
+async function probeVerify(
+	url: string,
+	token: string,
+	method: "GET" | "POST" = "GET",
+): Promise<{
+	ok: boolean;
+	status?: number;
+	permanent?: boolean;
+	message?: string;
+}> {
+	try {
+		const res = await fetch(url, {
+			method,
+			headers: {
+				Authorization: `Bearer ${token}`,
+				...(method === "POST" ? { "Content-Type": "application/json" } : {}),
+			},
+			...(method === "POST" ? { body: "{}" } : {}),
+		});
+		if (res.ok) return { ok: true, status: res.status };
+		const body = (await res.json().catch(() => ({}))) as {
+			permanent?: boolean;
+			message?: string;
+		};
+		return {
+			ok: false,
+			status: res.status,
+			permanent: body.permanent === true,
+			message: body.message,
+		};
+	} catch (error) {
+		return { ok: false, message: (error as Error).message };
+	}
+}
+
+/** REAL end-to-end verify (WP6, S3): Worker auth → the container actually STARTS
+ *  (`/v1/health` goes through the Worker's `ensureServe`) → the model catalog
+ *  returns. Returns a human error NAMING the failing stage, or null on success.
+ *  A permanent container error or a cold start that never finishes is a HARD fail
+ *  — setup must not go green on a backend that can't run a turn (the old VERIFY
+ *  step was a no-op progress marker). Agent-identity readiness isn't checked here
+ *  (this runs pre-authorize on the admin token); the create-flow's Finish gate
+ *  owns that. */
+async function verifyLive(
+	workerUrl: string,
+	token: string,
+): Promise<string | null> {
+	const base = workerUrl.replace(/\/+$/, "");
+	// (a) Container start — poll /v1/health (through ensureServe) up to the ceiling.
+	const deadline = Date.now() + VERIFY_TIMEOUT_MS;
+	for (;;) {
+		const health = await probeVerify(`${base}/v1/health`, token);
+		if (health.ok) break;
+		if (health.permanent) {
+			return `Container start: ${health.message ?? "permanent error"}`;
+		}
+		if (health.status === 401 || health.status === 403) {
+			return `Worker auth: the admin token was rejected (HTTP ${health.status}).`;
+		}
+		if (Date.now() >= deadline) {
+			return "Container start: the sandbox didn't finish starting in time.";
+		}
+		await sleep(3000);
+	}
+	// (b) Model catalog — the composer's blocking query; proves the serve host
+	//     answers RPC, not just /v1/health.
+	const models = await probeVerify(
+		`${base}/rpc/list_agent_model_sections`,
+		token,
+		"POST",
+	);
+	if (!models.ok) {
+		return models.permanent
+			? `Model catalog: ${models.message ?? "permanent error"}`
+			: `Model catalog: the serve host didn't return models (HTTP ${
+					models.status ?? "network error"
+				}).`;
+	}
+	return null;
+}
+
+async function main(): Promise<void> {
 	log(`[provision] wrangler: ${WRANGLER}`);
-	log(`[provision] image:    ${TEAM_IMAGE}`);
+	log(`[provision] image:    ${resolveImage()}`);
 
 	// 1) LOGIN — reuse `wrangler login` (OAuth loopback). whoami first so an
 	//    already-authenticated operator skips the browser dance.
@@ -281,12 +391,23 @@ function main(): void {
 	const workerUrl = urlMatch[0];
 	progress("deploy", "done", `Deployed at ${workerUrl}`);
 
-	// 5) VERIFY — best-effort reachability; the desktop's connecting overlay
-	//    owns the real cold-start wait, so a soft failure here is fine.
-	progress("verify", "start", "Verifying it's live…");
-	progress("verify", "done", "Done.");
+	// 5) VERIFY — REAL end-to-end (WP6, fixes S3 "green but broken"): the Worker
+	//    must auth, the container must actually START, and the model catalog must
+	//    return. A green here PROVES the backend can run a turn — not just that the
+	//    Worker deployed. A failing stage exits non-zero with a stage-named error.
+	progress("verify", "start", "Waking the sandbox to verify it starts…");
+	const verifyErr = await verifyLive(workerUrl, adminToken);
+	if (verifyErr) {
+		progress("verify", "error", verifyErr);
+		log(`[provision] verify failed: ${verifyErr}`);
+		process.exit(1);
+	}
+	progress("verify", "done", "Sandbox starts and the model catalog is live.");
 
 	emitDeployed(workerUrl, adminToken);
 }
 
-main();
+main().catch((error) => {
+	log(`[provision] fatal: ${error instanceof Error ? error.message : error}`);
+	process.exit(1);
+});

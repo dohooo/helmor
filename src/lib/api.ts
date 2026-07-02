@@ -1134,19 +1134,32 @@ export interface TeamContainer {
 /** Dev-tools: list the operator's remote Cloudflare Containers. LOCAL_ONLY. */
 export async function listTeamContainers(): Promise<TeamContainer[]> {
 	const raw = await invoke<string>("list_team_containers");
+	// An empty payload is a legitimate "no containers" (the helper prints "[]").
+	const trimmed = raw.trim();
+	if (!trimmed || trimmed === "[]") return [];
+	let parsed: unknown;
 	try {
-		const parsed = JSON.parse(raw) as unknown;
-		const arr = Array.isArray(parsed)
-			? parsed
-			: ((parsed as { containers?: unknown[] })?.containers ??
-				(parsed as { apps?: unknown[] })?.apps ??
-				[]);
-		return (arr as TeamContainer[]).filter(
-			(c): c is TeamContainer => typeof c === "object" && c !== null,
-		);
+		parsed = JSON.parse(trimmed);
 	} catch {
-		return [];
+		// Unparseable output is a REAL failure — wrangler error text on stdout, or
+		// a CLI whose `--json` shape changed. Surface it instead of returning `[]`,
+		// which the panel renders as a reassuring "No containers found" even when
+		// the listing actually failed (team-cloud-stabilize WP6).
+		throw new Error(
+			`Couldn't read the container list from wrangler: ${trimmed.slice(0, 200)}`,
+		);
 	}
+	const arr = Array.isArray(parsed)
+		? parsed
+		: ((parsed as { containers?: unknown[] })?.containers ??
+			(parsed as { apps?: unknown[] })?.apps ??
+			null);
+	if (!Array.isArray(arr)) {
+		throw new Error("Unexpected container-list shape from wrangler.");
+	}
+	return arr.filter(
+		(c): c is TeamContainer => typeof c === "object" && c !== null,
+	);
 }
 
 /** Dev-tools: delete a remote Cloudflare Container by id. LOCAL_ONLY. */

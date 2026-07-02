@@ -72,6 +72,32 @@ describe("team-readiness", () => {
 		expect(getTeamReadiness().unauthorized).toBe(false);
 	});
 
+	it("degrades FAST (not stuck connecting) on a permanent container error", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					({
+						ok: false,
+						status: 503,
+						json: async () => ({
+							permanent: true,
+							message:
+								"Container failed to start due to a permanent error (startup).",
+						}),
+					}) as unknown as Response,
+			),
+		);
+		beginTeamReadinessProbe();
+		// Well before the 180s cold-start ceiling: a permanent error must NOT
+		// look like a cold start.
+		await vi.advanceTimersByTimeAsync(100);
+		expect(getTeamReadiness().state).toBe("degraded");
+		// Retryable (re-run setup may fix), NOT terminal-unauthorized.
+		expect(getTeamReadiness().unauthorized).toBe(false);
+		expect(getTeamReadiness().label).toMatch(/can't start/i);
+	});
+
 	it("degrades (unreachable, retryable) on sustained network errors", async () => {
 		vi.stubGlobal(
 			"fetch",

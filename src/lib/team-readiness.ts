@@ -136,6 +136,19 @@ const degradedUnreachable = (detail: string): TeamReadiness => ({
 	unauthorized: false,
 });
 
+/** The Worker reported a PERMANENT container-start failure (bad image / limits /
+ *  crash-loop). Retries against the same backend won't help, so degrade FAST
+ *  rather than polling the 180s cold-start ceiling — but stay retryable (not
+ *  `unauthorized`): re-running Team setup / redeploying can fix it (WP6). */
+const degradedPermanent = (detail?: string): TeamReadiness => ({
+	state: "degraded",
+	label: "The team sandbox can't start",
+	detail:
+		detail?.trim() ||
+		"Its container is failing to boot (a permanent error). Re-run Team setup, or check the sandbox image + Cloudflare Containers plan in Settings → Team.",
+	unauthorized: false,
+});
+
 async function runProbe(gen: number): Promise<void> {
 	const startedAt = Date.now();
 	let firstNetworkErrorAt: number | null = null;
@@ -178,7 +191,15 @@ async function runProbe(gen: number): Promise<void> {
 				}
 				const body = (await res.json().catch(() => ({}))) as {
 					message?: string;
+					permanent?: boolean;
 				};
+				// A PERMANENT container-start failure (Worker-tagged) won't clear
+				// with retries — degrade FAST instead of showing a cold-start
+				// stage (WP6, fixes S1/S3 "stuck connecting" on a dead backend).
+				if (body.permanent) {
+					set(degradedPermanent(body.message));
+					return;
+				}
 				set({
 					state: "connecting",
 					unauthorized: false,

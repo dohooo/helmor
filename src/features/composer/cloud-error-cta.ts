@@ -38,3 +38,28 @@ export function classifyCloudError(
 	if (BILLING_PHRASES.some((phrase) => text.includes(phrase))) return "billing";
 	return null;
 }
+
+/**
+ * Map a RAW cloud send/stream error into friendlier composer copy. WP2 smoke
+ * surfaced two unfriendly strings: the browser's network "Load failed" (Worker
+ * unreachable / CORS) and the Worker's permanent container-start error. Anything
+ * else passes through unchanged (Rust/Worker messages are already human-readable).
+ * Team-mode only — single-user never calls this.
+ */
+export function describeCloudError(message: string | null | undefined): string {
+	const raw = (message ?? "").trim();
+	if (!raw) return "The cloud run failed. Please try again.";
+	const text = raw.toLowerCase();
+	if (text.includes("permanent error") || text.includes("failed to start")) {
+		return "The team sandbox can't start — its container is failing to boot. Re-run Team setup, or check the sandbox image + Cloudflare Containers plan in Settings → Team.";
+	}
+	if (
+		text === "load failed" ||
+		text.includes("failed to fetch") ||
+		text.includes("networkerror") ||
+		text.includes("network error")
+	) {
+		return "Can't reach the team cloud — it may be offline, still waking, or the URL is wrong. Check your connection, then retry.";
+	}
+	return raw;
+}

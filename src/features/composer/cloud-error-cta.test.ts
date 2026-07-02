@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyCloudError } from "./cloud-error-cta";
+import { classifyCloudError, describeCloudError } from "./cloud-error-cta";
 
 describe("classifyCloudError", () => {
 	it.each([
@@ -34,5 +34,33 @@ describe("classifyCloudError", () => {
 		[undefined],
 	] as const)("returns null for unrelated message %j", (message) => {
 		expect(classifyCloudError(message)).toBeNull();
+	});
+});
+
+describe("describeCloudError", () => {
+	it("maps the browser network 'Load failed' to friendly copy", () => {
+		expect(describeCloudError("Load failed")).toMatch(/can't reach the team/i);
+		expect(describeCloudError("Failed to fetch")).toMatch(
+			/can't reach the team/i,
+		);
+	});
+
+	it("maps the Worker permanent container error to a re-run-setup hint", () => {
+		expect(
+			describeCloudError(
+				"serve host not ready: Container failed to start due to a permanent error. Check your container configuration.",
+			),
+		).toMatch(/sandbox can't start/i);
+	});
+
+	it("passes through an already-human-readable message unchanged", () => {
+		const msg = "Codex run stopped: rate limited, try again shortly.";
+		expect(describeCloudError(msg)).toBe(msg);
+	});
+
+	it("returns a generic line for an empty/absent message", () => {
+		expect(describeCloudError("")).toMatch(/failed/i);
+		expect(describeCloudError(null)).toMatch(/failed/i);
+		expect(describeCloudError(undefined)).toMatch(/failed/i);
 	});
 });
