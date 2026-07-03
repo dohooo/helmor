@@ -114,9 +114,9 @@ describe("vendor platform boundary", () => {
 
 		// gh is the one forge CLI staged on Linux: a `.tar.gz` nesting `bin/gh`.
 		expect(ghArchivePlan(linuxTargetInfoForArch("x64"))).toEqual({
-			slug: "gh_2.94.0_linux_amd64",
-			archiveName: "gh_2.94.0_linux_amd64.tar.gz",
-			url: "https://github.com/cli/cli/releases/download/v2.94.0/gh_2.94.0_linux_amd64.tar.gz",
+			slug: "gh_2.95.0_linux_amd64",
+			archiveName: "gh_2.95.0_linux_amd64.tar.gz",
+			url: "https://github.com/cli/cli/releases/download/v2.95.0/gh_2.95.0_linux_amd64.tar.gz",
 			sha256: "",
 		});
 	});
