@@ -1253,7 +1253,9 @@ impl StreamAccumulator {
         // never enter `collected[]` — they don't cross IPC, don't render,
         // don't waste downstream work. Edit that file to toggle.
         if let Some(subtype) = value.get("subtype").and_then(Value::as_str) {
-            if crate::pipeline::event_filter::is_suppressed_system_subtype(subtype) {
+            if crate::pipeline::event_filter::is_suppressed_system_subtype(subtype)
+                || crate::pipeline::event_filter::is_ingest_only_suppressed_system_subtype(subtype)
+            {
                 return;
             }
         }

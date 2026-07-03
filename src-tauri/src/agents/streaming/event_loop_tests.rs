@@ -68,6 +68,10 @@ enum EmittedEvent {
         permission_mode: Option<String>,
         payload_kind: String,
     },
+    RetryStatus {
+        attempt: i64,
+        max_retries: i64,
+    },
     PlanCaptured,
     Done {
         persisted: bool,
@@ -157,6 +161,14 @@ fn convert_action(action: Action) -> Result<EmittedEvent, String> {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string(),
+            },
+            AgentStreamEvent::RetryStatus {
+                attempt,
+                max_retries,
+                ..
+            } => EmittedEvent::RetryStatus {
+                attempt,
+                max_retries,
             },
             AgentStreamEvent::PlanCaptured {} => EmittedEvent::PlanCaptured,
             AgentStreamEvent::Done { persisted, .. } => EmittedEvent::Done { persisted },
@@ -292,9 +304,26 @@ fn dispatch_one(
         {
             if let Some(pipeline_state) = pipeline.as_mut() {
                 let notice = super::bridges::retry_notice_event_from_error(raw);
+                // Mirrors mod.rs: transient RetryStatus to the frontend, then
+                // the (ingest-suppressed) notice through the pipeline.
+                let retry_status = Action::EmitToFrontend(AgentStreamEvent::RetryStatus {
+                    attempt: notice.get("attempt").and_then(Value::as_i64).unwrap_or(0),
+                    max_retries: notice
+                        .get("max_retries")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0),
+                    message: raw
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("retryable sidecar error")
+                        .to_string(),
+                });
                 let raw_str = serde_json::to_string(&notice).unwrap_or_default();
                 let emit = pipeline_state.push_event(&notice, &raw_str);
-                session.handle_stream_event(emit)
+                session.handle_stream_event(emit).map(|mut actions| {
+                    actions.insert(0, retry_status);
+                    actions
+                })
             } else {
                 Ok(vec![])
             }

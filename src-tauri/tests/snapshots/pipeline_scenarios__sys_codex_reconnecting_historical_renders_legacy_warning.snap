@@ -1,0 +1,15 @@
+---
+source: tests/pipeline_scenarios.rs
+assertion_line: 1392
+expression: run_normalized(msgs)
+---
+- role: system
+  id: msg-1
+  content_length: 1
+  content:
+    - type: system-notice
+      severity: warning
+      label: Reconnecting...
+      body: Attempt 2/5
+  status: ~
+  streaming: ~

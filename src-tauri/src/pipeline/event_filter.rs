@@ -70,8 +70,23 @@ pub(crate) fn is_suppressed_event_type(event_type: &str) -> bool {
     SUPPRESSED_EVENT_TYPES.contains(&event_type)
 }
 
+/// System subtypes suppressed on LIVE INGEST ONLY (`accumulator`), while the
+/// adapter still renders rows persisted by earlier code versions.
+///
+/// `codex_reconnecting` (R2-A): Codex CLI ↔ OpenAI SSE self-heal retries are
+/// normal transient progress, not a thread-worthy Warning — each retry used to
+/// stack a persistent "Reconnecting… Attempt n/m" notice. The streaming layer
+/// now folds it into a transient `AgentStreamEvent::RetryStatus` (footer-only,
+/// never persisted); rows written before this change still render via the
+/// `labels.rs` branch, so historical fixtures don't drift.
+pub(crate) const INGEST_ONLY_SUPPRESSED_SYSTEM_SUBTYPES: &[&str] = &["codex_reconnecting"];
+
 pub(crate) fn is_suppressed_system_subtype(subtype: &str) -> bool {
     SUPPRESSED_SYSTEM_SUBTYPES.contains(&subtype)
+}
+
+pub(crate) fn is_ingest_only_suppressed_system_subtype(subtype: &str) -> bool {
+    INGEST_ONLY_SUPPRESSED_SYSTEM_SUBTYPES.contains(&subtype)
 }
 
 /// `task_type: "local_bash"` lifecycle events are Claude wrapping a

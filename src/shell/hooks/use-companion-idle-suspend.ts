@@ -1,6 +1,7 @@
 import { focusManager } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { useStreamingStore } from "@/features/conversation/state/streaming-store";
+import { setCompanionIdleSuspended } from "@/lib/companion-suspend";
 import { resumeEventStream, suspendEventStream } from "@/lib/ipc";
 import { isTeamModeActive } from "@/lib/team-mode";
 
@@ -53,6 +54,10 @@ export function useCompanionIdleSuspend(): void {
 				return;
 			}
 			suspended = true;
+			// R2-A: watch subscriptions (api.ts subscribeSessionStream) ride
+			// this signal — with rpc-stream keepalives a live watch stream
+			// would otherwise pin the sandbox awake forever.
+			setCompanionIdleSuspended(true);
 			suspendEventStream();
 			// Dropping the SSE alone isn't enough: the React Query polls (git-status
 			// @10s, forge, change-request) keep hitting the container and re-arm its
@@ -76,6 +81,7 @@ export function useCompanionIdleSuspend(): void {
 				// Returning to a visible window: re-ensure the stream (cheap no-op if
 				// already live), clear any idle-suspend, and re-arm the idle timer.
 				suspended = false;
+				setCompanionIdleSuspended(false);
 				resumeEventStream();
 				focusManager.setFocused(true);
 				reArm();
@@ -86,6 +92,7 @@ export function useCompanionIdleSuspend(): void {
 			if (document.visibilityState !== "visible") return;
 			if (suspended) {
 				suspended = false;
+				setCompanionIdleSuspended(false);
 				resumeEventStream();
 				focusManager.setFocused(true);
 			}
@@ -99,6 +106,7 @@ export function useCompanionIdleSuspend(): void {
 
 		return () => {
 			clearTimer();
+			setCompanionIdleSuspended(false);
 			// Restore React Query's default focus tracking on unmount.
 			focusManager.setFocused(undefined);
 			document.removeEventListener("visibilitychange", onVisibilityChange);

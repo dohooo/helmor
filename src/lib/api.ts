@@ -1,9 +1,14 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { InspectorFileItem } from "./editor-session";
-import { type ErrorCode, extractError } from "./errors";
 // `invoke` / `Channel` / `listen` route through the transport shim so the same
 // frontend works in the desktop Tauri webview AND when served to a phone
 // browser by the companion server. See `src/lib/ipc.ts`.
+import { trackAgentRetryStatus } from "./agent-retry-status";
+import {
+	isCompanionIdleSuspended,
+	subscribeCompanionIdleSuspended,
+} from "./companion-suspend";
+import type { InspectorFileItem } from "./editor-session";
+import { type ErrorCode, extractError } from "./errors";
 import { Channel, closeChannel, invoke, listen, type UnlistenFn } from "./ipc";
 import type {
 	CustomProvider,
@@ -13,6 +18,7 @@ import type {
 import { setSessionThreadPaginationState } from "./session-thread-pagination";
 import { listTeamSessionMessages, listTeamSessions } from "./team-api";
 import { getTeamConfig, isTeamModeActive } from "./team-mode";
+import { getTeamReadiness } from "./team-readiness";
 
 export type { CustomProvider, CustomProviderModel, ProviderFamily };
 
@@ -3771,6 +3777,15 @@ export type AgentStreamEvent =
 			payload: Record<string, unknown>;
 	  }
 	| { kind: "planCaptured" }
+	/** Transient provider-retry progress (Codex CLI ↔ backend SSE self-heal).
+	 *  Footer-only: never persisted, never a thread message — show a transient
+	 *  "Reconnecting…" status and clear it on the next stream event. */
+	| {
+			kind: "retryStatus";
+			attempt: number;
+			maxRetries: number;
+			message: string;
+	  }
 	| { kind: "error"; message: string; persisted: boolean; internal: boolean };
 
 /**
@@ -4064,6 +4079,11 @@ export async function startAgentMessageStream(
 			firstSeen = true;
 			clearTimeout(watchdog);
 		}
+		// R2-A: transient "Reconnecting… (n/m)" footer status — set by
+		// `retryStatus`, cleared by any other stream event.
+		if (typeof request.helmorSessionId === "string") {
+			trackAgentRetryStatus(request.helmorSessionId, event);
+		}
 		callback(event);
 	};
 	try {
@@ -4122,23 +4142,120 @@ export async function stopAgentStream(
  * through the same render pipeline. Works identically over native Tauri and the
  * companion HTTP/NDJSON transport. Returns an unlisten to detach.
  */
+/** Resubscribe backoff for a silently-dead watch stream (R2-A). */
+const WATCH_RESUBSCRIBE_BASE_MS = 1_000;
+const WATCH_RESUBSCRIBE_CEIL_MS = 30_000;
+
 export async function subscribeSessionStream(
 	sessionId: string,
 	callback: (event: AgentStreamEvent) => void,
 ): Promise<UnlistenFn> {
-	const subscriptionId = crypto.randomUUID();
-	const onEvent = new Channel<AgentStreamEvent>();
-	onEvent.onmessage = (event) => callback(event);
-	await invoke("subscribe_session_stream", {
-		sessionId,
-		subscriptionId,
-		onEvent,
+	let disposed = false;
+	let attached = false;
+	let retryTimer: number | null = null;
+	let backoffMs = WATCH_RESUBSCRIBE_BASE_MS;
+	let currentChannel: Channel<AgentStreamEvent> | null = null;
+	let currentSubscriptionId = "";
+
+	const detach = () => {
+		attached = false;
+		if (retryTimer !== null) {
+			window.clearTimeout(retryTimer);
+			retryTimer = null;
+		}
+		if (currentChannel) {
+			currentChannel.onmessage = () => {};
+			// Abort the companion fetch — the server auto-unsubscribes on body
+			// drop, so no network unsubscribe is needed here (important on
+			// idle-suspend: an RPC would re-wake the sleeping sandbox).
+			closeChannel(currentChannel);
+			currentChannel = null;
+		}
+	};
+
+	const attach = async () => {
+		const subscriptionId = crypto.randomUUID();
+		const onEvent = new Channel<AgentStreamEvent>();
+		currentChannel = onEvent;
+		currentSubscriptionId = subscriptionId;
+		attached = true;
+		onEvent.onmessage = (event) => {
+			// R2-A: internal marker from ipc.ts — the watch stream died silently
+			// (edge drop / container sleep / F-4 settle). Resubscribe with
+			// backoff instead of dropping teammates' turns with zero signal.
+			if ((event as { kind?: string }).kind === "watchClosed") {
+				detach();
+				scheduleResubscribe();
+				return;
+			}
+			// Healthy traffic → reset the backoff ladder.
+			backoffMs = WATCH_RESUBSCRIBE_BASE_MS;
+			trackAgentRetryStatus(sessionId, event);
+			callback(event);
+		};
+		await invoke("subscribe_session_stream", {
+			sessionId,
+			subscriptionId,
+			onEvent,
+		});
+	};
+
+	const scheduleResubscribe = () => {
+		if (disposed || retryTimer !== null) return;
+		const delay = backoffMs;
+		backoffMs = Math.min(backoffMs * 2, WATCH_RESUBSCRIBE_CEIL_MS);
+		retryTimer = window.setTimeout(() => {
+			retryTimer = null;
+			if (disposed || attached) return;
+			// Gates: while idle-suspended, the detach is intentional (let the
+			// sandbox sleep); while team readiness is degraded, don't knock on a
+			// known-bad backend every few seconds. Both re-check on the next tick
+			// without any network traffic.
+			if (
+				isCompanionIdleSuspended() ||
+				getTeamReadiness().state === "degraded"
+			) {
+				scheduleResubscribe();
+				return;
+			}
+			void attach().catch(() => {
+				detach();
+				scheduleResubscribe();
+			});
+		}, delay);
+	};
+
+	// R2-A: watch subscriptions ride the idle-suspend signal. Suspend →
+	// detach (with rpc-stream keepalives a live watch would pin the sandbox
+	// awake forever); resume → reattach immediately.
+	const unsubscribeSuspend = subscribeCompanionIdleSuspended(() => {
+		if (disposed) return;
+		if (isCompanionIdleSuspended()) {
+			detach();
+		} else if (!attached) {
+			void attach().catch(() => {
+				detach();
+				scheduleResubscribe();
+			});
+		}
 	});
+
+	try {
+		await attach();
+	} catch (error) {
+		unsubscribeSuspend();
+		detach();
+		throw error;
+	}
+
 	return () => {
-		onEvent.onmessage = () => {};
-		// Abort the companion fetch so the server frees the watcher and the
-		// browser releases the connection slot (no-op on native Tauri).
-		closeChannel(onEvent);
+		disposed = true;
+		unsubscribeSuspend();
+		const subscriptionId = currentSubscriptionId;
+		detach();
+		// Explicit unsubscribe for the native transport (no fetch to abort
+		// there); on the companion transport the body drop already freed the
+		// watcher, so this is belt-and-suspenders.
 		void invoke("unsubscribe_session_stream", { sessionId, subscriptionId });
 	};
 }

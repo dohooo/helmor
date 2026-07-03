@@ -653,12 +653,22 @@ async function companionInvoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
 				chan.onmessage?.(event);
 			})
 				.then(() => {
+					if (controller.signal.aborted) return;
+					// R2-A: a watch stream whose body closed WITHOUT teardown died
+					// silently (edge drop, container sleep). Tell the subscriber
+					// (api.ts subscribeSessionStream) so it can resubscribe —
+					// otherwise a watching client stops receiving teammates' turns
+					// with zero signal. Internal marker, never rendered.
+					if (cmd === "subscribe_session_stream") {
+						chan.onmessage?.({ kind: "watchClosed" });
+						return;
+					}
 					// Body closed WITHOUT a terminal event → the container-side task
 					// failed / ended abnormally (the agent run errored and dropped the
 					// channel). Synthesize a NON-persisted terminal error so the
 					// dispatcher clears `sending` + surfaces it, instead of waiting out
 					// the api.ts first-event watchdog.
-					if (sawTerminal || controller.signal.aborted || !isAgentStream) {
+					if (sawTerminal || !isAgentStream) {
 						return;
 					}
 					chan.onmessage?.({
@@ -671,6 +681,12 @@ async function companionInvoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
 				})
 				.catch((error) => {
 					if (controller.signal.aborted) return;
+					// R2-A: a mid-stream watch failure is the same silent death as a
+					// clean close — signal resubscribe instead of surfacing an error.
+					if (cmd === "subscribe_session_stream") {
+						chan.onmessage?.({ kind: "watchClosed" });
+						return;
+					}
 					chan.onmessage?.({
 						kind: "error",
 						message: streamErrorMessage(error),

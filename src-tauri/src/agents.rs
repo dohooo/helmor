@@ -146,6 +146,15 @@ pub enum AgentStreamEvent {
         message: String,
         payload: Value,
     },
+    /// Transient provider-retry progress (Codex CLI ↔ backend SSE self-heal,
+    /// `system/codex_reconnecting`). Footer-only: NEVER persisted and never a
+    /// thread message — the frontend shows a transient "Reconnecting…" status
+    /// and clears it on the next stream event. (R2-A R3 denoise.)
+    RetryStatus {
+        attempt: i64,
+        max_retries: i64,
+        message: String,
+    },
     /// A plan was captured from ExitPlanMode. The plan content is already
     /// in the thread messages as a PlanReview card; this event just tells
     /// the frontend to show the Implement / Request Changes buttons.

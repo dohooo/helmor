@@ -1339,6 +1339,59 @@ fn sys_no_subtype() {
     assert_yaml_snapshot!(run_normalized(msgs));
 }
 
+/// R2-A: live ingest DROPS `codex_reconnecting` (folded into the transient
+/// `AgentStreamEvent::RetryStatus` at the streaming layer) — it must never
+/// become a persisted turn / thread Warning.
+#[test]
+fn sys_codex_reconnecting_live_ingest_suppressed() {
+    let mut pipeline =
+        helmor_lib::pipeline::MessagePipeline::new("codex", "test-model", "ctx", "sess");
+    let event = json!({
+        "type": "system",
+        "subtype": "codex_reconnecting",
+        "attempt": 2,
+        "max_retries": 5,
+        "retry_delay_ms": 0,
+        "error": "Reconnecting... Attempt 2/5",
+    });
+    let emit = pipeline.push_event(&event, &serde_json::to_string(&event).unwrap());
+    // The `system` arm finalizes (emits a Full snapshot), but the suppressed
+    // subtype must not have collected anything — the snapshot stays empty.
+    match emit {
+        helmor_lib::pipeline::PipelineEmit::Full(messages) => {
+            assert!(
+                messages.is_empty(),
+                "codex_reconnecting must not render on live ingest, got {messages:?}"
+            );
+        }
+        helmor_lib::pipeline::PipelineEmit::None => {}
+        helmor_lib::pipeline::PipelineEmit::Partial(_) => {
+            panic!("unexpected Partial emit for codex_reconnecting")
+        }
+    }
+    assert!(
+        pipeline.finish().is_empty(),
+        "codex_reconnecting must not persist any message"
+    );
+}
+
+/// R2-A: rows persisted by PRE-R2-A code versions still render their Warning
+/// notice on historical reload (`labels.rs` legacy branch) — old sessions and
+/// fixtures must not drift.
+#[test]
+fn sys_codex_reconnecting_historical_renders_legacy_warning() {
+    let msgs = vec![system_json(
+        "s1",
+        json!({
+            "subtype": "codex_reconnecting",
+            "attempt": 2,
+            "max_retries": 5,
+            "error": "Reconnecting... Attempt 2/5",
+        }),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
 // ============================================================================
 // 7. Merge boundaries
 // ============================================================================

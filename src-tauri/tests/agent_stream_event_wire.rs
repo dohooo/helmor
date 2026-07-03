@@ -145,6 +145,15 @@ fn wire_format_plan_captured() {
 }
 
 #[test]
+fn wire_format_retry_status() {
+    assert_yaml_snapshot!(to_value(AgentStreamEvent::RetryStatus {
+        attempt: 2,
+        max_retries: 5,
+        message: "Reconnecting... Attempt 2/5".into(),
+    }));
+}
+
+#[test]
 fn wire_format_error() {
     assert_yaml_snapshot!(to_value(AgentStreamEvent::Error {
         message: "Sidecar crashed".into(),

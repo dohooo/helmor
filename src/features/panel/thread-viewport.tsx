@@ -16,6 +16,7 @@ import {
 import { useStickToBottom } from "use-stick-to-bottom";
 import { HelmorLogoAnimated } from "@/components/helmor-logo-animated";
 import { Button } from "@/components/ui/button";
+import { useAgentRetryStatus } from "@/lib/agent-retry-status";
 import { useAgentStreamOpened } from "@/lib/agent-stream-open";
 import type { ThreadMessageLike } from "@/lib/api";
 import { HelmorProfiler } from "@/lib/dev-react-profiler";
@@ -1488,13 +1489,22 @@ function StreamingFooter({
 	// keep the waking line; timeout/failure paths are unchanged (the footer
 	// unmounts when the WP2 error path clears `sending`).
 	const streamOpened = useAgentStreamOpened(sessionId);
+	// R2-A (R3 denoise): provider-retry progress is a transient footer status,
+	// not a persisted thread Warning. Set by the `retryStatus` stream event,
+	// cleared by the next stream event — so it only shows while the provider
+	// connection is actually retrying.
+	const retryStatus = useAgentRetryStatus(sessionId);
 	const teamWait =
 		isTeamModeActive() && elapsed >= TEAM_COLD_START_HINT_SECONDS;
-	const label = !teamWait
-		? display
-		: streamOpened
-			? `Thinking… ${display}`
-			: `Waking the container… ${display}`;
+	const label = retryStatus
+		? retryStatus.attempt > 0 && retryStatus.maxRetries > 0
+			? `Reconnecting… (${retryStatus.attempt}/${retryStatus.maxRetries}) ${display}`
+			: `Reconnecting… ${display}`
+		: !teamWait
+			? display
+			: streamOpened
+				? `Thinking… ${display}`
+				: `Waking the container… ${display}`;
 
 	return (
 		<div

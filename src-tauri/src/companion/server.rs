@@ -208,22 +208,48 @@ async fn rpc_stream_handler(
     let author_id = trusted_member_id(&headers);
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     match (state.streamer)(&cmd, args, author_id, tx) {
-        Ok(()) => {
-            let stream = UnboundedReceiverStream::new(rx).map(|line| {
-                Ok::<Bytes, std::convert::Infallible>(Bytes::from(format!("{line}\n")))
-            });
-            (
-                [(CONTENT_TYPE, "application/x-ndjson")],
-                axum::body::Body::from_stream(stream),
-            )
-                .into_response()
-        }
+        Ok(()) => (
+            [(CONTENT_TYPE, "application/x-ndjson")],
+            axum::body::Body::from_stream(ndjson_body_with_keepalive(rx, RPC_STREAM_KEEPALIVE)),
+        )
+            .into_response(),
         Err(command_error) => {
             let payload = serde_json::to_value(&command_error)
                 .unwrap_or_else(|_| json!({ "code": "Unknown", "message": "Internal error" }));
             (StatusCode::BAD_REQUEST, Json(payload)).into_response()
         }
     }
+}
+
+/// Keepalive cadence for `/rpc-stream/*` NDJSON bodies. A quiet-but-healthy
+/// stream (e.g. a `subscribe_session_stream` watcher on an idle session, or a
+/// long provider "thinking" gap) otherwise moves ZERO bytes, and the edge
+/// (CF Worker F-4 no-progress watchdog, 120s) force-settles it as a corpse —
+/// silently killing live watch streams. With this, "a healthy stream always
+/// carries bytes" holds for every companion stream (SSE `/v1/stream` already
+/// pings every 15s), so the watchdog's leak-protection semantics stay intact.
+const RPC_STREAM_KEEPALIVE: Duration = Duration::from_secs(30);
+
+/// NDJSON body stream: each event as `{line}\n`, plus a bare `"\n"` whenever
+/// the stream has been quiet for `keepalive` (the browser shim's `pumpNdjson`
+/// skips empty lines, so keepalives are invisible to consumers).
+///
+/// CORRECTNESS BOUNDARY: the stream MUST terminate when `rx` closes (returns
+/// `None`). A naive `select` with an endless interval would keep the body open
+/// forever after the subscription ends — leaking watcher subscriptions and
+/// pinning the edge's inflight counter (the exact inverse of the F-4 bug).
+fn ndjson_body_with_keepalive(
+    rx: tokio::sync::mpsc::UnboundedReceiver<String>,
+    keepalive: Duration,
+) -> impl Stream<Item = Result<Bytes, std::convert::Infallible>> {
+    stream::unfold(rx, move |mut rx| async move {
+        tokio::select! {
+            line = rx.recv() => {
+                line.map(|line| (Ok(Bytes::from(format!("{line}\n"))), rx))
+            }
+            () = tokio::time::sleep(keepalive) => Some((Ok(Bytes::from("\n")), rx)),
+        }
+    })
 }
 
 /// Serve a static asset from the app's embedded frontend bundle (the same
@@ -421,10 +447,52 @@ fn image_mime(path: &std::path::Path) -> &'static str {
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
+    use std::time::Duration;
 
     use axum::http::{header::COOKIE, HeaderMap, HeaderValue};
+    use futures::StreamExt;
 
-    use super::{cookie_token, path_is_within, resolve_allowed_image_file};
+    use super::{
+        cookie_token, ndjson_body_with_keepalive, path_is_within, resolve_allowed_image_file,
+    };
+
+    #[tokio::test]
+    async fn ndjson_keepalive_emits_blank_lines_between_events() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let mut body = std::pin::pin!(ndjson_body_with_keepalive(rx, Duration::from_millis(20)));
+
+        // Quiet stream → keepalive blank line arrives (a healthy stream always
+        // carries bytes, so the edge no-progress watchdog never false-trips).
+        let first = tokio::time::timeout(Duration::from_secs(2), body.next())
+            .await
+            .expect("keepalive within timeout")
+            .expect("stream still open")
+            .unwrap();
+        assert_eq!(&first[..], b"\n");
+
+        // A real event still flows through as its own `{line}\n`.
+        tx.send("{\"kind\":\"x\"}".to_string()).unwrap();
+        let second = tokio::time::timeout(Duration::from_secs(2), body.next())
+            .await
+            .expect("event within timeout")
+            .expect("stream still open")
+            .unwrap();
+        assert_eq!(&second[..], b"{\"kind\":\"x\"}\n");
+    }
+
+    #[tokio::test]
+    async fn ndjson_body_terminates_when_sender_drops() {
+        // CORRECTNESS BOUNDARY (inverse F-4): when the subscription ends (tx
+        // dropped) the body MUST end too — keepalives must not keep it alive,
+        // or watcher subscriptions leak and the edge inflight counter pins.
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let mut body = std::pin::pin!(ndjson_body_with_keepalive(rx, Duration::from_millis(20)));
+        drop(tx);
+        let end = tokio::time::timeout(Duration::from_secs(2), body.next())
+            .await
+            .expect("stream should settle promptly after sender drop");
+        assert!(end.is_none(), "body must terminate, not keep keepaliving");
+    }
 
     #[test]
     fn cookie_token_extracts_pat() {

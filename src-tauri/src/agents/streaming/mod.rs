@@ -511,6 +511,21 @@ pub(super) fn stream_via_sidecar(
 
                 if let Some(pipeline_state) = pipeline.as_mut() {
                     let notice = bridges::retry_notice_event_from_error(&event.raw);
+                    // Same transient surface as the native `codex_reconnecting`
+                    // passthrough below: footer-only RetryStatus, never a
+                    // persisted thread Warning (the synthesized notice is
+                    // ingest-suppressed by the pipeline).
+                    actions::apply_action(
+                        actions::Action::EmitToFrontend(AgentStreamEvent::RetryStatus {
+                            attempt: notice.get("attempt").and_then(Value::as_i64).unwrap_or(0),
+                            max_retries: notice
+                                .get("max_retries")
+                                .and_then(Value::as_i64)
+                                .unwrap_or(0),
+                            message: message.to_string(),
+                        }),
+                        &apply_ctx,
+                    );
                     let line = serde_json::to_string(&notice).unwrap_or_default();
                     let emit = pipeline_state.push_event(&notice, &line);
                     match turn_session.handle_stream_event(emit) {
@@ -1250,6 +1265,39 @@ pub(super) fn stream_via_sidecar(
                     // `result`, `system`, etc. The pipeline accumulator
                     // owns the dispatch by event type; the state machine
                     // takes its `PipelineEmit` and decides what to send.
+
+                    // Codex provider-retry progress → transient footer status
+                    // (R2-A R3 denoise). Emitted to the initiating client AND
+                    // hub watchers; the pipeline drops the raw event on ingest
+                    // (`event_filter::INGEST_ONLY_SUPPRESSED_SYSTEM_SUBTYPES`),
+                    // so it is never persisted and never a thread Warning.
+                    if event.event_type() == "system"
+                        && event.raw.get("subtype").and_then(Value::as_str)
+                            == Some("codex_reconnecting")
+                    {
+                        let retry_status = AgentStreamEvent::RetryStatus {
+                            attempt: event
+                                .raw
+                                .get("attempt")
+                                .and_then(Value::as_i64)
+                                .unwrap_or(0),
+                            max_retries: event
+                                .raw
+                                .get("max_retries")
+                                .and_then(Value::as_i64)
+                                .unwrap_or(0),
+                            message: event
+                                .raw
+                                .get("error")
+                                .and_then(Value::as_str)
+                                .unwrap_or("Reconnecting...")
+                                .to_string(),
+                        };
+                        actions::apply_action(
+                            actions::Action::EmitToFrontend(retry_status),
+                            &apply_ctx,
+                        );
+                    }
 
                     // Fast mode didn't engage — flip the composer toggle off
                     // (the notice itself renders via the pipeline below).
