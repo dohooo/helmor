@@ -252,6 +252,10 @@ export function useAppShellState({
 		reloadSettings: () => publishShellEvent({ type: "reload-settings" }),
 		// Quick-panel "Open in Helmor": only the main window navigates.
 		onWorkspaceReveal: isQuickPanelWindow ? undefined : handleWorkspaceReveal,
+		// R2-E (correction A): teammate room chat for the DISPLAYED session
+		// refetches actively (turn-driven watch no longer carries it).
+		getDisplayedSessionId: () =>
+			sel.selectionStore.getState().displayedSessionId ?? null,
 	});
 	// Team mode: drop the companion SSE while the window is hidden so the remote
 	// sandbox can idle-sleep; re-focusing wakes it. Inert outside team mode.

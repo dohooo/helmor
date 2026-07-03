@@ -144,24 +144,25 @@ describe("subscribeSessionStream auto-resubscribe (R2-A)", () => {
 		unlisten();
 	});
 
-	it("idle-suspend detaches the watch; resume reattaches immediately", async () => {
+	it("R2-E (correction B): suspend does NOT force-detach a live subscription; it only gates re-knocking", async () => {
+		// The watch is turn-driven — a held subscription means a remote turn is
+		// LIVE, and the ruling says a live turn overrides idle-suspend for the
+		// watch face. So flipping suspend must not abort the stream…
 		const calls = captureSubscribes();
 		const unlisten = await subscribeSessionStream("s1", vi.fn());
 
 		setCompanionIdleSuspended(true);
-		// Detach aborts the companion fetch (no network unsubscribe that would
-		// re-wake the sandbox).
-		expect(ipc.closeChannel).toHaveBeenCalledTimes(1);
-		expect(ipc.invoke).not.toHaveBeenCalledWith(
-			"unsubscribe_session_stream",
-			expect.anything(),
-		);
-		// While suspended, even a pending watchClosed retry must not reattach.
+		expect(ipc.closeChannel).not.toHaveBeenCalled();
+		expect(calls).toHaveLength(1);
+
+		// …but a silent close WHILE suspended must not re-knock on a sleeping
+		// backend (polls stay suspended; only the owner's turn-driven attach —
+		// via a fresh subscribeSessionStream call — may re-open).
+		calls[0].channel.onmessage?.(watchClosed);
 		await vi.advanceTimersByTimeAsync(120_000);
 		expect(calls).toHaveLength(1);
 
 		setCompanionIdleSuspended(false);
-		await vi.waitFor(() => expect(calls).toHaveLength(2));
 		unlisten();
 	});
 });

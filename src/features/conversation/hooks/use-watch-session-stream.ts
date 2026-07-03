@@ -23,13 +23,13 @@ import {
 	subscribeSessionStream,
 	type ThreadMessageLike,
 } from "@/lib/api";
+import { useCompanionIdleSuspended } from "@/lib/companion-suspend";
 import { sessionThreadMessagesQueryOptions } from "@/lib/query-client";
 import {
 	mergeRoomChatMessages,
 	readSessionThread,
 	replaceStreamingTail,
 } from "@/lib/session-thread-cache";
-import { isTeamModeActive } from "@/lib/team-mode";
 
 type Args = {
 	sessionId: string | null;
@@ -66,10 +66,21 @@ export function useWatchSessionStream({ sessionId, activeStreams }: Args) {
 		? activeStreams.some((stream) => stream.sessionId === sessionId)
 		: false;
 
+	// R2-E: TURN-DRIVEN. The watch attaches only while a remote turn is live
+	// (`hasRemoteStream`, event-driven via `activeStreamsChanged` over the
+	// TeamHub WS) — an idle displayed session holds NO container stream, so
+	// the sandbox can sleep. Ruling (correction B): a live remote turn
+	// OVERRIDES idle-suspend for the watch face only — suspend keeps gating
+	// polls, but a teammate's live turn must mirror even on a suspended app;
+	// when the turn ends (activeStreams empties) the watch detaches and the
+	// app falls back to suspended quiet.
+	const suspended = useCompanionIdleSuspended();
+	const remoteTurnActive = hasRemoteStream;
 	const enabled =
 		Boolean(sessionId) &&
 		!isLocallyDriven &&
-		(hasRemoteStream || isTeamModeActive());
+		hasRemoteStream &&
+		(!suspended || remoteTurnActive);
 
 	const isLocallyDrivenRef = useRef(isLocallyDriven);
 	isLocallyDrivenRef.current = isLocallyDriven;

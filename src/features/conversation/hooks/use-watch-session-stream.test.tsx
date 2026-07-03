@@ -7,6 +7,7 @@ import {
 	useStreamingStore,
 } from "@/features/conversation/state/streaming-store";
 import type { ActiveStreamSummary, AgentStreamEvent } from "@/lib/api";
+import { setCompanionIdleSuspended } from "@/lib/companion-suspend";
 import { useWatchSessionStream } from "./use-watch-session-stream";
 
 // ---------------------------------------------------------------------------
@@ -155,8 +156,10 @@ describe("useWatchSessionStream — enabled gate", () => {
 		);
 	});
 
-	it("subscribes in team mode even when there is NO remote stream (idle-subscribe case)", () => {
-		// Team mode + no active stream → enabled = true via isTeamModeActive()
+	it("R2-E: does NOT subscribe in team mode without a remote turn (turn-driven watch)", () => {
+		// The old always-on team subscribe held a container stream for every
+		// displayed session, pinning the sandbox awake. Turn-driven: no active
+		// remote stream → no watch → the sandbox can sleep.
 		teamModeMocks.isTeamModeActive.mockReturnValue(true);
 		const { Wrapper } = createWrapper();
 
@@ -169,10 +172,40 @@ describe("useWatchSessionStream — enabled gate", () => {
 			{ wrapper: Wrapper },
 		);
 
-		expect(apiMocks.subscribeSessionStream).toHaveBeenCalledWith(
-			"session-3",
-			expect.any(Function),
-		);
+		expect(apiMocks.subscribeSessionStream).not.toHaveBeenCalled();
+	});
+
+	it("RULING ANCHOR (correction B): while suspended, a non-empty activeStreams attaches the watch; emptying detaches back to suspended quiet", () => {
+		// A live remote turn OVERRIDES idle-suspend for the watch face only —
+		// a teammate's turn must mirror even on a suspended app; when the turn
+		// ends, the watch detaches and nothing re-pins the sandbox.
+		teamModeMocks.isTeamModeActive.mockReturnValue(true);
+		setCompanionIdleSuspended(true);
+		const { Wrapper } = createWrapper();
+		try {
+			const { rerender } = renderHook(
+				({ streams }: { streams: typeof NO_ACTIVE_STREAMS }) =>
+					useWatchSessionStream({
+						sessionId: "session-b",
+						activeStreams: streams,
+					}),
+				{ wrapper: Wrapper, initialProps: { streams: NO_ACTIVE_STREAMS } },
+			);
+			expect(apiMocks.subscribeSessionStream).not.toHaveBeenCalled();
+
+			// ActiveStreamsChanged (non-empty) arrives over the TeamHub WS.
+			rerender({ streams: activeStreamFor("session-b") });
+			expect(apiMocks.subscribeSessionStream).toHaveBeenCalledWith(
+				"session-b",
+				expect.any(Function),
+			);
+
+			// Turn ends → activeStreams empties → detach (effect cleanup runs).
+			rerender({ streams: NO_ACTIVE_STREAMS });
+			expect(apiMocks.subscribeSessionStream).toHaveBeenCalledTimes(1);
+		} finally {
+			setCompanionIdleSuspended(false);
+		}
 	});
 
 	it("does NOT subscribe when the sender is this client (isLocallyDriven suppresses)", () => {
@@ -214,7 +247,8 @@ describe("useWatchSessionStream — enabled gate", () => {
 			() =>
 				useWatchSessionStream({
 					sessionId: "session-5",
-					activeStreams: NO_ACTIVE_STREAMS,
+					// R2-E turn-driven: the watch only attaches during a remote turn.
+					activeStreams: activeStreamFor("session-5"),
 				}),
 			{ wrapper: Wrapper },
 		);
@@ -257,7 +291,7 @@ describe("useWatchSessionStream — enabled gate", () => {
 			() =>
 				useWatchSessionStream({
 					sessionId: "session-6",
-					activeStreams: NO_ACTIVE_STREAMS,
+					activeStreams: activeStreamFor("session-6"),
 				}),
 			{ wrapper: Wrapper },
 		);

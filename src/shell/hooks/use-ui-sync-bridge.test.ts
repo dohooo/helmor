@@ -33,12 +33,12 @@ describe("handleUiMutation — roomChatMessageAppended (sender-aware)", () => {
 		expect(invalidateQueries).not.toHaveBeenCalled();
 	});
 
-	it("marks the thread stale — never actively — for a teammate's message", () => {
+	it("marks a BACKGROUND session's thread stale (not active) for a teammate's message", () => {
 		const { invalidateQueries, queryClient, options } = makeCtx();
 		handleUiMutation(
 			{ type: "roomChatMessageAppended", sessionId: "s1", authorId: "99" },
 			queryClient,
-			options,
+			{ ...options, getDisplayedSessionId: () => "other-session" },
 			"42",
 		);
 		expect(invalidateQueries).toHaveBeenCalledTimes(1);
@@ -46,6 +46,36 @@ describe("handleUiMutation — roomChatMessageAppended (sender-aware)", () => {
 			queryKey: helmorQueryKeys.sessionMessages("s1"),
 			refetchType: "none",
 		});
+	});
+
+	it("R2-E (correction A): a teammate's message for the DISPLAYED session refetches ACTIVELY", () => {
+		// The watch stream is turn-driven now — teammate room chat (no turn)
+		// can only arrive via this event. For the session on screen the user
+		// must see it live: active refetch against the D1 mirror (Stage B
+		// wrote the row before this event fanned out — no container wake),
+		// safe under the WP3 merge rules.
+		const { invalidateQueries, queryClient, options } = makeCtx();
+		handleUiMutation(
+			{ type: "roomChatMessageAppended", sessionId: "s1", authorId: "99" },
+			queryClient,
+			{ ...options, getDisplayedSessionId: () => "s1" },
+			"42",
+		);
+		expect(invalidateQueries).toHaveBeenCalledWith({
+			queryKey: helmorQueryKeys.sessionMessages("s1"),
+			refetchType: "active",
+		});
+	});
+
+	it("correction A stays sender-aware: a SELF echo for the displayed session is still a pure ack", () => {
+		const { invalidateQueries, queryClient, options } = makeCtx();
+		handleUiMutation(
+			{ type: "roomChatMessageAppended", sessionId: "s1", authorId: "42" },
+			queryClient,
+			{ ...options, getDisplayedSessionId: () => "s1" },
+			"42",
+		);
+		expect(invalidateQueries).not.toHaveBeenCalled();
 	});
 
 	it("treats the event as non-self while our own member id is unresolved (null)", () => {

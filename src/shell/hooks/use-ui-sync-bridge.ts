@@ -21,6 +21,10 @@ type Options = {
 	 * navigate itself.
 	 */
 	onWorkspaceReveal?: (workspaceId: string, sessionId: string | null) => void;
+	/** R2-E (correction A): the currently DISPLAYED session — a teammate's
+	 *  room chat for it must refetch actively (the watch stream is now
+	 *  turn-driven and no longer delivers chat for idle sessions). */
+	getDisplayedSessionId?: () => string | null;
 };
 
 function invalidateAllWorkspaceChanges(queryClient: QueryClient) {
@@ -139,9 +143,20 @@ export function handleUiMutation(
 				event.authorId !== null &&
 				event.authorId === ownMemberId;
 			if (isSelfOrigin) return;
+			// R2-E (correction A): the watch stream is TURN-DRIVEN now, so a
+			// teammate's room chat (no turn) can't arrive over it anymore. For
+			// the session the user is LOOKING AT, refetch actively — it reads
+			// the D1 mirror (Stage B wrote the row before this event fanned
+			// out), not the container, and the WP3 merge rules make an active
+			// refetch safe (the historical "none" was belt-and-suspenders, not
+			// a requirement). Background sessions keep the cheap mark-stale.
+			const displayedSessionId = options.getDisplayedSessionId?.() ?? null;
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.sessionMessages(event.sessionId),
-				refetchType: "none",
+				refetchType:
+					displayedSessionId !== null && event.sessionId === displayedSessionId
+						? "active"
+						: "none",
 			});
 			return;
 		}
@@ -363,10 +378,12 @@ export function useUiSyncBridge({
 	processPendingCliSends,
 	reloadSettings,
 	onWorkspaceReveal,
+	getDisplayedSessionId,
 }: Options) {
 	const processPendingCliSendsRef = useRef(processPendingCliSends);
 	const reloadSettingsRef = useRef(reloadSettings);
 	const onWorkspaceRevealRef = useRef(onWorkspaceReveal);
+	const getDisplayedSessionIdRef = useRef(getDisplayedSessionId);
 	// Our own team member id (GitHub numeric id — the same value the server
 	// stamps as room-chat author_id). Ref'd so the once-registered listener below
 	// always reads the latest even if identity resolves after mount. `null` until
@@ -379,8 +396,15 @@ export function useUiSyncBridge({
 		processPendingCliSendsRef.current = processPendingCliSends;
 		reloadSettingsRef.current = reloadSettings;
 		onWorkspaceRevealRef.current = onWorkspaceReveal;
+		getDisplayedSessionIdRef.current = getDisplayedSessionId;
 		ownMemberIdRef.current = ownMemberId;
-	}, [processPendingCliSends, reloadSettings, onWorkspaceReveal, ownMemberId]);
+	}, [
+		processPendingCliSends,
+		reloadSettings,
+		onWorkspaceReveal,
+		getDisplayedSessionId,
+		ownMemberId,
+	]);
 
 	useEffect(() => {
 		let disposed = false;
@@ -399,6 +423,8 @@ export function useUiSyncBridge({
 					reloadSettings: () => reloadSettingsRef.current(),
 					onWorkspaceReveal: (workspaceId, sessionId) =>
 						onWorkspaceRevealRef.current?.(workspaceId, sessionId),
+					getDisplayedSessionId: () =>
+						getDisplayedSessionIdRef.current?.() ?? null,
 				},
 				ownMemberIdRef.current,
 			);

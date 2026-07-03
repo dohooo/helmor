@@ -3,10 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 // frontend works in the desktop Tauri webview AND when served to a phone
 // browser by the companion server. See `src/lib/ipc.ts`.
 import { trackAgentRetryStatus } from "./agent-retry-status";
-import {
-	isCompanionIdleSuspended,
-	subscribeCompanionIdleSuspended,
-} from "./companion-suspend";
+import { isCompanionIdleSuspended } from "./companion-suspend";
 import type { InspectorFileItem } from "./editor-session";
 import { type ErrorCode, extractError } from "./errors";
 import { Channel, closeChannel, invoke, listen, type UnlistenFn } from "./ipc";
@@ -4265,32 +4262,24 @@ export async function subscribeSessionStream(
 		}, delay);
 	};
 
-	// R2-A: watch subscriptions ride the idle-suspend signal. Suspend →
-	// detach (with rpc-stream keepalives a live watch would pin the sandbox
-	// awake forever); resume → reattach immediately.
-	const unsubscribeSuspend = subscribeCompanionIdleSuspended(() => {
-		if (disposed) return;
-		if (isCompanionIdleSuspended()) {
-			detach();
-		} else if (!attached) {
-			void attach().catch(() => {
-				detach();
-				scheduleResubscribe();
-			});
-		}
-	});
+	// R2-E (correction B): the immediate detach-on-suspend from R2-A is GONE.
+	// The watch is TURN-DRIVEN now — its owner (use-watch-session-stream) only
+	// holds a subscription while a remote turn is live, and the ruling says a
+	// live remote turn OVERRIDES idle-suspend for the watch face (a teammate's
+	// turn must mirror even on a suspended app). When the turn ends the owner
+	// unsubscribes, so nothing is left to pin the sandbox. The suspend gate
+	// SURVIVES in the resubscribe loop below: a silently-closed watch must not
+	// re-knock on a sleeping backend while suspended.
 
 	try {
 		await attach();
 	} catch (error) {
-		unsubscribeSuspend();
 		detach();
 		throw error;
 	}
 
 	return () => {
 		disposed = true;
-		unsubscribeSuspend();
 		const subscriptionId = currentSubscriptionId;
 		detach();
 		// Explicit unsubscribe for the native transport (no fetch to abort

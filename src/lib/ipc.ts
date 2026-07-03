@@ -879,6 +879,14 @@ function teardownEventStream(): void {
  */
 export function suspendEventStream(): void {
 	if (!transport.remote || !eventStreamController) return;
+	// R2-E: the TEAM transport's event plane is the hibernating TeamHub
+	// WebSocket — it never touches (or wakes) the container, so dropping it on
+	// idle-suspend saves nothing and costs everything: it is the ONLY free
+	// wake-up signal while the sandbox sleeps (a teammate's turn arrives as
+	// `activeStreamsChanged` over this socket and re-attaches the watch).
+	// Keep it. Container-bound streams/polls are suspended elsewhere
+	// (focusManager pause + companion-suspend watch detach).
+	if (transport.team) return;
 	teardownEventStream();
 	setCompanionConnectionState("online");
 }

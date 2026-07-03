@@ -411,6 +411,25 @@ export function repositoriesQueryOptions() {
  *  persisted — running streams are by definition tied to this app run,
  *  rehydrating stale state across restarts would mislead the UI. */
 export function activeStreamsQueryOptions() {
+	// R2-E: in team mode this query is EVENT-DRIVEN, never poll/boot-fetched.
+	// A sleeping container has zero active turns by definition, so asking it
+	// at boot/focus would only wake it to hear "[]". The bridge invalidates on
+	// `activeStreamsChanged` (delivered over the hibernating TeamHub WS), and
+	// at that moment the container is provably awake (it just emitted the
+	// event) — the /rpc refetch is free. Mid-turn boot is course-corrected
+	// from the D1 session mirror (see use-watch-session-stream).
+	if (isTeamModeActive()) {
+		return queryOptions({
+			queryKey: helmorQueryKeys.activeStreams,
+			queryFn: listActiveStreams,
+			initialData: [],
+			initialDataUpdatedAt: Date.now(),
+			staleTime: Number.POSITIVE_INFINITY,
+			refetchOnMount: false,
+			refetchOnWindowFocus: false,
+			refetchOnReconnect: false,
+		});
+	}
 	return queryOptions({
 		queryKey: helmorQueryKeys.activeStreams,
 		queryFn: listActiveStreams,

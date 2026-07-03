@@ -13,6 +13,8 @@
  * subscription lifecycles + tests).
  */
 
+import { useSyncExternalStore } from "react";
+
 let suspended = false;
 const listeners = new Set<() => void>();
 
@@ -33,4 +35,13 @@ export function subscribeCompanionIdleSuspended(
 	return () => {
 		listeners.delete(listener);
 	};
+}
+
+/** React read of the suspend flag (R2-E: the watch gate consults it). */
+export function useCompanionIdleSuspended(): boolean {
+	return useSyncExternalStore(
+		subscribeCompanionIdleSuspended,
+		isCompanionIdleSuspended,
+		() => false,
+	);
 }
