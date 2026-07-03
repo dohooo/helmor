@@ -538,6 +538,12 @@ export const WorkspaceComposerContainer = memo(
 		);
 
 		const modelSections = modelSectionsQuery.data ?? EMPTY_MODEL_SECTIONS;
+		// F-2: in-place recovery for a failed/empty catalog (e.g. a transient
+		// team-backend outage settles the query in error and it never refetches
+		// on its own) — the picker's Retry row calls this.
+		const handleRetryModels = useCallback(() => {
+			void modelSectionsQuery.refetch();
+		}, [modelSectionsQuery.refetch]);
 		const modelsLoading =
 			modelSectionsQuery.isLoading &&
 			modelSections.every((s) => s.options.length === 0);
@@ -1351,6 +1357,8 @@ export const WorkspaceComposerContainer = memo(
 						modelSections={modelSections}
 						hasOpencodeCustomProviders={hasOpencodeCustomProviders}
 						modelsLoading={modelsLoading}
+						modelsError={modelSectionsQuery.isError}
+						onRetryModels={handleRetryModels}
 						onSelectModel={handleSelectModelInner}
 						provider={provider}
 						effortLevel={effortLevel}

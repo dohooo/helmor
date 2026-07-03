@@ -1,6 +1,8 @@
-import { useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 import { HelmorLogoAnimated } from "@/components/helmor-logo-animated";
 import { Button } from "@/components/ui/button";
+import { helmorQueryKeys } from "@/lib/query-client";
 import { isTeamModeActive } from "@/lib/team-mode";
 import {
 	ensureTeamReadinessProbe,
@@ -36,6 +38,22 @@ export function TeamConnectingOverlay() {
 	useEffect(() => {
 		if (teamActive) ensureTeamReadinessProbe();
 	}, [teamActive]);
+
+	// F-2: whenever readiness TRANSITIONS into `ready` (a retry after degraded,
+	// a cold start completing), invalidate the model catalog — a query that
+	// errored during the outage settles in `isError` and never refetches on its
+	// own, leaving the composer's picker empty until a reload.
+	const queryClient = useQueryClient();
+	const prevReadyRef = useRef(readiness.state === "ready");
+	useEffect(() => {
+		const isReady = readiness.state === "ready";
+		if (isReady && !prevReadyRef.current) {
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.agentModelSections,
+			});
+		}
+		prevReadyRef.current = isReady;
+	}, [readiness.state, queryClient]);
 
 	if (!teamActive || readiness.state === "ready") return null;
 

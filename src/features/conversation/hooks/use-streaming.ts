@@ -807,11 +807,16 @@ export function useConversationStreaming({
 			const backendLiveStream = activeStreams.find(
 				(stream) => stream.sessionId === targetSessionId,
 			);
-			const mirroredLiveSessionId =
-				mirroredActiveSessionByContext[targetContextKey];
-			const hasMirroredLiveStream = mirroredLiveSessionId === targetSessionId;
-			const mirroredOnlyLiveStream =
-				hasMirroredLiveStream && !localLiveStream && !backendLiveStream;
+			// F-3 (silent message loss): the mirrored live-session marker
+			// (`mirroredActiveSessionByContext`) is a DISPLAY signal — "another
+			// client is driving" — cleared only by a terminal event / watcher
+			// teardown, so it can go STALE. Routing a send to the queue on the
+			// mirror alone black-holed the message: no optimistic row, no error,
+			// an in-memory queue whose drain trigger never fires. Queueing now
+			// requires a LOCAL stream or a BACKEND-confirmed live stream
+			// (`activeStreams` covers a teammate-driven turn too); a stale
+			// mirror falls through to the normal send path, where a failure
+			// surfaces via the existing catch (visible error + draft restore).
 			const liveStream =
 				localLiveStream ??
 				(backendLiveStream
@@ -819,12 +824,7 @@ export function useConversationStreaming({
 							stopSessionId: targetSessionId,
 							provider: backendLiveStream.provider,
 						}
-					: hasMirroredLiveStream
-						? {
-								stopSessionId: targetSessionId,
-								provider: model.provider,
-							}
-						: null);
+					: null);
 			const hasPlanReviewForContext = planReviewByContext[contextKey] ?? false;
 			if (liveStream && !hasPlanReviewForContext) {
 				// `forceQueue` is a caller-supplied override that pins
@@ -834,7 +834,7 @@ export function useConversationStreaming({
 				// `followUpBehaviorOverride` is the per-submit "opposite"
 				// flip from the composer shortcut; subordinate to forceQueue.
 				const effectiveBehavior =
-					hasTeamAgentMention || mirroredOnlyLiveStream || forceQueue
+					hasTeamAgentMention || forceQueue
 						? "queue"
 						: (followUpBehaviorOverride ?? followUpBehavior);
 				if (effectiveBehavior === "queue" && !isOverride) {
@@ -862,7 +862,10 @@ export function useConversationStreaming({
 							editorStateSnapshot,
 						},
 					);
-					storeActions.setComposerRestore(null);
+					// F-3: do NOT clear composerRestore on enqueue — if the queue
+					// item is lost (it's in-memory), the draft is still restorable.
+					// The queued item itself renders via useSubmitQueueForSession
+					// (queued rows with Steer now / Remove), so it's never invisible.
 					return;
 				}
 
@@ -970,8 +973,15 @@ export function useConversationStreaming({
 			const isFirstUserMessage =
 				(currentThread ?? []).every((message) => message.role !== "user") &&
 				(currentTitle == null || currentTitle === "Untitled");
+			// F-3 (silent message loss, live root cause): this await runs BEFORE
+			// the send's try/catch. When the backend is unreachable it rejected
+			// FIRST — the whole submit died here with the composer already
+			// cleared: no optimistic row, no error, message gone. The preference
+			// preamble is best-effort decoration; on failure proceed without it
+			// and let the actual send surface the outage via the existing catch
+			// (visible error + draft restore).
 			const repoPreferences = targetRepoId
-				? await loadRepoPreferences(targetRepoId)
+				? await loadRepoPreferences(targetRepoId).catch(() => null)
 				: null;
 			// The general-preference preamble is prepended ONLY on the wire
 			// to the agent (Rust side stitches it onto `prompt_prefix`).

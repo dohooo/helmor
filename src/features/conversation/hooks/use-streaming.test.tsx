@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PendingUserInput } from "@/features/conversation/pending-user-input";
@@ -1920,11 +1920,16 @@ describe("useConversationStreaming", () => {
 			});
 		});
 
-		it("queues team follow-ups when only a mirrored remote stream is known", async () => {
+		// F-3 regression (silent message loss): the mirrored live-session marker
+		// can go STALE — with no local stream and no backend-confirmed stream it
+		// must NOT route the send to the queue (a black hole: invisible, in
+		// memory, drain never fires). A stale mirror sends directly instead.
+		it("sends directly (never queues) when only a stale mirrored stream is known", async () => {
 			teamModeMocks.isTeamModeActive.mockReturnValue(true);
 			useStreamingStore
 				.getState()
 				.setMirroredActiveSession("session:session-1", "session-1");
+			apiMocks.startAgentMessageStream.mockResolvedValue(undefined);
 			const queue = createFakeQueue();
 
 			const { Wrapper } = createWrapper();
@@ -1957,15 +1962,192 @@ describe("useConversationStreaming", () => {
 				});
 			});
 
-			expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
+			expect(queue.snapshot().has("session-1")).toBe(false);
 			expect(apiMocks.steerAgentStream).not.toHaveBeenCalled();
+			expect(
+				apiMocks.startAgentMessageStream.mock.calls.some(
+					([request]) =>
+						(request as { prompt?: string } | undefined)?.prompt ===
+						"@agent follow up",
+				),
+			).toBe(true);
+		});
+
+		// F-3 regression: when the stale-mirror direct send FAILS, the failure
+		// must be visible (send error set) and the draft restorable — never
+		// silent loss.
+		it("surfaces the error and restores the draft when a stale-mirror direct send fails", async () => {
+			teamModeMocks.isTeamModeActive.mockReturnValue(true);
+			useStreamingStore
+				.getState()
+				.setMirroredActiveSession("session:f3-fail", "f3-fail");
+			apiMocks.startAgentMessageStream.mockRejectedValue(
+				new Error("backend unreachable"),
+			);
+			const queue = createFakeQueue();
+
+			const { Wrapper } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:f3-fail",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "f3-fail",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: queue,
+						activeStreams: NO_ACTIVE_STREAMS,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "@agent doomed send",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
+			expect(queue.snapshot().has("f3-fail")).toBe(false);
+			expect(apiMocks.startAgentMessageStream).toHaveBeenCalled();
+			await waitFor(() => {
+				const state = useStreamingStore.getState();
+				expect(state.sendErrorsByContext["session:f3-fail"]).toBeTruthy();
+				expect(state.composerRestore).toMatchObject({
+					contextKey: "session:f3-fail",
+					draft: "@agent doomed send",
+				});
+			});
+		});
+
+		// F-3 regression: a BACKEND-confirmed live stream still queues @agent
+		// follow-ups, and enqueueing must not wipe the composer-restore stash.
+		// F-3 regression (live root cause): `loadRepoPreferences` runs BEFORE
+		// the send's try/catch. Its rejection used to kill the whole submit
+		// silently (composer already cleared, no optimistic row, no error).
+		// It is best-effort now: the send proceeds without the preamble, and a
+		// stream failure surfaces via the existing catch.
+		it("still sends (and surfaces stream errors) when loadRepoPreferences rejects", async () => {
+			teamModeMocks.isTeamModeActive.mockReturnValue(true);
+			apiMocks.loadRepoPreferences.mockRejectedValue(new Error("Load failed"));
+			apiMocks.startAgentMessageStream.mockRejectedValue(
+				new Error("backend unreachable"),
+			);
+			const queue = createFakeQueue();
+
+			const { Wrapper } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:f3-prefs",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "f3-prefs",
+						displayedWorkspaceId: "workspace-1",
+						repoId: "repo-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: queue,
+						activeStreams: NO_ACTIVE_STREAMS,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "@agent prefs-reject send",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
+			// The pre-send preference failure must NOT kill the submit.
+			expect(apiMocks.startAgentMessageStream).toHaveBeenCalled();
+			await waitFor(() => {
+				const state = useStreamingStore.getState();
+				expect(state.sendErrorsByContext["session:f3-prefs"]).toBeTruthy();
+				expect(state.composerRestore).toMatchObject({
+					draft: "@agent prefs-reject send",
+				});
+			});
+		});
+
+		it("queues @agent follow-ups on a backend-confirmed stream and keeps composerRestore", async () => {
+			teamModeMocks.isTeamModeActive.mockReturnValue(true);
+			const queue = createFakeQueue();
+			const activeStreams: ActiveStreamSummary[] = [
+				{
+					sessionId: "session-1",
+					workspaceId: "workspace-1",
+					provider: "claude",
+				},
+			];
+			const sentinelRestore = {
+				contextKey: "session:other",
+				draft: "unrelated stash",
+				images: [],
+				files: [],
+				customTags: [],
+				editorState: null,
+				nonce: 1,
+			};
+			useStreamingStore.getState().setComposerRestore(sentinelRestore);
+
+			const { Wrapper } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: queue,
+						activeStreams,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "@agent queued follow up",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
 			expect(queue.snapshot().get("session-1")?.[0]).toMatchObject({
-				prompt: "@agent follow up",
+				prompt: "@agent queued follow up",
 				context: {
 					sessionId: "session-1",
 					workspaceId: "workspace-1",
 					contextKey: "session:session-1",
 				},
+			});
+			expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
+			// F-3: enqueue no longer clears the restore stash.
+			expect(useStreamingStore.getState().composerRestore).toMatchObject({
+				draft: "unrelated stash",
 			});
 		});
 

@@ -165,6 +165,11 @@ type WorkspaceComposerProps = {
 	/** false → OpenCode picker shows an "Add custom model…" jump. */
 	hasOpencodeCustomProviders?: boolean;
 	modelsLoading?: boolean;
+	/** F-2: the model-catalog query failed (e.g. a transient team-backend
+	 *  outage) — the picker shows an in-place error row with a Retry. */
+	modelsError?: boolean;
+	/** F-2: refetch the model catalog (wired to the picker's Retry row). */
+	onRetryModels?: () => void;
 	onSelectModel: (modelId: string, provider: string | null) => void;
 	provider?: string;
 	effortLevel: string;
@@ -324,6 +329,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	modelSections,
 	hasOpencodeCustomProviders = false,
 	modelsLoading = false,
+	modelsError = false,
+	onRetryModels,
 	onSelectModel,
 	provider: _provider = "claude",
 	effortLevel,
@@ -1128,6 +1135,24 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 												sideOffset={4}
 												className="min-w-[17rem]"
 											>
+												{/* F-2: after a transient backend outage the catalog
+												    query can settle in an error/empty state without
+												    self-recovering — never show a silently empty menu;
+												    surface the failure in place with a Retry. */}
+												{modelsError ||
+												modelSections.every((s) => s.options.length === 0) ? (
+													<div className="px-2 py-1.5">
+														<p className="mb-1.5 text-muted-foreground text-xs">
+															<I18nText source="modelsLoadFailed" />
+														</p>
+														<DropdownMenuItem
+															onClick={() => onRetryModels?.()}
+															className="justify-center font-medium"
+														>
+															<I18nText source="retry" />
+														</DropdownMenuItem>
+													</div>
+												) : null}
 												{modelSections.map((section, index) => (
 													<DropdownMenuGroup key={section.id}>
 														{index > 0 ? <DropdownMenuSeparator /> : null}

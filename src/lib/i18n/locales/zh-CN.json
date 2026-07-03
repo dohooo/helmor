@@ -925,6 +925,7 @@
 	"modelNewChats": "新聊天模型",
 	"modelPrsMrsCommitPush": "PR/MR 与提交推送模型",
 	"models": "模型",
+	"modelsLoadFailed": "模型列表加载失败。",
 	"modified": "已修改",
 	"moonshotOpenAICompatible": "Moonshot 的 OpenAI 兼容 API。",
 	"more": "更多",
