@@ -555,6 +555,24 @@ const LOCAL_ONLY_INVOKES = new Set<string>([
 	"read_query_cache",
 	"write_query_cache",
 	"delete_query_cache",
+	// R2-E: the local LLM runtime is THIS Mac's endpoint (llama.cpp on
+	// localhost) — its panel was polling the cloud container every 2s by
+	// routing mistake. Everything local-llm runs on the desktop host.
+	"get_local_llm_status",
+	"start_local_llm",
+	"stop_local_llm",
+	"list_local_llm_catalog",
+	"inspect_local_llm_model",
+	"detect_local_llm_hardware",
+	"list_local_llm_downloads",
+	"start_local_llm_download",
+	"cancel_local_llm_download",
+	"get_local_llm_endpoint",
+	"set_local_llm_context_override",
+	"activate_local_llm_model",
+	"inspect_local_llm_catalog_entry",
+	"pause_local_llm_download",
+	"subscribe_local_llm_downloads",
 ]);
 
 export function invoke<T>(

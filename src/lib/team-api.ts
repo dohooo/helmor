@@ -313,6 +313,40 @@ export interface TeamMessageRow {
 	author_id: string | null;
 }
 
+/** `POST /team/event` — publish a presence frame directly to the TeamHub DO
+ *  (R2-E: typing must not wake the container). The Worker only accepts the
+ *  whitelisted kind from a member token and stamps memberId/ts server-side —
+ *  the placeholders here are overwritten, never trusted. Best-effort. */
+export async function publishPresenceEvent(
+	cfg: TeamConfig,
+	input: {
+		workspaceId: string;
+		sessionId: string | null;
+		activity: "typing" | "working" | "idle";
+	},
+): Promise<void> {
+	const base = normalizeUrl(cfg.url);
+	try {
+		await fetch(`${base}/team/event`, {
+			method: "POST",
+			headers: { ...authHeaders(cfg), "Content-Type": "application/json" },
+			body: JSON.stringify({
+				event: "ui-mutation",
+				data: {
+					type: "roomPresenceChanged",
+					memberId: "",
+					workspaceId: input.workspaceId,
+					sessionId: input.sessionId,
+					activity: input.activity,
+					ts: 0,
+				},
+			}),
+		});
+	} catch {
+		// Presence is ephemeral — a dropped frame self-heals on the next one.
+	}
+}
+
 /** `GET /team/git-status` — the D1 git snapshot mirror (R2-E). Null when the
  *  container has never pushed one for this workspace (fresh repo / chat
  *  workspace). Readable with the sandbox asleep. */

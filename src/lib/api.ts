@@ -17,6 +17,7 @@ import {
 	getTeamGitSnapshot,
 	listTeamSessionMessages,
 	listTeamSessions,
+	publishPresenceEvent,
 } from "./team-api";
 import { getTeamConfig, isTeamModeActive } from "./team-mode";
 import { getTeamReadiness } from "./team-readiness";
@@ -2583,6 +2584,18 @@ export async function reportPresence(
 	sessionId: string | null,
 	activity: PresenceActivity,
 ): Promise<void> {
+	// R2-E: team mode publishes presence DIRECTLY to the TeamHub DO
+	// (`POST /team/event`) — typing indicators must not wake the container.
+	// The Worker whitelists the event kind and STAMPS memberId + ts from the
+	// token identity (ruling, correction C), so peers consume the exact same
+	// `roomPresenceChanged` ui-mutation frame as before.
+	if (isTeamModeActive()) {
+		const cfg = getTeamConfig();
+		if (cfg) {
+			await publishPresenceEvent(cfg, { workspaceId, sessionId, activity });
+			return;
+		}
+	}
 	await invoke("report_presence", { workspaceId, sessionId, activity });
 }
 

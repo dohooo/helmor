@@ -23,6 +23,7 @@ import {
 import {
 	createWorkerTeamGatewayStore,
 	handleTeamRoute,
+	lookupMemberId,
 	readBackupHandle,
 	readCloudIdentityMemberId,
 	TEAM_ID,
@@ -969,17 +970,55 @@ async function handleTeamEventSubscribe(
  *  (`{"event","data"}`) to broadcast to every connected member. Companion token
  *  only (the container holds HELMOR_COMPANION_TOKEN ⇒ classifyBearer "admin").
  *  NEVER touches the container. */
-async function handleTeamEventPublish(
+/** R2-E (ruling, correction C): the ONLY ui-mutation kinds a MEMBER token may
+ *  publish directly. Everything else stays companion-token-only — a member
+ *  must never be able to forge arbitrary ui-mutations (cache-invalidation
+ *  spoofing) or impersonate another member. */
+const MEMBER_PUBLISHABLE_EVENT_TYPES = new Set(["roomPresenceChanged"]);
+
+export async function handleTeamEventPublish(
 	req: Request,
 	env: Env,
 ): Promise<Response> {
-	if (
-		req.headers.get("Authorization") !== `Bearer ${env.HELMOR_COMPANION_TOKEN}`
-	) {
-		return new Response("Unauthorized", { status: 401 });
+	const bearer = (req.headers.get("Authorization") ?? "").replace(
+		/^Bearer /,
+		"",
+	);
+	const isCompanion = bearer === env.HELMOR_COMPANION_TOKEN;
+	let memberId: string | null = null;
+	if (!isCompanion) {
+		memberId = bearer ? await lookupMemberId(env, bearer) : null;
+		if (!memberId) return new Response("Unauthorized", { status: 401 });
 	}
-	const line = await req.text();
+	let line = await req.text();
 	if (!line) return new Response(null, { status: 204 });
+
+	if (!isCompanion) {
+		// Member-published events: whitelisted kinds only, and the server
+		// STAMPS the member identity from the token — a body-asserted
+		// memberId is overwritten, never trusted.
+		let parsed: {
+			event?: string;
+			data?: { type?: string; memberId?: string; ts?: number };
+		};
+		try {
+			parsed = JSON.parse(line);
+		} catch {
+			return new Response("Bad Request", { status: 400 });
+		}
+		const kind = parsed?.data?.type ?? "";
+		if (
+			parsed?.event !== "ui-mutation" ||
+			!MEMBER_PUBLISHABLE_EVENT_TYPES.has(kind) ||
+			!parsed.data
+		) {
+			return new Response("Forbidden", { status: 403 });
+		}
+		parsed.data.memberId = memberId ?? undefined;
+		parsed.data.ts = Date.now();
+		line = JSON.stringify(parsed);
+	}
+
 	const stub = env.TEAM_HUB.get(
 		env.TEAM_HUB.idFromName(env.HELMOR_SANDBOX_ID ?? "helmor-team-0"),
 	);

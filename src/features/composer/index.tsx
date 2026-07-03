@@ -111,10 +111,11 @@ import { UserInputPanel } from "./user-input-panel";
 
 const OPEN_SETTINGS_EVENT = "helmor:open-settings";
 
-// Stage D: pre-warm the team sandbox on composer focus so a following @agent run
-// is hot (Stage C lets the container sleep when idle). Team mode only +
-// throttled — a focus storm (clicks, re-renders) must not spam the Worker.
-// Best-effort: warmUpSandbox swallows errors and the Worker returns 202 at once.
+// Stage D → R2-E: pre-warm the team sandbox on the first TYPED INPUT (not mere
+// focus — clicking around must not wake a sleeping container; typing signals
+// send intent, so warming here hides the cold start behind composition time).
+// Team mode only + throttled. Best-effort: warmUpSandbox swallows errors and
+// the Worker returns 202 at once.
 const WARM_UP_THROTTLE_MS = 60_000;
 let lastWarmUpAt = 0;
 function maybeWarmUpTeamSandbox(): void {
@@ -947,7 +948,6 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								className="relative"
 								onFocusCapture={() => {
 									setIsInputFocused(true);
-									maybeWarmUpTeamSandbox();
 								}}
 								onBlurCapture={(event) => {
 									if (
@@ -1064,7 +1064,12 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 							<EditablePlugin disabled={inputDisabled} />
 							<HasContentPlugin
 								onChange={setHasContent}
-								onEditing={onEditing}
+								onEditing={() => {
+									// R2-E: warm the sandbox on typed input (send intent),
+									// not on focus — see maybeWarmUpTeamSandbox.
+									maybeWarmUpTeamSandbox();
+									onEditing?.();
+								}}
 							/>
 							<ShimmerKeywordPlugin keywords={SHIMMER_KEYWORDS} />
 							<TerminalDirectivePlugin

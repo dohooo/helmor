@@ -560,7 +560,12 @@ export function workspaceForgeQueryOptions(workspaceId: string) {
 		// with backend-side polling (e.g. CI status changes).
 		staleTime: Number.POSITIVE_INFINITY,
 		refetchOnWindowFocus: "always",
-		refetchInterval: (query) => workspaceForgeRefetchInterval(query.state.data),
+		// R2-E: team mode disables the interval — forge state refreshes on
+		// focus and on the container's turn-driven pushes; external-only
+		// transitions (CI finishing elsewhere) wait for the next attention.
+		refetchInterval: isTeamModeActive()
+			? false
+			: (query) => workspaceForgeRefetchInterval(query.state.data),
 		meta: PERSIST_META,
 	});
 }
@@ -686,7 +691,8 @@ export function codexRateLimitsQueryOptions(enabled: boolean) {
 		queryKey: helmorQueryKeys.codexRateLimits,
 		queryFn: getCodexRateLimits,
 		staleTime: RATE_LIMITS_STALE_TIME,
-		refetchInterval: enabled ? RATE_LIMITS_STALE_TIME : false,
+		refetchInterval:
+			enabled && !isTeamModeActive() ? RATE_LIMITS_STALE_TIME : false,
 		refetchOnWindowFocus: true,
 		enabled,
 	});
@@ -1026,7 +1032,10 @@ export function workspaceChangeRequestQueryOptions(
 		staleTime: 30_000,
 		gcTime: DEFAULT_GC_TIME,
 		refetchOnWindowFocus: true,
-		refetchInterval: (query) => changeRequestRefetchInterval(query.state.data),
+		// R2-E: team mode is focus/turn-driven (see workspaceForgeQueryOptions).
+		refetchInterval: isTeamModeActive()
+			? false
+			: (query) => changeRequestRefetchInterval(query.state.data),
 		retry: 0,
 		// Identity-stable per (workspaceId, seed signature) so React Query
 		// doesn't re-evaluate placeholderData on unrelated re-renders.
@@ -1064,7 +1073,9 @@ export function workspaceForgeActionStatusQueryOptions(workspaceId: string) {
 		refetchOnWindowFocus: "always",
 		refetchOnMount: "always",
 		refetchInterval: (query) =>
-			forgeActionStatusRefetchInterval(query.state.data),
+			isTeamModeActive()
+				? false
+				: forgeActionStatusRefetchInterval(query.state.data),
 		retry: 0,
 		meta: PERSIST_META,
 	});
