@@ -210,6 +210,95 @@ fn backfill_stacked_target_branches(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// R2-C (R5): freeze existing chat-workspace display names.
+///
+/// Before this migration a chat workspace's sidebar name was re-derived on
+/// every read (`display_title()`: primary-session title by message count,
+/// falling back to the active session title), so switching sessions flipped
+/// the name. New titles freeze at write time (`sessions::rename_session`);
+/// this backfill freezes EXISTING chat workspaces at the name the UI is
+/// showing at migration time — the SQL below replicates the exact
+/// `display_title()` derivation (primary_session CTE from
+/// `models/workspaces.rs` + the primary-else-active candidate rule from
+/// `workspace/helpers.rs`), so the frozen value is byte-identical to what
+/// the user currently sees. No visible name changes; the name just stops
+/// drifting.
+///
+/// Skipped (stay floating until `rename_session` freezes them naturally):
+/// - already-named workspaces (`custom_name` set — user override wins),
+/// - workspaces with a `pr_title` (it outranks session titles in
+///   `display_title()`, so freezing a session title would CHANGE the name),
+/// - workspaces whose derived candidate is empty/"Untitled" (display shows
+///   the "New chat" placeholder — nothing real to freeze yet).
+///
+/// Idempotent: the `custom_name IS NULL` guard makes re-runs no-ops.
+fn backfill_chat_workspace_frozen_names(connection: &Connection) -> Result<()> {
+    if !has_table(connection, "workspaces")
+        || !has_table(connection, "sessions")
+        || !has_table(connection, "session_messages")
+        || !has_column(connection, "workspaces", "custom_name")
+        || !has_column(connection, "workspaces", "mode")
+        || !has_column(connection, "workspaces", "pr_title")
+        || !has_column(connection, "workspaces", "active_session_id")
+        || !has_column(connection, "sessions", "is_hidden")
+        || !has_column(connection, "sessions", "action_kind")
+    {
+        return Ok(());
+    }
+    connection
+        .execute(
+            "WITH primary_session AS (
+               SELECT workspace_id, title FROM (
+                 SELECT
+                   s.workspace_id,
+                   s.title,
+                   ROW_NUMBER() OVER (
+                     PARTITION BY s.workspace_id
+                     ORDER BY
+                       COALESCE(smc.message_count, 0) DESC,
+                       s.updated_at DESC,
+                       s.id DESC
+                   ) AS rn
+                 FROM sessions s
+                 LEFT JOIN (
+                   SELECT session_id, COUNT(*) AS message_count
+                   FROM session_messages
+                   GROUP BY session_id
+                 ) smc ON smc.session_id = s.id
+                 WHERE COALESCE(s.is_hidden, 0) = 0
+                   AND s.action_kind IS NULL
+               ) WHERE rn = 1
+             ),
+             candidate AS (
+               SELECT
+                 w.id AS workspace_id,
+                 CASE
+                   WHEN TRIM(COALESCE(ps.title, '')) != '' THEN ps.title
+                   ELSE (SELECT s2.title FROM sessions s2 WHERE s2.id = w.active_session_id)
+                 END AS title
+               FROM workspaces w
+               LEFT JOIN primary_session ps ON ps.workspace_id = w.id
+               WHERE w.mode = 'chat'
+             )
+             UPDATE workspaces
+             SET custom_name = (
+               SELECT c.title FROM candidate c WHERE c.workspace_id = workspaces.id
+             )
+             WHERE mode = 'chat'
+               AND (custom_name IS NULL OR TRIM(custom_name) = '')
+               AND TRIM(COALESCE(pr_title, '')) = ''
+               AND TRIM(COALESCE((
+                 SELECT c.title FROM candidate c WHERE c.workspace_id = workspaces.id
+               ), '')) != ''
+               AND (
+                 SELECT c.title FROM candidate c WHERE c.workspace_id = workspaces.id
+               ) != 'Untitled'",
+            [],
+        )
+        .context("Failed to freeze existing chat workspace names")?;
+    Ok(())
+}
+
 fn run_migrations(connection: &Connection) -> Result<()> {
     // Migration: rename claude_session_id → provider_session_id (supports any agent provider)
     let has_old_column: bool = connection
@@ -867,6 +956,11 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         add_column_if_missing(connection, "workspaces", "triage_source_ref", "TEXT")?;
         // User-set display name. NULL = fall back to the auto-derived title.
         add_column_if_missing(connection, "workspaces", "custom_name", "TEXT")?;
+        // R2-C: freeze existing chat-workspace names at their currently
+        // displayed value (see the function docs for the exact semantics).
+        // Must run after the custom_name ALTER above.
+        backfill_chat_workspace_frozen_names(connection)
+            .context("Failed to backfill frozen chat workspace names")?;
         connection
             .execute_batch(
                 "CREATE INDEX IF NOT EXISTS idx_workspaces_triage_source
