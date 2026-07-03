@@ -198,6 +198,19 @@ export function CustomProviderCard({
 
 	return (
 		<div className="flex flex-col gap-2 rounded-lg border border-border/50 bg-muted/20 p-3">
+			{adapter.caps.apiStyleSelectable && isManual ? (
+				<StyleSelect
+					label={adapter.styleLabel ?? "apiStyle"}
+					options={adapter.styleOptions ?? DEFAULT_STYLE_OPTIONS}
+					value={
+						draft.apiStyle ??
+						(adapter.styleOptions ?? DEFAULT_STYLE_OPTIONS)[0]?.value ??
+						"chat"
+					}
+					onChange={(apiStyle) => commit({ apiStyle })}
+				/>
+			) : null}
+
 			<div className="flex items-center gap-2">
 				{preset ? (
 					<span className="flex min-w-0 flex-1 items-center gap-2 text-[13px] font-medium text-foreground">
@@ -242,7 +255,7 @@ export function CustomProviderCard({
 						value={draft.apiKey}
 						onChange={(e) => patch({ apiKey: e.target.value })}
 						onBlur={commitText}
-						placeholder="apiKey"
+						placeholder={isVertex ? "vertexTokenPlaceholder" : "apiKey"}
 						className="h-8 min-w-0 flex-1 border-border/50 bg-background/40 text-[13px]"
 					/>
 					{preset?.apiKeyUrl && !draft.apiKey ? (
@@ -259,19 +272,6 @@ export function CustomProviderCard({
 					) : null}
 				</div>
 			)}
-
-			{adapter.caps.apiStyleSelectable && isManual ? (
-				<StyleSelect
-					label={adapter.styleLabel ?? "apiStyle"}
-					options={adapter.styleOptions ?? DEFAULT_STYLE_OPTIONS}
-					value={
-						draft.apiStyle ??
-						(adapter.styleOptions ?? DEFAULT_STYLE_OPTIONS)[0]?.value ??
-						"chat"
-					}
-					onChange={(apiStyle) => commit({ apiStyle })}
-				/>
-			) : null}
 
 			{isVertex ? (
 				<VertexFields
