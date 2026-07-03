@@ -70,10 +70,6 @@ fn keychain_key(instance_id: &str) -> (String, String, Option<String>) {
     )
 }
 
-fn shell_quote_arg(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
 #[tauri::command]
 pub async fn spawn_keychain_store_terminal(
     manager: tauri::State<'_, crate::workspace::scripts::ScriptProcessManager>,
@@ -88,8 +84,8 @@ pub async fn spawn_keychain_store_terminal(
     // interactively so it never lands in shell history or process args.
     let command = format!(
         "security add-generic-password -s {} -a {} -U -w",
-        shell_quote_arg(service.trim()),
-        shell_quote_arg(account.trim()),
+        crate::platform::shell::quote_posix_arg(service.trim()),
+        crate::platform::shell::quote_posix_arg(account.trim()),
     );
     let working_dir = crate::platform::paths::home_dir_or_current_or_root()
         .display()

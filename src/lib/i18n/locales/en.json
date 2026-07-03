@@ -1583,7 +1583,7 @@
 	"vertexAuthMode": "Authentication",
 	"vertexAuthToken": "API token",
 	"vertexAuthTokenHint": "Stored in Helmor settings.",
-	"vertexKeychainDialogHint": "Paste your token at the prompt and press Enter — it goes straight into macOS Keychain.",
+	"vertexKeychainDialogHint": "Paste your token at the prompt, press Enter, then retype it once to confirm — it goes straight into macOS Keychain.",
 	"vertexKeychainDialogTitle": "Store token in Keychain",
 	"vertexKeychainStoreCta": "Store token in Keychain…",
 	"vertexKeychainStored": "Token stored in Keychain",

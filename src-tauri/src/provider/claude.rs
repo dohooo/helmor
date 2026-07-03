@@ -270,9 +270,40 @@ impl CustomProviderBackend for ClaudeBackend {
 
     fn remove(&self, id: &str) -> anyhow::Result<()> {
         let mut providers = list();
+        // Best-effort Keychain cleanup before the row is gone: the token
+        // item is keyed by provider id, so a deleted Vertex provider would
+        // otherwise strand it forever. Missing item / errors are fine.
+        #[cfg(target_os = "macos")]
+        if providers
+            .iter()
+            .any(|p| p.id == id && p.api_style.as_deref() == Some(VERTEX_API_STYLE))
+        {
+            delete_vertex_keychain_item(id);
+        }
         providers.retain(|p| p.id != id);
         crate::settings::upsert_setting_json(SETTINGS_KEY, &providers)?;
         Ok(())
+    }
+}
+
+/// Delete the provider's Keychain token item. Best-effort: the item may
+/// never have been created (token mode, or the user closed the store
+/// dialog), and `security` exits non-zero for "not found" — both ignored.
+#[cfg(target_os = "macos")]
+fn delete_vertex_keychain_item(account: &str) {
+    let result = std::process::Command::new("security")
+        .args([
+            "delete-generic-password",
+            "-s",
+            VERTEX_KEYCHAIN_SERVICE,
+            "-a",
+            account,
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    if let Err(error) = result {
+        tracing::debug!(%error, "vertex keychain cleanup: could not run `security`");
     }
 }
 

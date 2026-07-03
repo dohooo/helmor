@@ -154,25 +154,20 @@ fn insert_vertex_params(
     match &vertex.auth {
         ClaudeVertexAuth::Token(token) => set("ANTHROPIC_AUTH_TOKEN", token),
         ClaudeVertexAuth::Keychain { service, account } => {
+            // Quoted for the system shell — the CLI runs apiKeyHelper via `sh`.
             obj.insert(
                 "claudeSettings".to_string(),
                 serde_json::json!({
                     "apiKeyHelper": format!(
                         "security find-generic-password -s {} -a {} -w",
-                        shell_quote(service),
-                        shell_quote(account),
+                        crate::platform::shell::quote_posix_arg(service),
+                        crate::platform::shell::quote_posix_arg(account),
                     ),
                 }),
             );
         }
     }
     obj.insert("claudeEnvironment".to_string(), Value::Object(env));
-}
-
-/// Single-quote a value for the system shell (the CLI runs `apiKeyHelper`
-/// through `sh`). Embedded single quotes become `'\''`.
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 /// Load the workspace's `/add-dir` list via the helmor session id. Returns

@@ -1583,7 +1583,7 @@
 	"vertexAuthMode": "认证方式",
 	"vertexAuthToken": "明文 Token",
 	"vertexAuthTokenHint": "存储在 Helmor 设置中。",
-	"vertexKeychainDialogHint": "在提示处粘贴 token 并回车 —— 它会直接写入 macOS 钥匙串。",
+	"vertexKeychainDialogHint": "在提示处粘贴 token 并回车，系统会要求再输入一次确认 —— token 直接写入 macOS 钥匙串。",
 	"vertexKeychainDialogTitle": "存入钥匙串",
 	"vertexKeychainStoreCta": "把 token 存入钥匙串…",
 	"vertexKeychainStored": "token 已存入钥匙串",
