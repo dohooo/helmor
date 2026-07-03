@@ -232,6 +232,33 @@ describe("useReadStateController mark-read effect", () => {
 		expect(detail?.unreadSessionCount).toBe(0);
 	});
 
+	it("cancels in-flight refetches of the three optimistic keys before zeroing (R2-B / R8)", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		seedCacheForWorkspace(queryClient, "ws-1", [
+			makeSession("session-A", { unreadCount: 3 }),
+		]);
+		const cancelSpy = vi.spyOn(queryClient, "cancelQueries");
+
+		renderHook(() => useReadStateController(defaultDeps(queryClient)), {
+			wrapper: wrapper(queryClient),
+		});
+
+		await waitFor(() =>
+			expect(apiMocks.markSessionRead).toHaveBeenCalledWith("session-A"),
+		);
+		expect(cancelSpy).toHaveBeenCalledWith({
+			queryKey: helmorQueryKeys.workspaceGroups,
+		});
+		expect(cancelSpy).toHaveBeenCalledWith({
+			queryKey: helmorQueryKeys.workspaceSessions("ws-1"),
+		});
+		expect(cancelSpy).toHaveBeenCalledWith({
+			queryKey: helmorQueryKeys.workspaceDetail("ws-1"),
+		});
+	});
+
 	it("rolls back groups + detail + sessions when markSessionRead rejects", async () => {
 		const error = new Error("IPC boom");
 		apiMocks.markSessionRead.mockRejectedValueOnce(error);

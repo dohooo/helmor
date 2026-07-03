@@ -154,6 +154,23 @@ export function useReadStateController(
 		lastMarkedReadSessionIdRef.current = sessionId;
 		lastMarkedReadReselectTickRef.current = reselectTick;
 
+		// R2-B (R8): abort any in-flight refetch of the three keys we're about
+		// to write optimistically — a resolution landing after the zero would
+		// write the stale (non-zero) unread back and flicker the green dot.
+		// Post-success reconcile recomputes the true value (idempotent since
+		// WP4's self-authored SQL exclusion), so cancelling loses nothing.
+		void queryClient.cancelQueries({
+			queryKey: helmorQueryKeys.workspaceGroups,
+		});
+		if (workspaceId) {
+			void queryClient.cancelQueries({
+				queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
+			});
+			void queryClient.cancelQueries({
+				queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
+			});
+		}
+
 		// Snapshot for rollback on IPC failure.
 		const previousGroups = queryClient.getQueryData(
 			helmorQueryKeys.workspaceGroups,

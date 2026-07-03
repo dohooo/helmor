@@ -36,6 +36,19 @@ export type PendingCreationEntry = {
 	resolvedWorkspaceId: string | null;
 };
 
+/**
+ * R2-B tombstone: a workspace the user deleted whose removal hasn't been
+ * confirmed by server truth yet. While an entry exists the row is hidden from
+ * BOTH the live groups and the archived list, no matter what snapshot the
+ * query cache currently holds — the mutation gate only blocks NEW invalidates,
+ * so a refetch already in flight at click time can (and does) write the
+ * pre-delete snapshot back; the overlay is what keeps the row from
+ * resurrecting through that window.
+ */
+export type PendingDeleteEntry = {
+	stage: "deleting" | "confirmed";
+};
+
 type ProjectedArchivedRow = {
 	row: WorkspaceRow;
 	sortTimestamp: number;
@@ -46,16 +59,23 @@ export function projectSidebarLists({
 	baseArchivedSummaries,
 	pendingArchives,
 	pendingCreations,
+	pendingDeletes,
 }: {
 	baseGroups: WorkspaceGroup[];
 	baseArchivedSummaries: WorkspaceSummary[];
 	pendingArchives: ReadonlyMap<string, PendingArchiveEntry>;
 	pendingCreations: ReadonlyMap<string, PendingCreationEntry>;
+	pendingDeletes?: ReadonlyMap<string, PendingDeleteEntry>;
 }): {
 	groups: WorkspaceGroup[];
 	archivedRows: WorkspaceRow[];
 } {
 	const hiddenLiveIds = new Set(pendingArchives.keys());
+	if (pendingDeletes) {
+		for (const workspaceId of pendingDeletes.keys()) {
+			hiddenLiveIds.add(workspaceId);
+		}
+	}
 	for (const [optimisticWorkspaceId, pendingCreation] of pendingCreations) {
 		hiddenLiveIds.add(optimisticWorkspaceId);
 		if (pendingCreation.resolvedWorkspaceId) {
@@ -101,6 +121,14 @@ export function projectSidebarLists({
 			},
 			sortTimestamp: pendingArchive.sortTimestamp,
 		});
+	}
+
+	// Deletion is terminal for both lists — a tombstoned id must not surface
+	// in the archived column either (deletes are issued from there too).
+	if (pendingDeletes) {
+		for (const workspaceId of pendingDeletes.keys()) {
+			archivedById.delete(workspaceId);
+		}
 	}
 
 	const archivedRows = Array.from(archivedById.values())
@@ -521,6 +549,22 @@ export function shouldReconcilePendingArchive(
 	}
 
 	return baseArchivedSummaries.some((summary) => summary.id === workspaceId);
+}
+
+/** A confirmed delete tombstone can be dropped once NEITHER list contains the
+ *  id — from then on the base data itself carries the removal. */
+export function shouldReconcilePendingDelete(
+	workspaceId: string,
+	baseGroups: WorkspaceGroup[],
+	baseArchivedSummaries: WorkspaceSummary[],
+): boolean {
+	const stillLive = baseGroups.some((group) =>
+		group.rows.some((row) => row.id === workspaceId),
+	);
+	if (stillLive) {
+		return false;
+	}
+	return !baseArchivedSummaries.some((summary) => summary.id === workspaceId);
 }
 
 export function shouldReconcilePendingCreation(

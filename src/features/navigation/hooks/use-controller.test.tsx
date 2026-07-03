@@ -1898,3 +1898,183 @@ describe("useWorkspacesSidebarController × sidebar-mutation-gate", () => {
 		await waitFor(() => expect(isSidebarMutationInFlight()).toBe(false));
 	});
 });
+
+describe("useWorkspacesSidebarController delete tombstone (R2-B)", () => {
+	beforeEach(() => {
+		resetSidebarMutationGate();
+		vi.clearAllMocks();
+		apiMocks.loadWorkspaceGroups.mockResolvedValue(workspaceGroups);
+		apiMocks.loadArchivedWorkspaces.mockResolvedValue([]);
+		apiMocks.listRepositories.mockResolvedValue([]);
+		apiMocks.loadAddRepositoryDefaults.mockResolvedValue({
+			lastCloneDirectory: null,
+		});
+		apiMocks.loadWorkspaceDetail.mockImplementation(async (id: string) =>
+			makeWorkspaceDetail(id),
+		);
+		apiMocks.loadWorkspaceSessions.mockResolvedValue(emptySessions);
+		apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
+		apiMocks.permanentlyDeleteWorkspace.mockResolvedValue(undefined);
+	});
+
+	afterEach(() => {
+		resetSidebarMutationGate();
+		vi.clearAllMocks();
+	});
+
+	function renderController(queryClient: QueryClient) {
+		return renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: null,
+					autoSelectEnabled: false,
+					onSelectWorkspace: vi.fn(),
+					pushWorkspaceToast: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+	}
+
+	// R2-B touchstone: the root cause of R7. A refetch that was ALREADY in
+	// flight when the user clicked delete resolves afterwards and writes the
+	// pre-delete snapshot back into the cache. The mutation gate can't stop it
+	// (it only blocks NEW invalidates), so only the tombstone overlay keeps
+	// the deleted row from resurrecting.
+	it("an in-flight refetch writing back the pre-delete snapshot cannot resurrect the row", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		let resolveDelete: () => void = () => {};
+		apiMocks.permanentlyDeleteWorkspace.mockReturnValue(
+			new Promise<void>((resolve) => {
+				resolveDelete = resolve;
+			}),
+		);
+
+		const { result } = renderController(queryClient);
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows.map((r) => r.id)).toEqual([
+				"ws-1",
+				"ws-2",
+			]);
+		});
+
+		act(() => {
+			result.current.handleDeleteWorkspace("ws-1");
+		});
+		expect(result.current.groups[0]?.rows.map((r) => r.id)).toEqual(["ws-2"]);
+
+		// The racy write-back: exactly what a stale queryFn resolution does.
+		// NOTE: React Query batches cache notifications on a microtask — the
+		// re-render must be awaited or a resurrect would be invisible to a
+		// synchronous expect (false green).
+		await act(async () => {
+			queryClient.setQueryData(
+				helmorQueryKeys.workspaceGroups,
+				workspaceGroups,
+			);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		});
+		expect(result.current.groups[0]?.rows.map((r) => r.id)).toEqual(["ws-2"]);
+
+		// Storm variant: repeated stale write-backs while the IPC is still
+		// pending must not resurrect the row either.
+		await act(async () => {
+			queryClient.setQueryData(
+				helmorQueryKeys.workspaceGroups,
+				workspaceGroups,
+			);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			queryClient.setQueryData(
+				helmorQueryKeys.workspaceGroups,
+				workspaceGroups,
+			);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		});
+		expect(result.current.groups[0]?.rows.map((r) => r.id)).toEqual(["ws-2"]);
+
+		// IPC succeeds; server truth no longer contains ws-1. The reconcile
+		// refetch settles and the tombstone clears against it.
+		apiMocks.loadWorkspaceGroups.mockResolvedValue([
+			{ ...workspaceGroups[0], rows: [workspaceGroups[0].rows[1]] },
+		]);
+		act(() => {
+			resolveDelete();
+		});
+		await waitFor(() => {
+			expect(isSidebarMutationInFlight()).toBe(false);
+		});
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows.map((r) => r.id)).toEqual(["ws-2"]);
+		});
+	});
+
+	it("a stale write-back AFTER the IPC succeeded still cannot resurrect the row until server truth confirms", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const { result } = renderController(queryClient);
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows).toHaveLength(2);
+		});
+
+		// Keep the reconcile refetch returning the STALE list (server snapshot
+		// lag): the confirmed tombstone must keep hiding the row.
+		act(() => {
+			result.current.handleDeleteWorkspace("ws-1");
+		});
+		await waitFor(() => {
+			expect(apiMocks.permanentlyDeleteWorkspace).toHaveBeenCalledWith("ws-1");
+		});
+		await waitFor(() => {
+			expect(isSidebarMutationInFlight()).toBe(false);
+		});
+
+		await act(async () => {
+			queryClient.setQueryData(
+				helmorQueryKeys.workspaceGroups,
+				workspaceGroups,
+			);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		});
+		expect(result.current.groups[0]?.rows.map((r) => r.id)).toEqual(["ws-2"]);
+	});
+
+	it("rolls the tombstone back when the delete IPC fails, so the row reappears", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const pushWorkspaceToast = vi.fn();
+		apiMocks.permanentlyDeleteWorkspace.mockRejectedValue(new Error("boom"));
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: null,
+					autoSelectEnabled: false,
+					onSelectWorkspace: vi.fn(),
+					pushWorkspaceToast,
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows).toHaveLength(2);
+		});
+
+		act(() => {
+			result.current.handleDeleteWorkspace("ws-1");
+		});
+		expect(result.current.groups[0]?.rows.map((r) => r.id)).toEqual(["ws-2"]);
+
+		await waitFor(() => {
+			expect(pushWorkspaceToast).toHaveBeenCalled();
+		});
+		// Rollback restored the snapshot AND withdrew the tombstone.
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows.map((r) => r.id)).toEqual([
+				"ws-1",
+				"ws-2",
+			]);
+		});
+	});
+});
