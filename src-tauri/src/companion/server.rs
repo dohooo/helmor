@@ -210,7 +210,13 @@ async fn rpc_stream_handler(
     match (state.streamer)(&cmd, args, author_id, tx) {
         Ok(()) => (
             [(CONTENT_TYPE, "application/x-ndjson")],
-            axum::body::Body::from_stream(ndjson_body_with_keepalive(rx, RPC_STREAM_KEEPALIVE)),
+            axum::body::Body::from_stream(ndjson_body_with_keepalive(
+                rx,
+                RPC_STREAM_KEEPALIVE,
+                // R2-A.1: rotate SUBSCRIPTION bodies only; turn/post streams
+                // must never be force-closed (legit turns exceed 5 minutes).
+                is_subscription_stream(&cmd).then(subscription_stream_deadline),
+            )),
         )
             .into_response(),
         Err(command_error) => {
@@ -230,9 +236,51 @@ async fn rpc_stream_handler(
 /// pings every 15s), so the watchdog's leak-protection semantics stay intact.
 const RPC_STREAM_KEEPALIVE: Duration = Duration::from_secs(30);
 
+/// R2-A.1: maximum lifetime for SUBSCRIPTION stream bodies (idempotent,
+/// client-resubscribable: `subscribe_session_stream`, `subscribe_ui_mutations`
+/// and the `/v1/stream` SSE). Rotation is the zombie-pipe reaper: a client
+/// that died WITHOUT propagating cancel leaves a pipe the edge can't tell
+/// apart from a healthy one once keepalives flow (bytes = progress = activity
+/// renewal → the container never sleeps, observed live as R2-F1). Closing the
+/// body server-side settles the edge pipe (`pipeTo` finally → inflight
+/// release, the F-4-tested path); healthy clients reattach instantly via the
+/// R2-A auto-resubscribe / SSE reconnect loops. If an extreme zombie writable
+/// even swallows the close, the upstream has STOPPED sending bytes, so the
+/// edge's 120s no-progress watchdog reaps it — two independent layers.
+///
+/// NEVER applied to turn/post streams (`send_agent_message_stream`,
+/// `post_room_chat_message`): a legitimate turn can far exceed 5 minutes and
+/// force-closing one would manufacture a WP2-class incident.
+const SUBSCRIPTION_STREAM_MAX_LIFETIME: Duration = Duration::from_secs(5 * 60);
+/// ± jitter so a fleet of subscriptions opened together doesn't rotate (and
+/// re-knock) in lockstep.
+const SUBSCRIPTION_STREAM_LIFETIME_JITTER: Duration = Duration::from_secs(30);
+
+/// Streaming commands whose NDJSON body gets the max-lifetime rotation.
+fn is_subscription_stream(cmd: &str) -> bool {
+    matches!(cmd, "subscribe_session_stream" | "subscribe_ui_mutations")
+}
+
+/// Randomized rotation deadline: `MAX_LIFETIME ± JITTER`.
+fn subscription_stream_deadline() -> Duration {
+    let jitter = SUBSCRIPTION_STREAM_LIFETIME_JITTER.as_millis() as i64;
+    // Cheap uniform jitter without a rand dependency: subsecond clock noise.
+    let noise = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_millis() as i64)
+        .unwrap_or(0)
+        % (2 * jitter + 1))
+        - jitter;
+    let base = SUBSCRIPTION_STREAM_MAX_LIFETIME.as_millis() as i64;
+    Duration::from_millis((base + noise).max(0) as u64)
+}
+
 /// NDJSON body stream: each event as `{line}\n`, plus a bare `"\n"` whenever
 /// the stream has been quiet for `keepalive` (the browser shim's `pumpNdjson`
-/// skips empty lines, so keepalives are invisible to consumers).
+/// skips empty lines, so keepalives are invisible to consumers). When
+/// `max_lifetime` is set (subscription streams only — see
+/// [`SUBSCRIPTION_STREAM_MAX_LIFETIME`]) the body force-closes at the
+/// deadline and the client resubscribes.
 ///
 /// CORRECTNESS BOUNDARY: the stream MUST terminate when `rx` closes (returns
 /// `None`). A naive `select` with an endless interval would keep the body open
@@ -241,13 +289,23 @@ const RPC_STREAM_KEEPALIVE: Duration = Duration::from_secs(30);
 fn ndjson_body_with_keepalive(
     rx: tokio::sync::mpsc::UnboundedReceiver<String>,
     keepalive: Duration,
+    max_lifetime: Option<Duration>,
 ) -> impl Stream<Item = Result<Bytes, std::convert::Infallible>> {
-    stream::unfold(rx, move |mut rx| async move {
+    // Absolute deadline fixed at body creation.
+    let deadline = max_lifetime.map(|d| tokio::time::Instant::now() + d);
+    stream::unfold((rx, deadline), move |(mut rx, deadline)| async move {
+        let expired = async {
+            match deadline {
+                Some(at) => tokio::time::sleep_until(at).await,
+                None => std::future::pending().await,
+            }
+        };
         tokio::select! {
             line = rx.recv() => {
-                line.map(|line| (Ok(Bytes::from(format!("{line}\n"))), rx))
+                line.map(|line| (Ok(Bytes::from(format!("{line}\n"))), (rx, deadline)))
             }
-            () = tokio::time::sleep(keepalive) => Some((Ok(Bytes::from("\n")), rx)),
+            () = tokio::time::sleep(keepalive) => Some((Ok(Bytes::from("\n")), (rx, deadline))),
+            () = expired => None,
         }
     })
 }
@@ -339,7 +397,14 @@ fn ui_mutation_stream(
     let interval = tokio::time::interval(Duration::from_secs(15));
     let pings = tokio_stream::wrappers::IntervalStream::new(interval)
         .map(|_| Ok::<_, std::convert::Infallible>(Event::default().event("ping").data("{}")));
-    hello.chain(stream::select(mutations, pings))
+    // R2-A.1: this SSE is a subscription stream too (idempotent — the desktop
+    // reconnect loop reattaches on drop), and its 15s pings would feed a
+    // zombie edge pipe forever just like rpc-stream keepalives. Rotate it on
+    // the same max-lifetime so cancel-lost pipes get reaped.
+    let deadline = subscription_stream_deadline();
+    hello
+        .chain(stream::select(mutations, pings))
+        .take_until(Box::pin(tokio::time::sleep(deadline)))
 }
 
 fn unauthorized() -> Response {
@@ -459,7 +524,11 @@ mod tests {
     #[tokio::test]
     async fn ndjson_keepalive_emits_blank_lines_between_events() {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-        let mut body = std::pin::pin!(ndjson_body_with_keepalive(rx, Duration::from_millis(20)));
+        let mut body = std::pin::pin!(ndjson_body_with_keepalive(
+            rx,
+            Duration::from_millis(20),
+            None
+        ));
 
         // Quiet stream → keepalive blank line arrives (a healthy stream always
         // carries bytes, so the edge no-progress watchdog never false-trips).
@@ -481,12 +550,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn subscription_body_rotates_at_max_lifetime_even_with_live_sender() {
+        // R2-A.1 zombie reaper: the body must close at the TTL even though the
+        // subscription (tx) is alive and keepalives are flowing — server-side
+        // rotation is what settles a cancel-lost edge pipe.
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let mut body = std::pin::pin!(super::ndjson_body_with_keepalive(
+            rx,
+            Duration::from_millis(10),
+            Some(Duration::from_millis(60)),
+        ));
+        let mut saw_end = false;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(Duration::from_secs(2), body.next()).await {
+                Ok(Some(_chunk)) => {}
+                Ok(None) => {
+                    saw_end = true;
+                    break;
+                }
+                Err(_) => break,
+            }
+        }
+        assert!(saw_end, "subscription body must close at max lifetime");
+        drop(tx);
+    }
+
+    #[tokio::test]
+    async fn turn_stream_body_is_never_lifetime_rotated() {
+        // Turn/post streams get NO max lifetime — a legit turn can far exceed
+        // it, and a force-close would be a WP2-class incident. With
+        // `max_lifetime: None` the body must still be alive (keepaliving)
+        // well past where a subscription TTL would have closed it.
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let mut body = std::pin::pin!(super::ndjson_body_with_keepalive(
+            rx,
+            Duration::from_millis(10),
+            None,
+        ));
+        // Drain events for longer than the (test-scale) subscription TTL.
+        for _ in 0..12 {
+            let item = tokio::time::timeout(Duration::from_secs(2), body.next())
+                .await
+                .expect("body should keep producing keepalives")
+                .expect("body must stay open without a TTL");
+            let _ = item.unwrap();
+        }
+        // A real event still flows after all that.
+        tx.send("{\"kind\":\"still-alive\"}".to_string()).unwrap();
+        let found = loop {
+            let chunk = tokio::time::timeout(Duration::from_secs(2), body.next())
+                .await
+                .expect("event within timeout")
+                .expect("stream still open")
+                .unwrap();
+            if chunk.as_ref() != b"\n" {
+                break chunk;
+            }
+        };
+        assert_eq!(&found[..], b"{\"kind\":\"still-alive\"}\n");
+    }
+
+    #[test]
+    fn subscription_stream_classification_is_exact() {
+        assert!(super::is_subscription_stream("subscribe_session_stream"));
+        assert!(super::is_subscription_stream("subscribe_ui_mutations"));
+        // Turn/post streams must NEVER be classified for rotation.
+        assert!(!super::is_subscription_stream("send_agent_message_stream"));
+        assert!(!super::is_subscription_stream("post_room_chat_message"));
+    }
+
+    #[tokio::test]
     async fn ndjson_body_terminates_when_sender_drops() {
         // CORRECTNESS BOUNDARY (inverse F-4): when the subscription ends (tx
         // dropped) the body MUST end too — keepalives must not keep it alive,
         // or watcher subscriptions leak and the edge inflight counter pins.
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-        let mut body = std::pin::pin!(ndjson_body_with_keepalive(rx, Duration::from_millis(20)));
+        let mut body = std::pin::pin!(ndjson_body_with_keepalive(
+            rx,
+            Duration::from_millis(20),
+            None
+        ));
         drop(tx);
         let end = tokio::time::timeout(Duration::from_secs(2), body.next())
             .await

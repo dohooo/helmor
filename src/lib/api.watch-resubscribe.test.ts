@@ -89,6 +89,32 @@ describe("subscribeSessionStream auto-resubscribe (R2-A)", () => {
 		unlisten();
 	});
 
+	it("no events are lost across a server-side lifetime rotation (R2-A.1)", async () => {
+		// The container rotates subscription bodies every ~5m (zombie-pipe
+		// reaper). Rotation presents to the client as a silent close →
+		// resubscribe; events emitted after reattach flow to the SAME callback.
+		// The sub-second gap itself is covered by the watch hook's
+		// reconcile-on-attach (`refreshFromDb`) + the WP3 merge rules, so
+		// nothing observable is dropped.
+		const calls = captureSubscribes();
+		const callback = vi.fn();
+		const unlisten = await subscribeSessionStream("s1", callback);
+
+		calls[0].channel.onmessage?.({ kind: "update", messages: [] });
+		calls[0].channel.onmessage?.(watchClosed); // ← lifetime rotation
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(calls).toHaveLength(2);
+		calls[1].channel.onmessage?.({ kind: "planCaptured" });
+
+		expect(callback).toHaveBeenNthCalledWith(1, {
+			kind: "update",
+			messages: [],
+		});
+		expect(callback).toHaveBeenNthCalledWith(2, { kind: "planCaptured" });
+		expect(callback).toHaveBeenCalledTimes(2); // watchClosed never leaked
+		unlisten();
+	});
+
 	it("unlisten stops the resubscribe loop and unsubscribes", async () => {
 		const calls = captureSubscribes();
 		const unlisten = await subscribeSessionStream("s1", vi.fn());
