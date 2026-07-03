@@ -69,6 +69,12 @@ const LOCAL_ONLY: &[&str] = &[
     // reading history while the sandbox sleeps.
     "convert_historical_records",
 ];
+// NOTE (R2-D): `read/write/delete_query_cache` are NOT in this list even
+// though the frontend's `LOCAL_ONLY_INVOKES` forces them local — the
+// companion dispatch DOES implement them (this list tracks dispatch-absent
+// commands only). The frontend override is a ROUTING decision: the React
+// Query persistence cache is desktop disk state (per-backend buckets), so in
+// team mode it must hit this Mac's files, never the container's.
 
 #[test]
 fn every_frontend_invoke_is_reachable_in_the_companion() {

@@ -356,7 +356,6 @@
 	"connectAccounts": "Connect accounts",
 	"connectBrowserHelmorDesktopSoCan": "Connect this browser to your Helmor desktop so you can open your workspaces, sessions, and agents from here. Only continue if you started this pairing yourself.",
 	"connectGithub": "Connect GitHub in",
-	"connectRepoToBuild": "Connect a repository to start building — or just chat.",
 	"connectSlackWorkspace": "Connect a Slack workspace",
 	"connected": "Connected",
 	"connecting": "Connecting",
@@ -1638,5 +1637,7 @@
 	"workspacesCanNowArchiveThemselvesAutomatically": "Workspaces can now archive themselves automatically once their linked PR/MR is merged.",
 	"yes": "Yes",
 	"zoom": "Zoom in",
-	"zoomOut": "Zoom out"
+	"zoomOut": "Zoom out",
+	"connectRepoLink": "Connect a repository",
+	"connectRepoRest": " to start building — or just chat."
 }

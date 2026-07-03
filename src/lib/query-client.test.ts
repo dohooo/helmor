@@ -339,3 +339,16 @@ describe("createHelmorQueryClient dehydrate filter", () => {
 		expect(dumped.queries).toHaveLength(0);
 	});
 });
+
+describe("R2-D persist whitelist", () => {
+	it("workspaceSessions persists; session message threads do not", async () => {
+		const { workspaceSessionsQueryOptions, sessionThreadMessagesQueryOptions } =
+			await import("./query-client");
+		expect(workspaceSessionsQueryOptions("w1").meta).toEqual({ persist: true });
+		// Message threads stay memory/DB-only: WP3's convergence protocol owns
+		// that truth, and persisting them would add a merge surface for no gain.
+		expect(
+			sessionThreadMessagesQueryOptions("s1").meta ?? {},
+		).not.toHaveProperty("persist");
+	});
+});

@@ -54,19 +54,25 @@ function renderStartPage({
 }
 
 describe("WorkspaceStartPage — no-repo guide (WP7 Gate 2)", () => {
-	it("zero repos shows the guide + Add repository CTA (chat-locked mode)", () => {
+	it("zero repos shows the guide with the underlined connect-repo link (R4: no separate button)", () => {
 		renderStartPage({ mode: "chat" });
 		expect(screen.getByTestId("start-no-repo-guide")).toBeInTheDocument();
+		// The sentence is split around the clickable fragment.
+		expect(screen.getByTestId("start-connect-repo-link")).toHaveTextContent(
+			"Connect a repository",
+		);
 		expect(
-			screen.getByText(
-				"Connect a repository to start building — or just chat.",
-			),
+			screen.getByText(/to start building — or just chat\./),
 		).toBeInTheDocument();
+		// R4 ruling: the old standalone "Add repository" button is GONE.
+		expect(
+			screen.queryByRole("button", { name: "Add repository" }),
+		).not.toBeInTheDocument();
 	});
 
-	it("the CTA fires the open-add-repository shell event", () => {
+	it("clicking the connect-repo link opens the sidebar add-repo dropdown (shell event)", () => {
 		renderStartPage({ mode: "chat" });
-		fireEvent.click(screen.getByRole("button", { name: "Add repository" }));
+		fireEvent.click(screen.getByTestId("start-connect-repo-link"));
 		expect(mocks.publishShellEvent).toHaveBeenCalledWith({
 			type: "open-add-repository",
 		});

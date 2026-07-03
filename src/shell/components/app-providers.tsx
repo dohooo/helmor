@@ -18,7 +18,12 @@ import { SettingsDialog } from "@/features/settings";
 import { InviteAcceptHost } from "@/features/team/invite-accept-host";
 import { I18nText } from "@/lib/i18n";
 import { getPendingPairingToken, isRemoteTransport } from "@/lib/ipc";
-import { helmorQueryPersister, QUERY_CACHE_BUSTER } from "@/lib/query-client";
+import { isTauriRuntime } from "@/lib/platform";
+import {
+	createTeamQueryPersister,
+	helmorQueryPersister,
+	QUERY_CACHE_BUSTER,
+} from "@/lib/query-client";
 import { resetSessionThreadPagination } from "@/lib/session-thread-pagination";
 import { SettingsContext } from "@/lib/settings";
 import { resetSubmitQueue } from "@/lib/use-submit-queue";
@@ -79,6 +84,17 @@ export function AppProviders({
 	// via `useRef` in `useSelectionController`, inside the keyed subtree — so it
 	// resets for free on the remount; only these module-scoped survivors need an
 	// explicit reset.) Skipped on the initial mount (generation 0).
+	// R2-D: one team persister per transport generation — its lazy bucket-key
+	// resolution (and the aggressive prune of non-current buckets) runs once
+	// per switch. Null when there's no team config or no Tauri runtime.
+	const teamPersister = useMemo(
+		() =>
+			isRemoteTransport() && isTauriRuntime()
+				? createTeamQueryPersister()
+				: null,
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- generation IS the transport identity
+		[transportGeneration],
+	);
 	const prevGenerationRef = useRef(transportGeneration);
 	useEffect(() => {
 		if (prevGenerationRef.current === transportGeneration) return;
@@ -160,10 +176,24 @@ export function AppProviders({
 		<SettingsContext.Provider value={settingsContextValue}>
 			{/* Keyed on the transport generation so an in-place team↔local switch
 			    fully remounts the QueryClient + router subtree against the new
-			    transport. Persistence is gated off for remote transports (team /
-			    companion): the persister calls local Tauri commands that remote
-			    backends do not implement. */}
-			{isRemoteTransport() ? (
+			    transport. R2-D (R1): the TEAM transport persists too, into a
+			    per-backend bucket (sha256(url+token)), so switching back shows
+			    the lists instantly (SWR refresh behind). The cache commands are
+			    LOCAL_ONLY — they hit this Mac's disk, not the Worker. Only the
+			    pure-browser companion (no Tauri runtime → nowhere local to
+			    persist) stays on the bare provider. */}
+			{isRemoteTransport() && isTauriRuntime() && teamPersister ? (
+				<PersistQueryClientProvider
+					key={transportGeneration}
+					client={queryClient}
+					persistOptions={{
+						persister: teamPersister,
+						buster: QUERY_CACHE_BUSTER,
+					}}
+				>
+					{providerChildren}
+				</PersistQueryClientProvider>
+			) : isRemoteTransport() ? (
 				<QueryClientProvider key={transportGeneration} client={queryClient}>
 					{providerChildren}
 				</QueryClientProvider>

@@ -77,9 +77,22 @@ export function saveTeamConfig(config: TeamConfig): void {
 export function clearTeamConfig(): void {
 	const store = storage();
 	if (!store) return;
+	// R2-D: leaving a team deletes its query-cache bucket from disk right
+	// away (privacy: an ex-member's machine must not keep the team's
+	// workspace-list cache). Read the config BEFORE removing it; the delete
+	// is best-effort fire-and-forget (the aggressive prune at the next team
+	// persister init is the retry path). Lazy import keeps this module
+	// dependency-light for ipc's boot order (see file header).
+	const url = store.getItem(URL_KEY);
+	const token = store.getItem(TOKEN_KEY);
 	store.removeItem(URL_KEY);
 	store.removeItem(TOKEN_KEY);
 	store.removeItem(MODE_KEY);
+	if (url) {
+		void import("./team-query-cache").then(({ deleteTeamQueryCacheBucket }) =>
+			deleteTeamQueryCacheBucket(normalizeUrl(url), token ?? ""),
+		);
+	}
 }
 
 /**

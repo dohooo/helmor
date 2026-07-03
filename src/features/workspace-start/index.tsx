@@ -509,19 +509,23 @@ export function WorkspaceStartPage({
 											: "max-w-[44rem] translate-y-0 opacity-100",
 									)}
 								>
-									<I18nText source="connectRepoToBuild" />
-									<Button
-										type="button"
-										variant="outline"
-										size="sm"
-										className="shrink-0 gap-1.5"
-										onClick={() =>
-											publishShellEvent({ type: "open-add-repository" })
-										}
-									>
-										<FolderPlus className="size-3.5" strokeWidth={1.8} />
-										<I18nText source="addRepository2" />
-									</Button>
+									{/* R4 Gate2 (user ruling): no separate button — the
+									    "Connect a repository" fragment itself is the CTA,
+									    slightly-bold underline, opening the same add-repo
+									    dropdown as the sidebar's top-left button. */}
+									<span className="whitespace-pre-wrap">
+										<button
+											type="button"
+											data-testid="start-connect-repo-link"
+											className="cursor-pointer underline decoration-[1.5px] underline-offset-4 hover:opacity-80"
+											onClick={() =>
+												publishShellEvent({ type: "open-add-repository" })
+											}
+										>
+											<I18nText source="connectRepoLink" />
+										</button>
+										<I18nText source="connectRepoRest" />
+									</span>
 								</span>
 							) : mode === "chat" ? (
 								<span

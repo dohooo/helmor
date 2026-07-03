@@ -352,7 +352,7 @@ async function listSessions(env: Env, workspaceId: string): Promise<unknown[]> {
 		`SELECT id, workspace_id, title, status, model, agent_type, permission_mode,
 		        effort_level, action_kind, session_kind, is_hidden,
 		        last_user_message_at, created_at, updated_at
-		 FROM sessions WHERE workspace_id = ?1 ORDER BY updated_at DESC`,
+		 FROM sessions WHERE workspace_id = ?1 ORDER BY created_at ASC, id ASC`,
 	)
 		.bind(workspaceId)
 		.all();

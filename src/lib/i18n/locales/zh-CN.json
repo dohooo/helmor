@@ -356,7 +356,6 @@
 	"connectAccounts": "连接账号",
 	"connectBrowserHelmorDesktopSoCan": "将此浏览器连接到 Helmor 桌面端，这样你就能在这里打开工作区、会话和 agent。仅在你本人发起配对时继续。",
 	"connectGithub": "在",
-	"connectRepoToBuild": "先连接一个仓库开始构建 — 也可以直接聊天。",
 	"connectSlackWorkspace": "连接 Slack 工作区",
 	"connected": "已连接",
 	"connecting": "正在连接",
@@ -1638,5 +1637,7 @@
 	"workspacesCanNowArchiveThemselvesAutomatically": "工作区现在可以在关联的 PR/MR 合并后自动归档。",
 	"yes": "是",
 	"zoom": "放大",
-	"zoomOut": "缩小"
+	"zoomOut": "缩小",
+	"connectRepoLink": "连接一个仓库",
+	"connectRepoRest": "以开始构建 — 也可以直接聊天。"
 }

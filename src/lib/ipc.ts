@@ -548,6 +548,13 @@ const LOCAL_ONLY_INVOKES = new Set<string>([
 	// pipeline. Runs on the desktop over rows fetched from /team/messages; routing
 	// it to the container would defeat reading history while the sandbox sleeps.
 	"convert_historical_records",
+	// R2-D: the React Query persistence cache is DESKTOP DISK state — files
+	// under this Mac's data dir — even while the transport points at the team
+	// Worker (which doesn't implement these). Keeping them local is what lets
+	// team mode run a persister at all (per-backend buckets, R1 fix).
+	"read_query_cache",
+	"write_query_cache",
+	"delete_query_cache",
 ]);
 
 export function invoke<T>(

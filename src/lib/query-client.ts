@@ -60,6 +60,10 @@ import {
 } from "./session-thread-pagination";
 import { listTeamMembers, listTeamWorkspaces } from "./team-api";
 import { getTeamConfig, type TeamConfig } from "./team-mode";
+import {
+	computeTeamBucketKey,
+	registerAndPruneTeamBuckets,
+} from "./team-query-cache";
 
 const CHANGES_STALE_TIME = 3_000;
 const CHANGES_REFETCH_INTERVAL = 10_000;
@@ -324,6 +328,50 @@ export const helmorQueryPersister = createAsyncStoragePersister({
 	key: QUERY_CACHE_KEY,
 });
 
+/**
+ * R2-D: persister for the TEAM transport — same file-backed storage, but
+ * bucketed per backend (`sha256(url+token)`, see `team-query-cache.ts`) so
+ * Local↔Team switches restore instantly (R1) and different backends /
+ * member identities never share cached lists. The bucket key is resolved
+ * LAZILY (WebCrypto is async, the provider render path is sync); the first
+ * resolution also registers the bucket and prunes every non-current team
+ * bucket (aggressive retention, by ruling — leaving a team must not keep
+ * its cache on disk).
+ *
+ * Returns `null` when no team config exists (the caller falls back to a
+ * bare provider — nothing meaningful to persist against).
+ */
+export function createTeamQueryPersister(): ReturnType<
+	typeof createAsyncStoragePersister
+> | null {
+	const config = getTeamConfig();
+	if (!config) return null;
+	let bucketKeyPromise: Promise<string> | undefined;
+	const bucketKey = (): Promise<string> => {
+		if (!bucketKeyPromise) {
+			bucketKeyPromise = computeTeamBucketKey(config.url, config.token).then(
+				async (key: string) => {
+					await registerAndPruneTeamBuckets(key);
+					return key;
+				},
+			);
+		}
+		return bucketKeyPromise;
+	};
+	return createAsyncStoragePersister({
+		// The storage adapter resolves its own bucket key and ignores the
+		// persister-supplied one (which only namespaces within a storage).
+		storage: {
+			getItem: async () => tauriFsQueryCacheStorage.getItem(await bucketKey()),
+			setItem: async (_key: string, value: string) =>
+				tauriFsQueryCacheStorage.setItem(await bucketKey(), value),
+			removeItem: async () =>
+				tauriFsQueryCacheStorage.removeItem(await bucketKey()),
+		},
+		key: "helmor-query-cache--team",
+	});
+}
+
 export function workspaceGroupsQueryOptions() {
 	return queryOptions({
 		queryKey: helmorQueryKeys.workspaceGroups,
@@ -571,6 +619,11 @@ export function workspaceSessionsQueryOptions(
 		queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
 		queryFn: () => loadWorkspaceSessions(workspaceId),
 		staleTime: overrides.staleTime ?? 0,
+		// R2-D: session tabs are list-shaped state worth an instant first paint
+		// after a transport switch. Message THREADS stay memory/DB-only (WP3's
+		// convergence protocol owns that truth; persisting them would add a
+		// merge surface for no gain).
+		meta: PERSIST_META,
 	});
 }
 
