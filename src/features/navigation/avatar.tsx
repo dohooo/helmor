@@ -31,6 +31,9 @@ function getWorkspaceAvatarSrc(repoIconSrc?: string | null) {
 	return repoIconSrc?.trim() ? repoIconSrc : null;
 }
 
+/** Mirrors Radix's `ImageLoadingStatus` union (not exported by the package). */
+type AvatarLoadingStatus = "idle" | "loading" | "loaded" | "error";
+
 export const WorkspaceAvatar = memo(function WorkspaceAvatar({
 	repoIconSrc,
 	repoInitials,
@@ -63,12 +66,24 @@ export const WorkspaceAvatar = memo(function WorkspaceAvatar({
 		.slice(0, 2)
 		.toUpperCase();
 	const src = getWorkspaceAvatarSrc(repoIconSrc);
-	const [hasImage, setHasImage] = useState(Boolean(src));
+	// Radix's <Avatar.Image> never mounts the underlying <img> unless its own
+	// probe reports "loaded" — on failure it just renders `null`. A native
+	// <img onError> therefore never fires, so we drive the fallback from
+	// Radix's `onLoadingStatusChange` instead. Without this, a broken or
+	// undecodable icon (an empty `favicon.ico`, an `.ico` WebKit can't render,
+	// a corrupt file) leaves the avatar permanently blank instead of showing
+	// the initials.
+	const [status, setStatus] = useState<AvatarLoadingStatus>("idle");
 
+	// Reset when the icon source changes so a new icon gets a fresh chance to
+	// load before we decide to fall back.
 	useEffect(() => {
-		setHasImage(Boolean(src));
+		setStatus("idle");
 	}, [src]);
-	const showFallback = !src || !hasImage;
+
+	// Stay optimistic while idle/loading (no initials flash for good icons);
+	// only fall back once the load actually errors or there's no src at all.
+	const showFallback = !src || status === "error";
 
 	return (
 		<Avatar
@@ -86,12 +101,7 @@ export const WorkspaceAvatar = memo(function WorkspaceAvatar({
 				<AvatarImage
 					src={src}
 					alt={`${repoName ?? title} icon`}
-					onError={() => {
-						setHasImage(false);
-					}}
-					onLoad={() => {
-						setHasImage(true);
-					}}
+					onLoadingStatusChange={(nextStatus) => setStatus(nextStatus)}
 				/>
 			) : null}
 			{showFallback ? (
