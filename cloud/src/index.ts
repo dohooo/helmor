@@ -48,6 +48,34 @@ export class Sandbox extends CloudflareSandbox<Env> {
 		// restoring from the last backup. The base reads `this.sleepAfter` AFTER
 		// this constructor runs (it defers via blockConcurrencyWhile).
 		this.sleepAfter = env.SANDBOX_IDLE_TIMEOUT ?? "15m";
+
+		// F-4 root fix: the base's `isActivityExpired` treats ANY
+		// `inflightRequests > 0` as activity and RE-ARMS the idle timer on
+		// every alarm tick. A SIGKILLed desktop leaves companion pipes that
+		// never settle (verified live: inflight pinned at 4 for 7h+, container
+		// never slept, billing on). Replace the expiry check (an instance
+		// class-field on the SDK base — override it per-instance) with one
+		// keyed ONLY on `sleepAfterMs`: liveness renews the timer explicitly —
+		// every request start (base + fetchCompanionPort), and streaming
+		// bodies via the throttled progress renewal in `fetchCompanionPort` —
+		// so a genuinely active connection keeps the container awake by MOVING
+		// BYTES, while a dead pipe stops renewing and the timer runs out.
+		const self = this as unknown as {
+			isActivityExpired: () => boolean;
+			sleepAfterMs?: number;
+			inflightRequests?: number;
+		};
+		self.isActivityExpired = () => {
+			// Not yet armed (onStart/renew hasn't run) → not expired.
+			if (typeof self.sleepAfterMs !== "number") return false;
+			const expired = self.sleepAfterMs <= Date.now();
+			if (expired) {
+				console.log(
+					`[idle] expiry reached (inflight=${self.inflightRequests ?? "?"} — ignored; renewals stopped)`,
+				);
+			}
+			return expired;
+		};
 	}
 
 	/** Arm the idle countdown on every container start. A rollout / platform
@@ -63,6 +91,21 @@ export class Sandbox extends CloudflareSandbox<Env> {
 		} catch (error) {
 			console.error("arm idle timer on start failed", error);
 		}
+	}
+
+	/** F-4 diagnostics: log every idle-timer renewal with its caller so a live
+	 *  `wrangler tail` shows exactly what keeps the container awake. Cheap
+	 *  (one log per renewal) and safe to keep. */
+	renewActivityTimeout(): void {
+		const caller = new Error().stack?.split("\n")[2]?.trim() ?? "?";
+		const internals = this as unknown as {
+			inflightRequests?: number;
+			sleepAfterMs?: number;
+		};
+		console.log(
+			`[idle] renew inflight=${internals.inflightRequests ?? "?"} caller=${caller}`,
+		);
+		super.renewActivityTimeout();
 	}
 
 	async fetch(request: Request): Promise<Response> {
@@ -121,30 +164,67 @@ export class Sandbox extends CloudflareSandbox<Env> {
 			// not just until the headers arrive. For a long-lived `/v1/stream`
 			// SSE this keeps the sandbox awake for the whole connection, so an
 			// open desktop blocks the idle-sleep alarm; the moment the client
-			// disconnects (body cancels) it drops to idle and `sleepAfter` starts.
-			// Non-streaming bodies close immediately, so they release right away.
-			const reader = response.body.getReader();
-			const monitored = new ReadableStream<Uint8Array>({
-				async pull(controller) {
-					try {
-						const { done, value } = await reader.read();
-						if (done) {
-							release();
-							controller.close();
-							return;
-						}
-						controller.enqueue(value);
-					} catch (error) {
-						release();
-						controller.error(error);
+			// disconnects it drops to idle and `sleepAfter` starts.
+			//
+			// F-4 (idle sleep never fired): the previous hand-rolled pull/cancel
+			// wrapper only released when the runtime called pull() or cancel() —
+			// a client disconnect with no outstanding read left the stream
+			// stalled, `release()` never ran, and `inflightRequests` stayed ≥ 1
+			// forever. `isActivityExpired()` treats any inflight as activity and
+			// RE-ARMS the timer on every alarm tick, so the container never
+			// slept (observed: 55+ min active with zero traffic). Mirror the
+			// SDK's own containerFetch pattern instead: pump the body through an
+			// IdentityTransformStream and release in `finally` — the pipe
+			// settles on upstream close, upstream error, OR downstream cancel,
+			// so every disconnect path decrements exactly once.
+			// Second layer (verified live): a SIGKILLed client does NOT reliably
+			// propagate cancel into this pipe — the pipe stalls on backpressure,
+			// `finally` never runs, and inflight stays pinned (observed: 4 leaked
+			// connections kept the container awake 7h+). A no-progress watchdog
+			// force-settles dead pipes: every healthy companion stream carries
+			// keepalive pings (`/v1/stream` pings; RPC bodies finish fast), so a
+			// pipe that moves ZERO bytes for this long is a corpse, not a quiet
+			// stream.
+			const PIPE_NO_PROGRESS_MS = 120_000;
+			// Throttled liveness renewal: with `isActivityExpired` keyed only on
+			// `sleepAfterMs` (see constructor), a long-running stream keeps the
+			// container awake by actually MOVING BYTES — every healthy companion
+			// stream carries keepalive pings, so this renews at most once per
+			// minute while data flows and stops the moment the pipe dies.
+			const RENEW_EVERY_MS = 60_000;
+			let lastRenew = Date.now();
+			let lastProgress = Date.now();
+			const renew = () => internals.renewActivityTimeout?.();
+			const progressTap = new TransformStream<Uint8Array, Uint8Array>({
+				transform(chunk, controller) {
+					const now = Date.now();
+					lastProgress = now;
+					if (now - lastRenew >= RENEW_EVERY_MS) {
+						lastRenew = now;
+						renew();
 					}
-				},
-				cancel(reason) {
-					release();
-					void reader.cancel(reason);
+					controller.enqueue(chunk);
 				},
 			});
-			return new Response(monitored, response);
+			const abort = new AbortController();
+			const watchdog = setInterval(() => {
+				if (Date.now() - lastProgress > PIPE_NO_PROGRESS_MS) {
+					abort.abort("companion pipe made no progress; force-settling");
+				}
+			}, 30_000);
+			const { readable, writable } = new IdentityTransformStream();
+			void response.body
+				.pipeThrough(progressTap)
+				.pipeTo(writable, { signal: abort.signal })
+				.catch(() => {
+					// Client disconnected / upstream dropped / watchdog abort —
+					// release below.
+				})
+				.finally(() => {
+					clearInterval(watchdog);
+					release();
+				});
+			return new Response(readable, response);
 		} catch (error) {
 			release();
 			throw error;
@@ -189,6 +269,10 @@ export class Sandbox extends CloudflareSandbox<Env> {
 						excludes: ["workspaces", "cache", "logs", "run", "local-llm"],
 					});
 					await writeBackupHandle(this.helmorEnv, handle);
+					// F-5 boundary, observable in `wrangler tail`: the idle path
+					// backs up BEFORE destroy; /admin/destroy-sandbox intentionally
+					// does not (a deliberate reset).
+					console.log("[idle] backup-before-sleep done; destroying");
 				})(),
 				new Promise<never>((_, reject) => {
 					timer = setTimeout(
