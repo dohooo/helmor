@@ -144,6 +144,9 @@ export interface LocalTeamRegistry {
 	setModelCatalog(payload: string): void;
 	listSessions(workspaceId: string): Promise<LocalSessionRow[]>;
 	listSessionMessages(sessionId: string): Promise<LocalMessageRow[]>;
+	/** R2-E: git snapshot mirror (in-memory for local-dev). */
+	getGitSnapshot(workspaceId: string): Promise<unknown | null>;
+	putGitSnapshot(snapshot: { workspaceId: string }): Promise<void>;
 	putCodexIdentity(
 		memberId: string,
 		input: { refreshToken: string; idToken: string },
@@ -307,6 +310,9 @@ export class InMemoryLocalTeamRegistry implements LocalTeamRegistry {
 	}
 
 	async syncTeamData(input: TeamSyncInput): Promise<{ ok: true }> {
+		if (input.gitSnapshot) {
+			await this.putGitSnapshot(input.gitSnapshot);
+		}
 		for (const s of input.sessions ?? []) {
 			if (!s?.id || !s.workspaceId) continue;
 			this.snapshotState.sessions[s.id] = {
@@ -376,6 +382,17 @@ export class InMemoryLocalTeamRegistry implements LocalTeamRegistry {
 		return Object.values(this.snapshotState.sessions)
 			.filter((s) => s.workspace_id === workspaceId)
 			.sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+	}
+
+	private gitSnapshots = new Map<string, unknown>();
+
+	async getGitSnapshot(workspaceId: string): Promise<unknown | null> {
+		return this.gitSnapshots.get(workspaceId) ?? null;
+	}
+
+	async putGitSnapshot(snapshot: { workspaceId: string }): Promise<void> {
+		if (snapshot?.workspaceId)
+			this.gitSnapshots.set(snapshot.workspaceId, snapshot);
 	}
 
 	async listSessionMessages(sessionId: string): Promise<LocalMessageRow[]> {

@@ -36,6 +36,10 @@ pub struct TeamSync {
     /// Per-session high-water-mark: the max `session_messages.rowid` already
     /// mirrored. Append-only, so we only ever POST rows beyond it.
     cursors: Mutex<HashMap<String, i64>>,
+    /// R2-E: per-workspace git-snapshot throttle (the git watcher can fire
+    /// bursts; one snapshot per ~2s per workspace is plenty — the watcher
+    /// re-fires on quiesce so the last burst always gets a trailing push).
+    git_pushed_at: Mutex<HashMap<String, std::time::Instant>>,
 }
 
 struct SyncConfig {
@@ -96,6 +100,25 @@ struct SyncPayload {
     messages: Vec<SyncMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     replace_workspace_sessions: Option<ReplaceWorkspaceSessions>,
+    /// R2-E: workspace git snapshot pushed on `WorkspaceGitStateChanged` /
+    /// `WorkspaceFilesChanged` so team clients read git status + changes from
+    /// D1 instead of polling `/rpc` every 10s (which pinned the container
+    /// awake for the whole attended session).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    git_snapshot: Option<GitSnapshot>,
+}
+
+/// Zero shape invention: the two fields serialize the exact structs the
+/// desktop `/rpc` commands return, so the frontend team branch can consume
+/// the D1 copy with the SAME types.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitSnapshot {
+    workspace_id: String,
+    captured_at: String,
+    version: u32,
+    git_status: crate::git::ops::WorkspaceGitActionStatus,
+    changes: Vec<crate::workspace::files::EditorFileListItem>,
 }
 
 /// Stage C realtime envelope. Mirrors the old SSE frame the desktop parsed (an
@@ -132,6 +155,7 @@ impl TeamSync {
         Self {
             config,
             cursors: Mutex::new(HashMap::new()),
+            git_pushed_at: Mutex::new(HashMap::new()),
         }
     }
 
@@ -170,6 +194,7 @@ impl TeamSync {
                 sessions: vec![session],
                 messages,
                 replace_workspace_sessions: None,
+                git_snapshot: None,
             },
         )
         .await?;
@@ -206,6 +231,7 @@ impl TeamSync {
                     workspace_id: workspace_id.to_string(),
                     session_ids,
                 }),
+                git_snapshot: None,
             },
         )
         .await
@@ -263,6 +289,74 @@ impl TeamSync {
     }
 }
 
+impl TeamSync {
+    /// R2-E: push one workspace's git snapshot to D1 (throttled per
+    /// workspace). Best-effort like every other mirror job.
+    async fn sync_git_snapshot(&self, workspace_id: &str) -> Result<()> {
+        let Some(cfg) = self.config.as_ref() else {
+            return Ok(());
+        };
+        const GIT_SNAPSHOT_THROTTLE: std::time::Duration = std::time::Duration::from_secs(2);
+        {
+            let mut pushed = self.git_pushed_at.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(at) = pushed.get(workspace_id) {
+                if at.elapsed() < GIT_SNAPSHOT_THROTTLE {
+                    return Ok(());
+                }
+            }
+            pushed.insert(workspace_id.to_string(), std::time::Instant::now());
+        }
+        let wid = workspace_id.to_string();
+        let snapshot =
+            tauri::async_runtime::spawn_blocking(move || read_git_snapshot(&wid)).await??;
+        let Some(snapshot) = snapshot else {
+            return Ok(());
+        };
+        post_sync(
+            cfg,
+            &SyncPayload {
+                sessions: vec![],
+                messages: vec![],
+                replace_workspace_sessions: None,
+                git_snapshot: Some(snapshot),
+            },
+        )
+        .await
+    }
+}
+
+/// Compute the git snapshot for a workspace (blocking: git subprocesses).
+/// Chat / non-operational workspaces have no worktree — returns None.
+fn read_git_snapshot(workspace_id: &str) -> Result<Option<GitSnapshot>> {
+    let Some(record) = crate::models::workspaces::load_workspace_record_by_id(workspace_id)? else {
+        return Ok(None);
+    };
+    if record.mode == crate::workspace::state::WorkspaceMode::Chat || !record.state.is_operational()
+    {
+        return Ok(None);
+    }
+    let root = crate::workspace::helpers::workspace_path(&record)?;
+    let git_status = crate::git::ops::workspace_action_status(
+        &root,
+        record.remote.as_deref(),
+        record
+            .intended_target_branch
+            .as_deref()
+            .or(record.default_branch.as_deref()),
+    )?;
+    let changes = crate::workspace::files::list_workspace_changes_for_workspace(
+        &root.display().to_string(),
+        Some(workspace_id),
+    )?;
+    Ok(Some(GitSnapshot {
+        workspace_id: workspace_id.to_string(),
+        captured_at: crate::models::db::current_timestamp()?,
+        version: 1,
+        git_status,
+        changes,
+    }))
+}
+
 async fn post_sync(cfg: &SyncConfig, payload: &SyncPayload) -> Result<()> {
     let response = cfg
         .client
@@ -312,6 +406,25 @@ pub fn on_ui_mutation<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: &UiMu
     let (session_id, workspace_id) = stage_b_targets(event);
     if session_id.is_none() && workspace_id.is_none() {
         return;
+    }
+
+    // R2-E: git snapshot mirror — fed by the container git watcher's events
+    // (the same ones the desktop bridge consumes), so team clients read git
+    // state from D1 instead of polling the container.
+    let git_workspace_id = match event {
+        UiMutationEvent::WorkspaceGitStateChanged { workspace_id }
+        | UiMutationEvent::WorkspaceFilesChanged { workspace_id } => Some(workspace_id.clone()),
+        _ => None,
+    };
+    if let Some(wid) = git_workspace_id {
+        let app_git = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Some(sync) = app_git.try_state::<TeamSync>() {
+                if let Err(error) = sync.sync_git_snapshot(&wid).await {
+                    tracing::warn!(error = %format!("{error:#}"), workspace_id = %wid, "team_sync: git snapshot mirror failed");
+                }
+            }
+        });
     }
 
     let app = app.clone();
@@ -519,6 +632,7 @@ mod tests {
                 author_id: None,
             }],
             replace_workspace_sessions: None,
+            git_snapshot: None,
         };
         let json = serde_json::to_value(&payload).unwrap();
         assert!(json.get("sessions").is_none());
@@ -538,6 +652,7 @@ mod tests {
                 workspace_id: "w1".into(),
                 session_ids: vec!["s1".into(), "s2".into()],
             }),
+            git_snapshot: None,
         };
         let json = serde_json::to_value(&payload).unwrap();
         assert_eq!(json["replaceWorkspaceSessions"]["workspaceId"], "w1");

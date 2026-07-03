@@ -313,6 +313,27 @@ export interface TeamMessageRow {
 	author_id: string | null;
 }
 
+/** `GET /team/git-status` — the D1 git snapshot mirror (R2-E). Null when the
+ *  container has never pushed one for this workspace (fresh repo / chat
+ *  workspace). Readable with the sandbox asleep. */
+export async function getTeamGitSnapshot(
+	cfg: TeamConfig,
+	workspaceId: string,
+): Promise<{ gitStatus?: unknown; changes?: unknown } | null> {
+	const base = normalizeUrl(cfg.url);
+	const res = await fetch(
+		`${base}/team/git-status?workspaceId=${encodeURIComponent(workspaceId)}`,
+		{ headers: authHeaders(cfg) },
+	);
+	if (!res.ok) {
+		throw new Error(`Failed to load team git snapshot (HTTP ${res.status})`);
+	}
+	const body = (await res.json()) as {
+		snapshot?: { gitStatus?: unknown; changes?: unknown } | null;
+	};
+	return body.snapshot ?? null;
+}
+
 /** `GET /team/messages` — the D1 message mirror for a session (raw rows). */
 export async function listTeamSessionMessages(
 	cfg: TeamConfig,

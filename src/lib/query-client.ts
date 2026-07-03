@@ -59,7 +59,7 @@ import {
 	setSessionThreadPaginationState,
 } from "./session-thread-pagination";
 import { listTeamMembers, listTeamWorkspaces } from "./team-api";
-import { getTeamConfig, type TeamConfig } from "./team-mode";
+import { getTeamConfig, isTeamModeActive, type TeamConfig } from "./team-mode";
 import {
 	computeTeamBucketKey,
 	registerAndPruneTeamBuckets,
@@ -1019,10 +1019,12 @@ export function workspaceGitActionStatusQueryOptions(workspaceId: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.workspaceGitActionStatus(workspaceId),
 		queryFn: () => loadWorkspaceGitActionStatus(workspaceId),
+		// R2-E: team mode is push-driven (container git watcher → D1 +
+		// workspaceGitStateChanged broadcast) — no polling, no container wake.
 		staleTime: CHANGES_STALE_TIME,
 		gcTime: DEFAULT_GC_TIME,
 		refetchOnWindowFocus: true,
-		refetchInterval: 10_000,
+		refetchInterval: isTeamModeActive() ? false : 10_000,
 		retry: 0,
 	});
 }
@@ -1067,7 +1069,8 @@ export function workspaceChangesQueryOptions(
 		queryFn: () => listWorkspaceChanges(workspaceRootPath, workspaceId),
 		staleTime: CHANGES_STALE_TIME,
 		refetchOnWindowFocus: true,
-		refetchInterval: CHANGES_REFETCH_INTERVAL,
+		// R2-E: push-driven in team mode (see workspaceGitActionStatusQueryOptions).
+		refetchInterval: isTeamModeActive() ? false : CHANGES_REFETCH_INTERVAL,
 	});
 }
 

@@ -16,7 +16,11 @@ import type {
 	ProviderFamily,
 } from "./provider-config";
 import { setSessionThreadPaginationState } from "./session-thread-pagination";
-import { listTeamSessionMessages, listTeamSessions } from "./team-api";
+import {
+	getTeamGitSnapshot,
+	listTeamSessionMessages,
+	listTeamSessions,
+} from "./team-api";
 import { getTeamConfig, isTeamModeActive } from "./team-mode";
 import { getTeamReadiness } from "./team-readiness";
 
@@ -2917,6 +2921,15 @@ export async function listWorkspaceChanges(
 	workspaceRootPath: string,
 	workspaceId?: string | null,
 ): Promise<InspectorFileItem[]> {
+	// R2-E: team mode reads the D1 git-snapshot mirror (see
+	// loadWorkspaceGitActionStatus) — no container wake for the changes list.
+	if (isTeamModeActive() && workspaceId) {
+		const cfg = getTeamConfig();
+		if (cfg) {
+			const snapshot = await getTeamGitSnapshot(cfg, workspaceId);
+			return (snapshot?.changes as InspectorFileItem[] | undefined) ?? [];
+		}
+	}
 	try {
 		return await invoke<InspectorFileItem[]>("list_workspace_changes", {
 			workspaceRootPath,
@@ -3069,9 +3082,36 @@ export async function refreshWorkspaceChangeRequest(
 	}
 }
 
+/** Quiet zero-status used in team mode before the container has pushed a
+ *  snapshot (fresh repo workspace / chat workspace, which has no git). */
+const QUIET_GIT_ACTION_STATUS: WorkspaceGitActionStatus = {
+	uncommittedCount: 0,
+	conflictCount: 0,
+	syncTargetBranch: null,
+	syncStatus: "upToDate",
+	behindTargetCount: 0,
+	remoteTrackingRef: null,
+	aheadOfRemoteCount: 0,
+	aheadOfTargetCount: 0,
+	pushStatus: "unpublished",
+};
+
 export async function loadWorkspaceGitActionStatus(
 	workspaceId: string,
 ): Promise<WorkspaceGitActionStatus> {
+	// R2-E: team mode reads the D1 git-snapshot mirror (pushed by the container
+	// on its git-watcher events) instead of waking the sandbox. Invalidation
+	// rides the existing `workspaceGitStateChanged` broadcast.
+	if (isTeamModeActive()) {
+		const cfg = getTeamConfig();
+		if (cfg) {
+			const snapshot = await getTeamGitSnapshot(cfg, workspaceId);
+			return (
+				(snapshot?.gitStatus as WorkspaceGitActionStatus | undefined) ??
+				QUIET_GIT_ACTION_STATUS
+			);
+		}
+	}
 	try {
 		return await invoke<WorkspaceGitActionStatus>(
 			"get_workspace_git_action_status",

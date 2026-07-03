@@ -161,6 +161,49 @@ describe("shared Team Gateway contract", () => {
 		}
 	});
 
+	it("git snapshot: PUT /team/sync stores it; GET /team/git-status reads it (R2-E)", async () => {
+		const { store } = makeStore();
+		const memberToken = await acceptMember(store);
+		const snapshot = {
+			workspaceId: "w1",
+			capturedAt: "2026-07-03T00:00:00Z",
+			version: 1,
+			gitStatus: { uncommittedCount: 2, pushStatus: "unpushed" },
+			changes: [{ path: "src/a.ts", name: "a.ts" }],
+		};
+		const put = await teamRoute(store, "/team/sync", {
+			method: "PUT",
+			headers: auth(ADMIN_TOKEN),
+			body: JSON.stringify({ gitSnapshot: snapshot }),
+		});
+		expect(put.status).toBe(200);
+
+		const read = await teamRoute(store, "/team/git-status?workspaceId=w1", {
+			headers: auth(memberToken),
+		});
+		expect(read.status).toBe(200);
+		expect(await read.json()).toEqual({
+			snapshot: expect.objectContaining({
+				workspaceId: "w1",
+				gitStatus: expect.objectContaining({ uncommittedCount: 2 }),
+			}),
+		});
+
+		// Unknown workspace → null, not an error.
+		const miss = await teamRoute(store, "/team/git-status?workspaceId=nope", {
+			headers: auth(memberToken),
+		});
+		expect(await miss.json()).toEqual({ snapshot: null });
+
+		// Unauthorized read rejected.
+		const unauth = await teamRoute(
+			store,
+			"/team/git-status?workspaceId=w1",
+			{},
+		);
+		expect(unauth.status).toBe(401);
+	});
+
 	it("mirrors sessions + messages via /team/sync and serves them sandbox-independently", async () => {
 		const { store } = makeStore();
 		const memberToken = await acceptMember(store);

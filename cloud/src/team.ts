@@ -117,6 +117,7 @@ export function createWorkerTeamGatewayStore(
 		syncTeamData: (input) => syncTeamData(env, input),
 		listSessions: (workspaceId) => listSessions(env, workspaceId),
 		listSessionMessages: (sessionId) => listSessionMessages(env, sessionId),
+		getGitSnapshot: (workspaceId) => getGitSnapshot(env, workspaceId),
 	};
 }
 
@@ -233,6 +234,50 @@ async function listWorkspaces(env: Env): Promise<unknown[]> {
 	return results;
 }
 
+/** R2-E git snapshot mirror. Own table (write-path self-heal CREATE, the
+ * model_catalog precedent — no migration step for existing deployments).
+ * Payload stored opaque: it is the exact serialization of the container's
+ * /rpc response shapes, versioned inside the blob. */
+const CREATE_GIT_SNAPSHOTS_SQL = `CREATE TABLE IF NOT EXISTS git_snapshots (
+	workspace_id TEXT PRIMARY KEY,
+	payload TEXT NOT NULL,
+	updated_at TEXT NOT NULL
+)`;
+
+async function putGitSnapshot(
+	env: Env,
+	snapshot: NonNullable<TeamSyncInput["gitSnapshot"]>,
+): Promise<void> {
+	if (!snapshot.workspaceId) return;
+	await env.DB.prepare(CREATE_GIT_SNAPSHOTS_SQL).run();
+	await env.DB.prepare(
+		`INSERT INTO git_snapshots (workspace_id, payload, updated_at)
+		 VALUES (?1, ?2, datetime('now'))
+		 ON CONFLICT(workspace_id) DO UPDATE SET
+		   payload = excluded.payload, updated_at = excluded.updated_at`,
+	)
+		.bind(snapshot.workspaceId, JSON.stringify(snapshot))
+		.run();
+}
+
+async function getGitSnapshot(
+	env: Env,
+	workspaceId: string,
+): Promise<unknown | null> {
+	if (!workspaceId) return null;
+	try {
+		const row = await env.DB.prepare(
+			"SELECT payload FROM git_snapshots WHERE workspace_id = ?1",
+		)
+			.bind(workspaceId)
+			.first<{ payload: string }>();
+		return row ? JSON.parse(row.payload) : null;
+	} catch {
+		// Table not created yet (no snapshot ever pushed) — not an error.
+		return null;
+	}
+}
+
 /**
  * Stage B write-through (PUT /team/sync, container→D1). Upserts session rows,
  * APPENDS message rows (immutable — `ON CONFLICT DO NOTHING`), and applies
@@ -244,6 +289,10 @@ async function syncTeamData(
 	env: Env,
 	input: TeamSyncInput,
 ): Promise<{ ok: true }> {
+	// R2-E: git snapshot rides the same sync payload; separate table + upsert.
+	if (input.gitSnapshot) {
+		await putGitSnapshot(env, input.gitSnapshot);
+	}
 	const stmts: ReturnType<typeof env.DB.prepare>[] = [];
 	for (const s of input.sessions ?? []) {
 		if (!s?.id || !s.workspaceId) continue;
