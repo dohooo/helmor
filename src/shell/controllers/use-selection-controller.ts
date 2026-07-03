@@ -226,7 +226,19 @@ export function useSelectionController(
 			pending.fallbackTimerId = null;
 		}
 	}, []);
-	useEffect(() => cancelScheduledDisplayFlip, [cancelScheduledDisplayFlip]);
+	// Unmount latch: async selection continuations (`.then()` after the hold)
+	// can reach `scheduleDisplayFlip` AFTER the cleanup below already ran —
+	// the flip they schedule would then leak its 80ms fallback timer past
+	// teardown (observed as a flaky "window is not defined" uncaught in the
+	// full vitest run, #795 leftover). Latch + early-return closes that hole.
+	const displayFlipDisposedRef = useRef(false);
+	useEffect(() => {
+		displayFlipDisposedRef.current = false;
+		return () => {
+			displayFlipDisposedRef.current = true;
+			cancelScheduledDisplayFlip();
+		};
+	}, [cancelScheduledDisplayFlip]);
 	const startupPrefetchedWorkspaceRef = useRef<string | null>(null);
 	const warmedWorkspaceIdsRef = useRef<Set<string>>(new Set());
 	const sessionSelectionHistoryByWorkspaceRef = useRef<
@@ -630,6 +642,7 @@ export function useSelectionController(
 			requestId: number,
 			nextViewMode: ShellViewMode,
 		) => {
+			if (displayFlipDisposedRef.current) return;
 			cancelScheduledDisplayFlip();
 			const handles: PendingDisplayFlip = {
 				rafId: null,
@@ -643,6 +656,9 @@ export function useSelectionController(
 			};
 			pendingDisplayFlipRef.current = handles;
 			const run = () => {
+				// Environment guard: if the timer outlived the DOM (test env
+				// teardown), touching `window` below would throw as an uncaught.
+				if (typeof window === "undefined") return;
 				if (handles.consumed) return;
 				handles.consumed = true;
 				if (handles.rafId !== null) {
