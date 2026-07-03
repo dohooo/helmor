@@ -181,21 +181,28 @@ fn expand_models(providers: &[CustomProvider]) -> Vec<ClaudeProviderModel> {
         if api_key.is_empty() && vertex.is_none() {
             continue;
         }
+        // Custom models are merged into the official Claude section (composer
+        // and Settings alike), so each label is prefixed with its provider
+        // name (`Name · model`) — otherwise a custom `claude-opus-4-8` is
+        // indistinguishable from the official one. Mirrors Codex/OpenCode.
+        let prefix = match provider.name.trim() {
+            "" => provider.id.trim(),
+            name => name,
+        };
         let mut seen = std::collections::HashSet::new();
         for model in &provider.models {
             let slug = model.slug.trim();
             if slug.is_empty() || !seen.insert(slug.to_string()) {
                 continue;
             }
-            let label = model.label.trim();
+            let label = match model.label.trim() {
+                "" => slug,
+                label => label,
+            };
             models.push(ClaudeProviderModel {
                 id: model_id(&provider.id, slug),
                 provider_key: provider.id.clone(),
-                label: if label.is_empty() {
-                    slug.to_string()
-                } else {
-                    label.to_string()
-                },
+                label: format!("{prefix} · {label}"),
                 cli_model: slug.to_string(),
                 base_url: base_url.to_string(),
                 api_key: api_key.to_string(),
@@ -334,7 +341,7 @@ mod tests {
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].id, "claude-custom|acme|m");
         assert_eq!(models[0].provider_key, "acme");
-        assert_eq!(models[0].label, "M");
+        assert_eq!(models[0].label, "Acme · M");
         assert_eq!(models[0].base_url, "https://acme/v1");
     }
 

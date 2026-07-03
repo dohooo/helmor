@@ -90,14 +90,11 @@ export function CustomProviderCard({
 	const apiKeyOnly = Boolean(preset?.apiKeyOnly);
 	const hasModels = draft.models.length > 0;
 	const canFetch = draft.baseUrl.trim().length > 0;
-	// Vertex-type Claude provider: gateway URL + project id/region, and the
-	// token may live in the macOS Keychain instead of Helmor settings.
-	// Keychain auth is macOS-only — other platforms always use token mode
-	// (mirrors the backend fallback in provider/claude.rs).
+	// Vertex-type Claude provider: gateway URL + project id/region. The token
+	// field is owned by <VertexFields/> (below the token-source select), so
+	// the generic API-key row is skipped entirely.
 	const isVertex =
 		adapter.family === "claude" && isManual && draft.apiStyle === "vertex";
-	const vertexKeychain =
-		isVertex && isMac() && draft.vertexAuthMode === "keychain";
 	// Claude endpoints are Anthropic-style (base must NOT end in /v1 — the SDK
 	// appends /v1/messages and fetch appends /v1/models). Others are /v1.
 	const baseUrlPlaceholder = isVertex
@@ -248,14 +245,14 @@ export function CustomProviderCard({
 				/>
 			) : null}
 
-			{vertexKeychain ? null : (
+			{isVertex ? null : (
 				<div className="flex items-center gap-2">
 					<Input
 						type="password"
 						value={draft.apiKey}
 						onChange={(e) => patch({ apiKey: e.target.value })}
 						onBlur={commitText}
-						placeholder={isVertex ? "vertexTokenPlaceholder" : "apiKey"}
+						placeholder="apiKey"
 						className="h-8 min-w-0 flex-1 border-border/50 bg-background/40 text-[13px]"
 					/>
 					{preset?.apiKeyUrl && !draft.apiKey ? (
@@ -327,7 +324,9 @@ const VERTEX_AUTH_OPTIONS: StyleOption[] = [
 // the provider id as account for per-provider isolation. Not configurable.
 const VERTEX_KEYCHAIN_SERVICE = "helmor-anthropic-auth-token";
 
-/** Vertex extras: project id + auth mode. */
+/** Vertex extras: project id + token source, then the source-dependent
+ * token field below it — switching the source only swaps what renders
+ * underneath, everything above stays put. */
 function VertexFields({
 	draft,
 	patch,
@@ -380,7 +379,16 @@ function VertexFields({
 						account={draft.id}
 					/>
 				</>
-			) : null}
+			) : (
+				<Input
+					type="password"
+					value={draft.apiKey}
+					onChange={(e) => patch({ apiKey: e.target.value })}
+					onBlur={commitText}
+					placeholder="vertexTokenPlaceholder"
+					className="h-8 border-border/50 bg-background/40 text-[13px]"
+				/>
+			)}
 		</>
 	);
 }

@@ -1582,7 +1582,7 @@
 	"vertexAuthKeychainHint": "Read from Keychain at runtime; never stored in Helmor.",
 	"vertexAuthMode": "Token source",
 	"vertexAuthToken": "Environment variable",
-	"vertexAuthTokenHint": "Paste the token above; passed to the CLI as ANTHROPIC_AUTH_TOKEN.",
+	"vertexAuthTokenHint": "Paste the token below; passed to the CLI as ANTHROPIC_AUTH_TOKEN.",
 	"vertexKeychainDialogHint": "Paste your token at the prompt, press Enter, then retype it once to confirm — it goes straight into macOS Keychain.",
 	"vertexKeychainDialogTitle": "Store token in Keychain",
 	"vertexKeychainStoreCta": "Store token in Keychain…",

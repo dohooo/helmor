@@ -1582,7 +1582,7 @@
 	"vertexAuthKeychainHint": "运行时从钥匙串读取，不存入 Helmor。",
 	"vertexAuthMode": "Token 提供方式",
 	"vertexAuthToken": "环境变量",
-	"vertexAuthTokenHint": "在上方粘贴 Token，以 ANTHROPIC_AUTH_TOKEN 环境变量传给 CLI。",
+	"vertexAuthTokenHint": "在下方粘贴 Token，以 ANTHROPIC_AUTH_TOKEN 环境变量传给 CLI。",
 	"vertexKeychainDialogHint": "在提示处粘贴 token 并回车，系统会要求再输入一次确认 —— token 直接写入 macOS 钥匙串。",
 	"vertexKeychainDialogTitle": "存入钥匙串",
 	"vertexKeychainStoreCta": "把 token 存入钥匙串…",
