@@ -402,6 +402,7 @@ export class ClaudeSessionManager implements SessionManager {
 			fastMode,
 			claudeThinkingDisplay,
 			claudeEnvironment,
+			claudeSettings,
 			agentProxy,
 			images,
 			sourceRepoPath,
@@ -447,6 +448,14 @@ export class ClaudeSessionManager implements SessionManager {
 			claudeEnvironment && Object.keys(claudeEnvironment).length > 0
 				? claudeEnvironment
 				: undefined;
+		// Per-turn `--settings` overrides: fast mode + host-supplied keys
+		// (e.g. `apiKeyHelper` for Vertex keychain auth). Host keys win.
+		const mergedSettings = {
+			...(effectiveFastMode ? { fastMode: true } : {}),
+			...(claudeSettings ?? {}),
+		};
+		const settingsOverrides =
+			Object.keys(mergedSettings).length > 0 ? mergedSettings : undefined;
 		const additionalDirectoryEnv =
 			additionalDirectories.length > 0
 				? { CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: "1" }
@@ -483,7 +492,7 @@ export class ClaudeSessionManager implements SessionManager {
 					type: "adaptive",
 					display: claudeThinkingDisplay ?? "summarized",
 				},
-				...(effectiveFastMode ? { settings: { fastMode: true } } : {}),
+				...(settingsOverrides ? { settings: settingsOverrides } : {}),
 				...(projectMcpServers ? { mcpServers: projectMcpServers } : {}),
 				onElicitation: async (request, options) => {
 					// MCP elicitation: surface as a unified userInputRequest

@@ -475,6 +475,7 @@ async fn dispatch(
         |         "request_quit"
         |         "resize_agent_login_terminal"
         |         "resize_forge_cli_auth_terminal"
+        |         "resize_keychain_store_terminal"
         |         "resize_repo_script"
         |         "reveal_path_in_finder"
         |         "show_image_in_finder"
@@ -484,11 +485,13 @@ async fn dispatch(
         |         "reveal_workspace_in_main_window"
         |         "stop_agent_login_terminal"
         |         "stop_forge_cli_auth_terminal"
+        |         "stop_keychain_store_terminal"
         |         "stop_repo_script"
         |         "sync_global_hotkey"
         |         "toggle_mini_window_mode"
         |         "write_agent_login_terminal_stdin"
         |         "write_forge_cli_auth_terminal_stdin"
+        |         "write_keychain_store_terminal_stdin"
         |         "write_repo_script_stdin" => Ok(Value::Null),
 
         other => Err(anyhow::anyhow!("Unknown companion command: {other}").into()),

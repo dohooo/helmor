@@ -470,7 +470,7 @@ export const WorkspaceRowItem = memo(
 						<div className="flex min-w-0 flex-1 items-center gap-2">
 							<WorkspaceAvatar
 								repoIconSrc={row.repoIconSrc}
-								repoInitials={row.repoInitials ?? row.avatar ?? null}
+								repoInitials={row.repoInitials || row.avatar || null}
 								repoName={row.repoName}
 								title={displayTitle}
 								badgeClassName={showStatusDot ? statusDotClassName : null}

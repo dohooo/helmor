@@ -35,9 +35,23 @@ function makeQuery(messages: SDKMessage[]) {
 				yield m;
 			}
 			if (hangAfterScenario && !closed) {
-				await new Promise<void>((resolve) => {
-					releaseHang = resolve;
-				});
+				// The production drain timer is `.unref()`'d so a real 20-min drain
+				// can't block sidecar shutdown. That timer is what fires `q.close()`
+				// to release this hang. But an unref'd timer only fires while the
+				// event loop is otherwise kept alive — and once this iterator parks
+				// there is no other ref'd handle in user space. On macOS/Linux Bun
+				// the timer still fires; on Windows Bun it doesn't, wedging the whole
+				// `bun test` process until the CI job hits its 20-min timeout. Hold a
+				// ref'd heartbeat while parked so the drain timer fires deterministically
+				// on every platform; it's cleared the instant `close()` resolves us.
+				const heartbeat = setInterval(() => {}, 1000);
+				try {
+					await new Promise<void>((resolve) => {
+						releaseHang = resolve;
+					});
+				} finally {
+					clearInterval(heartbeat);
+				}
 			}
 		},
 		close() {

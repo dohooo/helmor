@@ -170,6 +170,7 @@ pub(super) fn stream_via_sidecar(
         helmor_session_id: request.helmor_session_id.as_deref(),
         claude_base_url: model.claude_base_url.as_deref(),
         claude_auth_token: model.claude_auth_token.as_deref(),
+        claude_vertex: model.claude_vertex.as_ref(),
         agent_proxy: agent_proxy.as_ref(),
         claude_thinking_display: claude_thinking_display.as_deref(),
         images: &images_for_wire,

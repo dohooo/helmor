@@ -865,6 +865,8 @@ pub struct ResolvedModel {
     pub supports_effort: bool,
     pub claude_base_url: Option<String>,
     pub claude_auth_token: Option<String>,
+    /// Some → Vertex-type Claude provider; replaces base-url/token injection.
+    pub claude_vertex: Option<crate::provider::claude::ClaudeVertexConfig>,
     pub codex_provider: Option<CodexProviderConfig>,
 }
 
@@ -886,13 +888,18 @@ impl ResolvedModel {
 /// `cursor-` namespace before handing `cli_model` to the SDK.
 pub fn resolve_model(model_id: &str, provider_hint: Option<&str>) -> ResolvedModel {
     if let Some(model) = crate::provider::claude::resolve(model_id) {
+        // Vertex providers authenticate via the vertex env block; plain
+        // base-url/token injection would shadow it (ANTHROPIC_AUTH_TOKEN
+        // outranks apiKeyHelper in the CLI's credential precedence).
+        let is_vertex = model.vertex.is_some();
         return ResolvedModel {
             id: model.id,
             provider: "claude".to_string(),
             cli_model: model.cli_model,
             supports_effort: true,
-            claude_base_url: Some(model.base_url),
-            claude_auth_token: Some(model.api_key),
+            claude_base_url: (!is_vertex).then_some(model.base_url),
+            claude_auth_token: (!is_vertex).then_some(model.api_key),
+            claude_vertex: model.vertex,
             codex_provider: None,
         };
     }
@@ -905,6 +912,7 @@ pub fn resolve_model(model_id: &str, provider_hint: Option<&str>) -> ResolvedMod
             supports_effort: true,
             claude_base_url: None,
             claude_auth_token: None,
+            claude_vertex: None,
             codex_provider: Some(CodexProviderConfig {
                 id: model.instance_id,
                 base_url: model.base_url,
@@ -963,6 +971,7 @@ pub fn resolve_model(model_id: &str, provider_hint: Option<&str>) -> ResolvedMod
         supports_effort: true,
         claude_base_url: None,
         claude_auth_token: None,
+        claude_vertex: None,
         codex_provider: None,
     }
 }
@@ -1038,6 +1047,7 @@ mod tests {
                 cli_model: "MiniMax-M2.7".to_string(),
                 base_url: "https://api.minimax.io/anthropic".to_string(),
                 api_key: "sk-test".to_string(),
+                vertex: None,
             }],
             Vec::new(),
             None,
@@ -1264,6 +1274,7 @@ mod tests {
             supports_effort: true,
             claude_base_url: None,
             claude_auth_token: None,
+            claude_vertex: None,
             codex_provider: None,
         };
         assert_eq!(mk("codex").sidecar_provider(), "codex");

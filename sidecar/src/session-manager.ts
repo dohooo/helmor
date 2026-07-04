@@ -33,6 +33,10 @@ export interface SendMessageParams {
 	 *  absent, the manager falls back to its hardcoded default. */
 	readonly claudeThinkingDisplay?: "summarized" | "omitted";
 	readonly claudeEnvironment?: Readonly<Record<string, string>>;
+	/** Per-turn Claude Code settings overrides, forwarded to the CLI as an
+	 *  inline `--settings` JSON (e.g. `apiKeyHelper` for Vertex keychain
+	 *  auth). Only the Claude manager reads it. */
+	readonly claudeSettings?: Readonly<Record<string, string>>;
 	/** Custom Codex provider definition; only the Codex manager reads it. */
 	readonly codexProvider?: CodexProviderConfig;
 	readonly agentProxy?: AgentProxySettings;

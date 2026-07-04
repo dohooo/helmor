@@ -112,6 +112,7 @@ export function parseSendMessageParams(
 			params.claudeThinkingDisplay,
 		),
 		claudeEnvironment: parseOptionalStringRecord(params, "claudeEnvironment"),
+		claudeSettings: parseOptionalStringRecord(params, "claudeSettings"),
 		codexProvider: parseCodexProvider(params, "codexProvider"),
 		agentProxy: parseAgentProxySettings(params, "agentProxy"),
 		additionalDirectories: parseOptionalStringArray(
