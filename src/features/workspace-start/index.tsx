@@ -484,7 +484,15 @@ export function WorkspaceStartPage({
 								? "min-h-0 flex-1"
 								: previewCard
 									? "pointer-events-none h-0 translate-y-2 opacity-0"
-									: "h-10 translate-y-0 opacity-100",
+									: repositories.length === 0
+										? // R4 Gate2 fix: the no-repo guide wraps to two
+											// lines at normal window widths — a fixed h-10 +
+											// overflow-hidden clipped the second line ("or
+											// just chat."), hiding the legal chat path. Let
+											// ONLY this branch grow; all other branches keep
+											// the original fixed height.
+											"h-auto min-h-10 translate-y-0 opacity-100"
+										: "h-10 translate-y-0 opacity-100",
 						)}
 					>
 						<div
@@ -492,6 +500,12 @@ export function WorkspaceStartPage({
 								"absolute flex items-center gap-x-2 whitespace-nowrap text-center font-semibold leading-tight tracking-normal text-foreground transition-[left,transform,font-size] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
 								"left-1/2 -translate-x-1/2 text-[24px]",
 								composerAtBottom ? "top-1/2 -translate-y-1/2" : "top-0",
+								// R4 Gate2 fix (see container above): flow-position the
+								// guide so its wrapped height actually sizes the parent.
+								repositories.length === 0 &&
+									!composerAtBottom &&
+									!previewCard &&
+									"static w-full translate-x-0 justify-center",
 							)}
 						>
 							{repositories.length === 0 ? (
