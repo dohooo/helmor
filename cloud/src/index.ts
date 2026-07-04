@@ -267,24 +267,17 @@ export class Sandbox extends CloudflareSandbox<Env> {
 						localBucket: true,
 						name: `helmor-idle-${new Date().toISOString()}`,
 						ttl: 259200, // 3 days
-						excludes: [
-							"workspaces",
-							"cache",
-							"logs",
-							"run",
-							"local-llm",
-							// R2-F4a: the relocated provider homes carry session
-							// THREADS (which are the point of this backup) plus
-							// heavy non-thread noise — exclude the noise to guard
-							// the 15s backup budget (globs, per the SDK contract).
-							".claude/telemetry",
-							".claude/downloads",
-							".claude/paste-cache",
-							".claude/shell-snapshots",
-							".claude/file-history",
-							".codex/worktrees",
-							".codex/logs*",
-						],
+						// R2-F4a POST-MORTEM: keep this list IDENTICAL to
+						// backupAndStore's. Nested "dir/sub" exclude patterns made
+						// mksquashfs drop the ENTIRE .claude tree from idle backups
+						// (verified by archive autopsy: the idle backup with nested
+						// globs had no .claude at all, while the post-turn backup
+						// with only these five top-level names carried the threads)
+						// — which silently defeated the provider-state relocation.
+						// Archives stay small (~75KB with threads); if provider
+						// noise ever threatens the 15s budget, prune it container-
+						// side instead of risking this exclude semantics again.
+						excludes: ["workspaces", "cache", "logs", "run", "local-llm"],
 					});
 					await writeBackupHandle(this.helmorEnv, handle);
 					// F-5 boundary, observable in `wrangler tail`: the idle path
