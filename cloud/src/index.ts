@@ -267,7 +267,24 @@ export class Sandbox extends CloudflareSandbox<Env> {
 						localBucket: true,
 						name: `helmor-idle-${new Date().toISOString()}`,
 						ttl: 259200, // 3 days
-						excludes: ["workspaces", "cache", "logs", "run", "local-llm"],
+						excludes: [
+							"workspaces",
+							"cache",
+							"logs",
+							"run",
+							"local-llm",
+							// R2-F4a: the relocated provider homes carry session
+							// THREADS (which are the point of this backup) plus
+							// heavy non-thread noise — exclude the noise to guard
+							// the 15s backup budget (globs, per the SDK contract).
+							".claude/telemetry",
+							".claude/downloads",
+							".claude/paste-cache",
+							".claude/shell-snapshots",
+							".claude/file-history",
+							".codex/worktrees",
+							".codex/logs*",
+						],
 					});
 					await writeBackupHandle(this.helmorEnv, handle);
 					// F-5 boundary, observable in `wrangler tail`: the idle path
@@ -1373,6 +1390,18 @@ export async function ensureServe(
 				// RISK-2). /root is root's home (matches start-serve.sh's fallback),
 				// so today's behavior is unchanged, just made deterministic.
 				HOME: "/root",
+				// R2-F4a: provider SESSION STATE must live inside the backed-up
+				// /home/helmor tree, or every idle-sleep destroys the threads and
+				// the next same-thread turn fails with "empty response" (the
+				// resume finds nothing — R2-F4, same root cause as R2-F3).
+				// Both vars are first-class in their CLIs and already honored by
+				// start-serve.sh's seeding paths: the codex auth.json write uses
+				// $CODEX_HOME, and the Claude onboarding seed writes
+				// `$CLAUDE_CONFIG_DIR/.claude.json`. HOME stays pinned to /root —
+				// the VERIFIED auth env semantics (§2.6) are unchanged; only the
+				// per-thread state relocates.
+				CLAUDE_CONFIG_DIR: "/home/helmor/.claude",
+				CODEX_HOME: "/home/helmor/.codex",
 				// Claude Code refuses --dangerously-skip-permissions as root
 				// (getuid()===0) UNLESS IS_SANDBOX=1 (binary guard, VERIFIED 2.1.x:
 				// `getuid()===0 && IS_SANDBOX!=="1" && !CLAUDE_CODE_BUBBLEWRAP`). The

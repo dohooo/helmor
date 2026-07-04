@@ -39,6 +39,13 @@ fi
 # boot.sh both honor this default so they share ONE database.
 export HELMOR_DATA_DIR="${HELMOR_DATA_DIR:-/home/helmor}"
 
+# R2-F4a: provider session state lives under the backed-up data dir so threads
+# survive idle-sleep (backup→restore). The Worker sets the same values in
+# startProcess env; these defaults keep the boot.sh path identical. HOME stays
+# /root — only per-thread state relocates (auth env semantics unchanged).
+export CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-${HELMOR_DATA_DIR}/.claude}"
+export CODEX_HOME="${CODEX_HOME:-${HELMOR_DATA_DIR}/.codex}"
+
 # Cloud workflow closure (PR6): commit + push each finished agent turn so the
 # ephemeral sandbox disk never loses code. On by default in the container.
 export HELMOR_CLOUD_AUTOPUSH="${HELMOR_CLOUD_AUTOPUSH:-1}"
