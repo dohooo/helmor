@@ -2,4 +2,4 @@
 "helmor": patch
 ---
 
-Update the bundled Claude Code, Codex, Cursor, OpenCode, and Kimi coding agents to their latest versions.
+Update the bundled Claude Code, Cursor, and OpenCode coding agents to their latest versions.
