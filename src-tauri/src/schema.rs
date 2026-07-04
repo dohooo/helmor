@@ -1,7 +1,7 @@
 //! Database schema initialization for Helmor.
 //!
-//! Creates all required tables if they don't exist, matching the Conductor
-//! schema for data compatibility.
+//! Creates all required tables if they don't exist, matching Helmor's
+//! current schema.
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
@@ -299,6 +299,44 @@ fn backfill_chat_workspace_frozen_names(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Startup reconcile for stacks whose base merged under an older build, before
+/// merge-time splicing existed. Every workspace still stacked on a merged layer
+/// is spliced out via the shared write-layer primitive
+/// [`crate::models::workspaces::splice_out_stack_layer`], re-homing its
+/// children onto the nearest surviving base — the exact end state a live merge
+/// now produces. Iterating over *all* merged layers converges even for chained
+/// merges (a child of a merged layer always ends on a non-merged ancestor or
+/// the repo default). Idempotent: once every merged layer is childless it's a
+/// no-op, so this can run on every startup like the backfill above.
+fn heal_children_of_merged_stack_layers(connection: &Connection) -> Result<()> {
+    if !has_table(connection, "workspaces")
+        || !has_column(connection, "workspaces", "parent_workspace_id")
+        || !has_column(connection, "workspaces", "pr_sync_state")
+    {
+        return Ok(());
+    }
+    let merged_layers: Vec<String> = {
+        let mut stmt = connection
+            .prepare("SELECT id FROM workspaces WHERE pr_sync_state = 'merged'")
+            .context("Failed to prepare merged-layer query")?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .context("Failed to query merged layers")?;
+        rows.collect::<rusqlite::Result<Vec<String>>>()
+            .context("Failed to read merged layers")?
+    };
+    // Splice directly on `connection` rather than opening our own transaction:
+    // `ensure_schema` / `run_migrations` can run inside a caller's transaction,
+    // where an `unchecked_transaction()` here would fail with "cannot start a
+    // transaction within a transaction". Each splice is a single idempotent
+    // UPDATE, so a crash mid-loop just heals on the next run.
+    for layer_id in &merged_layers {
+        crate::models::workspaces::splice_out_stack_layer(connection, layer_id)
+            .with_context(|| format!("Failed to splice merged stack layer {layer_id}"))?;
+    }
+    Ok(())
+}
+
 fn run_migrations(connection: &Connection) -> Result<()> {
     // Migration: rename claude_session_id → provider_session_id (supports any agent provider)
     let has_old_column: bool = connection
@@ -566,8 +604,7 @@ fn run_migrations(connection: &Connection) -> Result<()> {
     // creation. Default 1 (on) — preserves the pre-feature behavior for
     // existing repos and is the most common case. Users opt out per-repo
     // when they prefer to run setup manually from the inspector.
-    // Nullable so the conductor-import path (which copies rows without
-    // specifying this column) can leave it NULL; reads treat NULL as on.
+    // Nullable for legacy rows; reads treat NULL as on.
     if has_table(connection, "repos") && !has_column(connection, "repos", "auto_run_setup") {
         connection
             .execute_batch("ALTER TABLE repos ADD COLUMN auto_run_setup INTEGER DEFAULT 1")
@@ -661,6 +698,13 @@ fn run_migrations(connection: &Connection) -> Result<()> {
     // children are touched.
     backfill_stacked_target_branches(connection)
         .context("Failed to backfill stacked-PR target branches")?;
+
+    // A stacked base that merged under an older build never spliced its children
+    // out (merge-time splicing is newer). Re-home any workspace still stacked on
+    // a merged layer so its parent/target point past the merged base — the same
+    // end state a live merge now produces.
+    heal_children_of_merged_stack_layers(connection)
+        .context("Failed to heal children of merged stack layers")?;
 
     let had_workspace_status =
         has_table(connection, "workspaces") && has_column(connection, "workspaces", "status");
@@ -871,9 +915,8 @@ fn run_migrations(connection: &Connection) -> Result<()> {
 
     // Workspace `mode`: 'worktree' (existing — own dir, own branch) or
     // 'local' (operates on the source repo's root, no separate worktree).
-    // Nullable + COALESCE'd at read sites so the conductor import flow
-    // (which copies columns directly without applying NOT NULL defaults)
-    // keeps working — NULL is treated as 'worktree' on read.
+    // Nullable + COALESCE'd at read sites for legacy rows — NULL is treated
+    // as 'worktree' on read.
     if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "mode") {
         connection
             .execute_batch("ALTER TABLE workspaces ADD COLUMN mode TEXT DEFAULT 'worktree'")
@@ -1509,6 +1552,97 @@ mod tests {
             target_of(&connection, "orphan").as_deref(),
             Some("stale-base")
         );
+    }
+
+    fn parent_of(connection: &Connection, id: &str) -> Option<String> {
+        connection
+            .query_row(
+                "SELECT parent_workspace_id FROM workspaces WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn heal_splices_children_off_a_merged_base() {
+        let (connection, _dir) = open_test_db();
+        ensure_schema(&connection).unwrap();
+
+        // root(bottom) -> mid -> tip; the bottom's PR is already merged.
+        insert_ws(&connection, "root", "feat/root", Some("main"), None);
+        insert_ws(
+            &connection,
+            "mid",
+            "feat/mid",
+            Some("feat/root"),
+            Some("root"),
+        );
+        insert_ws(
+            &connection,
+            "tip",
+            "feat/tip",
+            Some("feat/mid"),
+            Some("mid"),
+        );
+        connection
+            .execute(
+                "UPDATE workspaces SET pr_sync_state = 'merged' WHERE id = 'root'",
+                [],
+            )
+            .unwrap();
+
+        heal_children_of_merged_stack_layers(&connection).unwrap();
+
+        // mid detaches to a root: it no longer points at the merged root, and
+        // its target falls back to "main" (this fixture has no `repos` row, so
+        // the repo-default lookup misses — the real default_branch path is
+        // covered by the models-layer test).
+        assert_eq!(parent_of(&connection, "mid"), None);
+        assert_eq!(target_of(&connection, "mid").as_deref(), Some("main"));
+
+        // tip is untouched: still stacked on mid, still targeting mid's branch.
+        assert_eq!(parent_of(&connection, "tip").as_deref(), Some("mid"));
+        assert_eq!(target_of(&connection, "tip").as_deref(), Some("feat/mid"));
+
+        // The merged root itself survives as a standalone row.
+        assert_eq!(parent_of(&connection, "root"), None);
+
+        // Idempotent: a second pass changes nothing.
+        heal_children_of_merged_stack_layers(&connection).unwrap();
+        assert_eq!(parent_of(&connection, "mid"), None);
+        assert_eq!(target_of(&connection, "tip").as_deref(), Some("feat/mid"));
+    }
+
+    #[test]
+    fn heal_runs_inside_an_ambient_transaction_without_nesting() {
+        // Regression: `ensure_schema` / `run_migrations` can run inside a
+        // caller's transaction. The heal must NOT open its own transaction, or it
+        // aborts with "cannot start a transaction within a transaction".
+        let (connection, _dir) = open_test_db();
+        ensure_schema(&connection).unwrap();
+        insert_ws(&connection, "root", "feat/root", Some("main"), None);
+        insert_ws(
+            &connection,
+            "mid",
+            "feat/mid",
+            Some("feat/root"),
+            Some("root"),
+        );
+        connection
+            .execute(
+                "UPDATE workspaces SET pr_sync_state = 'merged' WHERE id = 'root'",
+                [],
+            )
+            .unwrap();
+
+        // Mirror the import flow: a transaction is already open on this conn.
+        connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+        heal_children_of_merged_stack_layers(&connection).unwrap();
+        connection.execute_batch("COMMIT").unwrap();
+
+        assert_eq!(parent_of(&connection, "mid"), None);
+        assert_eq!(target_of(&connection, "mid").as_deref(), Some("main"));
     }
 
     #[test]

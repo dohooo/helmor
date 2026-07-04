@@ -366,6 +366,16 @@ pub async fn refresh_workspace_change_request(
     if outcome.transitioned_to_merged {
         crate::workspace::archive::try_auto_archive_after_merge(&app, &workspace_id);
     }
+    // A merged layer's stacked children were re-homed onto its base; refresh
+    // each so the sidebar re-nests and the child's header retargets.
+    for child_id in &outcome.retargeted_children {
+        ui_sync::publish(
+            &app,
+            UiMutationEvent::WorkspaceChanged {
+                workspace_id: child_id.clone(),
+            },
+        );
+    }
     Ok(result)
 }
 
@@ -436,6 +446,16 @@ async fn run_change_request_action(
     }
     if outcome.transitioned_to_merged {
         crate::workspace::archive::try_auto_archive_after_merge(&app, &workspace_id);
+    }
+    // A merged layer's stacked children were re-homed onto its base; refresh
+    // each so the sidebar re-nests and the child's header retargets.
+    for child_id in &outcome.retargeted_children {
+        ui_sync::publish(
+            &app,
+            UiMutationEvent::WorkspaceChanged {
+                workspace_id: child_id.clone(),
+            },
+        );
     }
     Ok(result)
 }

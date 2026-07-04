@@ -263,6 +263,13 @@ pub fn repo_icon_src_for_root_path(root_path: Option<&str>) -> Option<String> {
     let data_uri = icon_path.as_deref().and_then(|path| {
         let mime_type = repo_icon_mime_type(Path::new(path));
         let bytes = fs::read(path).ok()?;
+        // A 0-byte icon file (e.g. the empty `public/favicon.ico` placeholder
+        // scaffolded API repos ship) would otherwise become a valid-looking but
+        // image-less `data:` URI — the frontend can't render it and the avatar
+        // ends up blank. Treat it as "no icon" so the UI falls back to initials.
+        if bytes.is_empty() {
+            return None;
+        }
         Some(format!(
             "data:{mime_type};base64,{}",
             BASE64_STANDARD.encode(bytes)
@@ -1365,6 +1372,22 @@ mod tests {
 
         assert!(repo_icon_src_for_root_path(Some(&root_str)).is_none());
         // Second call exercises the negative-cache path.
+        assert!(repo_icon_src_for_root_path(Some(&root_str)).is_none());
+    }
+
+    #[test]
+    fn repo_icon_src_returns_none_for_empty_icon_file() {
+        // A matched-but-empty icon file (e.g. a 0-byte `public/favicon.ico`
+        // placeholder) must NOT produce a blank `data:` URI — the avatar has to
+        // fall back to initials instead of rendering nothing.
+        let dir = tempfile::tempdir().unwrap();
+        let root_str = dir.path().to_str().unwrap().to_string();
+
+        fs::create_dir_all(dir.path().join("public")).unwrap();
+        fs::write(dir.path().join("public/favicon.ico"), b"").unwrap();
+
+        assert!(repo_icon_src_for_root_path(Some(&root_str)).is_none());
+        // Second call exercises the cached path.
         assert!(repo_icon_src_for_root_path(Some(&root_str)).is_none());
     }
 

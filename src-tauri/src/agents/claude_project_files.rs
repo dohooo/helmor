@@ -5,7 +5,7 @@
 //! optional sibling directory `<provider_session_id>/` that holds tool
 //! results, subagent transcripts, etc. The encoded directory is derived
 //! from the cwd, so any operation that changes a workspace's cwd
-//! (Conductor import, local→worktree conversion, etc.) makes existing
+//! (local→worktree conversion, etc.) makes existing
 //! sessions invisible to a `resume:` call until we copy the files into
 //! the new project dir.
 
@@ -142,10 +142,10 @@ mod tests {
 
     #[test]
     fn encode_project_dir_replaces_slashes_and_dots() {
-        let path = PathBuf::from("/Users/me/conductor/workspaces/repo/ws");
+        let path = PathBuf::from("/Users/me/old-app/workspaces/repo/ws");
         assert_eq!(
             encode_project_dir(&path),
-            "-Users-me-conductor-workspaces-repo-ws"
+            "-Users-me-old-app-workspaces-repo-ws"
         );
 
         let path2 = PathBuf::from("/Users/me/helmor-dev/workspaces/repo/ws");

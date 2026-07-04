@@ -21,6 +21,8 @@ pub struct BuildSendMessageParamsInput<'a> {
     pub helmor_session_id: Option<&'a str>,
     pub claude_base_url: Option<&'a str>,
     pub claude_auth_token: Option<&'a str>,
+    /// Vertex-type Claude provider; `Some` replaces base-url/token injection.
+    pub claude_vertex: Option<&'a crate::provider::claude::ClaudeVertexConfig>,
     pub agent_proxy: Option<&'a Value>,
     /// Forwarded as `claudeThinkingDisplay` to the sidecar. Expected
     /// values: `"summarized"` or `"omitted"`. Omitted from the wire
@@ -90,6 +92,11 @@ pub fn build_send_message_params(input: BuildSendMessageParamsInput<'_>) -> Valu
             );
         }
     }
+    if let Some(vertex) = input.claude_vertex {
+        if let Some(obj) = params.as_object_mut() {
+            insert_vertex_params(obj, vertex);
+        }
+    }
     if let Some(proxy) = input.agent_proxy {
         if let Some(obj) = params.as_object_mut() {
             obj.insert("agentProxy".to_string(), proxy.clone());
@@ -110,6 +117,57 @@ pub fn build_send_message_params(input: BuildSendMessageParamsInput<'_>) -> Valu
         }
     }
     params
+}
+
+/// Vertex-type providers: the gateway holds the GCP credentials
+/// (`CLAUDE_CODE_SKIP_VERTEX_AUTH`); Claude Code authenticates to the
+/// gateway itself via `ANTHROPIC_AUTH_TOKEN` (token mode) or an
+/// `apiKeyHelper` reading the macOS Keychain (keychain mode). The helper
+/// goes out as `claudeSettings` — the sidecar forwards it to the CLI as an
+/// inline `--settings` JSON — because `apiKeyHelper` is a settings key,
+/// not an env var. Token mode must NOT also set an apiKeyHelper (env token
+/// outranks the helper in the CLI's credential precedence).
+fn insert_vertex_params(
+    obj: &mut serde_json::Map<String, Value>,
+    vertex: &crate::provider::claude::ClaudeVertexConfig,
+) {
+    use crate::provider::claude::ClaudeVertexAuth;
+
+    let mut env = serde_json::Map::new();
+    let mut set = |k: &str, v: &str| {
+        env.insert(k.to_string(), Value::from(v));
+    };
+    set("CLAUDE_CODE_USE_VERTEX", "1");
+    set("CLAUDE_CODE_SKIP_VERTEX_AUTH", "1");
+    set("ANTHROPIC_VERTEX_BASE_URL", &vertex.base_url);
+    if !vertex.project_id.is_empty() {
+        set("ANTHROPIC_VERTEX_PROJECT_ID", &vertex.project_id);
+    }
+    set(
+        "CLOUD_ML_REGION",
+        if vertex.region.is_empty() {
+            "global"
+        } else {
+            &vertex.region
+        },
+    );
+    match &vertex.auth {
+        ClaudeVertexAuth::Token(token) => set("ANTHROPIC_AUTH_TOKEN", token),
+        ClaudeVertexAuth::Keychain { service, account } => {
+            // Quoted for the system shell — the CLI runs apiKeyHelper via `sh`.
+            obj.insert(
+                "claudeSettings".to_string(),
+                serde_json::json!({
+                    "apiKeyHelper": format!(
+                        "security find-generic-password -s {} -a {} -w",
+                        crate::platform::shell::quote_posix_arg(service),
+                        crate::platform::shell::quote_posix_arg(account),
+                    ),
+                }),
+            );
+        }
+    }
+    obj.insert("claudeEnvironment".to_string(), Value::Object(env));
 }
 
 /// Load the workspace's `/add-dir` list via the helmor session id. Returns

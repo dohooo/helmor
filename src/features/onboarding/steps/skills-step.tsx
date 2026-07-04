@@ -52,12 +52,10 @@ export function SkillsStep({
 	step,
 	onBack,
 	onNext,
-	isRoutingImport,
 }: {
 	step: OnboardingStep;
 	onBack: () => void;
 	onNext: () => void;
-	isRoutingImport: boolean;
 }) {
 	const { t } = useI18n();
 	const [isInstallingCli, setIsInstallingCli] = useState(true);
@@ -133,7 +131,7 @@ export function SkillsStep({
 					? "translate-x-0 translate-y-0 opacity-100"
 					: step === "repoImport"
 						? "pointer-events-none translate-x-0 translate-y-0 opacity-0"
-						: step === "conductorTransition" || step === "completeTransition"
+						: step === "completeTransition"
 							? "pointer-events-none scale-[1.08] opacity-0 blur-sm"
 							: "pointer-events-none -translate-x-[118vw] translate-y-[55vh] opacity-100"
 			}`}
@@ -191,7 +189,6 @@ Commands:
   models       List available AI models
   github       GitHub integration - auth, PR lookup, merge
   scripts      Inspect repo-level setup/run/archive scripts
-  conductor    Migrate from Helmor v1 (Conductor)
   completions  Shell completion scripts
   cli-status   Report whether ${ONBOARDING_CLI_NAME} is installed to PATH
   quit         Ask a running Helmor app to quit
@@ -256,7 +253,6 @@ Options:
 						type="button"
 						size="lg"
 						onClick={onNext}
-						disabled={isRoutingImport}
 						className="h-11 gap-2 px-4 text-title"
 					>
 						<I18nText source="next" />

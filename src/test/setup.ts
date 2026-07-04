@@ -286,8 +286,6 @@ vi.mock("@tauri-apps/api/core", () => ({
 				return "";
 			case "drain_pending_cli_sends":
 				return [];
-			case "conductor_source_available":
-				return false;
 			case "detect_installed_editors":
 				return [];
 			default:

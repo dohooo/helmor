@@ -20,9 +20,17 @@ export type CustomProvider = {
 	baseUrl: string;
 	apiKey: string;
 	/** Wire protocol / API style. OpenCode: "chat" | "responses". Kimi:
-	 *  "openai" | "openai_responses" | "anthropic" | "kimi". Interpreted by the
-	 *  family's backend. */
+	 *  "openai" | "openai_responses" | "anthropic" | "kimi". Claude:
+	 *  "anthropic" (default) | "vertex". Interpreted by the family's backend. */
 	apiStyle?: string;
+	/** Vertex-type Claude providers (`apiStyle === "vertex"`) only. */
+	vertexProjectId?: string;
+	/** CLOUD_ML_REGION; empty → "global". */
+	vertexRegion?: string;
+	/** "token" (default — `apiKey` holds the gateway token) | "keychain".
+	 *  Keychain item names are fixed: service `helmor-anthropic-auth-token`,
+	 *  account = provider id. */
+	vertexAuthMode?: string;
 	headers?: Record<string, string>;
 	models: CustomProviderModel[];
 	/** Codex: per-provider enabled models (`null` = all). Merged families: unused. */

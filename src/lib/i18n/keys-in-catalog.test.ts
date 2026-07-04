@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import en from "./locales/en.json";
@@ -25,6 +25,7 @@ function usedKeys(): { key: string; loc: string }[] {
 		.filter(
 			(f) =>
 				f &&
+				existsSync(f) &&
 				!f.includes(".test.") &&
 				!f.startsWith("src/lib/i18n/") &&
 				!f.includes("/mockup/"),

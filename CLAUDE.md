@@ -55,7 +55,7 @@ Feature-based layout. Each feature folder follows: `index.tsx` (main) + `contain
 | `features/inspector/` | Right-side inspector (actions, changes sections). |
 | `features/navigation/` | Sidebar workspace groups. |
 | `features/commit/` | Commit button + lifecycle hook. |
-| `features/settings/` | Settings dialog + panels (CLI install, repo settings, Conductor import). |
+| `features/settings/` | Settings dialog + panels (CLI install, repo settings). |
 | `shell/` | Top-level layout, GitHub identity gate, panel resize hooks. State management now delegated to focused hooks in `shell/hooks/` (e.g. `use-app-shell-state.tsx`, `use-selection-controllers.ts`) — App.tsx refactored from 1976 to 18 lines to improve re-render isolation. All files < 300 lines. |
 | `components/ai/` | AI-specific components (code block, file tree, reasoning). |
 | `components/ui/` | shadcn/ui primitives (base-nova). |
@@ -68,7 +68,7 @@ Feature-based layout. Each feature folder follows: `index.tsx` (main) + `contain
 | Module | Role |
 | --- | --- |
 | `lib.rs` | Tauri app builder. Registers commands, runs setup hook. |
-| `commands/` | Tauri command handlers split by domain (session, repository, workspace, editor, github, conductor, settings, system). |
+| `commands/` | Tauri command handlers split by domain (session, repository, workspace, editor, github, settings, system). |
 | `agents/` | Agent streaming + persistence (catalog, persistence, queries, streaming, support). |
 | `pipeline/` | Message pipeline: `accumulator/` -> `adapter/` + `collapse` -> `ThreadMessageLike[]`. Includes `event_filter.rs`, `classify.rs`, `types.rs`. |
 | `workspace/` | Workspace operations (branching, lifecycle, helpers) + `files/` sub-module (editor, changes, types). |

@@ -70,8 +70,8 @@ Shell completions: `helmor completions <shell>`.
 
 Other useful subcommands: `helmor session` (inspect conversations),
 `helmor files` (read/write workspace files), `helmor scripts show` (effective
-setup/run/archive scripts), `helmor settings`, `helmor data info`, and
-`helmor conductor` (migration). Each has `--help` with examples.
+setup/run/archive scripts), `helmor settings`, and `helmor data info`.
+Each has `--help` with examples.
 
 ## MCP server
 

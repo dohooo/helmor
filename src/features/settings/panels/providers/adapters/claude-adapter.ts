@@ -19,7 +19,22 @@ export const CLAUDE_ADAPTER: ProviderConfigAdapter = {
 	family: "claude",
 	displayName: "Claude Code",
 	presets: CLAUDE_PRESETS,
-	caps: { baseUrlEditable: true, apiStyleSelectable: false },
+	caps: { baseUrlEditable: true, apiStyleSelectable: true },
+	// Provider kind, not a wire protocol: "vertex" switches the CLI to
+	// Google Vertex AI mode (CLAUDE_CODE_USE_VERTEX) behind an LLM gateway.
+	styleLabel: "providerType",
+	styleOptions: [
+		{
+			value: "anthropic",
+			label: "Anthropic",
+			hint: "anthropicCompatibleEndpoint",
+		},
+		{
+			value: "vertex",
+			label: "Vertex AI",
+			hint: "vertexProviderHint",
+		},
+	],
 	customProvidersDescription: "addThirdPartyAnthropicCompatibleModels",
 	useCustomProviders: () => useSettingsBackedProviders("claude"),
 	fetchModels: (provider) =>

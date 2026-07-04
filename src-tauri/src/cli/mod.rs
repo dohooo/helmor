@@ -7,12 +7,11 @@
 //! # Architecture
 //!
 //! Each command domain gets its own sub-module (`repo`, `workspace`,
-//! `session`, `files`, `send`, `github`, `settings`, `scripts`,
-//! `conductor`, `system`, `data`). Shared helpers live in `output` (JSON
+//! `session`, `files`, `send`, `github`, `settings`, `scripts`, `system`,
+//! `data`). Shared helpers live in `output` (JSON
 //! / human formatting) and `refs` (UUID / name disambiguation).
 
 pub mod args;
-mod conductor;
 mod data;
 mod files;
 mod github;
@@ -158,7 +157,6 @@ fn dispatch(cli: &Cli) -> Result<()> {
         C::Models { action } => send::dispatch_models(action, cli),
         C::Github { action } => github::dispatch(action, cli),
         C::Scripts { action } => scripts::dispatch(action, cli),
-        C::Conductor { action } => conductor::dispatch(action, cli),
         C::Mcp => crate::mcp::run_mcp_server(),
         C::TerminalHook { agent } => terminal_hook::run(agent, cli),
     }

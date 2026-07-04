@@ -175,4 +175,4 @@ compute with `curl … | shasum -a 256` to pin for release.
 ### node (`NODE_VERSION` + `NODE_SHA256{darwin:{arm64,x64}, windows:{arm64,x64}}`)
 The runtime that runs the cursor worker. SHA from `https://nodejs.org/dist/v<ver>/SHASUMS256.txt`
 (rows `node-v<ver>-darwin-{arm64,x64}.tar.gz`, `node-v<ver>-win-{arm64,x64}.zip`). **Pin to the Node
-24 line** to satisfy `@cursor/sdk`'s `>=22.13` engines floor and match Conductor's bundled runtime.
+24 line** to satisfy `@cursor/sdk`'s `>=22.13` engines floor and match the bundled worker runtime.
