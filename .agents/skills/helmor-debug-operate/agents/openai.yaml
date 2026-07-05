@@ -1,0 +1,4 @@
+interface:
+  display_name: "Helmor Debug Operations"
+  short_description: "Operate and debug Helmor dev builds through Tauri MCP."
+  default_prompt: "Use $helmor-debug-operate to operate the local Helmor dev build through Tauri MCP and verify the UI flow."

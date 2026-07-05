@@ -1,0 +1,4 @@
+interface:
+  display_name: "Helmor Debug Loop"
+  short_description: "Autonomous Helmor local-dev bug loop."
+  default_prompt: "Use $helmor-debug-loop to reproduce, instrument, inspect, fix, and verify a Helmor local-dev bug."

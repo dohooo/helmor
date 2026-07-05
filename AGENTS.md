@@ -190,6 +190,14 @@ Terminal Mode is a composer toggle (settings opt-in) that sends prompts directly
 
 > **Hard rule:** Use the Tauri MCP bridge (`tauri-plugin-mcp-bridge`) only. No `chrome-devtools` MCP, no `/agent-browser`. Helmor runs in Tauri webview only.
 
+### Skill routing
+
+When the user asks to use Tauri MCP (including misspellings like "towery MCP"), debug the local dev build, simulate user actions, switch workspaces/sessions, type or send composer text, inspect the webview, take screenshots, trace IPC, or run visual end-to-end checks against Helmor, first use the project skill `helmor-debug-operate` (`.agents/skills/helmor-debug-operate/SKILL.md`). Treat it as the operation manual for controlling the local desktop build. Use `helmor-cli` instead only for terminal-first data/workspace automation where the UI is not under test.
+
+When the user asks for an autonomous local-dev bug loop, repeated reproduction, temporary logging/instrumentation, self-directed debugging, or "fix and verify through the app", first use `helmor-debug-loop` (`.agents/skills/helmor-debug-loop/SKILL.md`). That loop skill must use `helmor-debug-operate` for all Tauri MCP app operations and must explicitly handle `not reproduced`, `flaky`, and `blocked` outcomes rather than pretending a reproduction succeeded.
+
+The Helmor local-dev debug skill is a prompt, not a source of truth. It can be stale if the local UI changed without the skill being updated. If a skill recipe fails three times, stop repeating it mechanically: take fresh screenshots/snapshots, reason from the visible UI, and inspect the relevant source code if needed. If you discover a better path, missing pitfall, stale selector, or unverified workaround, record a candidate update under `.agent-contexts/<task-slug>/skill-update-candidates.md` with evidence and verification status, then ask the user for confirmation before editing the skill unless the current user request explicitly asks you to update it.
+
 ### Prerequisites
 
 1. **Debug build only.** MCP bridge is behind `#[cfg(debug_assertions)]`. Always `bun run dev`.
@@ -201,7 +209,7 @@ Terminal Mode is a composer toggle (settings opt-in) that sends prompts directly
 - **UI state**: `webview_screenshot` -> `webview_dom_snapshot type=accessibility` (prefer ref IDs for follow-ups)
 - **User input**: `webview_interact` + `webview_keyboard`. Never dispatch synthetic events via `webview_execute_js`.
 - **IPC tracing**: `ipc_monitor start` -> trigger flow -> `ipc_get_captured filter=<cmd>` -> `ipc_monitor stop`. Always stop when done.
-- **Direct backend call**: `ipc_execute_command command=... args=...` to bypass frontend.
+- **Direct backend call**: do not use Tauri MCP `ipc_execute_command` for Helmor app commands; current bridge dynamic command execution returns `Unsupported Tauri command`. Use `helmor-debug-operate`'s click-triggered **Call App Commands** helper, or drive the UI.
 - **Async waits**: `webview_wait_for type=ipc-event value=<event>` for streaming/pipeline events.
 - **Console/system logs**: `read_logs source=console` or `source=system filter=helmor`.
 - **JS eval**: `webview_execute_js script="(() => <expr>)()"` (IIFE, JSON-serializable return). Cannot see React state.
