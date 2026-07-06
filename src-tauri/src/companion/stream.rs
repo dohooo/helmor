@@ -44,6 +44,40 @@ pub fn build_stream_starter(app: tauri::AppHandle) -> StreamStarter {
     )
 }
 
+/// DF-4: run a turn/post command and surface a failure as a TYPED terminal
+/// error event on the NDJSON body — never a silent 200 empty stream.
+///
+/// The dispatched commands (`send_agent_message_stream`,
+/// `post_room_chat_message`) return `Err` from ENTRY validation (empty
+/// prompt, provider/model mismatch, workingDirectory resolution, non-UUID
+/// `clientMessageId` — R2-F2) before any stream event is emitted. On the
+/// desktop these surface through the invoke rejection; on the companion
+/// transport the response headers (200, x-ndjson) have already left, so the
+/// WP2 "a failed stream must carry a terminal error event" contract requires
+/// the error to travel IN-BAND. `persisted: false` (nothing was written) and
+/// `internal: false` (entry validation is actionable, show the message).
+async fn run_and_surface<F>(tx: UnboundedSender<String>, label: &'static str, command: F)
+where
+    F: std::future::Future<Output = Result<(), CommandError>>,
+{
+    let Err(error) = command.await else { return };
+    tracing::warn!(error = %format!("{error:?}"), "companion {label} failed");
+    let event = AgentStreamEvent::Error {
+        message: format!("{error:?}"),
+        persisted: false,
+        internal: false,
+    };
+    match serde_json::to_string(&event) {
+        Ok(line) => {
+            // Receiver gone (client disconnected) just drops the line.
+            let _ = tx.send(line);
+        }
+        Err(serialize_error) => {
+            tracing::error!(error = %serialize_error, "failed to serialize terminal error event");
+        }
+    }
+}
+
 /// A Tauri `Channel<T>` whose every message is forwarded as one NDJSON line.
 fn ndjson_channel<T>(tx: UnboundedSender<String>) -> Channel<T> {
     Channel::new(move |body: InvokeResponseBody| {
@@ -104,11 +138,13 @@ fn start_room_chat(
         // itself doesn't stream events over this channel — the Update goes to
         // the hub — but dropping _channel before the task completes would close
         // tx and signal the HTTP response body as finished prematurely.
-        let _channel = ndjson_channel::<AgentStreamEvent>(tx);
-        let hub = app.state::<SessionStreamHub>();
-        if let Err(error) = agents::post_room_chat_message(app.clone(), request, hub).await {
-            tracing::warn!(error = %format!("{error:?}"), "companion room-chat failed");
-        }
+        let _channel = ndjson_channel::<AgentStreamEvent>(tx.clone());
+        let app_for_command = app.clone();
+        run_and_surface(tx, "room-chat", async move {
+            let hub = app_for_command.state::<SessionStreamHub>();
+            agents::post_room_chat_message(app_for_command.clone(), request, hub).await
+        })
+        .await;
     });
     Ok(())
 }
@@ -121,15 +157,16 @@ fn start_agent_stream(
 ) -> Result<(), CommandError> {
     let request = resolve_request(args, author_id)?;
 
-    let channel = ndjson_channel::<AgentStreamEvent>(tx);
+    let channel = ndjson_channel::<AgentStreamEvent>(tx.clone());
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let sidecar = app.state::<ManagedSidecar>();
-        if let Err(error) =
-            agents::send_agent_message_stream(app.clone(), sidecar, request, channel).await
-        {
-            tracing::warn!(error = %format!("{error:?}"), "companion agent stream failed");
-        }
+        let app_for_command = app.clone();
+        run_and_surface(tx, "agent stream", async move {
+            let sidecar = app_for_command.state::<ManagedSidecar>();
+            agents::send_agent_message_stream(app_for_command.clone(), sidecar, request, channel)
+                .await
+        })
+        .await;
     });
     Ok(())
 }
@@ -190,6 +227,54 @@ fn start_session_stream_subscription(
             .unsubscribe(&session_id, &subscription_id);
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod run_and_surface_tests {
+    use super::run_and_surface;
+    use crate::error::CommandError;
+
+    /// DF-4 anchor: a command failure becomes exactly ONE typed terminal
+    /// error line on the NDJSON body — the WP2 contract at the entry layer.
+    /// The entry validations themselves are unit-anchored at their sources
+    /// (non-UUID clientMessageId in `agents::tests` for R2-F2,
+    /// workingDirectory resolution in `agents::support::tests`).
+    #[tokio::test]
+    async fn err_command_emits_exactly_one_typed_terminal_error_line() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+        run_and_surface(tx, "agent stream", async {
+            Err(CommandError::from(anyhow::anyhow!(
+                "workingDirectory is required but was not provided"
+            )))
+        })
+        .await;
+
+        let line = rx.try_recv().expect("terminal error line must be emitted");
+        let event: serde_json::Value = serde_json::from_str(&line).expect("line is one JSON event");
+        assert_eq!(event["kind"], "error");
+        assert_eq!(event["persisted"], false);
+        assert_eq!(event["internal"], false);
+        assert!(
+            event["message"]
+                .as_str()
+                .unwrap()
+                .contains("workingDirectory is required"),
+            "error event must name the cause, got {event}"
+        );
+        // Exactly one line, then the channel closes (tx dropped) → body EOF.
+        assert!(
+            rx.try_recv().is_err(),
+            "no extra lines after the terminal error"
+        );
+    }
+
+    #[tokio::test]
+    async fn ok_command_emits_nothing() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        run_and_surface(tx, "room-chat", async { Ok(()) }).await;
+        assert!(rx.try_recv().is_err(), "success path adds no lines");
+    }
 }
 
 #[cfg(test)]
