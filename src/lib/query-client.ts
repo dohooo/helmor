@@ -49,7 +49,7 @@ import {
 } from "./api";
 // Routed through the transport shim so query-cache persistence works in the
 // mobile browser companion too (not just the Tauri webview).
-import { isCompanionAsleepError } from "./companion-asleep";
+import { isAsleepPayload, isCompanionAsleepError } from "./companion-asleep";
 import { invoke } from "./ipc";
 import { parsePrUrl } from "./pr-url";
 // Lazy-cycle-safe: session-thread-cache imports `helmorQueryKeys` from this
@@ -233,8 +233,19 @@ export function createHelmorQueryClient() {
 				// Opt-in persistence: keep default's `status === "success"`
 				// gate and require an explicit `meta: { persist: true }` on
 				// the query. Default = in-memory only.
+				// R3-A (live-verified): while the sandbox sleeps, persisted list
+				// queries sit in `error` state (typed asleep, retry off) while
+				// still HOLDING their last-known data. The success-only gate made
+				// the periodic persister rewrite drop them from the disk bucket —
+				// so the next cold boot against a sleeping backend showed an
+				// EMPTY sidebar with no way to wake anything. Keep asleep-errored
+				// queries with data in the bucket (isAsleepPayload also matches
+				// the plain-object error a hydrate round-trip leaves behind).
 				shouldDehydrateQuery: (query) =>
-					query.state.status === "success" && query.meta?.persist === true,
+					query.meta?.persist === true &&
+					(query.state.status === "success" ||
+						(query.state.data !== undefined &&
+							isAsleepPayload(query.state.error))),
 			},
 		},
 	});
