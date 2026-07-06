@@ -141,14 +141,28 @@ export class Sandbox extends CloudflareSandbox<Env> {
 			decrementInflight?: () => void;
 		};
 		if (!internals.container?.running) {
-			return new Response("Container is not running", { status: 503 });
+			// R3-A typed asleep: only reached without a preceding ensureServe (a
+			// wake-intent request cold-starts first), so a sleeping container
+			// answers with the structured shape the frontend treats as "keep
+			// showing last-known data" — never a wake, never an error dialog.
+			return containerAsleepResponse();
 		}
+
+		// R3-A gate 2 (renew): only requests that explicitly declared wake
+		// intent may renew the idle timer — at request start AND through the
+		// streaming progress tap below. Unmarked (PASSIVE) traffic is forwarded
+		// but leaves the countdown untouched, so an open watch stream (with its
+		// 30s keepalives) no longer keeps the container awake forever. Inflight
+		// accounting stays IDENTICAL for both (F-4 leak protection unchanged —
+		// `isActivityExpired` ignores inflight; the bookkeeping is diagnostics
+		// + the no-progress watchdog still settles corpse pipes).
+		const wakeIntent = request.headers.get(WAKE_INTENT_HEADER) === "1";
 
 		const tcpPort = internals.container.getTcpPort(port);
 		const target = request.url.replace("https:", "http:");
 
 		internals.inflightRequests = (internals.inflightRequests ?? 0) + 1;
-		internals.renewActivityTimeout?.();
+		if (wakeIntent) internals.renewActivityTimeout?.();
 		let released = false;
 		const release = () => {
 			if (released) return;
@@ -195,7 +209,12 @@ export class Sandbox extends CloudflareSandbox<Env> {
 			const RENEW_EVERY_MS = 60_000;
 			let lastRenew = Date.now();
 			let lastProgress = Date.now();
-			const renew = () => internals.renewActivityTimeout?.();
+			// R3-A gate 2: a PASSIVE pipe still tracks progress (watchdog) but
+			// its bytes never renew — a watch stream's keepalives feed corpse
+			// detection only, so watching a session is free.
+			const renew = wakeIntent
+				? () => internals.renewActivityTimeout?.()
+				: () => {};
 			const progressTap = new TransformStream<Uint8Array, Uint8Array>({
 				transform(chunk, controller) {
 					const now = Date.now();
@@ -379,6 +398,48 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  *  checkpoint (gated by HELMOR_CLOUD_AUTOPUSH) has already folded helmor.db, so
  *  a backup taken now snapshots a consistent DB. */
 const AGENT_STREAM_PATH = "/rpc-stream/send_agent_message_stream";
+
+/** R3-A wake-intent marker (mirrors `WAKE_INTENT_HEADER` in `src/lib/ipc.ts`).
+ *  Only requests carrying it may cold-start the container (gate 1, `route`) or
+ *  renew its idle timer (gate 2, `fetchCompanionPort`). Cost governance, not a
+ *  security boundary — the member token already authenticates the caller; this
+ *  protects the wallet from our own passive traffic, not from attackers. */
+export const WAKE_INTENT_HEADER = "X-Helmor-Wake-Intent";
+
+/** The typed asleep answer for PASSIVE traffic while the container sleeps.
+ *  The frontend maps `code: "ContainerAsleep"` to `CompanionAsleepError`:
+ *  queries keep their previous data (no retry, no error dialog), micro-writes
+ *  queue for the next wake. */
+export function containerAsleepResponse(): Response {
+	return new Response(
+		JSON.stringify({
+			code: "ContainerAsleep",
+			asleep: true,
+			message:
+				"The sandbox is asleep; passive requests return stale data until an explicit action wakes it.",
+		}),
+		{ status: 503, headers: { "content-type": "application/json" } },
+	);
+}
+
+/** R3-A gate 1: proxy a PASSIVE request WITHOUT ensureServe. An awake
+ *  container answers normally (gate 2 keeps its idle timer untouched); a
+ *  sleeping one — or one mid-cold-start whose serve isn't listening yet —
+ *  yields the typed asleep response instead of a wake. */
+export async function proxyWithoutWake(
+	sandbox: CloudflareSandbox,
+	forwarded: Request,
+	port: number,
+): Promise<Response> {
+	try {
+		return await containerFetchThroughPort(sandbox, forwarded, port);
+	} catch (error) {
+		console.log(
+			`[wake-gate] passive proxy failed while not serving: ${(error as Error).message}`,
+		);
+		return containerAsleepResponse();
+	}
+}
 
 /** CORS for the desktop team-mode webview, which calls this Worker over browser
  *  `fetch` from a cross-origin context (http://localhost:1420 in dev,
@@ -616,6 +677,23 @@ async function route(
 	// BEFORE ensureServe so it never triggers a cold start itself.
 	if (url.pathname === "/admin/destroy-sandbox") {
 		return handleAdminDestroySandbox(forwarded, env, sandbox);
+	}
+
+	// R3-A gate 1 (cold start): only wake-intent requests may ensureServe.
+	// Everything else is proxied as-is — an awake container answers normally
+	// (without renewing, gate 2), a sleeping one gets the typed asleep shape.
+	// Path exemptions (both intentional wake-capable):
+	//   - /v1/health: diagnostic endpoint — provision/WP6 verify depend on it
+	//     performing a REAL cold-start check; no frontend code polls it.
+	//   - MODEL_CATALOG_RPC: only reaches here on a D1 cache MISS — WP5's one
+	//     legitimate non-@agent wake (brand-new/reset team seeds the catalog).
+	const wakeIntent = req.headers.get(WAKE_INTENT_HEADER) === "1";
+	if (
+		!wakeIntent &&
+		url.pathname !== "/v1/health" &&
+		url.pathname !== MODEL_CATALOG_RPC
+	) {
+		return proxyWithoutWake(sandbox, forwarded, port);
 	}
 
 	try {
