@@ -94,10 +94,28 @@ export class Sandbox extends CloudflareSandbox<Env> {
 		}
 	}
 
+	/** R3-A (live-verified leak): the containers base constructor calls
+	 *  `renewActivityTimeout()` inside `blockConcurrencyWhile` on EVERY DO
+	 *  (re-)instantiation. A passive request that wakes an evicted DO would
+	 *  therefore re-arm the full idle window — steady passive polling could
+	 *  keep a running container alive through eviction cycles forever. Skip
+	 *  exactly that one constructor renew: wake traffic renews explicitly,
+	 *  and `onStart` re-arms on real container boot (platform-restart guard).
+	 *  Class-field init runs before the base's deferred renew (it yields a
+	 *  microtask for exactly this reason), so the flag is reliably set. */
+	private skipConstructorRenew = true;
+
 	/** F-4 diagnostics: log every idle-timer renewal with its caller so a live
 	 *  `wrangler tail` shows exactly what keeps the container awake. Cheap
 	 *  (one log per renewal) and safe to keep. */
 	renewActivityTimeout(): void {
+		if (this.skipConstructorRenew) {
+			this.skipConstructorRenew = false;
+			console.log(
+				"[idle] constructor renew skipped (R3-A: DO re-instantiation must not re-arm)",
+			);
+			return;
+		}
 		const caller = new Error().stack?.split("\n")[2]?.trim() ?? "?";
 		const internals = this as unknown as {
 			inflightRequests?: number;

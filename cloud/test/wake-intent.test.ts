@@ -171,6 +171,33 @@ describe("gate 2: fetchCompanionPort renew gating", () => {
 	});
 });
 
+describe("constructor renew skip (DO re-instantiation must not re-arm)", () => {
+	it("swallows exactly one renew per instance, then delegates to the base", () => {
+		// The containers base constructor renews inside blockConcurrencyWhile on
+		// EVERY DO (re-)instantiation — a passive request waking an evicted DO
+		// would re-arm the full idle window (live-verified). The override skips
+		// exactly that first renew; later renews reach the base (which stamps
+		// `sleepAfterMs = now + sleepAfter`).
+		const renewActivityTimeout = (
+			Sandbox.prototype as unknown as {
+				renewActivityTimeout: () => void;
+			}
+		).renewActivityTimeout;
+		const fake = {
+			skipConstructorRenew: true,
+			sleepAfter: "5m",
+			sleepAfterMs: undefined as number | undefined,
+		};
+
+		renewActivityTimeout.call(fake); // the constructor's renew → skipped
+		expect(fake.skipConstructorRenew).toBe(false);
+		expect(fake.sleepAfterMs).toBeUndefined();
+
+		renewActivityTimeout.call(fake); // real activity → arms the countdown
+		expect(fake.sleepAfterMs).toBeGreaterThan(Date.now());
+	});
+});
+
 describe("gate 1: proxyWithoutWake (no ensureServe on the passive path)", () => {
 	it("passes an awake container's answer through untouched", async () => {
 		const sandbox = {
