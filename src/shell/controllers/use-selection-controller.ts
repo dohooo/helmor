@@ -74,6 +74,20 @@ const WORKSPACE_SWITCH_SIDE_EFFECT_DELAY_MS = 140;
 // update and merges the heavy flip back into the input task's frame.
 const DISPLAY_FLIP_FALLBACK_MS = SCHEDULE_AFTER_PAINT_FALLBACK_MS;
 
+// DF-3 (R3-C): upper bound for HOLDing the previous pane while a cold
+// target's prime is in flight. When the prime doesn't settle inside this
+// window (asleep backend with retry off, boot-window transport stalls —
+// the dogfood "stuck on the old workspace's thread >30s" bug), land the
+// TARGET workspace with a null session so the panel shows the target's
+// placeholder instead of the WRONG (previous) workspace's content.
+//
+// DESIGN INTENT — do not "optimize" this bound away: team-cloud cold
+// primes take >=2.3s, so team cold targets are EXPECTED to pass through
+// the placeholder path. Showing the target's skeleton beats showing
+// another workspace's messages under the target's sidebar highlight;
+// the prime's resolve still refines to the real session afterwards.
+const COLD_DISPLAY_HOLD_MAX_MS = 2_000;
+
 type PendingDisplayFlip = {
 	rafId: number | null;
 	innerTimerId: number | null;
@@ -551,8 +565,32 @@ export function useSelectionController(
 			if (store.getState().displayedWorkspaceId === null) {
 				setDisplayed(workspaceId, targetSessionId);
 			}
+			// Bound the hold (see COLD_DISPLAY_HOLD_MAX_MS): if the prime is
+			// still unsettled when this fires, land the target placeholder.
+			// The prime's resolve/reject below still runs afterwards and
+			// refines the session (requestId-guarded), so a late prime can
+			// only improve on the placeholder — never regress it.
+			const holdTimerId = window.setTimeout(() => {
+				if (workspaceSelectionRequestRef.current !== requestId) return;
+				// Boot-pipeline triage breadcrumb (DF-3 step 0): record what
+				// state the unsettled queries were in when the hold expired.
+				console.debug(
+					"[selection] cold display hold expired; landing target placeholder",
+					{
+						workspaceId,
+						detail: queryClient.getQueryState(
+							helmorQueryKeys.workspaceDetail(workspaceId),
+						)?.fetchStatus,
+						sessions: queryClient.getQueryState(
+							helmorQueryKeys.workspaceSessions(workspaceId),
+						)?.fetchStatus,
+					},
+				);
+				setDisplayed(workspaceId, targetSessionId);
+			}, COLD_DISPLAY_HOLD_MAX_MS);
 			void primeWorkspaceDisplay(workspaceId)
 				.then(async ({ sessionId, sessions }) => {
+					window.clearTimeout(holdTimerId);
 					if (workspaceSelectionRequestRef.current !== requestId) return;
 					// Resolve-time live-read: an explicit session picked while the
 					// prime was in flight (`selectSession` only updates the router
@@ -614,6 +652,7 @@ export function useSelectionController(
 					setDisplayed(workspaceId, resolvedSessionId);
 				})
 				.catch(() => {
+					window.clearTimeout(holdTimerId);
 					if (workspaceSelectionRequestRef.current !== requestId) return;
 					// Bounded fallback for the hold: land (target, null) so the
 					// panel shows today's placeholder instead of holding forever.

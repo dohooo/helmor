@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { HelmorLogoAnimated } from "@/components/helmor-logo-animated";
 import { Button } from "@/components/ui/button";
+import { isAsleepPayload } from "@/lib/companion-asleep";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { isTeamModeActive } from "@/lib/team-mode";
 import {
@@ -50,6 +51,23 @@ export function TeamConnectingOverlay() {
 		if (isReady && !prevReadyRef.current) {
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.agentModelSections,
+			});
+			// DF-3 (R3-C): list queries that errored while the sandbox slept
+			// (typed asleep, retry off — see the query-client default) settle
+			// in `isError` and never refetch on their own, leaving session
+			// lists stuck on "Loading"/stale until a remount. Waking IS the
+			// recovery signal — revalidate exactly the asleep-errored
+			// workspace list queries on the ready transition (same F-2
+			// pattern as the model catalog above).
+			void queryClient.invalidateQueries({
+				predicate: (query) => {
+					const root = query.queryKey[0];
+					return (
+						(root === "workspaceSessions" || root === "workspaceDetail") &&
+						query.state.status === "error" &&
+						isAsleepPayload(query.state.error)
+					);
+				},
 			});
 		}
 		prevReadyRef.current = isReady;

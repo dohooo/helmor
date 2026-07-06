@@ -1001,6 +1001,119 @@ describe("useSelectionController", () => {
 		unsubscribe();
 	});
 
+	// DF-3 (R3-C): a prime that never settles (asleep backend with retry off,
+	// boot-window transport stalls) must not hold the OLD pane forever — the
+	// hold is bounded, landing the target placeholder; a late prime resolve
+	// still refines to the real session.
+	it("cold hold expires after its bound: lands the target placeholder, a late prime still refines", async () => {
+		const { flushFrames } = installFlipTimingHarness();
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		seedWorkspaceCache(queryClient, "ws-A", [
+			makeSession("ws-A-session-1", { active: true }),
+		]);
+		// ws-B is cold and its prime hangs (deferred, unsettled).
+		const detail = deferred<WorkspaceDetail | null>();
+		const sessions = deferred<WorkspaceSessionSummary[]>();
+		const thread = deferred<ThreadMessageLike[]>();
+		vi.mocked(loadWorkspaceDetail).mockImplementation((workspaceId) =>
+			workspaceId === "ws-B" ? detail.promise : new Promise(() => {}),
+		);
+		vi.mocked(loadWorkspaceSessions).mockImplementation((workspaceId) =>
+			workspaceId === "ws-B" ? sessions.promise : new Promise(() => {}),
+		);
+		vi.mocked(loadSessionThreadMessages).mockImplementation((sessionId) =>
+			sessionId === "ws-B-session-1" ? thread.promise : new Promise(() => {}),
+		);
+
+		const { result } = renderHook(
+			() => useSelectionController(buildHookProps({ queryClient })),
+			{ wrapper: routerWrapper },
+		);
+
+		act(() => {
+			result.current.actions.selectWorkspace("ws-A");
+		});
+		act(() => {
+			result.current.actions.selectWorkspace("ws-B");
+		});
+		act(() => {
+			flushFrames();
+			vi.advanceTimersByTime(0);
+		});
+		// Hold window open: old pane on screen while the prime hangs.
+		expect(result.current.state.displayedWorkspaceId).toBe("ws-A");
+
+		// The bound expires with the prime STILL unsettled → the target lands
+		// with a null session (its placeholder), never the old workspace's
+		// content under the new sidebar highlight.
+		act(() => {
+			vi.advanceTimersByTime(2_000);
+		});
+		expect(result.current.state.displayedWorkspaceId).toBe("ws-B");
+		expect(result.current.state.displayedSessionId).toBeNull();
+
+		// The late prime resolve refines the placeholder to the real session.
+		await act(async () => {
+			detail.resolve(makeWorkspace("ws-B"));
+			sessions.resolve([makeSession("ws-B-session-1", { active: true })]);
+			thread.resolve([]);
+		});
+		await flushPrimeResolution();
+		expect(result.current.state.displayedWorkspaceId).toBe("ws-B");
+		expect(result.current.state.displayedSessionId).toBe("ws-B-session-1");
+	});
+
+	it("an expired-hold timer never clobbers a newer selection", async () => {
+		const { flushFrames } = installFlipTimingHarness();
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		seedWorkspaceCache(queryClient, "ws-A", [
+			makeSession("ws-A-session-1", { active: true }),
+		]);
+		// ws-B cold with a hanging prime.
+		vi.mocked(loadWorkspaceDetail).mockImplementation(
+			() => new Promise(() => {}),
+		);
+		vi.mocked(loadWorkspaceSessions).mockImplementation(
+			() => new Promise(() => {}),
+		);
+
+		const { result } = renderHook(
+			() => useSelectionController(buildHookProps({ queryClient })),
+			{ wrapper: routerWrapper },
+		);
+
+		act(() => {
+			result.current.actions.selectWorkspace("ws-A");
+		});
+		act(() => {
+			result.current.actions.selectWorkspace("ws-B");
+		});
+		act(() => {
+			flushFrames();
+			vi.advanceTimersByTime(0);
+		});
+		// The user bails back to warm ws-A before the hold expires.
+		act(() => {
+			result.current.actions.selectWorkspace("ws-A");
+		});
+		act(() => {
+			flushFrames();
+			vi.advanceTimersByTime(0);
+		});
+		expect(result.current.state.displayedWorkspaceId).toBe("ws-A");
+
+		// ws-B's hold timer fires later — superseded requestId, must no-op.
+		act(() => {
+			vi.advanceTimersByTime(2_000);
+		});
+		expect(result.current.state.displayedWorkspaceId).toBe("ws-A");
+		expect(result.current.state.displayedSessionId).toBe("ws-A-session-1");
+	});
+
 	it("an explicit selectSession during an in-flight cold hold wins at resolve in one displayed commit", async () => {
 		const { flushFrames } = installFlipTimingHarness();
 		const queryClient = new QueryClient({
