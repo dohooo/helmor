@@ -984,23 +984,73 @@ export async function handleTeamClone(
 }
 
 /**
+ * DF-4 backup gate: does this NDJSON line represent work worth a snapshot?
+ * NOT backup-worthy: keepalive blanks and `{"kind":"error"}` terminal events
+ * (the companion emits them for ENTRY validation failures — nothing was
+ * persisted, `persisted: false`). The two exclusions interlock with the DF-4
+ * error-surface fix: a failed turn now carries an error event (visible), and
+ * that event alone must NOT re-qualify the empty turn for a 48MB backup — a
+ * byte-based predicate would. Serde emits the `kind` tag first, so a cheap
+ * prefix check suffices; any other event (update/done/…) means the turn did
+ * real work.
+ */
+export function isBackupWorthyLine(line: string): boolean {
+	const trimmed = line.trim();
+	if (trimmed.length === 0) return false; // keepalive
+	return !trimmed.startsWith('{"kind":"error"');
+}
+
+/**
  * Wait for the agent-stream body to fully drain (so the in-container WAL
  * checkpoint + autopush that fire just before the terminal `done` have run),
  * then snapshot the data dir to R2 and persist the handle. Best-effort: a
  * backup failure must never surface to the client (the response already left).
+ *
+ * DF-4 backup gate: a stream that carried NO backup-worthy line (empty turn —
+ * entry validation failed, only keepalives/error events flowed) skips the
+ * snapshot entirely; dogfooding measured 48MB×3s per failed request. On a
+ * mid-stream abort we back up anyway (a slightly-stale snapshot beats none).
  */
-async function backupAfterStream(
+export async function backupAfterStream(
 	body: ReadableStream<Uint8Array>,
 	sandbox: CloudflareSandbox,
 	env: Env,
 ): Promise<void> {
+	let backupWorthy = false;
 	try {
 		// Drain to EOF — resolves when the companion closes the stream, i.e.
-		// after the turn finalized (checkpoint folded helmor.db).
-		await body.pipeTo(new WritableStream());
+		// after the turn finalized (checkpoint folded helmor.db). Scan lines
+		// until the first backup-worthy one, then just drain.
+		const decoder = new TextDecoder();
+		let tail = "";
+		await body.pipeTo(
+			new WritableStream({
+				write(chunk) {
+					if (backupWorthy) return;
+					tail += decoder.decode(chunk, { stream: true });
+					const lines = tail.split("\n");
+					tail = lines.pop() ?? "";
+					if (lines.some(isBackupWorthyLine)) backupWorthy = true;
+					// A pathological unterminated line can't grow unbounded:
+					// classify it conservatively as work and stop buffering.
+					if (tail.length > 1_000_000) {
+						backupWorthy = true;
+						tail = "";
+					}
+				},
+			}),
+		);
+		if (!backupWorthy && isBackupWorthyLine(tail)) backupWorthy = true;
 	} catch {
 		// A client disconnect can abort the tee; still attempt the backup with
 		// whatever is on disk — a slightly-stale snapshot beats none.
+		backupWorthy = true;
+	}
+	if (!backupWorthy) {
+		console.log(
+			"skipping post-stream backup: no persisted work on this stream (keepalives/error events only)",
+		);
+		return;
 	}
 	await backupAndStore(sandbox, env);
 }
