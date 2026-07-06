@@ -139,6 +139,19 @@ describe("useFeedbackSubmit", () => {
 			sessionId: "s1",
 			finalizePromise,
 			preparedWorkingDirectory: "/prepared",
+			prepared: {
+				workspaceId: "w1",
+				initialSessionId: "s1",
+				repoId: "r1",
+				repoName: "repo",
+				directoryName: "dir",
+				branch: "b",
+				defaultBranch: "main",
+				state: "initializing",
+				repoScripts: { setupScript: null, verifyScript: null },
+				workingDirectory: null,
+				branchIntent: "from_branch",
+			} as never,
 		});
 
 		const ctx = setup();
@@ -208,6 +221,19 @@ describe("useFeedbackSubmit", () => {
 			sessionId: "s1",
 			finalizePromise,
 			preparedWorkingDirectory: null,
+			prepared: {
+				workspaceId: "w1",
+				initialSessionId: "s1",
+				repoId: "r1",
+				repoName: "repo",
+				directoryName: "dir",
+				branch: "b",
+				defaultBranch: "main",
+				state: "initializing",
+				repoScripts: { setupScript: null, verifyScript: null },
+				workingDirectory: null,
+				branchIntent: "from_branch",
+			} as never,
 		});
 
 		const ctx = setup();

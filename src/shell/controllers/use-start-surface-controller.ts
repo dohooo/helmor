@@ -19,6 +19,7 @@ import {
 import { buildTerminalBootCommand } from "@/features/terminal/terminal-presets";
 import { setPendingBoot } from "@/features/terminal/terminal-session-store";
 import { createWorkspaceFromStartComposer } from "@/features/workspace-start/create-workspace";
+import { seedCreatedWorkspaceCaches } from "@/features/workspace-start/seed-created-workspace";
 import {
 	type BranchPickerEntry,
 	convertSessionToTerminal,
@@ -30,15 +31,12 @@ import {
 	prewarmSlashCommandsForRepo,
 	type RepositoryCreateOption,
 	renameSession,
-	type ThreadMessageLike,
 	type WorkspaceBranchIntent,
-	type WorkspaceDetail,
 	type WorkspaceMode,
 } from "@/lib/api";
 import { extractError } from "@/lib/errors";
 import { translateSource } from "@/lib/i18n";
 import { helmorQueryKeys } from "@/lib/query-client";
-import { sessionThreadCacheKey } from "@/lib/session-thread-cache";
 import {
 	type AppSettings,
 	readRepoPreference,
@@ -533,6 +531,7 @@ export function useStartSurfaceController(
 					workspaceId,
 					sessionId,
 					preparedWorkingDirectory,
+					prepared,
 				} = await createWorkspaceFromStartComposer({
 					// Chat mode ignores repoId/sourceBranch — pass empty
 					// strings so the function signature stays the same.
@@ -562,44 +561,22 @@ export function useStartSurfaceController(
 				// outcome so the next start-page session begins clean.
 				setStartPendingLinkedDirectories(EMPTY_STRING_LIST);
 
-				// Chat workspaces ship as `ready` from a single-phase prep,
-				// so a real WorkspaceDetail isn't materialised until the
-				// follow-up query roundtrips. Without something in the
-				// detail cache, the inspector pane reads `mode === undefined`
-				// → renders one frame → re-renders with `mode === "chat"`
-				// → vanishes. Seed a minimal synthetic detail with the
-				// fields the inspector gate checks; the real fetch
-				// overwrites it shortly after.
-				if (startMode === "chat") {
-					const synthetic: WorkspaceDetail = {
-						id: workspaceId,
-						title: "New chat",
-						repoId: "",
-						repoName: "Chats",
-						directoryName: "",
-						state: "ready",
-						hasUnread: false,
-						workspaceUnread: 0,
-						unreadSessionCount: 0,
-						status: "in-progress",
-						mode: "chat",
-						sessionCount: 1,
-						messageCount: 0,
-						rootPath: preparedWorkingDirectory ?? null,
-						activeSessionId: sessionId,
-					};
-					queryClient.setQueryData<WorkspaceDetail | null>(
-						helmorQueryKeys.workspaceDetail(workspaceId),
-						(existing) => existing ?? synthetic,
-					);
-					// Seed an empty thread so the panel's
-					// `messagesQuery.data === undefined` gate doesn't suppress the
-					// optimistic user bubble before the first DB fetch lands.
-					queryClient.setQueryData<ThreadMessageLike[]>(
-						sessionThreadCacheKey(sessionId),
-						(existing) => existing ?? [],
-					);
-				}
+				// DF-1: seed the new workspace's detail/sessions/thread caches
+				// SYNCHRONOUSLY so the view switch below hits the selection
+				// controller's cached fast path and flips immediately —
+				// instead of the cold-target HOLD keeping the OLD workspace
+				// on screen until a network prime round-trips (the "first
+				// message vanished" start-page bug). The chat-mode synthetic
+				// detail also keeps the inspector's `mode` gate stable on
+				// first mount (it read `mode === undefined` for one frame
+				// otherwise); the real fetches overwrite every seed shortly
+				// after.
+				seedCreatedWorkspaceCaches({
+					queryClient,
+					prepared,
+					mode: startMode,
+					workingDirectory: preparedWorkingDirectory ?? null,
+				});
 
 				requestSidebarReconcile(queryClient);
 
