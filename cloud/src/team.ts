@@ -296,6 +296,10 @@ async function syncTeamData(
 	const stmts: ReturnType<typeof env.DB.prepare>[] = [];
 	for (const s of input.sessions ?? []) {
 		if (!s?.id || !s.workspaceId) continue;
+		// DF-2: `created_at` follows the container byte-for-byte on update too
+		// (not just first insert), so the container's format-normalization
+		// migration self-heals stale mirror rows on the next sync. COALESCE
+		// guards a null payload value from clobbering a good mirror value.
 		stmts.push(
 			env.DB.prepare(
 				`INSERT INTO sessions
@@ -315,6 +319,7 @@ async function syncTeamData(
 				   session_kind = excluded.session_kind,
 				   is_hidden = excluded.is_hidden,
 				   last_user_message_at = excluded.last_user_message_at,
+				   created_at = COALESCE(excluded.created_at, created_at),
 				   updated_at = excluded.updated_at`,
 			).bind(
 				s.id,
@@ -398,10 +403,15 @@ async function syncTeamData(
 async function listSessions(env: Env, workspaceId: string): Promise<unknown[]> {
 	if (!workspaceId) return [];
 	const { results } = await env.DB.prepare(
+		// DF-2 defense-in-depth: `datetime()` normalizes both timestamp formats
+		// (legacy space-separated vs RFC 3339), so mixed stock rows sort
+		// chronologically even before the container migration propagates.
+		// Within-second ties fall back to `id ASC` (R2-D determinism).
 		`SELECT id, workspace_id, title, status, model, agent_type, permission_mode,
 		        effort_level, action_kind, session_kind, is_hidden,
 		        last_user_message_at, created_at, updated_at
-		 FROM sessions WHERE workspace_id = ?1 ORDER BY created_at ASC, id ASC`,
+		 FROM sessions WHERE workspace_id = ?1
+		 ORDER BY datetime(created_at) ASC, id ASC`,
 	)
 		.bind(workspaceId)
 		.all();
