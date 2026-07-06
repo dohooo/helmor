@@ -46,10 +46,16 @@ function makeHarness(upstreamBody: ReadableStream<Uint8Array> | null) {
 			fetchCompanionPort: (request: Request, port: number) => Promise<Response>;
 		}
 	).fetchCompanionPort;
+	// R3-A: these tests pin the F-4 decrementInflight release paths, which
+	// only WAKE-marked requests take (a passive release decrements manually
+	// without the base's renew-on-zero — see wake-intent.test.ts).
 	const run = (request?: Request) =>
 		fetchCompanionPort.call(
 			self,
-			request ?? new Request("https://do.internal/v1/health"),
+			request ??
+				new Request("https://do.internal/v1/health", {
+					headers: { "X-Helmor-Wake-Intent": "1" },
+				}),
 			8080,
 		);
 	return { self, calls, run };

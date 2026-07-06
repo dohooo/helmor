@@ -167,7 +167,20 @@ export class Sandbox extends CloudflareSandbox<Env> {
 		const release = () => {
 			if (released) return;
 			released = true;
-			internals.decrementInflight?.();
+			if (wakeIntent) {
+				internals.decrementInflight?.();
+				return;
+			}
+			// R3-A gate 2 (live-verified leak): the base `decrementInflight`
+			// renews the idle timer whenever inflight hits 0 ("window starts
+			// fresh from the last request completion") — right for wake
+			// traffic, but it let every PASSIVE request re-arm the countdown
+			// on release. Decrement manually so passive traffic keeps the F-4
+			// accounting without ever touching the timer.
+			internals.inflightRequests = Math.max(
+				0,
+				(internals.inflightRequests ?? 1) - 1,
+			);
 		};
 		try {
 			const response = await tcpPort.fetch(target, request);

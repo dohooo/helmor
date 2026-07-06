@@ -52,6 +52,10 @@ function makeHarness(
 		decrementInflight: () => {
 			calls.decrement += 1;
 			self.inflightRequests -= 1;
+			// Mimic the SDK base: renew when inflight hits 0 ("window starts
+			// fresh from the last request completion"). The live-verified leak:
+			// passive releases must NEVER reach this.
+			if (self.inflightRequests === 0) self.renewActivityTimeout();
 		},
 	};
 	const fetchCompanionPort = (
@@ -146,7 +150,24 @@ describe("gate 2: fetchCompanionPort renew gating", () => {
 	it("header lookup is case-insensitive (Headers semantics)", async () => {
 		const { calls, run } = makeHarness(null);
 		await run({ "x-helmor-wake-intent": "1" });
-		expect(calls.renew).toBe(1);
+		expect(calls.renew).toBe(2); // request start + base renew-on-zero release
+	});
+
+	it("passive release never triggers the base's renew-on-zero (live-verified leak)", async () => {
+		// Body-less response → release runs synchronously inside the request.
+		const { self, calls, run } = makeHarness(null);
+		await run(); // no wake-intent header
+		expect(self.inflightRequests).toBe(0); // F-4 accounting still exact
+		expect(calls.decrement).toBe(0); // manual decrement, not the base's
+		expect(calls.renew).toBe(0); // ...so the countdown was never touched
+	});
+
+	it("wake release keeps the base decrementInflight semantics", async () => {
+		const { self, calls, run } = makeHarness(null);
+		await run({ [WAKE_INTENT_HEADER]: "1" });
+		expect(self.inflightRequests).toBe(0);
+		expect(calls.decrement).toBe(1);
+		expect(calls.renew).toBe(2); // request start + renew-on-zero release
 	});
 });
 
