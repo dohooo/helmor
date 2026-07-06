@@ -1063,8 +1063,10 @@ fn run_migrations(connection: &Connection) -> Result<()> {
     // raw string, so mixed formats break ordering (space 0x20 < 'T' 0x54).
     // `datetime('now')` is UTC, so appending "Z" is timezone-correct.
     // Idempotent: normalized rows no longer match `LIKE '% %'`. COALESCE keeps
-    // the original value if strftime can't parse it (never expected).
-    if has_table(connection, "sessions") {
+    // the original value if strftime can't parse it (never expected). The
+    // column guard covers pre-created_at legacy schemas (ensure_schema adds
+    // the column right after this via the CREATE TABLE defaults).
+    if has_table(connection, "sessions") && has_column(connection, "sessions", "created_at") {
         connection
             .execute_batch(
                 "UPDATE sessions
