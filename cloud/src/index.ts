@@ -418,6 +418,33 @@ export interface Env {
 const SERVE_START_CMD = "/usr/local/bin/helmor-start-serve";
 const HEALTH_CHECK_TIMEOUT_MS = 1_500;
 const RESTORE_BACKUP_TIMEOUT_MS = 15_000;
+/** R3-E: hard deadline for plain (non-stream) /rpc proxy hops. Generous —
+ *  finalize/clone-scale work legitimately takes tens of seconds — but finite,
+ *  so a stuck container handler surfaces as a typed 504 instead of a
+ *  client-side forever-hang (WP2 contract on the plain-RPC face). */
+const RPC_PROXY_TIMEOUT_MS = 60_000;
+
+/** R3-E: race a plain /rpc proxy hop against the deadline; a breach returns a
+ *  typed 504 (`ContainerRpcTimeout`) instead of hanging the client forever.
+ *  Non-timeout rejections pass through untouched. */
+export async function proxyPlainRpcWithDeadline(
+	fetchPromise: Promise<Response>,
+	pathname: string,
+	timeoutMs: number = RPC_PROXY_TIMEOUT_MS,
+): Promise<Response> {
+	try {
+		return await withTimeout(fetchPromise, timeoutMs, `rpc proxy ${pathname}`);
+	} catch (error) {
+		if (!String((error as Error).message).includes("timed out")) throw error;
+		return new Response(
+			JSON.stringify({
+				code: "ContainerRpcTimeout",
+				message: `${pathname} did not answer within ${timeoutMs}ms — the container may be stuck; retry or check its health.`,
+			}),
+			{ status: 504, headers: { "content-type": "application/json" } },
+		);
+	}
+}
 const START_PROCESS_TIMEOUT_MS = 90_000;
 const IDENTITY_MINT_TIMEOUT_MS = 15_000;
 const FORGE_INJECT_TIMEOUT_MS = 15_000;
@@ -800,7 +827,18 @@ async function route(
 	// Transparent HTTP proxy: method, path, body, and streaming responses
 	// pass straight through; headers carry the derived member id + shared
 	// companion token (see `deriveForwardedRequest`).
-	const response = await containerFetchThroughPort(sandbox, forwarded, port);
+	//
+	// R3-E: plain /rpc calls get a hard deadline → typed 504. The WP2 error
+	// contract was closed for the STREAM entry in R3-B; the plain-RPC face
+	// (workspace creation among others) could still hang forever with the
+	// client seeing nothing — no reject, no resolve (OBS-R3C-2). Streams
+	// (`/rpc-stream/*`) are long-lived by design and stay un-deadlined.
+	const response = url.pathname.startsWith("/rpc/")
+		? await proxyPlainRpcWithDeadline(
+				containerFetchThroughPort(sandbox, forwarded, port),
+				url.pathname,
+			)
+		: await containerFetchThroughPort(sandbox, forwarded, port);
 
 	// WP5 write-through: a LIVE pass of the model-catalog RPC (cache miss above,
 	// or a pre-seed by provision's WP6 verify) stores the container's answer so
@@ -930,6 +968,33 @@ export async function handleTeamClone(
 			502,
 			`git clone failed for "${gitUrl}" → ${targetDir}: ${(error as Error).message}. ` +
 				"The path may already exist, or the URL is private/unreachable.",
+		);
+	}
+
+	// R3-E: the SDK checkout materializes the working tree but NOT the
+	// remote-tracking refs (`origin/<branch>`), and the worktree finalize
+	// path resolves its base as `origin/<default>` — without this fetch,
+	// every team build-workspace finalize dies with "Base branch is missing
+	// in source repo" (live-verified on a fresh clone). Fetch the full
+	// refspec through the same (possibly token-authenticated) origin remote
+	// the clone configured. A failure is fatal for the add: better a typed
+	// error now than a repo that wedges every workspace create later.
+	try {
+		const refFetch = await sandbox.exec(
+			`git -C '${targetDir}' fetch origin '+refs/heads/*:refs/remotes/origin/*'`,
+		);
+		if (refFetch.exitCode !== 0) {
+			await sandbox.exec(`rm -rf '${targetDir}'`).catch(() => {});
+			return jsonError(
+				502,
+				`git fetch (remote-tracking refs) failed after clone (exit ${refFetch.exitCode}): ${refFetch.stderr?.slice(0, 300) ?? ""}`,
+			);
+		}
+	} catch (error) {
+		await sandbox.exec(`rm -rf '${targetDir}'`).catch(() => {});
+		return jsonError(
+			502,
+			`git fetch (remote-tracking refs) failed after clone: ${(error as Error).message}`,
 		);
 	}
 

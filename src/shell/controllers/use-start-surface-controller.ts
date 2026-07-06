@@ -16,6 +16,7 @@ import {
 	buildTitleSeed,
 	seedSessionTitle,
 } from "@/features/conversation/hooks/seed-session-title";
+import { useStreamingStore } from "@/features/conversation/state/streaming-store";
 import { buildTerminalBootCommand } from "@/features/terminal/terminal-presets";
 import { setPendingBoot } from "@/features/terminal/terminal-session-store";
 import { createWorkspaceFromStartComposer } from "@/features/workspace-start/create-workspace";
@@ -54,6 +55,30 @@ import {
 	useLatestRef,
 	useStableActions,
 } from "@/shell/hooks/use-stable-actions";
+
+/** R3-E: client-side backstop deadline for the workspace-create IPC. The
+ *  Worker's plain-RPC deadline (60s → typed 504) should always fire first;
+ *  this catches transport-level hangs the Worker never sees, so the start
+ *  composer can never lose a submit silently (OBS-R3C-2). */
+const CREATE_WORKSPACE_TIMEOUT_MS = 75_000;
+
+function withCreateTimeout<T>(promise: Promise<T>): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | null = null;
+	const deadline = new Promise<never>((_, reject) => {
+		timer = setTimeout(
+			() =>
+				reject(
+					new Error(
+						"Creating the workspace timed out — the backend didn't answer. Your draft has been restored.",
+					),
+				),
+			CREATE_WORKSPACE_TIMEOUT_MS,
+		);
+	});
+	return Promise.race([promise, deadline]).finally(() => {
+		if (timer) clearTimeout(timer);
+	}) as Promise<T>;
+}
 
 export type StartSurfaceState = {
 	startRepositoryId: string | null;
@@ -512,6 +537,29 @@ export function useStartSurfaceController(
 				return { shouldStream: false };
 			}
 
+			// R3-E: if the create fails OR hangs, the draft the user just
+			// submitted must come back — submitDraft already cleared the
+			// editor, so without this a silent transport loss eats the
+			// message (OBS-R3C-2). Keyed to the start composer's context so
+			// the restore lands in the surface the user is looking at.
+			const restoreStartDraft = () => {
+				const contextKey =
+					startMode === "chat"
+						? "start:chat"
+						: startRepository
+							? `start:repo:${startRepository.id}`
+							: "start:no-repo";
+				useStreamingStore.getState().setComposerRestore({
+					contextKey,
+					draft: payload.prompt,
+					images: payload.imagePaths,
+					files: payload.filePaths,
+					customTags: payload.customTags,
+					editorState: payload.editorStateSnapshot ?? null,
+					nonce: Date.now(),
+				});
+			};
+
 			try {
 				if (
 					startMode !== "chat" &&
@@ -532,31 +580,33 @@ export function useStartSurfaceController(
 					sessionId,
 					preparedWorkingDirectory,
 					prepared,
-				} = await createWorkspaceFromStartComposer({
-					// Chat mode ignores repoId/sourceBranch — pass empty
-					// strings so the function signature stays the same.
-					repoId: startRepository?.id ?? "",
-					sourceBranch:
-						startMode === "chat" || startRepositoryIsPlainDirectory
-							? ""
-							: startSourceBranch,
-					mode: startMode,
-					// Only worktree mode honors branchIntent.
-					branchIntent:
-						startMode === "worktree" ? startBranchIntent : undefined,
-					submitMode: options?.startSubmitMode ?? "startNow",
-					editorStateSnapshot: payload.editorStateSnapshot,
-					composerConfig: {
-						modelId: payload.model.id,
-						effortLevel: payload.effortLevel,
-						permissionMode: payload.permissionMode,
-						fastMode: payload.fastMode,
-					},
-					linkedDirectories: startPendingLinkedDirectories,
-					// Reuse the composer's provisional id so pre-submit
-					// paste-cache files end up owned by this session.
-					seedSessionId: payload.provisionalSessionId,
-				});
+				} = await withCreateTimeout(
+					createWorkspaceFromStartComposer({
+						// Chat mode ignores repoId/sourceBranch — pass empty
+						// strings so the function signature stays the same.
+						repoId: startRepository?.id ?? "",
+						sourceBranch:
+							startMode === "chat" || startRepositoryIsPlainDirectory
+								? ""
+								: startSourceBranch,
+						mode: startMode,
+						// Only worktree mode honors branchIntent.
+						branchIntent:
+							startMode === "worktree" ? startBranchIntent : undefined,
+						submitMode: options?.startSubmitMode ?? "startNow",
+						editorStateSnapshot: payload.editorStateSnapshot,
+						composerConfig: {
+							modelId: payload.model.id,
+							effortLevel: payload.effortLevel,
+							permissionMode: payload.permissionMode,
+							fastMode: payload.fastMode,
+						},
+						linkedDirectories: startPendingLinkedDirectories,
+						// Reuse the composer's provisional id so pre-submit
+						// paste-cache files end up owned by this session.
+						seedSessionId: payload.provisionalSessionId,
+					}),
+				);
 				// Picks belonged to the in-flight create; clear regardless of
 				// outcome so the next start-page session begins clean.
 				setStartPendingLinkedDirectories(EMPTY_STRING_LIST);
@@ -727,6 +777,10 @@ export function useStartSurfaceController(
 				setViewModeRef.current("conversation");
 				return outcome;
 			} catch (error) {
+				// R3-E: give the consumed draft back on EVERY create failure
+				// (typed errors, the Worker's 504, and the client-side
+				// timeout backstop alike).
+				restoreStartDraft();
 				const { code, message } = extractError(
 					error,
 					translateSource("miscCouldNotCreateWorkspace"),

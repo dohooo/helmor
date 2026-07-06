@@ -100,7 +100,9 @@ function fakeSandbox(register: RegisterOutcome): {
 					}),
 		exec: async (cmd: string) => {
 			execCalls.push(cmd);
-			return { success: true };
+			// R3-E: handleTeamClone now runs `git fetch` for remote-tracking
+			// refs after the checkout and checks its exitCode.
+			return { success: true, exitCode: 0 };
 		},
 	} as unknown as import("@cloudflare/sandbox").Sandbox;
 	return { sandbox, execCalls };
@@ -223,5 +225,55 @@ describe("handleTeamClone — D1 workspaces mirror", () => {
 			name: "renamed", // refreshed by the upsert
 			status: "active",
 		});
+	});
+});
+
+describe("handleTeamClone — remote-tracking refs (R3-E)", () => {
+	it("runs a full-refspec git fetch after the checkout (worktree finalize needs origin/<default>)", async () => {
+		const { sandbox, execCalls } = fakeSandbox({
+			ok: true,
+			body: { repositoryId: "repo-1", createdRepository: true },
+		});
+		const res = await handleTeamClone(
+			forwardedClone("https://github.com/acme/foo.git"),
+			sandbox,
+			8080,
+			env as unknown as import("../src/index").Env,
+		);
+		expect(res.status).toBe(200);
+		expect(
+			execCalls.some(
+				(cmd) =>
+					cmd.includes("git -C") &&
+					cmd.includes("fetch origin") &&
+					cmd.includes("refs/remotes/origin"),
+			),
+		).toBe(true);
+	});
+
+	it("a failing refs fetch is a typed 502 and cleans up the clone dir", async () => {
+		const execCalls: string[] = [];
+		const sandbox = {
+			gitCheckout: async () => ({ success: true, exitCode: 0 }),
+			containerFetch: async () => new Response("{}", { status: 200 }),
+			exec: async (cmd: string) => {
+				execCalls.push(cmd);
+				if (cmd.includes("fetch origin")) {
+					return { success: false, exitCode: 128, stderr: "fatal: auth" };
+				}
+				return { success: true, exitCode: 0 };
+			},
+		} as unknown as import("@cloudflare/sandbox").Sandbox;
+
+		const res = await handleTeamClone(
+			forwardedClone("https://github.com/acme/foo.git"),
+			sandbox,
+			8080,
+			env as unknown as import("../src/index").Env,
+		);
+		expect(res.status).toBe(502);
+		const body = (await res.json()) as { message: string };
+		expect(body.message).toContain("remote-tracking refs");
+		expect(execCalls.some((cmd) => cmd.startsWith("rm -rf"))).toBe(true);
 	});
 });
