@@ -466,7 +466,10 @@ function corsHeaders(origin: string): Record<string, string> {
 		"Access-Control-Allow-Origin": origin,
 		"Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,PATCH,OPTIONS",
 		"Access-Control-Allow-Headers":
-			"Authorization, Content-Type, X-Helmor-Member-Id",
+			// R3-A: the wake-intent marker is a custom header, so every marked
+			// request preflights — it MUST be allowed here or the browser blocks
+			// the actual POST ("Can't reach the team cloud", live-verified).
+			"Authorization, Content-Type, X-Helmor-Member-Id, X-Helmor-Wake-Intent",
 		"Access-Control-Allow-Credentials": "true",
 		"Access-Control-Max-Age": "86400",
 		Vary: "Origin",
