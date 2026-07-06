@@ -1,5 +1,11 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { createHelmorQueryClient } from "@/lib/query-client";
@@ -44,14 +50,21 @@ function enableTeamMode(): void {
 	localStorage.setItem("helmor.team.mode", "1");
 }
 
-function renderComposer(sendError: string | null) {
+function renderComposer(
+	sendError: string | null,
+	options: {
+		onSubmit?: React.ComponentProps<typeof WorkspaceComposer>["onSubmit"];
+		restoreDraft?: string | null;
+	} = {},
+) {
 	const queryClient = createHelmorQueryClient();
 	return render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider delayDuration={0}>
 				<WorkspaceComposer
 					contextKey="session:session-cta"
-					onSubmit={vi.fn()}
+					onSubmit={options.onSubmit ?? vi.fn()}
+					restoreDraft={options.restoreDraft ?? null}
 					disabled={false}
 					submitDisabled={false}
 					sending={false}
@@ -123,6 +136,42 @@ describe("WorkspaceComposer — cloud-error recovery CTA", () => {
 		).not.toBeInTheDocument();
 		expect(
 			screen.queryByRole("button", { name: "View Team settings" }),
+		).not.toBeInTheDocument();
+	});
+
+	// DF-5 (R3-C): transport-level errors get an in-place Retry (the copy
+	// already promised one); provider-level and CTA errors must NOT.
+	it("shows a Retry button on a transport-level send error and resubmits the restored draft", async () => {
+		enableTeamMode();
+		const onSubmit = vi.fn();
+		renderComposer("Load failed", { onSubmit, restoreDraft: "resend me" });
+
+		const retry = await screen.findByRole("button", { name: "Retry" });
+		fireEvent.click(retry);
+		await waitFor(() => {
+			expect(onSubmit).toHaveBeenCalled();
+		});
+		expect(onSubmit.mock.calls[0][0]).toBe("resend me");
+	});
+
+	it("does NOT show Retry for a provider-level send error", () => {
+		enableTeamMode();
+		renderComposer("Steer rejected: turn already completed");
+
+		expect(
+			screen.queryByRole("button", { name: "Retry" }),
+		).not.toBeInTheDocument();
+	});
+
+	it("does NOT show Retry alongside an auth CTA", () => {
+		enableTeamMode();
+		renderComposer("Request failed: Unauthorized");
+
+		expect(
+			screen.getByRole("button", { name: "Re-authorize" }),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "Retry" }),
 		).not.toBeInTheDocument();
 	});
 

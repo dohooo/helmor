@@ -9,6 +9,7 @@ import {
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { StartSubmitMode } from "@/features/composer/start-submit-mode";
+import { useSendErrorRecovery } from "@/features/conversation/hooks/use-send-error-recovery";
 import type { PendingUserInput } from "@/features/conversation/pending-user-input";
 import {
 	type PendingPermission as StorePendingPermission,
@@ -218,6 +219,9 @@ export function useConversationStreaming({
 	const activeSendError = useStreamingStore(
 		(state) => state.sendErrorsByContext[composerContextKey] ?? null,
 	);
+	// DF-5: auto-clear retryable (transport-level) send errors when the
+	// backend recovers — readiness ready-transition edge.
+	useSendErrorRecovery(composerContextKey);
 	const pendingUserInput = useStreamingStore(
 		(state) => state.pendingUserInputByContext[composerContextKey] ?? null,
 	);

@@ -116,6 +116,12 @@ export function DraftPersistencePlugin({
 			try {
 				editor.setEditorState(editor.parseEditorState(restoreEditorState));
 				editor.update(() => {
+					// DF-5: `setEditorState` doesn't dirty any node, so
+					// dirty-gated listeners (HasContentPlugin) never re-run and
+					// the send button stays disabled on the restored draft until
+					// the user types. Mark the root dirty inside the follow-up
+					// update so content-derived state recomputes immediately.
+					$getRoot().markDirty();
 					$getRoot().selectEnd();
 				});
 				return;
@@ -154,6 +160,12 @@ export function DraftPersistencePlugin({
 
 			try {
 				editor.setEditorState(editor.parseEditorState(persisted));
+				// DF-5: same markDirty rationale as applyRestorePayload — a
+				// setEditorState restore never dirties nodes, so HasContentPlugin
+				// wouldn't recompute and Send stays disabled on a visible draft.
+				editor.update(() => {
+					$getRoot().markDirty();
+				});
 				return true;
 			} catch {
 				clearPersistedDraft(targetContextKey);

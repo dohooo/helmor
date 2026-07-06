@@ -63,7 +63,11 @@ import { getTeamConfig, isTeamModeActive } from "@/lib/team-mode";
 import { cn } from "@/lib/utils";
 import { clampEffort } from "@/lib/workspace-helpers";
 import { ComposerButton } from "./button";
-import { classifyCloudError, describeCloudError } from "./cloud-error-cta";
+import {
+	classifyCloudError,
+	describeCloudError,
+	isRetryableSendError,
+} from "./cloud-error-cta";
 import { ContextBar } from "./context-bar";
 import { ContextUsageRing } from "./context-usage-ring";
 import { clearPersistedDraft } from "./draft-storage";
@@ -1092,6 +1096,22 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 											{cloudErrorCta === "auth"
 												? "Re-authorize"
 												: "View Team settings"}
+										</Button>
+									</div>
+								) : isRetryableSendError(sendError) ? (
+									// DF-5: transport-level failure — offer the retry the
+									// copy promises. `submitDraft` reads the editor
+									// directly (the restored draft is still in it), so
+									// this works even before the hasContent flag settles.
+									<div className="mt-2">
+										<Button
+											type="button"
+											variant="outline"
+											size="xs"
+											disabled={sending}
+											onClick={handleSubmit}
+										>
+											<I18nText source="retry" />
 										</Button>
 									</div>
 								) : null}

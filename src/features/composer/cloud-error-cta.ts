@@ -39,6 +39,41 @@ export function classifyCloudError(
 	return null;
 }
 
+// DF-5 (R3-C): lowercased substrings that mark a TRANSPORT-level send
+// failure — the backend was unreachable/asleep, not a provider verdict on
+// the turn. These (and only these) errors are retryable in place: the
+// readiness ready-transition auto-clears them and the error box offers a
+// Retry button. Same conservative substring approach as the CTA classifier
+// above (the wire carries no structured code); anything unrecognized is
+// treated as NOT retryable so provider-level failures (backend healthy,
+// turn failed) are never swept by a mere reconnect.
+const RETRYABLE_PHRASES = [
+	"load failed",
+	"failed to fetch",
+	"networkerror",
+	"network error",
+	"timed out",
+	"timeout",
+	"asleep",
+	"containerasleep",
+	"error sending request",
+];
+
+/**
+ * Is this send-error a transport-level failure that a recovered backend
+ * makes retryable? Auth/billing failures are excluded (they have their own
+ * CTA and need user action, not a retry); unknown messages are excluded
+ * (assume provider-level until proven otherwise).
+ */
+export function isRetryableSendError(
+	message: string | null | undefined,
+): boolean {
+	if (!message) return false;
+	if (classifyCloudError(message)) return false;
+	const text = message.toLowerCase();
+	return RETRYABLE_PHRASES.some((phrase) => text.includes(phrase));
+}
+
 /**
  * Map a RAW cloud send/stream error into friendlier composer copy. WP2 smoke
  * surfaced two unfriendly strings: the browser's network "Load failed" (Worker
