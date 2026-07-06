@@ -78,6 +78,15 @@ const LOCAL_ONLY: &[&str] = &[
 // commands only). The frontend override is a ROUTING decision: the React
 // Query persistence cache is desktop disk state (per-backend buckets), so in
 // team mode it must hit this Mac's files, never the container's.
+//
+// NOTE (R3-A): `detect_installed_editors` follows the same precedent — the
+// frontend registry (`src/lib/command-classes.ts`) classifies it LOCAL_ONLY
+// (editors are installed on the user's Mac; detecting them inside the cloud
+// container answered the wrong question and woke the sandbox on boot), but
+// the dispatch arm in rpc.rs stays: frontend routing decision ≠ container
+// capability gap, and removing it would force an image bump for nothing.
+// The frontend's full wake/passive classification lives in that registry,
+// enforced by src/lib/command-classes.test.ts (this test's TS twin).
 
 #[test]
 fn every_frontend_invoke_is_reachable_in_the_companion() {

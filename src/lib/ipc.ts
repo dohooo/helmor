@@ -38,6 +38,7 @@ import {
 	beginAgentStreamOpen,
 	markAgentStreamOpened,
 } from "./agent-stream-open";
+import { LOCAL_ONLY_COMMANDS } from "./command-classes";
 import { isTauriRuntime } from "./platform";
 import { getTeamConfig, isTeamModeActive } from "./team-mode";
 
@@ -506,74 +507,14 @@ export function convertLocalFileSrc(
 
 /**
  * Commands that ALWAYS run on the local Tauri backend, even in team/companion
- * mode. `authorize_cloud_codex_identity` runs `codex login` and
- * `authorize_cloud_claude_identity` drives our own Claude OAuth (PKCE) flow on
- * the user's own machine (browser sign-in + loopback callback), capturing the
- * subscription OAuth credential and uploading it to the
- * Worker — they fundamentally cannot run inside the cloud container (no local
- * browser / CLI login there), so they must NOT be routed to the companion like
- * other invokes. Keep in sync with `LOCAL_ONLY` in
+ * mode (e.g. `authorize_cloud_codex_identity` runs `codex login` on THIS Mac;
+ * the query-cache trio is desktop disk state; local-llm is this Mac's llama.cpp).
+ * R3-A: derived from the wake-intent registry — `src/lib/command-classes.ts`
+ * is the single source of truth (per-command reasons live there). Keep the
+ * dispatch-absent subset in sync with `LOCAL_ONLY` in
  * `src-tauri/tests/companion_dispatch_coverage.rs`.
  */
-const LOCAL_ONLY_INVOKES = new Set<string>([
-	"authorize_cloud_codex_identity",
-	"authorize_cloud_claude_identity",
-	// Forge creds (gh token / glab config) live in THIS Mac's keychain / config
-	// files — capture must run on the desktop, never the cloud container.
-	"authorize_cloud_forge_identity",
-	// Auto-deploy drives wrangler (OAuth + deploy) on this Mac; it can't run in
-	// the cloud container.
-	"deploy_team_cloud",
-	// Dev-tools: list/delete remote Cloudflare Containers via wrangler on this Mac.
-	"list_team_containers",
-	"delete_team_container",
-	// Dev-only inspection helpers read buffers owned by the desktop Tauri host.
-	"debug_list_terminal_buffers",
-	"debug_read_terminal_buffer",
-	// Team identity is the GitHub account on THIS Mac. Routing this to the
-	// cloud sandbox leaves the desktop without a self author for optimistic
-	// room-chat bubbles.
-	"list_forge_accounts",
-	// Avatar caching writes to LOCAL disk and is rendered via a local
-	// `asset://` URL. Routing it to the container (team mode) would cache there
-	// and hand back a path this webview can't resolve, so every team-room
-	// avatar falls back to initials. Always keep it local.
-	"cache_forge_avatar",
-	// Pasted composer images are written to LOCAL disk and previewed via a
-	// local `asset://` URL. Routing the write to the cloud container (team
-	// mode) would store it there and hand back a path this desktop webview
-	// can't resolve, so the hover preview shows a broken image. Keep local.
-	"save_pasted_image",
-	// Stage B: convert team D1 mirror rows → thread messages via the local
-	// pipeline. Runs on the desktop over rows fetched from /team/messages; routing
-	// it to the container would defeat reading history while the sandbox sleeps.
-	"convert_historical_records",
-	// R2-D: the React Query persistence cache is DESKTOP DISK state — files
-	// under this Mac's data dir — even while the transport points at the team
-	// Worker (which doesn't implement these). Keeping them local is what lets
-	// team mode run a persister at all (per-backend buckets, R1 fix).
-	"read_query_cache",
-	"write_query_cache",
-	"delete_query_cache",
-	// R2-E: the local LLM runtime is THIS Mac's endpoint (llama.cpp on
-	// localhost) — its panel was polling the cloud container every 2s by
-	// routing mistake. Everything local-llm runs on the desktop host.
-	"get_local_llm_status",
-	"start_local_llm",
-	"stop_local_llm",
-	"list_local_llm_catalog",
-	"inspect_local_llm_model",
-	"detect_local_llm_hardware",
-	"list_local_llm_downloads",
-	"start_local_llm_download",
-	"cancel_local_llm_download",
-	"get_local_llm_endpoint",
-	"set_local_llm_context_override",
-	"activate_local_llm_model",
-	"inspect_local_llm_catalog_entry",
-	"pause_local_llm_download",
-	"subscribe_local_llm_downloads",
-]);
+const LOCAL_ONLY_INVOKES = LOCAL_ONLY_COMMANDS;
 
 export function invoke<T>(
 	cmd: string,
