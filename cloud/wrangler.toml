@@ -21,7 +21,7 @@ compatibility_flags = ["nodejs_compat"]
 # changes; this tag just has to point at a published build.
 [[containers]]
 class_name = "Sandbox"
-image = "docker.io/caspianzhao/helmor-team-sandbox:0.1.6"
+image = "docker.io/caspianzhao/helmor-team-sandbox:0.1.7"
 instance_type = "standard-3"
 max_instances = 1
 
