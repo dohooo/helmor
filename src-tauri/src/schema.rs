@@ -1056,6 +1056,24 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         .execute_batch(SESSION_READ_STATE_DDL)
         .context("Failed to create session_read_state table")?;
 
+    // DF-2: normalize legacy space-separated `sessions.created_at` values
+    // (schema-default `datetime('now')`, e.g. "2026-07-06 11:01:04") to the
+    // RFC 3339 millis "Z" format every remaining writer produces
+    // ("2026-07-06T11:01:04.000Z"). The D1 team mirror sorts sessions by the
+    // raw string, so mixed formats break ordering (space 0x20 < 'T' 0x54).
+    // `datetime('now')` is UTC, so appending "Z" is timezone-correct.
+    // Idempotent: normalized rows no longer match `LIKE '% %'`. COALESCE keeps
+    // the original value if strftime can't parse it (never expected).
+    if has_table(connection, "sessions") {
+        connection
+            .execute_batch(
+                "UPDATE sessions
+                 SET created_at = COALESCE(strftime('%Y-%m-%dT%H:%M:%f', created_at) || 'Z', created_at)
+                 WHERE created_at LIKE '% %'",
+            )
+            .context("Failed to normalize legacy sessions.created_at format")?;
+    }
+
     Ok(())
 }
 
@@ -2278,6 +2296,40 @@ mod tests {
         ensure_schema(&connection).unwrap();
         drop_dead_schema(&connection).unwrap();
         drop_dead_schema(&connection).unwrap();
+    }
+
+    #[test]
+    fn created_at_format_normalized_to_iso_and_idempotent() {
+        // DF-2: legacy space-separated `datetime('now')` rows are rewritten to
+        // the RFC 3339 millis "Z" format; ISO rows are untouched byte-for-byte;
+        // a second run is a no-op.
+        let (connection, _dir) = open_test_db();
+        ensure_schema(&connection).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO sessions (id, created_at) VALUES
+                   ('legacy', '2026-07-06 11:01:04'),
+                   ('iso',    '2026-07-06T10:54:52.822Z')",
+            )
+            .unwrap();
+
+        let read = |conn: &Connection, id: &str| -> String {
+            conn.query_row(
+                "SELECT created_at FROM sessions WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+
+        run_migrations(&connection).unwrap();
+        assert_eq!(read(&connection, "legacy"), "2026-07-06T11:01:04.000Z");
+        assert_eq!(read(&connection, "iso"), "2026-07-06T10:54:52.822Z");
+
+        // Idempotent: normalized rows no longer match the LIKE guard.
+        run_migrations(&connection).unwrap();
+        assert_eq!(read(&connection, "legacy"), "2026-07-06T11:01:04.000Z");
+        assert_eq!(read(&connection, "iso"), "2026-07-06T10:54:52.822Z");
     }
 
     #[test]

@@ -837,6 +837,52 @@ mod tests {
     }
 
     #[test]
+    fn create_session_writes_rfc3339_created_at() {
+        // DF-2: every sessions.created_at writer must produce the RFC 3339
+        // millis "Z" format — the D1 mirror sorts by the raw string, so a
+        // schema-default `datetime('now')` row (space-separated) breaks
+        // ordering against ISO rows.
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let _dir = TestDataDir::new("create-session-created-at");
+
+        let db_path = crate::data_dir::db_path().unwrap();
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO repos (id, name, root_path) VALUES ('r1', 'test-repo', '/tmp/test-repo')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (id, repository_id, directory_name, state, status, display_order) VALUES ('w1', 'r1', 'test-dir', 'ready', 'in-progress', ?1)",
+            [crate::workspace::sidebar_order::ORDER_STEP],
+        )
+        .unwrap();
+
+        let response = create_session(
+            "w1",
+            None,
+            None,
+            crate::models::sessions::CreateSessionOverrides::default(),
+        )
+        .unwrap();
+        let (created_at, updated_at): (String, String) = conn
+            .query_row(
+                "SELECT created_at, updated_at FROM sessions WHERE id = ?1",
+                [response.session_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        for value in [&created_at, &updated_at] {
+            assert!(
+                value.contains('T') && value.ends_with('Z') && !value.contains(' '),
+                "expected RFC 3339 millis Z timestamp, got {value:?}"
+            );
+        }
+        assert_eq!(created_at, updated_at);
+    }
+
+    #[test]
     fn create_action_session_uses_local_default_title() {
         let _lock = TEST_ENV_LOCK.lock().unwrap();
         let _dir = TestDataDir::new("create-session-action-title");

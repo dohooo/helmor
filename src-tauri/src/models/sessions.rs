@@ -653,11 +653,17 @@ pub fn create_session(
         action_kind,
     )?;
 
+    // DF-2: bind created_at/updated_at explicitly (RFC 3339 millis, UTC "Z") —
+    // the same format the workspace-creation seed session uses — instead of
+    // falling back to the schema's `datetime('now')` default (space-separated).
+    // The D1 session mirror sorts by the raw string, so a second format breaks
+    // ordering (space 0x20 < 'T' 0x54). Keep every writer on one format.
+    let created_at = db::current_timestamp()?;
     transaction
         .execute(
             r#"
-            INSERT INTO sessions (id, workspace_id, status, title, permission_mode, action_kind, model, effort_level, fast_mode, session_kind, agent_type)
-            VALUES (?1, ?2, 'idle', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            INSERT INTO sessions (id, workspace_id, status, title, permission_mode, action_kind, model, effort_level, fast_mode, session_kind, agent_type, created_at, updated_at)
+            VALUES (?1, ?2, 'idle', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)
             "#,
             (
                 &session_id,
@@ -670,6 +676,7 @@ pub fn create_session(
                 fast_mode as i64,
                 session_kind,
                 overrides.agent_type,
+                &created_at,
             ),
         )
         .context("Failed to create session")?;
