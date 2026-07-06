@@ -9,6 +9,7 @@
 
 import {
 	Sandbox as CloudflareSandbox,
+	type DirectoryBackup,
 	getSandbox,
 	proxyToSandbox,
 } from "@cloudflare/sandbox";
@@ -762,6 +763,19 @@ async function route(
 				{ status: 503, headers: { "content-type": "application/json" } },
 			);
 		}
+		// R3-D: a failing backup restore is its own structured failure —
+		// "your data snapshot can't be loaded" is actionable (check backup
+		// size/health), unlike the generic not-ready shape below, and must
+		// never be silently retried into an OOM wedge loop.
+		if (error instanceof ContainerRestoreError) {
+			return new Response(
+				JSON.stringify({
+					code: "ContainerRestoreFailed",
+					message: error.message,
+				}),
+				{ status: 503, headers: { "content-type": "application/json" } },
+			);
+		}
 		return new Response(
 			JSON.stringify({
 				code: "Unavailable",
@@ -1072,11 +1086,56 @@ async function backupAndStore(
 			localBucket: true,
 			name: `helmor-${new Date().toISOString()}`,
 			ttl: 259200, // 3 days
-			excludes: ["workspaces", "cache", "logs", "run", "local-llm"],
+			excludes: BACKUP_EXCLUDES,
 		});
 		await writeBackupHandle(env, handle);
+		await warnIfBackupOversized(env, handle);
 	} catch (error) {
 		console.error("Phase 2b backup failed", error);
+	}
+}
+
+/** Trees excluded from the sleep backup. Workspaces are pushed to git by
+ *  autopush; cache/logs/run/local-llm are disposable.
+ *
+ *  R3-D: `.codex/.tmp` is Codex's plugin-marketplace clone cache — fully
+ *  regenerable and 76MB+ in practice. Backing it up inflated the archive
+ *  ~700x (70KB → 48MB), and restoring that archive blew the Sandbox DO's
+ *  isolate memory limit in `restoreBackup`, wedging EVERY subsequent wake
+ *  (P0 OBS-R3C-3). Provider dirs live under the backed-up tree since F4a —
+ *  any future cache they grow must be excluded here too (the size alarm
+ *  below is the tripwire). */
+export const BACKUP_EXCLUDES = [
+	"workspaces",
+	"cache",
+	"logs",
+	"run",
+	"local-llm",
+	".codex/.tmp",
+];
+
+/** R3-D: backup size budget alarm. Healthy backups (SQLite DB + provider
+ *  state, caches excluded) are single-digit MB; the alarm threshold is ~10x
+ *  that. A breach means something regenerable crept back into the archive —
+ *  fix the excludes BEFORE the archive grows past what `restoreBackup` can
+ *  hold in the DO isolate (the OOM-wedge failure mode this guards against). */
+export const BACKUP_SIZE_WARN_BYTES = 50 * 1024 * 1024;
+
+export async function warnIfBackupOversized(
+	env: Env,
+	handle: DirectoryBackup,
+): Promise<void> {
+	try {
+		const head = await env.BACKUP_BUCKET?.head(
+			`backups/${handle.id}/data.sqsh`,
+		);
+		if (head && head.size > BACKUP_SIZE_WARN_BYTES) {
+			console.warn(
+				`backup size budget exceeded: ${head.size} bytes (budget ${BACKUP_SIZE_WARN_BYTES}) — check createBackup excludes before restores start OOMing`,
+			);
+		}
+	} catch {
+		// Size check is best-effort telemetry; never fail the backup for it.
 	}
 }
 
@@ -1313,6 +1372,17 @@ export interface EnsureServeOptions {
  *  the ~15s restore/mint + a 180s readiness poll on a backend that can't run; the
  *  Worker turns it into a structured `permanent` 503 the desktop maps to a
  *  "re-run setup" surface rather than an endless "connecting". */
+/** R3-D: the cold start's backup restore failed (timeout, isolate OOM reset,
+ *  R2/archive corruption). Terminal for THIS wake — route() surfaces it as a
+ *  structured 503 (`ContainerRestoreFailed`) instead of silently cold-starting
+ *  an empty DB against a possibly-reset DO. */
+export class ContainerRestoreError extends Error {
+	constructor(detail: string) {
+		super(`Container backup restore failed: ${detail}`);
+		this.name = "ContainerRestoreError";
+	}
+}
+
 export class PermanentContainerError extends Error {
 	readonly phase: string;
 	constructor(phase: string, detail?: string) {
@@ -1474,17 +1544,32 @@ export async function ensureServe(
 	// startProcess (the serve opens the DB + receives the tokens), but they hit
 	// independent backends, so overlapping shaves the mint off the critical path.
 	const restorePromise = (async () => {
+		const handle = await readBackupHandle(env).catch((error) => {
+			// D1 read failure: treat like "no backup" (cold-start empty) — the
+			// data may still be fine on the next wake.
+			console.error("Phase 2b backup-handle read failed", error);
+			return null;
+		});
+		if (!handle) return;
 		try {
-			const handle = await readBackupHandle(env);
-			if (handle) {
-				await withTimeout(
-					sandbox.restoreBackup(handle),
-					restoreBackupTimeoutMs,
-					"restoreBackup",
-				);
-			}
+			await withTimeout(
+				sandbox.restoreBackup(handle),
+				restoreBackupTimeoutMs,
+				"restoreBackup",
+			);
 		} catch (error) {
-			console.error("Phase 2b restore failed (cold-starting empty)", error);
+			// R3-D: a FAILING restore must be LOUD, not a silent empty-DB
+			// cold start. The live P0 (OBS-R3C-3) was an archive too big for
+			// the DO isolate: restoreBackup OOM-reset the DO on every wake,
+			// the old catch logged "cold-starting empty" and pressed on
+			// against a dead DO, and the user saw an unexplained 503 loop
+			// under a green "Connected". Throw typed instead — route() maps
+			// it to a structured 503 so the desktop can surface "backup
+			// restore failing" and readiness can degrade.
+			console.error("Phase 2b restore failed", error);
+			throw new ContainerRestoreError(
+				error instanceof Error ? error.message : String(error),
+			);
 		}
 	})();
 

@@ -94,6 +94,43 @@ function set(next: TeamReadiness): void {
 	for (const listener of listeners) listener();
 }
 
+// R3-D: consecutive WAKE-request failures. The probe's catalog check is a
+// CONTROL-PLANE answer (Worker + D1) — it says nothing about whether the
+// container can actually be woken. During the restore-OOM P0 the catalog
+// kept answering 200 while every wake died, so the UI sat on "Connected"
+// over a dead backend. Track wake outcomes reported by the transport: after
+// N consecutive failures, degrade readiness (and hold the probe's `ready`
+// verdict) until a wake SUCCEEDS again.
+const WAKE_FAILURE_DEGRADE_THRESHOLD = 3;
+let consecutiveWakeFailures = 0;
+
+function wakeWedged(): boolean {
+	return consecutiveWakeFailures >= WAKE_FAILURE_DEGRADE_THRESHOLD;
+}
+
+function degradedWakeWedged(detail?: string): TeamReadiness {
+	return {
+		state: "degraded",
+		label: "The team sandbox isn't waking",
+		detail:
+			detail ||
+			"The backend answers, but the container fails to start (its data snapshot may be failing to restore). Retry, or check Team settings.",
+		unauthorized: false,
+	};
+}
+
+/** Report the outcome of a WAKE-classified request (transport calls this). */
+export function reportWakeOutcome(ok: boolean, detail?: string): void {
+	if (ok) {
+		consecutiveWakeFailures = 0;
+		return;
+	}
+	consecutiveWakeFailures += 1;
+	if (wakeWedged() && current.state === "ready") {
+		set(degradedWakeWedged(detail));
+	}
+}
+
 // A monotonically increasing token identifies the live probe; bumping it aborts
 // any in-flight loop (checked after every await), mirroring ipc.ts's stream
 // generation. `probeLive` lets `ensureTeamReadinessProbe` avoid double-kicking.
@@ -187,7 +224,10 @@ async function runProbe(gen: number): Promise<void> {
 				// network-error clock (a 503 is a cold start, not unreachable).
 				firstNetworkErrorAt = null;
 				if (res.ok) {
-					set(READY);
+					// R3-D: a catalog 200 is control-plane-only evidence. While
+					// wakes are wedged, `ready` would be a lie — stay degraded
+					// until a wake succeeds (which resets the counter).
+					set(wakeWedged() ? degradedWakeWedged() : READY);
 					return;
 				}
 				if (res.status === 401 || res.status === 403) {
@@ -266,11 +306,16 @@ export function beginTeamReadinessProbe(): void {
 export function resetTeamReadiness(): void {
 	probeGen += 1;
 	probeLive = false;
+	consecutiveWakeFailures = 0;
 	set(idle());
 }
 
 /** Retry after `degraded`. Same as {@link beginTeamReadinessProbe}. */
 export function retryTeamReadiness(): void {
+	// An explicit user retry forgives past wake failures — otherwise the
+	// wedged-degraded verdict is unescapable (the overlay blocks the very
+	// interactions that could produce a successful wake).
+	consecutiveWakeFailures = 0;
 	beginTeamReadinessProbe();
 }
 

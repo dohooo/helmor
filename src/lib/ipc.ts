@@ -50,6 +50,7 @@ import {
 } from "./companion-asleep";
 import { isTauriRuntime } from "./platform";
 import { getTeamConfig, isTeamModeActive } from "./team-mode";
+import { reportWakeOutcome } from "./team-readiness";
 
 export type { UnlistenFn };
 
@@ -701,11 +702,21 @@ async function companionInvoke<T>(
 		}
 	}
 
-	const res = await fetch(`${baseUrl()}/rpc/${encodeURIComponent(cmd)}`, {
-		method: "POST",
-		headers: rpcHeaders(cmd, wakeIntent),
-		body: JSON.stringify(record ?? args ?? {}),
-	});
+	// R3-D: is this request allowed to (and expected to) wake the sandbox?
+	// Its outcome feeds the readiness wake-health counter — the catalog probe
+	// alone can report "Connected" over a container that can't start.
+	const isWakeRequest = wakeIntent ?? isWakeCommand(cmd);
+	let res: Response;
+	try {
+		res = await fetch(`${baseUrl()}/rpc/${encodeURIComponent(cmd)}`, {
+			method: "POST",
+			headers: rpcHeaders(cmd, wakeIntent),
+			body: JSON.stringify(record ?? args ?? {}),
+		});
+	} catch (error) {
+		if (isWakeRequest) reportWakeOutcome(false);
+		throw error;
+	}
 	if (!res.ok) {
 		// The browser "pair this device" gate is companion-only; a team-mode
 		// 401 surfaces as a normal error (the Settings health check is the
@@ -713,6 +724,18 @@ async function companionInvoke<T>(
 		if (res.status === 401 && transport.companion)
 			setCompanionAuthState("unauthed");
 		const error = await parseHttpError(res);
+		// R3-D: a WAKE request that came back 5xx means the container failed
+		// to start for us (restore failure, permanent error, not-ready) —
+		// feed the readiness wake-health counter. 4xx (auth/validation) says
+		// nothing about container health.
+		if (isWakeRequest && res.status >= 500) {
+			reportWakeOutcome(
+				false,
+				typeof (error as { message?: unknown })?.message === "string"
+					? (error as { message: string }).message
+					: undefined,
+			);
+		}
 		// R3-A typed asleep: a PASSIVE request while the sandbox sleeps. Reads
 		// throw the typed error (React Query: no retry, keep previous data);
 		// micro-writes queue for replay on the next wake; ephemeral signals
@@ -729,6 +752,7 @@ async function companionInvoke<T>(
 		throw error;
 	}
 	setCompanionAuthState("ok");
+	if (isWakeRequest) reportWakeOutcome(true);
 	// Any successful container answer proves it is awake: clear the staleness
 	// indicator and replay queued micro-writes (guarded against re-entry — a
 	// replay that finds the sandbox asleep again just re-queues).

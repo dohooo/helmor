@@ -11,7 +11,9 @@ vi.mock("./team-mode", () => ({ getTeamConfig: mocks.getTeamConfig }));
 import {
 	beginTeamReadinessProbe,
 	getTeamReadiness,
+	reportWakeOutcome,
 	resetTeamReadiness,
+	retryTeamReadiness,
 } from "./team-readiness";
 
 const healthResponse = (status: number, message = "") =>
@@ -129,5 +131,78 @@ describe("team-readiness", () => {
 		mocks.getTeamConfig.mockReturnValue(null);
 		beginTeamReadinessProbe();
 		expect(getTeamReadiness().state).toBe("unconfigured");
+	});
+});
+
+describe("team-readiness wake-health (R3-D)", () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+		mocks.getTeamConfig.mockReturnValue({
+			url: "https://team.example.workers.dev",
+			token: "tok",
+		});
+		resetTeamReadiness();
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => healthResponse(200)),
+		);
+	});
+	afterEach(() => {
+		resetTeamReadiness();
+		vi.useRealTimers();
+		vi.unstubAllGlobals();
+		vi.restoreAllMocks();
+	});
+
+	async function toReady() {
+		beginTeamReadinessProbe();
+		await vi.advanceTimersByTimeAsync(100);
+		expect(getTeamReadiness().state).toBe("ready");
+	}
+
+	it("degrades after 3 consecutive wake failures despite a green catalog probe", async () => {
+		await toReady();
+		reportWakeOutcome(false);
+		reportWakeOutcome(false);
+		expect(getTeamReadiness().state).toBe("ready"); // below threshold
+		reportWakeOutcome(false, "Container backup restore failed: OOM");
+		expect(getTeamReadiness().state).toBe("degraded");
+		expect(getTeamReadiness().label).toContain("isn't waking");
+		expect(getTeamReadiness().unauthorized).toBe(false);
+	});
+
+	it("a wedged wake-counter holds the probe's ready verdict (catalog 200 is control-plane-only)", async () => {
+		await toReady();
+		reportWakeOutcome(false);
+		reportWakeOutcome(false);
+		reportWakeOutcome(false);
+		// A fresh probe run still answers 200 from D1 — must NOT flip green.
+		beginTeamReadinessProbe();
+		await vi.advanceTimersByTimeAsync(100);
+		expect(getTeamReadiness().state).toBe("degraded");
+		expect(getTeamReadiness().label).toContain("isn't waking");
+	});
+
+	it("a successful wake resets the counter and readiness recovers", async () => {
+		await toReady();
+		reportWakeOutcome(false);
+		reportWakeOutcome(false);
+		reportWakeOutcome(false);
+		expect(getTeamReadiness().state).toBe("degraded");
+		reportWakeOutcome(true);
+		beginTeamReadinessProbe();
+		await vi.advanceTimersByTimeAsync(100);
+		expect(getTeamReadiness().state).toBe("ready");
+	});
+
+	it("an explicit user retry forgives past wake failures", async () => {
+		await toReady();
+		reportWakeOutcome(false);
+		reportWakeOutcome(false);
+		reportWakeOutcome(false);
+		expect(getTeamReadiness().state).toBe("degraded");
+		retryTeamReadiness();
+		await vi.advanceTimersByTimeAsync(100);
+		expect(getTeamReadiness().state).toBe("ready");
 	});
 });
