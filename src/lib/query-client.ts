@@ -49,6 +49,7 @@ import {
 } from "./api";
 // Routed through the transport shim so query-cache persistence works in the
 // mobile browser companion too (not just the Tauri webview).
+import { isCompanionAsleepError } from "./companion-asleep";
 import { invoke } from "./ipc";
 import { parsePrUrl } from "./pr-url";
 // Lazy-cycle-safe: session-thread-cache imports `helmorQueryKeys` from this
@@ -221,7 +222,12 @@ export function createHelmorQueryClient() {
 				gcTime: PERSIST_GC_TIME,
 				refetchOnReconnect: false,
 				refetchOnWindowFocus: true,
-				retry: 1,
+				// R3-A: a typed `ContainerAsleep` is the sandbox sleeping ON
+				// PURPOSE — retrying can't succeed without waking it (which
+				// passive reads must never do). Fail fast; the query keeps its
+				// previous data and the sidebar shows the one staleness dot.
+				retry: (failureCount, error) =>
+					!isCompanionAsleepError(error) && failureCount < 1,
 			},
 			dehydrate: {
 				// Opt-in persistence: keep default's `status === "success"`
@@ -702,7 +708,10 @@ export function claudeRateLimitsQueryOptions(enabled: boolean) {
 		queryKey: helmorQueryKeys.claudeRateLimits,
 		queryFn: getClaudeRateLimits,
 		staleTime: RATE_LIMITS_STALE_TIME,
-		refetchInterval: enabled ? RATE_LIMITS_STALE_TIME : false,
+		// R3-A: same team-mode gate as codex above — this was the E.3 miss
+		// that kept a 2min /rpc poll renewing the sandbox forever.
+		refetchInterval:
+			enabled && !isTeamModeActive() ? RATE_LIMITS_STALE_TIME : false,
 		refetchOnWindowFocus: true,
 		enabled,
 	});

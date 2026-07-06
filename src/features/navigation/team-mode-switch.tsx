@@ -19,6 +19,7 @@ import { getTeamConfig, isTeamModeActive } from "@/lib/team-mode";
 import { switchTeamMode } from "@/lib/team-switch";
 import { cn } from "@/lib/utils";
 import { publishShellEvent } from "@/shell/event-bus";
+import { useCompanionAsleep } from "@/shell/hooks/use-companion-asleep";
 import {
 	type ConnectionPhase,
 	useCompanionConnectionStatus,
@@ -84,6 +85,10 @@ function teamHost(): string | null {
 export function TeamModeSwitch() {
 	const [open, setOpen] = useState(false);
 	const status = useCompanionConnectionStatus();
+	// R3-A: the ONE global staleness hint. While the sandbox sleeps, passive
+	// reads show last-known data — the cloud icon dims instead of any
+	// per-query badge or error dialog.
+	const asleep = useCompanionAsleep();
 
 	if (!isTauriRuntime()) return null;
 
@@ -123,7 +128,12 @@ export function TeamModeSwitch() {
 						>
 							{active ? (
 								<Cloud
-									className={cn("size-4", cloudToneClass(status.phase))}
+									className={cn(
+										"size-4",
+										asleep && status.phase === "online"
+											? "text-muted-foreground"
+											: cloudToneClass(status.phase),
+									)}
 									strokeWidth={2}
 								/>
 							) : (
@@ -144,8 +154,17 @@ export function TeamModeSwitch() {
 				>
 					{active ? (
 						<>
-							<span className="font-medium">{PHASE_LABEL[status.phase]}</span>
+							<span className="font-medium">
+								{asleep && status.phase === "online"
+									? "Sleeping"
+									: PHASE_LABEL[status.phase]}
+							</span>
 							{host ? <span className="text-background/60">{host}</span> : null}
+							{asleep && status.phase === "online" ? (
+								<span className="text-background/60">
+									Sandbox asleep — showing last-known data.
+								</span>
+							) : null}
 							{status.phase === "disconnected" ? (
 								<span className="text-background/60">
 									Can't reach the team sandbox.

@@ -3,6 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 // frontend works in the desktop Tauri webview AND when served to a phone
 // browser by the companion server. See `src/lib/ipc.ts`.
 import { trackAgentRetryStatus } from "./agent-retry-status";
+import { isCompanionAsleepError } from "./companion-asleep";
 import { isCompanionIdleSuspended } from "./companion-suspend";
 import type { InspectorFileItem } from "./editor-session";
 import { type ErrorCode, extractError } from "./errors";
@@ -4243,6 +4244,10 @@ export async function stopAgentStream(
 /** Resubscribe backoff for a silently-dead watch stream (R2-A). */
 const WATCH_RESUBSCRIBE_BASE_MS = 1_000;
 const WATCH_RESUBSCRIBE_CEIL_MS = 30_000;
+/** R3-A: retry cadence while the sandbox is typed-asleep — slow enough to be
+ *  free noise on the Worker, never a wake (the watch pipe carries no wake
+ *  intent). */
+const WATCH_ASLEEP_RESUBSCRIBE_MS = 60_000;
 
 export async function subscribeSessionStream(
 	sessionId: string,
@@ -4316,8 +4321,16 @@ export async function subscribeSessionStream(
 				scheduleResubscribe();
 				return;
 			}
-			void attach().catch(() => {
+			void attach().catch((error) => {
 				detach();
+				// R3-A: a typed asleep means the sandbox is sleeping ON PURPOSE
+				// and a watch must never wake it — jump straight to the slow
+				// cadence instead of laddering 1s→2s→4s against the Worker.
+				// TeamHub's turn-started signal re-attaches promptly regardless
+				// (use-watch-session-stream is turn-driven).
+				if (isCompanionAsleepError(error)) {
+					backoffMs = WATCH_ASLEEP_RESUBSCRIBE_MS;
+				}
 				scheduleResubscribe();
 			});
 		}, delay);

@@ -38,7 +38,16 @@ import {
 	beginAgentStreamOpen,
 	markAgentStreamOpened,
 } from "./agent-stream-open";
-import { LOCAL_ONLY_COMMANDS } from "./command-classes";
+import { isWakeCommand, LOCAL_ONLY_COMMANDS } from "./command-classes";
+import {
+	CompanionAsleepError,
+	drainMicroWrites,
+	isAsleepPayload,
+	isQueueableMicroWrite,
+	queueMicroWrite,
+	setCompanionAsleep,
+	shouldDropWhenAsleep,
+} from "./companion-asleep";
 import { isTauriRuntime } from "./platform";
 import { getTeamConfig, isTeamModeActive } from "./team-mode";
 
@@ -375,6 +384,20 @@ function jsonHeaders(): Record<string, string> {
 	return { "Content-Type": "application/json", ...authHeaders() };
 }
 
+/** R3-A wake-intent marker. Only requests carrying this header may cold-start
+ *  the container or renew its idle timer (the Worker enforces both gates);
+ *  everything else observes for free. Cost governance, not a security
+ *  boundary — the member token already authenticates the caller. */
+export const WAKE_INTENT_HEADER = "X-Helmor-Wake-Intent";
+
+/** Headers for a `/rpc` / `/rpc-stream` request: JSON + auth, plus the
+ *  wake-intent marker when the registry (or an explicit call-site override)
+ *  says this command is allowed to spend money. */
+function rpcHeaders(cmd: string, wakeIntent?: boolean): Record<string, string> {
+	const wake = wakeIntent ?? isWakeCommand(cmd);
+	return wake ? { ...jsonHeaders(), [WAKE_INTENT_HEADER]: "1" } : jsonHeaders();
+}
+
 /**
  * Parse a non-OK HTTP response into the `{ code, message }` shape the frontend
  * expects from native IPC errors (see `src/lib/errors.ts#extractError`).
@@ -516,23 +539,37 @@ export function convertLocalFileSrc(
  */
 const LOCAL_ONLY_INVOKES = LOCAL_ONLY_COMMANDS;
 
+/** Tauri's `InvokeOptions` plus the R3-A escape hatch: a PASSIVE-classified
+ *  command explicitly upgraded to wake for one call (e.g. a user-facing
+ *  refresh button on data that is normally observed for free). */
+export type HelmorInvokeOptions = Partial<InvokeOptions> & {
+	wakeIntent?: boolean;
+};
+
 export function invoke<T>(
 	cmd: string,
 	args?: InvokeArgs,
-	options?: InvokeOptions,
+	options?: HelmorInvokeOptions,
 ): Promise<T> {
 	if (!transport.remote || (isTauriRuntime() && LOCAL_ONLY_INVOKES.has(cmd))) {
 		// Preserve the original call arity so tests asserting
 		// `invoke).toHaveBeenCalledWith("cmd")` (no trailing undefineds) keep
-		// matching.
-		if (options !== undefined) return tauriInvoke<T>(cmd, args, options);
+		// matching. `wakeIntent` is remote-transport metadata — never Tauri's.
+		const { wakeIntent: _wakeIntent, ...tauriOptions } = options ?? {};
+		if (options !== undefined && "headers" in tauriOptions) {
+			return tauriInvoke<T>(cmd, args, tauriOptions as InvokeOptions);
+		}
 		if (args !== undefined) return tauriInvoke<T>(cmd, args);
 		return tauriInvoke<T>(cmd);
 	}
-	return companionInvoke<T>(cmd, args);
+	return companionInvoke<T>(cmd, args, options?.wakeIntent);
 }
 
-async function companionInvoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
+async function companionInvoke<T>(
+	cmd: string,
+	args?: InvokeArgs,
+	wakeIntent?: boolean,
+): Promise<T> {
 	const record = isPlainArgs(args) ? args : undefined;
 
 	// UI-mutation subscription rides the SHARED, reconnecting `/v1/stream` SSE
@@ -666,7 +703,7 @@ async function companionInvoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
 
 	const res = await fetch(`${baseUrl()}/rpc/${encodeURIComponent(cmd)}`, {
 		method: "POST",
-		headers: jsonHeaders(),
+		headers: rpcHeaders(cmd, wakeIntent),
 		body: JSON.stringify(record ?? args ?? {}),
 	});
 	if (!res.ok) {
@@ -675,11 +712,52 @@ async function companionInvoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
 		// place to validate the token), not the pairing screen.
 		if (res.status === 401 && transport.companion)
 			setCompanionAuthState("unauthed");
-		throw await parseHttpError(res);
+		const error = await parseHttpError(res);
+		// R3-A typed asleep: a PASSIVE request while the sandbox sleeps. Reads
+		// throw the typed error (React Query: no retry, keep previous data);
+		// micro-writes queue for replay on the next wake; ephemeral signals
+		// (presence) drop — replaying them stale would be wrong.
+		if (isAsleepPayload(error)) {
+			setCompanionAsleep(true);
+			if (shouldDropWhenAsleep(cmd)) return undefined as T;
+			if (isQueueableMicroWrite(cmd) && isPlainArgs(record)) {
+				queueMicroWrite(cmd, record);
+				return undefined as T;
+			}
+			throw new CompanionAsleepError();
+		}
+		throw error;
 	}
 	setCompanionAuthState("ok");
+	// Any successful container answer proves it is awake: clear the staleness
+	// indicator and replay queued micro-writes (guarded against re-entry — a
+	// replay that finds the sandbox asleep again just re-queues).
+	setCompanionAsleep(false);
+	flushMicroWrites();
 	const text = await res.text();
 	return (text ? JSON.parse(text) : undefined) as T;
+}
+
+/** Replay the asleep micro-write queue. Sequential + re-entrancy-guarded so a
+ *  burst of successful responses triggers exactly one replay pass, and the
+ *  replays' own successes don't recurse. */
+let flushingMicroWrites = false;
+function flushMicroWrites(): void {
+	if (flushingMicroWrites) return;
+	const queued = drainMicroWrites();
+	if (queued.length === 0) return;
+	flushingMicroWrites = true;
+	void (async () => {
+		try {
+			for (const { cmd, args } of queued) {
+				// Still PASSIVE: a replay must never wake the sandbox. If it went
+				// back to sleep mid-flush, companionInvoke re-queues the rest.
+				await companionInvoke(cmd, args).catch(() => {});
+			}
+		} finally {
+			flushingMicroWrites = false;
+		}
+	})();
 }
 
 function isPlainArgs(args?: InvokeArgs): args is Record<string, unknown> {
@@ -716,16 +794,33 @@ async function openCompanionStream(
 		controller.abort();
 	}, STREAM_OPEN_TIMEOUT_MS);
 	try {
+		// Per-pipe wake polarity (R3-A): the OPEN request's header decides the
+		// whole pipe. A turn stream (`send_agent_message_stream`, WAKE) renews
+		// the container's idle timer while bytes flow; a watch stream
+		// (`subscribe_session_stream`, PASSIVE) is forwarded but NEVER renews —
+		// its 30s keepalives only feed the corpse watchdog, so watching a
+		// session is free and the sandbox sleeps on schedule.
 		const res = await fetch(
 			`${baseUrl()}/rpc-stream/${encodeURIComponent(cmd)}`,
 			{
 				method: "POST",
-				headers: jsonHeaders(),
+				headers: rpcHeaders(cmd),
 				body: JSON.stringify(args),
 				signal: controller.signal,
 			},
 		);
-		if (!res.ok || !res.body) throw await parseHttpError(res);
+		if (!res.ok || !res.body) {
+			const error = await parseHttpError(res);
+			if (isAsleepPayload(error)) {
+				setCompanionAsleep(true);
+				throw new CompanionAsleepError();
+			}
+			throw error;
+		}
+		// A successful open proves the container is awake (a WAKE pipe may have
+		// just cold-started it) — clear staleness + replay queued micro-writes.
+		setCompanionAsleep(false);
+		flushMicroWrites();
 		return res.body;
 	} catch (error) {
 		if (timedOut) {
