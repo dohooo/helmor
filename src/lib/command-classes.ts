@@ -96,7 +96,11 @@ export const COMMAND_CLASSES: Record<string, CommandClass> = {
 	sync_workspace_with_target_branch: "WAKE",
 	update_intended_target_branch: "WAKE",
 	create_and_checkout_branch: "WAKE",
-	trigger_workspace_fetch: "WAKE",
+	// Freshness fetch fired by browsing (workspace switch / app focus) — pure
+	// observation in spirit, so it must never wake or renew a sleeping
+	// container (R2-F6). Awake: forwarded and the fetch rides for free.
+	// Asleep: typed ContainerAsleep, swallowed by the fire-and-forget caller.
+	trigger_workspace_fetch: "PASSIVE",
 	stage_workspace_file: "WAKE",
 	unstage_workspace_file: "WAKE",
 	discard_workspace_file: "WAKE",

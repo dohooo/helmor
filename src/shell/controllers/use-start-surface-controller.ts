@@ -88,6 +88,9 @@ export type StartSurfaceState = {
 	/** Worktree mode only; backend ignores in local mode. */
 	startBranchIntent: WorkspaceBranchIntent;
 	startPendingNewBranch: string | null;
+	/** Fatal create failure surfaced inline on the start page (R2-F2);
+	 *  cleared on resubmit or when the user changes repo/mode. */
+	startCreateError: { title: string; message: string } | null;
 	startInboxProviderTab: string;
 	startInboxProviderSourceTab: string;
 	startInboxStateFilterBySource: Record<string, string>;
@@ -177,6 +180,12 @@ export function useStartSurfaceController(
 	const [startPendingNewBranch, setStartPendingNewBranch] = useState<
 		string | null
 	>(null);
+	// R2-F2: fatal create failures render inline in the start surface instead
+	// of a transient toast (a 4s toast is far too easy to miss).
+	const [startCreateError, setStartCreateError] = useState<{
+		title: string;
+		message: string;
+	} | null>(null);
 	// Local-mode branch pick — transient (a pending checkout), kept out of the
 	// persisted worktree `sourceBranchByRepoId` so it can't shadow live HEAD.
 	const [startLocalBranchSelection, setStartLocalBranchSelection] = useState<
@@ -275,6 +284,12 @@ export function useStartSurfaceController(
 		if (!startRepository) return;
 		void prewarmSlashCommandsForRepo(startRepository.id);
 	}, [startRepository]);
+
+	// The inline create error is scoped to the repo/mode it happened in —
+	// switching target invalidates it.
+	useEffect(() => {
+		setStartCreateError(null);
+	}, [startRepositoryId, startMode]);
 
 	// Repo switch only clears transient state; persisted picker selections
 	// are re-read from the new repo's slot automatically.
@@ -527,13 +542,16 @@ export function useStartSurfaceController(
 			payload: ComposerSubmitPayload,
 			options?: { startSubmitMode?: StartSubmitMode },
 		): Promise<ComposerCreatePrepareOutcome> => {
+			// A new submit supersedes any previous inline failure.
+			setStartCreateError(null);
+
 			// Chat mode doesn't require a repo selection — every other
 			// mode does.
 			if (startMode !== "chat" && !startRepository?.id) {
-				pushToastRef.current(
-					translateSource("miscPickRepositoryBeforeSending"),
-					translateSource("miscCantCreateWorkspace"),
-				);
+				setStartCreateError({
+					title: translateSource("miscCantCreateWorkspace"),
+					message: translateSource("miscPickRepositoryBeforeSending"),
+				});
 				return { shouldStream: false };
 			}
 
@@ -791,7 +809,9 @@ export function useStartSurfaceController(
 						: code === "BranchNotFound"
 							? translateSource("miscBranchNotFound")
 							: translateSource("miscCantCreateWorkspace");
-				pushToastRef.current(message, title);
+				// R2-F2: persistent inline error on the start surface — not a
+				// 4s toast the user can miss.
+				setStartCreateError({ title, message });
 				return { shouldStream: false };
 			}
 		},
@@ -921,6 +941,7 @@ export function useStartSurfaceController(
 			startMode,
 			startBranchIntent,
 			startPendingNewBranch,
+			startCreateError,
 			startInboxProviderTab,
 			startInboxProviderSourceTab,
 			startInboxStateFilterBySource,
@@ -938,6 +959,7 @@ export function useStartSurfaceController(
 			startComposerContextKey,
 			startComposerInsertTarget,
 			startComposerSettingsController,
+			startCreateError,
 			startInboxProviderSourceTab,
 			startInboxProviderTab,
 			startInboxStateFilterBySource,

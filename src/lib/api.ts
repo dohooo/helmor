@@ -2901,7 +2901,10 @@ export async function readEditorFile(
 }
 
 export function triggerWorkspaceFetch(workspaceId: string): void {
-	void invoke("trigger_workspace_fetch", { workspaceId });
+	// Best-effort freshness fetch. Classified PASSIVE (R2-F6): while the
+	// container sleeps this rejects with a typed asleep error — swallow it,
+	// browsing must never surface a toast or wake anything.
+	invoke("trigger_workspace_fetch", { workspaceId }).catch(() => {});
 }
 
 export async function readFileAtRef(
