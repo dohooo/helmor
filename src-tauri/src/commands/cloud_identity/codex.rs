@@ -59,6 +59,11 @@ pub struct CloudIdentityAuthResult {
     /// `true` when the Worker reports the bound account changed from a
     /// previously stored one (identity hygiene signal — not an error).
     pub changed: bool,
+    /// R5-A: the account email lifted from the `id_token`'s `email` claim,
+    /// parsed LOCALLY (display-only — shown in the Agent status card instead
+    /// of the account UUID). `None` when the claim is absent/unparseable.
+    /// Never token material: the email is an identity fact, not a credential.
+    pub email: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -131,6 +136,29 @@ fn parse_codex_auth_json(contents: &str) -> anyhow::Result<CapturedTokens> {
         refresh_token: Zeroizing::new(refresh_token),
         id_token,
     })
+}
+
+// ---------------------------------------------------------------------------
+// id_token email extraction (R5-A, display-only)
+// ---------------------------------------------------------------------------
+
+/// Lift the `email` claim out of an OIDC `id_token` WITHOUT verifying the
+/// signature — this is a display-only identity fact for the Agent status card
+/// (the Worker independently derives the authoritative `account_id` from the
+/// same token). Best-effort: any malformed segment yields `None`, never an
+/// error, and NEVER logs any token bytes.
+fn email_from_id_token(id_token: &str) -> Option<String> {
+    use base64::Engine as _;
+    let payload_b64 = id_token.split('.').nth(1)?;
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload_b64)
+        .ok()?;
+    let claims: serde_json::Value = serde_json::from_slice(&payload).ok()?;
+    let email = claims.get("email")?.as_str()?.trim();
+    if email.is_empty() {
+        return None;
+    }
+    Some(email.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -344,6 +372,11 @@ fn authorize_impl(worker_url: &str, team_token: &str) -> anyhow::Result<CloudIde
 
     let echo = upload_to_worker(worker_url, team_token, &tokens)?;
 
+    // R5-A: lift the display email out of the id_token BEFORE scrubbing.
+    // Local parse only — the email is returned to the frontend for the Agent
+    // status card; no token bytes travel with it.
+    let email = email_from_id_token(&tokens.id_token);
+
     // Tokens (incl. the zeroizing RT buffer) drop at end of scope; make the
     // scrub explicit and immediate now that the upload succeeded.
     drop(tokens);
@@ -352,6 +385,7 @@ fn authorize_impl(worker_url: &str, team_token: &str) -> anyhow::Result<CloudIde
     Ok(CloudIdentityAuthResult {
         account_id: echo.account_id,
         changed: echo.changed,
+        email,
     })
 }
 
@@ -463,6 +497,44 @@ mod tests {
 
     // NB: `cloud_identity_url` lives in the parent module now (shared with the
     // claude broker); its tests live there too.
+
+    fn jwt_with_payload(payload: serde_json::Value) -> String {
+        use base64::Engine as _;
+        let engine = &base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        format!(
+            "{}.{}.{}",
+            engine.encode(r#"{"alg":"RS256","typ":"JWT"}"#),
+            engine.encode(payload.to_string()),
+            engine.encode("sig")
+        )
+    }
+
+    #[test]
+    fn email_lifted_from_id_token_payload() {
+        let jwt = jwt_with_payload(serde_json::json!({
+            "email": "dev@example.com",
+            "https://api.openai.com/auth": { "chatgpt_account_id": "acct_1" }
+        }));
+        assert_eq!(
+            email_from_id_token(&jwt).as_deref(),
+            Some("dev@example.com")
+        );
+    }
+
+    #[test]
+    fn email_absent_or_malformed_yields_none() {
+        // No email claim.
+        let jwt = jwt_with_payload(serde_json::json!({ "sub": "user-1" }));
+        assert_eq!(email_from_id_token(&jwt), None);
+        // Empty email claim.
+        let jwt = jwt_with_payload(serde_json::json!({ "email": "   " }));
+        assert_eq!(email_from_id_token(&jwt), None);
+        // Not a JWT at all — must not panic or error.
+        assert_eq!(email_from_id_token("not-a-jwt"), None);
+        assert_eq!(email_from_id_token(""), None);
+        // Payload segment isn't base64/JSON.
+        assert_eq!(email_from_id_token("a.!!!.c"), None);
+    }
 
     #[test]
     fn captured_refresh_token_is_zeroizing_and_derefs_to_secret() {
