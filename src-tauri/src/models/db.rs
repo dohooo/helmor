@@ -42,6 +42,25 @@ pub fn workspace_fs_mutation_lock(workspace_id: &str) -> Arc<Mutex<()>> {
         .clone()
 }
 
+/// Per-repo FS-mutation lock map. Serializes repo-source re-clones
+/// (`workspace::rematerialize::ensure_repo_source`) so concurrent WAKE
+/// operations on the same repo perform exactly one clone.
+///
+/// Lock ordering: the repo lock is always INNERMOST — it may be acquired
+/// while holding a workspace lock (worktree rebuild → repo ensure), but a
+/// workspace lock must NEVER be acquired while holding a repo lock.
+fn per_repo_locks() -> &'static std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>> {
+    static MAP: OnceLock<std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
+    MAP.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+pub fn repo_fs_mutation_lock(repo_id: &str) -> Arc<Mutex<()>> {
+    let mut map = per_repo_locks().lock().expect("per-repo lock map poisoned");
+    map.entry(repo_id.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
+
 pub fn remove_workspace_lock(workspace_id: &str) {
     if let Ok(mut map) = per_workspace_locks().lock() {
         map.remove(workspace_id);

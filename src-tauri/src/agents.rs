@@ -297,7 +297,21 @@ pub async fn send_agent_message_stream(
         .into());
     }
 
-    let working_directory = resolve_stream_working_directory(&request)?;
+    // R4-A: may lazily rematerialize a missing worktree (repo re-clone can
+    // take tens of seconds) — run on the blocking pool, with the acting
+    // member re-bound so credential lookup works (see `run_blocking`).
+    let working_directory = {
+        let req = request.clone();
+        let acting = crate::forge::acting_member::current_async();
+        tauri::async_runtime::spawn_blocking(move || {
+            crate::forge::acting_member::scope_thread(acting, || {
+                resolve_stream_working_directory(&req)
+            })
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e}"))
+        .map_err(crate::error::CommandError::from)??
+    };
     let stream_id = Uuid::new_v4().to_string();
     let active_streams = app.state::<ActiveStreams>();
 
@@ -317,7 +331,23 @@ pub async fn send_agent_message_stream(
 fn resolve_stream_working_directory(
     request: &AgentSendRequest,
 ) -> anyhow::Result<std::path::PathBuf> {
-    resolve_working_directory(request.working_directory.as_deref())
+    match resolve_working_directory(request.working_directory.as_deref()) {
+        Ok(directory) => Ok(directory),
+        // R4-A: the working directory evaporated (container generation
+        // change). When the session maps back to a workspace, lazily
+        // rematerialize it and continue transparently; otherwise keep the
+        // original WorkspaceBroken error (e.g. sessionless curl callers).
+        Err(original) => {
+            let Some(session_id) = request.helmor_session_id.as_deref() else {
+                return Err(original);
+            };
+            let Ok(Some(workspace_id)) = crate::sessions::workspace_id_for_session(session_id)
+            else {
+                return Err(original);
+            };
+            crate::workspace::rematerialize::ensure_workspace_materialized(&workspace_id)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

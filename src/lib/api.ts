@@ -411,6 +411,10 @@ export type WorkspaceDetail = {
 	remoteUrl?: string | null;
 	defaultBranch?: string | null;
 	rootPath?: string | null;
+	/** Whether `rootPath` currently exists on disk. `rootPath` is the
+	 * expected (DB-derived) path even when the directory is missing —
+	 * WAKE-level operations lazily rematerialize it (R4-A). */
+	materialized?: boolean;
 	directoryName: string;
 	state: WorkspaceState;
 	hasUnread: boolean;

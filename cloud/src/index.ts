@@ -1163,6 +1163,13 @@ async function backupAndStore(
 /** Trees excluded from the sleep backup. Workspaces are pushed to git by
  *  autopush; cache/logs/run/local-llm are disposable.
  *
+ *  Backup boundary invariant (R4-A): only source-of-truth state (helmor.db
+ *  + small config + provider state) is backed up. Everything in
+ *  BACKUP_EXCLUDES or outside the backup tree is derived state: never
+ *  backed up, always rematerializable. Any change introducing a new
+ *  derived directory MUST ship its rematerialize path (see
+ *  src-tauri/src/workspace/rematerialize.rs) or add it to the backup.
+ *
  *  R3-D: `.codex/.tmp` is Codex's plugin-marketplace clone cache — fully
  *  regenerable and 76MB+ in practice. Backing it up inflated the archive
  *  ~700x (70KB → 48MB), and restoring that archive blew the Sandbox DO's

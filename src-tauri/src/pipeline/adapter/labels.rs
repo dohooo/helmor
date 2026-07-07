@@ -240,6 +240,20 @@ pub(super) fn build_system_notice(parsed: Option<&Value>, msg_id: &str) -> Optio
                 .map(str::to_string),
         }),
         "codex_reconnecting" => Some(build_codex_reconnecting_notice(parsed, msg_id)),
+        // R4-A: lazy rematerialize rebuilt this workspace's worktree from the
+        // repo default branch because its own branch was never pushed. A
+        // notification, not a failure — the turn continues on the rebuilt
+        // tree, but unpushed work is not recoverable.
+        "workspace_rebuilt" => Some(MessagePart::SystemNotice {
+            id: notice_part_id(msg_id),
+            severity: NoticeSeverity::Warning,
+            label: "Workspace rebuilt".to_string(),
+            body: parsed
+                .get("message")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .map(str::to_string),
+        }),
         "api_retry" => Some(build_api_retry_notice(parsed, msg_id)),
         "fast_mode_unavailable" => {
             let reason = parsed

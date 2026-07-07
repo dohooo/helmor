@@ -28,6 +28,12 @@ pub enum ErrorCode {
     BranchInUse,
     /// Branch not found locally or on the remote.
     BranchNotFound,
+    /// Repo source clone is missing and could not be re-cloned from its
+    /// remote (lazy rematerialize, R4-A).
+    RepoSourceUnavailable,
+    /// Workspace worktree is missing and could not be rebuilt from the
+    /// repo source (lazy rematerialize, R4-A).
+    WorkspaceRematerializeFailed,
 }
 
 /// Exposes an [`ErrorCode`] as a distinct layer in an anyhow error chain,

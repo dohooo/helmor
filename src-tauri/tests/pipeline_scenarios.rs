@@ -1333,6 +1333,22 @@ fn sys_error_max_turns_rendered() {
     assert_yaml_snapshot!(run_normalized(msgs));
 }
 
+/// R4-A: lazy rematerialize persists a `workspace_rebuilt` system row when a
+/// worktree is rebuilt from the repo default branch (its own branch was never
+/// pushed). Must render as a visible Warning notice on historical reload —
+/// not get swallowed as an unknown subtype.
+#[test]
+fn sys_workspace_rebuilt_renders_warning_notice() {
+    let msgs = vec![system_json(
+        "s1",
+        json!({
+            "subtype": "workspace_rebuilt",
+            "message": "Branch feat/x was never pushed; workspace was rebuilt from origin/main. Unpushed work is not recoverable.",
+        }),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
 #[test]
 fn sys_no_subtype() {
     let msgs = vec![system_json("s1", json!({}))];

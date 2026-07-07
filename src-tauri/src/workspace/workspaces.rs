@@ -143,6 +143,11 @@ pub struct WorkspaceDetail {
     pub remote_url: Option<String>,
     pub default_branch: Option<String>,
     pub root_path: Option<String>,
+    /// Whether `root_path` currently exists on disk. `root_path` is the
+    /// expected (DB-derived) path even when the directory is missing —
+    /// WAKE-level operations lazily rematerialize it (R4-A). PASSIVE
+    /// reads (this detail) never trigger a rebuild.
+    pub materialized: bool,
     pub directory_name: String,
     pub state: WorkspaceState,
     pub has_unread: bool,
@@ -1384,16 +1389,21 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
 
     // Use the workspace path as root_path so Claude Code/Codex operate in the
     // correct directory. For worktree workspaces this is the helmor data
-    // dir; for local it's the source repo's root. Archived workspaces have
+    // dir; for local it's the source repo's root. R4-A: the path is the
+    // EXPECTED path derived from the DB row — a missing directory no longer
+    // nulls it out (WAKE-level entry points lazily rematerialize; this
+    // PASSIVE read only reports `materialized`). Archived workspaces have
     // no on-disk path — return None so the frontend knows agent messaging
     // is unavailable.
-    let worktree_path = helpers::workspace_path(&record).ok().and_then(|p| {
-        if p.is_dir() {
-            p.to_str().map(|s| s.to_string())
-        } else {
-            None
-        }
-    });
+    let expected_path = helpers::workspace_path(&record).ok();
+    let materialized = expected_path
+        .as_deref()
+        .is_some_and(std::path::Path::is_dir);
+    let worktree_path = if record.state == WorkspaceState::Archived {
+        None
+    } else {
+        expected_path.and_then(|p| p.to_str().map(|s| s.to_string()))
+    };
     // Local workspaces: substitute the stored branch snapshot with the
     // live HEAD so the header reflects whatever the user (or another
     // local create) just checked out.
@@ -1410,6 +1420,7 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         remote_url: record.remote_url,
         default_branch: record.default_branch,
         root_path: worktree_path,
+        materialized,
         directory_name: record.directory_name,
         state: record.state,
         has_unread: record.has_unread,

@@ -1168,34 +1168,46 @@ fn resolve_push_status(
     WorkspacePushStatus::Unpublished
 }
 
+/// Process-level auth args for a network op against `remote` in `dir`
+/// (team-cloud member tokens; empty on desktop / ssh remotes — zero
+/// behavior change). See `workspace::rematerialize::auth_config_args`.
+fn network_auth_args(dir: &str, remote: &str) -> Vec<String> {
+    let url = run_git(["-C", dir, "remote", "get-url", remote], None).unwrap_or_default();
+    crate::workspace::rematerialize::auth_config_args(&url)
+}
+
 pub fn push_current_branch(workspace_dir: &Path, remote: &str) -> Result<PushBranchResult> {
     let branch = current_branch_name(workspace_dir)?;
     let workspace_dir = workspace_dir.display().to_string();
     let upstream = current_upstream_ref(Path::new(&workspace_dir));
 
+    let auth = network_auth_args(&workspace_dir, remote);
+
     if let Some(target_ref) = upstream {
         let push_ref = upstream_push_ref(&target_ref)
             .with_context(|| format!("Unsupported upstream ref for push: {target_ref}"))?;
-        return run_git_with_timeout(
+        let mut args = auth;
+        args.extend(
             [
                 "-C",
                 workspace_dir.as_str(),
                 "push",
                 remote,
                 push_ref.as_str(),
-            ],
-            None,
-            GIT_NETWORK_TIMEOUT,
-        )
-        .map(|_| PushBranchResult {
-            branch: branch.clone(),
-            target_ref,
-        })
-        .with_context(|| format!("Failed to push branch {branch} to its upstream"));
+            ]
+            .map(String::from),
+        );
+        return run_git_with_timeout(&args, None, GIT_NETWORK_TIMEOUT)
+            .map(|_| PushBranchResult {
+                branch: branch.clone(),
+                target_ref,
+            })
+            .with_context(|| format!("Failed to push branch {branch} to its upstream"));
     }
 
     let push_ref = format!("HEAD:refs/heads/{branch}");
-    run_git_with_timeout(
+    let mut args = auth;
+    args.extend(
         [
             "-C",
             workspace_dir.as_str(),
@@ -1203,15 +1215,15 @@ pub fn push_current_branch(workspace_dir: &Path, remote: &str) -> Result<PushBra
             "--set-upstream",
             remote,
             push_ref.as_str(),
-        ],
-        None,
-        GIT_NETWORK_TIMEOUT,
-    )
-    .map(|_| PushBranchResult {
-        branch: branch.clone(),
-        target_ref: format!("{remote}/{branch}"),
-    })
-    .with_context(|| format!("Failed to push branch {branch} to {remote}"))
+        ]
+        .map(String::from),
+    );
+    run_git_with_timeout(&args, None, GIT_NETWORK_TIMEOUT)
+        .map(|_| PushBranchResult {
+            branch: branch.clone(),
+            target_ref: format!("{remote}/{branch}"),
+        })
+        .with_context(|| format!("Failed to push branch {branch} to {remote}"))
 }
 
 /// Counts how many commits are reachable from HEAD but not from `base_ref`.
@@ -1307,25 +1319,21 @@ fn parse_unmerged_paths(output: &str) -> std::collections::BTreeSet<String> {
 /// a stalled remote or credential prompt cannot park the calling thread.
 pub fn fetch_remote_branch(workspace_dir: &Path, remote: &str, branch: &str) -> Result<()> {
     let workspace_dir = workspace_dir.display().to_string();
-    run_git_with_timeout(
-        ["-C", workspace_dir.as_str(), "fetch", remote, branch],
-        None,
-        GIT_NETWORK_TIMEOUT,
-    )
-    .map(|_| ())
-    .with_context(|| format!("Failed to fetch {remote}/{branch} into {workspace_dir}"))
+    let mut args = network_auth_args(&workspace_dir, remote);
+    args.extend(["-C", workspace_dir.as_str(), "fetch", remote, branch].map(String::from));
+    run_git_with_timeout(&args, None, GIT_NETWORK_TIMEOUT)
+        .map(|_| ())
+        .with_context(|| format!("Failed to fetch {remote}/{branch} into {workspace_dir}"))
 }
 
 /// Fetch all branches from the given remote, pruning deleted remote refs.
 pub fn fetch_all_remote(workspace_dir: &Path, remote: &str) -> Result<()> {
     let workspace_dir = workspace_dir.display().to_string();
-    run_git_with_timeout(
-        ["-C", workspace_dir.as_str(), "fetch", "--prune", remote],
-        None,
-        GIT_NETWORK_TIMEOUT,
-    )
-    .map(|_| ())
-    .with_context(|| format!("Failed to fetch all from {remote} in {workspace_dir}"))
+    let mut args = network_auth_args(&workspace_dir, remote);
+    args.extend(["-C", workspace_dir.as_str(), "fetch", "--prune", remote].map(String::from));
+    run_git_with_timeout(&args, None, GIT_NETWORK_TIMEOUT)
+        .map(|_| ())
+        .with_context(|| format!("Failed to fetch all from {remote} in {workspace_dir}"))
 }
 
 /// Returns true if `refs/remotes/<remote>/<branch>` exists locally (no network).
