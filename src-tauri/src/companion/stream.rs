@@ -155,19 +155,34 @@ fn start_agent_stream(
     author_id: Option<String>,
     tx: UnboundedSender<String>,
 ) -> Result<(), CommandError> {
+    // Bind the trusted member id as the ambient acting member for the whole
+    // stream task, mirroring the plain-RPC dispatcher (companion/rpc.rs). The
+    // forge layer deep inside the turn (per-member git credentials for lazy
+    // rematerialize, gh/glab ops) reads it via `current_async` →
+    // `scope_thread`; without this binding a turn-triggered re-clone of a
+    // private repo has no credentials and fails (R4-A live gap).
+    let member = author_id.clone();
     let request = resolve_request(args, author_id)?;
 
     let channel = ndjson_channel::<AgentStreamEvent>(tx.clone());
     let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let app_for_command = app.clone();
-        run_and_surface(tx, "agent stream", async move {
-            let sidecar = app_for_command.state::<ManagedSidecar>();
-            agents::send_agent_message_stream(app_for_command.clone(), sidecar, request, channel)
+    tauri::async_runtime::spawn(crate::forge::acting_member::scope_async(
+        member,
+        async move {
+            let app_for_command = app.clone();
+            run_and_surface(tx, "agent stream", async move {
+                let sidecar = app_for_command.state::<ManagedSidecar>();
+                agents::send_agent_message_stream(
+                    app_for_command.clone(),
+                    sidecar,
+                    request,
+                    channel,
+                )
                 .await
-        })
-        .await;
-    });
+            })
+            .await;
+        },
+    ));
     Ok(())
 }
 
