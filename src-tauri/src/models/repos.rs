@@ -1709,8 +1709,36 @@ fn resolve_repository_remote_url(repo_root: &Path, remote: &str) -> Result<Strin
         ["-C", repo_root_arg.as_str(), "remote", "get-url", remote],
         None,
     )
-    .map(|value| value.trim().to_string())
+    // Team-cloud clones embed the acting member's forge token in the origin
+    // URL (`https://x-access-token:gho_…@github.com/…`) so the sandbox SDK can
+    // clone private repos. That credential must stay in the on-disk git config
+    // only — never in the DB, backups, or any RPC payload (R2-F7). Strip the
+    // userinfo before the URL leaves this resolver.
+    .map(|value| redact_url_userinfo(value.trim()))
     .map_err(|error| anyhow::anyhow!("Failed to resolve remote URL for {remote}: {error}"))
+}
+
+/// Strip embedded credentials (URL userinfo) from a scheme://-style URL's
+/// authority, e.g. `https://x-access-token:gho_xxx@github.com/o/r.git` →
+/// `https://github.com/o/r.git`. SCP-style SSH URLs (`git@host:path`) have no
+/// scheme separator and pass through untouched — their "user" is the SSH
+/// login, not a credential.
+pub fn redact_url_userinfo(url: &str) -> String {
+    let Some(scheme_end) = url.find("://") else {
+        return url.to_string();
+    };
+    let after = &url[scheme_end + 3..];
+    let authority_end = after.find('/').unwrap_or(after.len());
+    let authority = &after[..authority_end];
+    match authority.rfind('@') {
+        Some(at) => format!(
+            "{}{}{}",
+            &url[..scheme_end + 3],
+            &authority[at + 1..],
+            &after[authority_end..]
+        ),
+        None => url.to_string(),
+    }
 }
 
 fn resolve_repository_default_branch(repo_root: &Path, remote: Option<&str>) -> Option<String> {
@@ -1838,6 +1866,45 @@ fn normalize_path_separators(path: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redact_url_userinfo_strips_credentials_and_preserves_everything_else() {
+        // Credentialed https (the team-cloud clone shape) → credentials gone.
+        assert_eq!(
+            redact_url_userinfo("https://x-access-token:gho_abc123@github.com/acme/repo.git"),
+            "https://github.com/acme/repo.git"
+        );
+        // Username-only userinfo is also stripped.
+        assert_eq!(
+            redact_url_userinfo("https://token@gitlab.com/acme/repo.git"),
+            "https://gitlab.com/acme/repo.git"
+        );
+        // No path segment.
+        assert_eq!(
+            redact_url_userinfo("https://user:pass@github.com"),
+            "https://github.com"
+        );
+        // '@' inside the path is not userinfo.
+        assert_eq!(
+            redact_url_userinfo("https://github.com/acme/repo@v2.git"),
+            "https://github.com/acme/repo@v2.git"
+        );
+        // Clean URLs pass through byte-for-byte.
+        assert_eq!(
+            redact_url_userinfo("https://github.com/acme/repo.git"),
+            "https://github.com/acme/repo.git"
+        );
+        // SCP-style SSH: the "user" is the SSH login, not a credential.
+        assert_eq!(
+            redact_url_userinfo("git@github.com:acme/repo.git"),
+            "git@github.com:acme/repo.git"
+        );
+        // Ports in the authority survive redaction.
+        assert_eq!(
+            redact_url_userinfo("http://a:b@host:8080/x"),
+            "http://host:8080/x"
+        );
+    }
 
     #[test]
     fn insert_and_load_repository_round_trips_forge_provider() {

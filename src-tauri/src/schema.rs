@@ -1076,6 +1076,36 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to normalize legacy sessions.created_at format")?;
     }
 
+    // R2-F7: strip embedded credentials from stored remote URLs. Team-cloud
+    // clones write an origin of the form `https://user:token@host/…`; the
+    // resolver now redacts on ingest, but rows written before that fix still
+    // carry the token (and leak it through get_workspace / backups / the D1
+    // mirror). Idempotent: redacted rows no longer match the `%://%@%` guard.
+    if has_table(connection, "repos") && has_column(connection, "repos", "remote_url") {
+        let mut stmt = connection
+            .prepare("SELECT id, remote_url FROM repos WHERE remote_url LIKE '%://%@%'")
+            .context("Failed to scan repos for credentialed remote URLs")?;
+        let rows: Vec<(String, String)> = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .context("Failed to read credentialed remote URLs")?
+            .collect::<std::result::Result<_, _>>()
+            .context("Failed to collect credentialed remote URLs")?;
+        drop(stmt);
+        for (id, url) in rows {
+            let redacted = crate::repos::redact_url_userinfo(&url);
+            if redacted != url {
+                connection
+                    .execute(
+                        "UPDATE repos SET remote_url = ?1 WHERE id = ?2",
+                        rusqlite::params![redacted, id],
+                    )
+                    .context("Failed to redact credentialed remote URL")?;
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -2298,6 +2328,48 @@ mod tests {
         ensure_schema(&connection).unwrap();
         drop_dead_schema(&connection).unwrap();
         drop_dead_schema(&connection).unwrap();
+    }
+
+    #[test]
+    fn credentialed_remote_urls_redacted_and_idempotent() {
+        // R2-F7: team-cloud clone rows carrying `user:token@` userinfo are
+        // rewritten credential-free; clean https and scp-style ssh rows are
+        // untouched byte-for-byte; a second run is a no-op.
+        let (connection, _dir) = open_test_db();
+        ensure_schema(&connection).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO repos (id, remote_url) VALUES
+                   ('leaky', 'https://x-access-token:gho_abc123@github.com/acme/repo.git'),
+                   ('clean', 'https://github.com/acme/other.git'),
+                   ('ssh',   'git@github.com:acme/ssh-repo.git')",
+            )
+            .unwrap();
+
+        let read = |conn: &Connection, id: &str| -> String {
+            conn.query_row("SELECT remote_url FROM repos WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .unwrap()
+        };
+
+        run_migrations(&connection).unwrap();
+        assert_eq!(
+            read(&connection, "leaky"),
+            "https://github.com/acme/repo.git"
+        );
+        assert_eq!(
+            read(&connection, "clean"),
+            "https://github.com/acme/other.git"
+        );
+        assert_eq!(read(&connection, "ssh"), "git@github.com:acme/ssh-repo.git");
+
+        // Idempotent: redacted rows no longer match the LIKE guard.
+        run_migrations(&connection).unwrap();
+        assert_eq!(
+            read(&connection, "leaky"),
+            "https://github.com/acme/repo.git"
+        );
     }
 
     #[test]
