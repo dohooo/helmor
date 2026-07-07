@@ -1,11 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	clearInviteFromLocation,
+	clearTeamConfig,
+	getCodexIdentityEmail,
 	getInviteFromLocation,
+	getTeamAdminToken,
 	getTeamConfig,
+	isTeamAdmin,
 	isTeamModeActive,
 	parseInviteLink,
-	pingTeamBackend,
+	saveCodexIdentityEmail,
+	saveTeamAdminToken,
 	saveTeamConfig,
 	setTeamModeActive,
 } from "./team-mode";
@@ -44,54 +49,70 @@ describe("team-mode config", () => {
 	});
 });
 
-describe("pingTeamBackend", () => {
-	afterEach(() => {
-		vi.restoreAllMocks();
+describe("admin token + role (R5-A)", () => {
+	beforeEach(() => {
+		localStorage.clear();
 	});
 
-	it("hits /v1/health with a bearer token and reports 2xx as reachable", async () => {
-		const fetchMock = vi
-			.fn()
-			.mockResolvedValue(new Response("{}", { status: 200 }));
-		vi.stubGlobal("fetch", fetchMock);
-
-		await expect(
-			pingTeamBackend("https://team.example.com/", "hlm_tok"),
-		).resolves.toBe(true);
-
-		expect(fetchMock).toHaveBeenCalledWith(
-			"https://team.example.com/v1/health",
-			{
-				headers: { Authorization: "Bearer hlm_tok" },
-			},
-		);
+	it("is not admin without a stored admin token", () => {
+		saveTeamConfig({ url: "https://team.example.com", token: "member" });
+		setTeamModeActive(true);
+		expect(getTeamAdminToken()).toBeNull();
+		expect(isTeamAdmin()).toBe(false);
 	});
 
-	it("reports non-2xx as unreachable", async () => {
-		vi.stubGlobal(
-			"fetch",
-			vi.fn().mockResolvedValue(new Response("nope", { status: 503 })),
-		);
-		await expect(
-			pingTeamBackend("https://team.example.com", "hlm_tok"),
-		).resolves.toBe(false);
+	it("is admin only when team mode is active AND an admin token exists", () => {
+		saveTeamAdminToken(" hlm_admin_1 ");
+		expect(getTeamAdminToken()).toBe("hlm_admin_1");
+		// Admin token alone isn't enough — team mode must be active.
+		expect(isTeamAdmin()).toBe(false);
+
+		saveTeamConfig({ url: "https://team.example.com", token: "member" });
+		setTeamModeActive(true);
+		expect(isTeamAdmin()).toBe(true);
 	});
 
-	it("swallows network errors and reports unreachable", async () => {
-		vi.stubGlobal(
-			"fetch",
-			vi.fn().mockRejectedValue(new Error("network down")),
-		);
-		await expect(pingTeamBackend("https://team.example.com", "")).resolves.toBe(
-			false,
-		);
+	it("ignores empty admin tokens", () => {
+		saveTeamAdminToken("   ");
+		expect(getTeamAdminToken()).toBeNull();
+	});
+});
+
+describe("codex identity email (R5-A)", () => {
+	beforeEach(() => {
+		localStorage.clear();
 	});
 
-	it("returns false for an empty URL without calling fetch", async () => {
-		const fetchMock = vi.fn();
-		vi.stubGlobal("fetch", fetchMock);
-		await expect(pingTeamBackend("   ", "tok")).resolves.toBe(false);
-		expect(fetchMock).not.toHaveBeenCalled();
+	it("round-trips the captured email", () => {
+		expect(getCodexIdentityEmail()).toBeNull();
+		saveCodexIdentityEmail(" dev@example.com ");
+		expect(getCodexIdentityEmail()).toBe("dev@example.com");
+	});
+
+	it("ignores empty emails", () => {
+		saveCodexIdentityEmail("   ");
+		expect(getCodexIdentityEmail()).toBeNull();
+	});
+});
+
+describe("clearTeamConfig (R5-A leave-team semantics)", () => {
+	beforeEach(() => {
+		localStorage.clear();
+	});
+
+	it("wipes config, mode flag, admin token, and cached email", () => {
+		saveTeamConfig({ url: "https://team.example.com", token: "member" });
+		setTeamModeActive(true);
+		saveTeamAdminToken("hlm_admin_1");
+		saveCodexIdentityEmail("dev@example.com");
+
+		clearTeamConfig();
+
+		expect(getTeamConfig()).toBeNull();
+		expect(isTeamModeActive()).toBe(false);
+		expect(getTeamAdminToken()).toBeNull();
+		expect(getCodexIdentityEmail()).toBeNull();
+		expect(isTeamAdmin()).toBe(false);
 	});
 });
 

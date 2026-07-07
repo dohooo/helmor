@@ -113,16 +113,21 @@ describe("filterFiles", () => {
 });
 
 describe("shouldIncludeAgentMentionOption", () => {
-	it("shows @agent for an empty mention query", () => {
-		expect(shouldIncludeAgentMentionOption("")).toBe(true);
+	it("shows @agent for an empty mention query (team mode)", () => {
+		expect(shouldIncludeAgentMentionOption("", true)).toBe(true);
 	});
 
-	it("shows @agent while typing its name", () => {
-		expect(shouldIncludeAgentMentionOption("ag")).toBe(true);
-		expect(shouldIncludeAgentMentionOption("Agent")).toBe(true);
+	it("shows @agent while typing its name (team mode)", () => {
+		expect(shouldIncludeAgentMentionOption("ag", true)).toBe(true);
+		expect(shouldIncludeAgentMentionOption("Agent", true)).toBe(true);
 	});
 
 	it("hides @agent for unrelated file mention queries", () => {
-		expect(shouldIncludeAgentMentionOption("src")).toBe(false);
+		expect(shouldIncludeAgentMentionOption("src", true)).toBe(false);
+	});
+
+	it("hides @agent entirely outside team mode (R5-A D 项)", () => {
+		expect(shouldIncludeAgentMentionOption("", false)).toBe(false);
+		expect(shouldIncludeAgentMentionOption("agent", false)).toBe(false);
 	});
 });

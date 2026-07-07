@@ -8,8 +8,8 @@ import {
 } from "lucide-react";
 import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { useCloudClaudeIdentity } from "@/features/settings/panels/cloud-identity/use-cloud-claude-identity";
-import { useCloudIdentity } from "@/features/settings/panels/cloud-identity/use-cloud-identity";
+import { useCloudClaudeIdentity } from "@/features/team/use-cloud-claude-identity";
+import { useCloudIdentity } from "@/features/team/use-cloud-identity";
 import { useTeamIdentity } from "@/features/team/use-team-identity";
 import {
 	deployTeamCloud,
@@ -18,10 +18,9 @@ import {
 } from "@/lib/api";
 import { openUrl } from "@/lib/platform-bridge";
 import { acceptInvite, createTeam, mintInvite } from "@/lib/team-api";
-import type { TeamConfig } from "@/lib/team-mode";
+import { saveTeamAdminToken, type TeamConfig } from "@/lib/team-mode";
 import { switchTeamMode } from "@/lib/team-switch";
 import { describeUnknownError } from "@/lib/workspace-helpers";
-import { publishShellEvent } from "@/shell/event-bus";
 
 /**
  * "Create a team" path of the setup card: stand up a fresh Cloudflare backend
@@ -38,12 +37,14 @@ import { publishShellEvent } from "@/shell/event-bus";
 type Phase = "intro" | "running" | "needs-upgrade" | "authorize" | "error";
 type StepStatus = "pending" | "active" | "done" | "error";
 
+// R5-A 裁决③: 方案 B copy — "we do it for you" voice, plain words over
+// infrastructure nouns.
 const STEPS: { key: TeamDeployStep; label: string }[] = [
 	{ key: "login", label: "Connect Cloudflare" },
-	{ key: "plan", label: "Check account plan" },
-	{ key: "provision", label: "Provision backend (D1 / R2 / secrets)" },
-	{ key: "deploy", label: "Deploy Worker + sandbox" },
-	{ key: "verify", label: "Verify it's live" },
+	{ key: "plan", label: "Check your plan" },
+	{ key: "provision", label: "Provision storage" },
+	{ key: "deploy", label: "Deploy your backend" },
+	{ key: "verify", label: "Make sure it's live" },
 ];
 
 const ALL_PENDING: Record<TeamDeployStep, StepStatus> = {
@@ -158,6 +159,10 @@ export function TeamCreateFlow({
 			}
 			const admin = { url: result.workerUrl, token: result.adminToken };
 			setAdminConfig(admin);
+			// R5-A: persist the admin token on THIS (the creator's) machine — it
+			// is what gates the sidebar Invite button and authenticates minting.
+			// Members never get one (their bearer is the invite token).
+			saveTeamAdminToken(result.adminToken);
 			// Bootstrap the single team row (admin-gated by the companion token).
 			await createTeam(admin).catch(() => {});
 			// Register the creator as a member + adopt that member token.
@@ -209,8 +214,8 @@ export function TeamCreateFlow({
 				<h2 className="font-semibold text-lg">Create a team</h2>
 			</div>
 			<p className="mt-1 text-mini text-muted-foreground leading-tight">
-				Helmor stands up your own Cloudflare backend — sign in once and we
-				provision and deploy everything for you.
+				Sign in to Cloudflare once — we provision, deploy, and verify everything
+				for you.
 			</p>
 
 			<ol className="mt-4 flex flex-col gap-2">
@@ -260,9 +265,9 @@ export function TeamCreateFlow({
 			{phase === "authorize" ? (
 				<div className="mt-4 flex flex-col gap-2">
 					<p className="text-mini text-muted-foreground leading-tight">
-						Authorize the agents you'll run in the cloud. They sign in with your
-						subscription, held in the team control plane — never on this machine
-						or in the container.
+						Choose which agents run in your cloud. They sign in with your
+						subscription, kept safely in your team's control plane — never on
+						this machine or in the container.
 					</p>
 					{!registered ? (
 						<div className="flex flex-col items-start gap-1.5 rounded-lg border border-status-warning/40 bg-status-warning/10 p-3">
@@ -314,19 +319,11 @@ export function TeamCreateFlow({
 			{phase === "error" ? (
 				<div className="mt-4 flex flex-col gap-2">
 					<p className="text-mini text-status-danger leading-tight">{error}</p>
+					{/* R5-A: no more "Advanced setup" fallback — manual Worker URL /
+					    token entry left the product. Retry is the recovery path. */}
 					<div className="flex items-center gap-2">
 						<Button size="sm" onClick={() => void run()}>
 							Try again
-						</Button>
-						<Button
-							variant="outline"
-							size="sm"
-							onClick={() => {
-								onDone();
-								publishShellEvent({ type: "open-settings", section: "team" });
-							}}
-						>
-							Advanced setup
 						</Button>
 					</div>
 				</div>
@@ -342,8 +339,8 @@ export function TeamCreateFlow({
 
 			{running ? (
 				<p className="mt-4 text-mini text-muted-foreground leading-tight">
-					A browser window opens for Cloudflare sign-in. Keep this open —
-					deploying a fresh backend takes a minute or two.
+					A browser window opens for Cloudflare sign-in. Deploying takes a
+					minute or two — we'll keep you posted right here.
 				</p>
 			) : null}
 		</div>

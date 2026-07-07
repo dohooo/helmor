@@ -1003,6 +1003,9 @@ export async function getAgentLoginStatus(): Promise<AgentLoginStatusResult> {
 export interface CloudCodexAuthResult {
 	accountId: string | null;
 	changed: boolean;
+	/** R5-A: account email parsed locally from the id_token (display-only) —
+	 *  the Agent status card shows it instead of the account UUID. */
+	email: string | null;
 }
 
 /**

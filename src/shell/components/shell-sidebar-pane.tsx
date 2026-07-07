@@ -13,6 +13,7 @@ import { WorkspacesSidebarContainer } from "@/features/navigation/container";
 import { SettingsButton } from "@/features/settings";
 import { getShortcut } from "@/features/shortcuts/registry";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
+import { InviteButton } from "@/features/team/invite";
 import { AppUpdateButton } from "@/features/updater/app-update-button";
 import type { AppUpdateStatus } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -207,6 +208,7 @@ export function ShellSidebarPane({
 								shortcut={getShortcut(appSettings.shortcuts, "settings.open")}
 							/>
 							<FeedbackButton onClick={onOpenFeedback} />
+							<InviteButton />
 						</div>
 						<AppUpdateButton status={appUpdateStatus} />
 					</div>

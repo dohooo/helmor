@@ -24,6 +24,15 @@
 const MODE_KEY = "helmor.team.mode";
 const URL_KEY = "helmor.team.url";
 const TOKEN_KEY = "helmor.team.token";
+/** R5-A: the companion/admin token, present ONLY on the creator's machine
+ *  (saved by the create flow right after deploy). Its presence is the role
+ *  gate — `isTeamAdmin()` — for admin-only UI like the sidebar Invite button.
+ *  Members never receive it (their bearer is the invite token). */
+const ADMIN_TOKEN_KEY = "helmor.team.adminToken";
+/** R5-A: the ChatGPT account email captured locally at authorize time (parsed
+ *  from the id_token on this machine — never sent anywhere). Display-only, so
+ *  the Agent status card can show a human identity instead of a UUID. */
+const CODEX_EMAIL_KEY = "helmor.team.codexEmail";
 
 export interface TeamConfig {
 	/** Worker base URL, trailing slash stripped. */
@@ -88,6 +97,10 @@ export function clearTeamConfig(): void {
 	store.removeItem(URL_KEY);
 	store.removeItem(TOKEN_KEY);
 	store.removeItem(MODE_KEY);
+	// R5-A: leaving a team also drops the creator-side admin token and the
+	// locally-captured agent email — both are meaningless outside this team.
+	store.removeItem(ADMIN_TOKEN_KEY);
+	store.removeItem(CODEX_EMAIL_KEY);
 	if (url) {
 		void import("./team-query-cache").then(({ deleteTeamQueryCacheBucket }) =>
 			deleteTeamQueryCacheBucket(normalizeUrl(url), token ?? ""),
@@ -140,24 +153,51 @@ export function setTeamModeActive(active: boolean): void {
 }
 
 /**
- * Probe a team backend's reachability via its public `/v1/health` endpoint.
- * Resolves `true` only on a 2xx response; never throws (network / CORS errors
- * resolve `false`), so callers can drive a simple "connected?" indicator.
+ * R5-A: persist the companion/admin token on the CREATOR's machine only —
+ * called by the create flow right after a successful deploy. Minting invites
+ * needs this token; its presence is what makes this machine "the admin".
  */
-export async function pingTeamBackend(
-	url: string,
-	token: string,
-): Promise<boolean> {
-	const base = normalizeUrl(url);
-	if (!base) return false;
-	try {
-		const res = await fetch(`${base}/v1/health`, {
-			headers: token ? { Authorization: `Bearer ${token}` } : {},
-		});
-		return res.ok;
-	} catch {
-		return false;
-	}
+export function saveTeamAdminToken(token: string): void {
+	const store = storage();
+	if (!store) return;
+	const trimmed = token.trim();
+	if (!trimmed) return;
+	store.setItem(ADMIN_TOKEN_KEY, trimmed);
+}
+
+/** The stored companion/admin token, or `null` on a member machine. */
+export function getTeamAdminToken(): string | null {
+	const store = storage();
+	if (!store) return null;
+	const token = (store.getItem(ADMIN_TOKEN_KEY) ?? "").trim();
+	return token ? token : null;
+}
+
+/**
+ * True on the team creator's machine (an admin token is stored). Members get
+ * `false` — admin-only UI (the sidebar Invite button) simply doesn't render.
+ */
+export function isTeamAdmin(): boolean {
+	return isTeamModeActive() && getTeamAdminToken() !== null;
+}
+
+/** R5-A: remember the ChatGPT account email captured at authorize time so the
+ *  Agent status card shows a human identity instead of an account UUID. */
+export function saveCodexIdentityEmail(email: string): void {
+	const store = storage();
+	if (!store) return;
+	const trimmed = email.trim();
+	if (!trimmed) return;
+	store.setItem(CODEX_EMAIL_KEY, trimmed);
+}
+
+/** The locally-captured Codex identity email, or `null` (pre-R5-A authorize /
+ *  member machines that never authorized). Callers fall back to accountId. */
+export function getCodexIdentityEmail(): string | null {
+	const store = storage();
+	if (!store) return null;
+	const email = (store.getItem(CODEX_EMAIL_KEY) ?? "").trim();
+	return email ? email : null;
 }
 
 /** A parsed team invite: the Worker origin to register against and the

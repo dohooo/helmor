@@ -66,10 +66,6 @@ import { AccountPanel } from "./panels/account";
 import { AppUpdatesPanel } from "./panels/app-updates";
 import { AppearancePanel } from "./panels/appearance";
 import { ArchiveCleanupPanel } from "./panels/archive-cleanup";
-import {
-	CloudClaudeIdentityPanel,
-	CloudIdentityPanel,
-} from "./panels/cloud-identity";
 import { ComponentsPanel } from "./panels/components";
 import { DevToolsPanel } from "./panels/dev-tools";
 import { InboxSettingsPanel } from "./panels/inbox";
@@ -78,7 +74,6 @@ import { MobileCompanionPanel } from "./panels/mobile-companion";
 import { ProvidersPanel } from "./panels/providers";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
 import { TeamPanel } from "./panels/team";
-import { TeamAdminPanel } from "./panels/team-admin";
 
 const FALLBACK_EFFORT_LEVELS = ["low", "medium", "high"];
 
@@ -639,14 +634,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 
 							{activeSection === "account" && <AccountPanel />}
 
-							{activeSection === "team" && (
-								<>
-									<TeamPanel />
-									<TeamAdminPanel />
-									<CloudIdentityPanel />
-									<CloudClaudeIdentityPanel />
-								</>
-							)}
+							{activeSection === "team" && <TeamPanel />}
 
 							{activeSection === "inbox" && (
 								<InboxSettingsPanel

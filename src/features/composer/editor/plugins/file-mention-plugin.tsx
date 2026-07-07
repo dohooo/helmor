@@ -39,6 +39,7 @@ import {
 } from "@/components/ui/command";
 import type { InspectorFileItem } from "@/lib/editor-session";
 import { workspaceFilesQueryOptions } from "@/lib/query-client";
+import { isTeamModeActive } from "@/lib/team-mode";
 import { cn } from "@/lib/utils";
 import { $createAgentMentionNode } from "../agent-mention-node";
 import { $createFileBadgeNode } from "../file-badge-node";
@@ -156,7 +157,7 @@ export function FileMentionPlugin({
 
 	const options = useMemo(() => {
 		const next: MentionOption[] = [];
-		if (shouldIncludeAgentMentionOption(query ?? "")) {
+		if (shouldIncludeAgentMentionOption(query ?? "", isTeamModeActive())) {
 			next.push(new AgentMentionOption());
 		}
 		const filtered = filterFiles(files, query ?? "");

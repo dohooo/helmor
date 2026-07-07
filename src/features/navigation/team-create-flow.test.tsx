@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 		}),
 	),
 	acceptInvite: vi.fn(() => Promise.resolve({ ok: true, memberId: "123" })),
+	saveTeamAdminToken: vi.fn(),
 	openUrl: vi.fn(),
 	publishShellEvent: vi.fn(),
 	codexAuthorize: vi.fn(),
@@ -36,6 +37,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/api", () => ({ deployTeamCloud: mocks.deployTeamCloud }));
 vi.mock("@/lib/team-switch", () => ({ switchTeamMode: mocks.switchTeamMode }));
+vi.mock("@/lib/team-mode", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/team-mode")>()),
+	saveTeamAdminToken: mocks.saveTeamAdminToken,
+}));
 vi.mock("@/lib/team-api", () => ({
 	createTeam: mocks.createTeam,
 	mintInvite: mocks.mintInvite,
@@ -53,7 +58,7 @@ vi.mock("@/lib/workspace-helpers", () => ({
 }));
 // The cloud-identity hooks use React Query + control-plane fetches; stub them so
 // the create-flow logic is tested in isolation (no QueryClientProvider needed).
-vi.mock("@/features/settings/panels/cloud-identity/use-cloud-identity", () => ({
+vi.mock("@/features/team/use-cloud-identity", () => ({
 	useCloudIdentity: () => ({
 		status: { hasToken: mocks.codexHasToken },
 		isLoading: false,
@@ -65,20 +70,17 @@ vi.mock("@/features/settings/panels/cloud-identity/use-cloud-identity", () => ({
 		refetch: vi.fn(),
 	}),
 }));
-vi.mock(
-	"@/features/settings/panels/cloud-identity/use-cloud-claude-identity",
-	() => ({
-		useCloudClaudeIdentity: () => ({
-			status: { hasToken: mocks.claudeHasToken },
-			isLoading: false,
-			isError: false,
-			isAuthorizing: false,
-			error: null,
-			authorize: mocks.claudeAuthorize,
-			refetch: vi.fn(),
-		}),
+vi.mock("@/features/team/use-cloud-claude-identity", () => ({
+	useCloudClaudeIdentity: () => ({
+		status: { hasToken: mocks.claudeHasToken },
+		isLoading: false,
+		isError: false,
+		isAuthorizing: false,
+		error: null,
+		authorize: mocks.claudeAuthorize,
+		refetch: vi.fn(),
 	}),
-);
+}));
 
 import { TeamCreateFlow } from "./team-create-flow";
 
@@ -200,19 +202,32 @@ describe("TeamCreateFlow", () => {
 		expect(mocks.switchTeamMode).not.toHaveBeenCalled();
 	});
 
-	it("surfaces a failure with an Advanced-setup fallback", async () => {
+	it("surfaces a failure with Retry only — no Advanced-setup fallback (R5-A)", async () => {
 		mocks.deployTeamCloud.mockRejectedValue(new Error("boom"));
-		const onDone = vi.fn();
-		render(<TeamCreateFlow onBack={vi.fn()} onDone={onDone} />);
+		render(<TeamCreateFlow onBack={vi.fn()} onDone={vi.fn()} />);
 
 		fireEvent.click(screen.getByRole("button", { name: CONNECT }));
 
 		await screen.findByText(/didn't finish/i);
-		fireEvent.click(screen.getByRole("button", { name: /Advanced setup/i }));
-		expect(onDone).toHaveBeenCalled();
-		expect(mocks.publishShellEvent).toHaveBeenCalledWith({
-			type: "open-settings",
-			section: "team",
+		// Manual Worker URL / token entry left the product — the error phase
+		// offers Try again and nothing else.
+		expect(
+			screen.queryByRole("button", { name: /Advanced setup/i }),
+		).toBeNull();
+		expect(screen.getByRole("button", { name: /Try again/i })).toBeTruthy();
+	});
+
+	it("persists the admin token on the creator's machine after deploy (R5-A)", async () => {
+		mocks.deployTeamCloud.mockResolvedValue({
+			kind: "deployed",
+			workerUrl: "https://team.example.workers.dev",
+			adminToken: "admin-tok",
 		});
+		mocks.codexHasToken = true;
+		render(<TeamCreateFlow onBack={vi.fn()} onDone={vi.fn()} />);
+
+		fireEvent.click(screen.getByRole("button", { name: CONNECT }));
+		await screen.findByRole("button", { name: /^Finish$/i });
+		expect(mocks.saveTeamAdminToken).toHaveBeenCalledWith("admin-tok");
 	});
 });

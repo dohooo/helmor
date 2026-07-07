@@ -97,13 +97,14 @@ export function TeamSetupCard() {
 					<TeamCreateFlow onBack={() => setView("choose")} onDone={close} />
 				) : (
 					<>
+						{/* R5-A 裁决③: 方案 B copy — "we do it for you" voice. */}
 						<h2 className="font-semibold text-lg">Set up team cloud</h2>
 						<p className="mt-1 text-mini text-muted-foreground leading-tight">
-							Run Helmor against a shared cloud backend so your team
-							collaborates in the same workspace.
+							Your team, one shared workspace — Helmor runs it for you in the
+							cloud.
 						</p>
 
-						<div className="mt-5 flex flex-col gap-2">
+						<div className="mt-6 flex flex-col gap-2">
 							<div className="flex items-center gap-1.5 font-medium">
 								<MailPlus
 									className="size-4 text-muted-foreground"
@@ -112,7 +113,7 @@ export function TeamSetupCard() {
 								<span>Join a team</span>
 							</div>
 							<p className="text-mini text-muted-foreground leading-tight">
-								Paste the invite link a teammate sent you.
+								Got an invite link? Paste it and you're in.
 							</p>
 							<div className="flex items-center gap-2">
 								<Input
@@ -134,7 +135,7 @@ export function TeamSetupCard() {
 							</div>
 						</div>
 
-						<div className="my-5 h-px bg-border/50" />
+						<div className="my-6 h-px bg-border/50" />
 
 						<div className="flex items-center justify-between gap-3">
 							<div className="flex flex-col gap-0.5">
@@ -146,7 +147,8 @@ export function TeamSetupCard() {
 									<span>Create a team</span>
 								</div>
 								<p className="text-mini text-muted-foreground leading-tight">
-									Stand up a new shared backend on Cloudflare.
+									We set up a private backend on your Cloudflare account —
+									nothing to configure.
 								</p>
 							</div>
 							<Button

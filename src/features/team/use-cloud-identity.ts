@@ -5,7 +5,11 @@ import {
 	type CloudCodexIdentityStatus,
 	getCloudCodexIdentityStatus,
 } from "@/lib/team-api";
-import { getTeamConfig, type TeamConfig } from "@/lib/team-mode";
+import {
+	getTeamConfig,
+	saveCodexIdentityEmail,
+	type TeamConfig,
+} from "@/lib/team-mode";
 
 /**
  * State + actions for the "Cloud Run Identity · Codex" settings panel.
@@ -102,6 +106,11 @@ export function useCloudIdentity(cfg: TeamConfig | null): UseCloudIdentity {
 				return Promise.reject(new Error("Team mode is not configured."));
 			}
 			return authorizeCloudCodexIdentity(resolved.url, resolved.token);
+		},
+		// R5-A: remember the account email captured locally at authorize time
+		// (display-only) so the Agent status card can show a human identity.
+		onSuccess: (result) => {
+			if (result.email) saveCodexIdentityEmail(result.email);
 		},
 		// On success (and on failure — a partial run may still have changed
 		// state) re-read the identity so the panel reflects the live DO.
