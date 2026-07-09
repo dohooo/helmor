@@ -2,6 +2,12 @@
 
 export type ProviderFamily = "claude" | "codex" | "opencode" | "kimi";
 
+export const DEFAULT_CODEX_MODEL_IDS = [
+	"gpt-5.6-sol",
+	"gpt-5.6-terra",
+	"gpt-5.6-luna",
+] as const;
+
 export type CustomProviderModel = {
 	slug: string;
 	label: string;
@@ -43,6 +49,24 @@ export function resolveEnabled(
 	available: readonly { slug: string }[],
 ): string[] {
 	return enabled ?? available.map((m) => m.slug);
+}
+
+export function resolveOfficialEnabled(
+	family: "claude" | "codex",
+	enabled: string[] | null,
+	available: readonly { slug: string }[],
+): string[] {
+	if (family !== "codex" || enabled !== null) {
+		return resolveEnabled(enabled, available);
+	}
+
+	return available
+		.filter(
+			(model) =>
+				DEFAULT_CODEX_MODEL_IDS.some((id) => id === model.slug) ||
+				model.slug.startsWith("codex:"),
+		)
+		.map((model) => model.slug);
 }
 
 export function toggleEnabled(

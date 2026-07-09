@@ -73,6 +73,7 @@ import {
 } from "./input-history";
 import type { PermissionPanelProps } from "./permission-panel";
 import { SessionContextInjector } from "./session-context-injector";
+import { includePinnedLegacyCodexModel } from "./session-model-sections";
 import type { StartSubmitMode } from "./start-submit-mode";
 import { SubmitQueueList } from "./submit-queue-list";
 import type { UserInputResponseHandler } from "./user-input";
@@ -535,12 +536,13 @@ export const WorkspaceComposerContainer = memo(
 			],
 		);
 
-		const modelSections = modelSectionsQuery.data ?? EMPTY_MODEL_SECTIONS;
+		const availableModelSections =
+			modelSectionsQuery.data ?? EMPTY_MODEL_SECTIONS;
 		const modelsLoading =
 			modelSectionsQuery.isLoading &&
-			modelSections.every((s) => s.options.length === 0);
+			availableModelSections.every((s) => s.options.length === 0);
 		// Drives the OpenCode "Add custom model…" jump; only fetched when an OpenCode section exists.
-		const opencodeSectionPresent = modelSections.some(
+		const opencodeSectionPresent = availableModelSections.some(
 			(s) => s.id === "opencode",
 		);
 		const opencodeCustomProvidersQuery = useQuery({
@@ -554,6 +556,11 @@ export const WorkspaceComposerContainer = memo(
 			(sessionsQuery.data ?? []).find(
 				(session) => session.id === displayedSessionId,
 			) ?? null;
+		const modelSections = useMemo(
+			() =>
+				includePinnedLegacyCodexModel(availableModelSections, currentSession),
+			[availableModelSections, currentSession],
+		);
 		const composerContextKey =
 			contextKeyOverride ??
 			getComposerContextKey(displayedWorkspaceId, displayedSessionId);

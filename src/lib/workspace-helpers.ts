@@ -1094,6 +1094,7 @@ export function createLiveThreadMessage({
 // ── Effort-level helpers ──────────────────────────────────────────────
 
 const EFFORT_RANK: Record<string, number> = {
+	none: 0,
 	minimal: 0,
 	low: 1,
 	medium: 2,

@@ -37,6 +37,8 @@ pub struct AgentModelSection {
     pub options: Vec<AgentModelOption>,
 }
 
+const DEFAULT_CODEX_MODEL_IDS: &[&str] = &["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
+
 /// The composer/CLI picker catalog: full catalog with the user's model
 /// selection applied. Empty sections are omitted.
 pub fn static_model_sections() -> Vec<AgentModelSection> {
@@ -86,7 +88,7 @@ pub fn full_catalog_sections() -> Vec<AgentModelSection> {
 }
 
 fn load_enabled_model_ids(key: &str) -> Option<Vec<String>> {
-    // null/absent → None (all enabled); `[]` → Some(empty) (none enabled).
+    // null/absent → None (provider default); `[]` → Some(empty) (none enabled).
     crate::settings::load_setting_json::<Vec<String>>(key)
         .ok()
         .flatten()
@@ -107,9 +109,15 @@ fn apply_official_enabled_filter(
                 "claude" => section
                     .options
                     .retain(|opt| crate::provider::is_enabled(claude_enabled, &opt.id)),
-                "codex" => section
-                    .options
-                    .retain(|opt| crate::provider::is_enabled(codex_enabled, &opt.id)),
+                "codex" => section.options.retain(|opt| {
+                    codex_enabled.map_or_else(
+                        || {
+                            opt.provider != "codex"
+                                || DEFAULT_CODEX_MODEL_IDS.contains(&opt.id.as_str())
+                        },
+                        |enabled| crate::provider::is_enabled(Some(enabled), &opt.id),
+                    )
+                }),
                 _ => {}
             }
             section
@@ -275,18 +283,16 @@ fn official_claude_section() -> AgentModelSection {
         label: "Claude Code".to_string(),
         status: AgentModelSectionStatus::Ready,
         options: vec![
-            // Fable 5 leads the list as the most capable pick, but it burns
-            // limits ~2x faster than Opus — `useEnsureDefaultModel` therefore
-            // pins the app default to the Opus 4.8 entry below, NOT
-            // to options[0]. No fast mode (Opus 4.6+ only).
+            // Fable 5 leads the Claude list as the most capable pick, but the
+            // cross-provider app default is selected separately by
+            // `useEnsureDefaultModel`. No fast mode (Opus 4.6+ only).
             claude_model(
                 "claude-fable-5[1m]",
                 "Fable 5 1M",
                 &["low", "medium", "high", "xhigh", "max"],
                 false,
             ),
-            // App default selection (see `useEnsureDefaultModel`, which pins
-            // this id). Pinned to the explicit `claude-opus-4-8[1m]` wire id —
+            // Pinned to the explicit `claude-opus-4-8[1m]` wire id —
             // the `[1m]` suffix selects the 1M-context variant, matching the
             // label. We do NOT use the CLI's `default` sentinel: it resolves to
             // whatever the bundled claude-code decides (non-deterministic
@@ -324,9 +330,36 @@ fn codex_section() -> AgentModelSection {
         label: "Codex".to_string(),
         status: AgentModelSectionStatus::Ready,
         options: vec![
-            codex_model("gpt-5.5", "GPT-5.5"),
-            codex_model("gpt-5.4", "GPT-5.4"),
-            codex_model("gpt-5.4-mini", "GPT-5.4-Mini"),
+            codex_model(
+                "gpt-5.6-sol",
+                "GPT-5.6 Sol",
+                &["none", "low", "medium", "high", "xhigh", "max"],
+            ),
+            codex_model(
+                "gpt-5.6-terra",
+                "GPT-5.6 Terra",
+                &["none", "low", "medium", "high", "xhigh", "max"],
+            ),
+            codex_model(
+                "gpt-5.6-luna",
+                "GPT-5.6 Luna",
+                &["none", "low", "medium", "high", "xhigh", "max"],
+            ),
+            codex_model(
+                "gpt-5.5",
+                "GPT-5.5",
+                &["none", "low", "medium", "high", "xhigh"],
+            ),
+            codex_model(
+                "gpt-5.4",
+                "GPT-5.4",
+                &["none", "low", "medium", "high", "xhigh"],
+            ),
+            codex_model(
+                "gpt-5.4-mini",
+                "GPT-5.4 Mini",
+                &["none", "low", "medium", "high", "xhigh"],
+            ),
         ],
     }
 }
@@ -750,16 +783,16 @@ fn claude_model(
     }
 }
 
-fn codex_model(id: &str, label: &str) -> AgentModelOption {
+fn codex_model(id: &str, label: &str, effort_levels: &[&str]) -> AgentModelOption {
     AgentModelOption {
         id: id.to_string(),
         provider: "codex".to_string(),
         label: label.to_string(),
         cli_model: id.to_string(),
         provider_key: None,
-        effort_levels: ["low", "medium", "high", "xhigh"]
-            .into_iter()
-            .map(str::to_string)
+        effort_levels: effort_levels
+            .iter()
+            .map(|level| level.to_string())
             .collect(),
         supports_fast_mode: true,
         supports_context_usage: true,
@@ -1016,12 +1049,23 @@ mod tests {
                 .iter()
                 .map(|model| model.id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["gpt-5.5", "gpt-5.4", "gpt-5.4-mini",]
+            vec![
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+                "gpt-5.6-luna",
+                "gpt-5.5",
+                "gpt-5.4",
+                "gpt-5.4-mini",
+            ]
         );
         assert!(sections[1]
             .options
             .iter()
             .all(|model| model.supports_fast_mode));
+        assert_eq!(
+            sections[1].options[0].effort_levels,
+            vec!["none", "low", "medium", "high", "xhigh", "max"]
+        );
 
         // No opencode prefs row → Unavailable, no options.
         assert_eq!(sections[2].id, "opencode");
@@ -1232,6 +1276,27 @@ mod tests {
     }
 
     #[test]
+    fn official_filter_defaults_to_gpt_5_6_and_keeps_custom_codex_models() {
+        let custom = codex_custom_model("hundun", "codex:hundun", "custom-model", "Custom");
+        let base = model_sections_for_inputs(Vec::new(), vec![custom], None, None, None);
+        let filtered = apply_official_enabled_filter(base, None, None);
+        let codex = filtered.iter().find(|s| s.id == "codex").unwrap();
+        assert_eq!(
+            codex
+                .options
+                .iter()
+                .map(|o| o.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+                "gpt-5.6-luna",
+                "codex:hundun|custom-model",
+            ]
+        );
+    }
+
+    #[test]
     fn official_filter_empty_list_empties_options() {
         let base = model_sections_for_inputs(Vec::new(), Vec::new(), None, None, None);
         let filtered = apply_official_enabled_filter(base, Some(&[]), None);
@@ -1255,9 +1320,9 @@ mod tests {
             options,
         };
         let kept = drop_empty_sections(vec![
-            section("alpha", vec![codex_model("m1", "M1")]),
+            section("alpha", vec![codex_model("m1", "M1", &[])]),
             section("beta", Vec::new()),
-            section("gamma", vec![codex_model("m2", "M2")]),
+            section("gamma", vec![codex_model("m2", "M2", &[])]),
         ]);
         assert_eq!(
             kept.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
