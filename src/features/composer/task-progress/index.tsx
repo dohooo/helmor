@@ -322,7 +322,7 @@ export function TaskProgressPanel({
 			}}
 			// Flat chrome matching the composer beneath it (border/70 + bg-sidebar,
 			// no shadow); rounded-lg reads calmer than xl at this strip height.
-			className="pointer-events-auto mt-2 mb-3 flex w-full flex-col overflow-hidden rounded-lg border border-border/70 bg-sidebar outline-none dark:border-border/40"
+			className="pointer-events-auto mt-1 mb-1 flex w-full flex-col overflow-hidden rounded-lg border border-border/70 bg-background outline-none dark:border-border/40"
 		>
 			{collapsed ? (
 				<button
