@@ -23,7 +23,10 @@ import type { SendMessageParams } from "../session-manager.js";
 // outer variable so each test can swap the SDK message stream.
 let scenario: SDKMessage[] = [];
 let hangAfterScenario = false;
+let queryCloseCount = 0;
+const releaseHangingQueries = new Set<() => void>();
 const previousBgDrainTimeout = process.env.HELMOR_CLAUDE_BG_DRAIN_TIMEOUT_MS;
+const LONG_BG_DRAIN_TIMEOUT_MS = "60000";
 
 function makeQuery(messages: SDKMessage[]) {
 	let closed = false;
@@ -47,14 +50,21 @@ function makeQuery(messages: SDKMessage[]) {
 				const heartbeat = setInterval(() => {}, 1000);
 				try {
 					await new Promise<void>((resolve) => {
-						releaseHang = resolve;
+						const release = () => {
+							releaseHangingQueries.delete(release);
+							resolve();
+						};
+						releaseHang = release;
+						releaseHangingQueries.add(release);
 					});
 				} finally {
 					clearInterval(heartbeat);
+					if (releaseHang) releaseHangingQueries.delete(releaseHang);
 				}
 			}
 		},
 		close() {
+			queryCloseCount += 1;
 			closed = true;
 			releaseHang?.();
 		},
@@ -159,6 +169,17 @@ function taskStarted(taskId = "t1"): SDKMessage {
 	} as unknown as SDKMessage;
 }
 
+function taskUpdated(taskId = "t1", status = "completed"): SDKMessage {
+	return {
+		type: "system",
+		subtype: "task_updated",
+		task_id: taskId,
+		patch: { status },
+		session_id: "s1",
+		uuid: `tu-${taskId}-${status}`,
+	} as unknown as SDKMessage;
+}
+
 function baseParams(): SendMessageParams {
 	return {
 		sessionId: "s1",
@@ -179,14 +200,37 @@ beforeAll(async () => {
 });
 
 afterEach(() => {
+	for (const release of releaseHangingQueries) release();
+	releaseHangingQueries.clear();
 	scenario = [];
 	hangAfterScenario = false;
+	queryCloseCount = 0;
 	if (previousBgDrainTimeout === undefined) {
 		delete process.env.HELMOR_CLAUDE_BG_DRAIN_TIMEOUT_MS;
 	} else {
 		process.env.HELMOR_CLAUDE_BG_DRAIN_TIMEOUT_MS = previousBgDrainTimeout;
 	}
 });
+
+async function expectSettles<T>(
+	promise: Promise<T>,
+	label: string,
+): Promise<T> {
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			promise,
+			new Promise<never>((_resolve, reject) => {
+				timeout = setTimeout(
+					() => reject(new Error(`${label} timed out`)),
+					500,
+				);
+			}),
+		]);
+	} finally {
+		if (timeout) clearTimeout(timeout);
+	}
+}
 
 describe("ClaudeSessionManager backgrounded-task resume (#891)", () => {
 	test("filters the pause result, resumes, and ends exactly once", async () => {
@@ -256,7 +300,7 @@ describe("ClaudeSessionManager run_in_background drain (completed with pending b
 				(m as { terminal_reason?: string }).terminal_reason === "completed",
 		).length;
 
-	test("defers `completed` while a bg task is pending, resumes on task_notification, ends once", async () => {
+	test("defers `completed` while a bg task is pending, replays it on task_notification, ends once", async () => {
 		scenario = [
 			assistant("dispatching"),
 			taskStarted("bg1"),
@@ -274,22 +318,23 @@ describe("ClaudeSessionManager run_in_background drain (completed with pending b
 
 		// One terminal end — the intermediate `completed` must not fire it.
 		expect(spy.ends).toBe(1);
-		// Only the FINAL `completed` reaches the pipeline (one result per turn).
+		// Only one `completed` reaches the pipeline (one result per turn).
 		expect(completedResultCount(spy)).toBe(1);
-		// Continuation flows through: notification + the post-resume assistant.
+		// Notification flows through before the deferred terminal result is replayed.
 		const subtypes = spy.passthroughs.map(
 			(m) => (m as { subtype?: string }).subtype,
 		);
-		expect(subtypes).toContain("task_notification");
-		const assistantTexts = spy.passthroughs
-			.filter((m) => (m as { type?: string }).type === "assistant")
-			.map(
-				(m) =>
-					(m as { message?: { content?: { text?: string }[] } }).message
-						?.content?.[0]?.text,
-			);
-		expect(assistantTexts).toContain("synthesizing");
-		// Usage recorded at the deferred pause AND the terminal result.
+		const notificationIndex = subtypes.findIndex(
+			(subtype) => subtype === "task_notification",
+		);
+		const replayedCompletedIndex = spy.passthroughs.findIndex(
+			(m) =>
+				(m as { type?: string }).type === "result" &&
+				(m as { terminal_reason?: string }).terminal_reason === "completed",
+		);
+		expect(notificationIndex).toBeGreaterThanOrEqual(0);
+		expect(replayedCompletedIndex).toBe(notificationIndex + 1);
+		// Usage recorded at the deferred pause and when replayed as terminal.
 		expect(spy.contextUsageUpdates).toBeGreaterThanOrEqual(2);
 	});
 
@@ -377,5 +422,100 @@ describe("ClaudeSessionManager run_in_background drain (completed with pending b
 			.map((m) => (m as { terminal_reason?: string }).terminal_reason)
 			.filter(Boolean);
 		expect(reasons).toContain("max_turns"); // passed through, not deferred
+	});
+
+	test("deferred completed closes immediately when task_notification drains the last pending task even if the iterator hangs", async () => {
+		process.env.HELMOR_CLAUDE_BG_DRAIN_TIMEOUT_MS = LONG_BG_DRAIN_TIMEOUT_MS;
+		hangAfterScenario = true;
+		scenario = [
+			assistant("dispatching"),
+			taskStarted("bg1"),
+			result("completed"),
+			taskNotification("bg1"),
+		];
+		const spy = makeSpyEmitter();
+		await expectSettles(
+			new ClaudeSessionManager().sendMessage(
+				"req-bg-notify-close",
+				baseParams(),
+				spy.emitter,
+			),
+			"task_notification drain",
+		);
+
+		expect(spy.ends).toBe(1);
+		expect(queryCloseCount).toBe(1);
+		expect(completedResultCount(spy)).toBe(1);
+		expect(
+			spy.passthroughs.some(
+				(m) => (m as { subtype?: string }).subtype === "task_notification",
+			),
+		).toBe(true);
+	});
+
+	test("deferred completed closes when killed task_updated drains the last pending task without notification", async () => {
+		process.env.HELMOR_CLAUDE_BG_DRAIN_TIMEOUT_MS = LONG_BG_DRAIN_TIMEOUT_MS;
+		hangAfterScenario = true;
+		scenario = [
+			assistant("dispatching"),
+			taskStarted("bg1"),
+			result("completed"),
+			taskUpdated("bg1", "killed"),
+		];
+		const spy = makeSpyEmitter();
+		await expectSettles(
+			new ClaudeSessionManager().sendMessage(
+				"req-bg-killed-close",
+				baseParams(),
+				spy.emitter,
+			),
+			"killed task_updated drain",
+		);
+
+		expect(spy.ends).toBe(1);
+		expect(queryCloseCount).toBe(1);
+		expect(completedResultCount(spy)).toBe(1);
+		expect(
+			spy.passthroughs.some(
+				(m) => (m as { subtype?: string }).subtype === "task_updated",
+			),
+		).toBe(true);
+	});
+
+	test("deferred completed replay is idempotent when another completed result arrives before finalization", async () => {
+		const firstCompleted = {
+			...result("completed"),
+			uuid: "r-completed-first-0-0",
+		} as SDKMessage;
+		const secondCompleted = {
+			...result("completed"),
+			uuid: "r-completed-second-0-0",
+		} as SDKMessage;
+		scenario = [
+			assistant("dispatching"),
+			taskStarted("bg1"),
+			firstCompleted,
+			secondCompleted,
+			taskNotification("bg1"),
+		];
+		const spy = makeSpyEmitter();
+		await new ClaudeSessionManager().sendMessage(
+			"req-bg-idempotent",
+			baseParams(),
+			spy.emitter,
+		);
+
+		expect(spy.ends).toBe(1);
+		expect(queryCloseCount).toBe(1);
+		const completedResults = spy.passthroughs.filter(
+			(m) =>
+				(m as { type?: string }).type === "result" &&
+				(m as { terminal_reason?: string }).terminal_reason === "completed",
+		);
+		expect(completedResults).toHaveLength(1);
+		expect((completedResults[0] as { uuid?: string }).uuid).toBe(
+			"r-completed-second-0-0",
+		);
+		expect(spy.contextUsageUpdates).toBeGreaterThanOrEqual(3);
 	});
 });

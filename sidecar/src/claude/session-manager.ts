@@ -714,10 +714,35 @@ export class ClaudeSessionManager implements SessionManager {
 		const pendingBgTasks = new Map<string, PendingBgTask>();
 		let bgDrainTimer: ReturnType<typeof setTimeout> | null = null;
 		let bgDrainTimedOut = false;
+		let deferredCompletedResult: SDKMessage | null = null;
+		let turnEnded = false;
 		const clearBgDrainTimer = () => {
 			if (bgDrainTimer === null) return;
 			clearTimeout(bgDrainTimer);
 			bgDrainTimer = null;
+		};
+		const endTurnOnce = () => {
+			if (turnEnded) return false;
+			turnEnded = true;
+			emitter.end(requestId);
+			return true;
+		};
+		const passthroughTerminalResult = (terminalResult: SDKMessage) => {
+			if (turnEnded) return false;
+			deferredCompletedResult = null;
+			clearBgDrainTimer();
+			emitter.passthrough(requestId, terminalResult);
+			const meta = buildClaudeStoredMeta(terminalResult, model ?? "");
+			if (meta) {
+				emitter.contextUsageUpdated(requestId, sessionId, JSON.stringify(meta));
+			}
+			endTurnOnce();
+			return true;
+		};
+		const passthroughDeferredCompletedIfReady = () => {
+			if (!deferredCompletedResult || pendingBgTasks.size > 0) return false;
+			const terminalResult = deferredCompletedResult;
+			return passthroughTerminalResult(terminalResult);
 		};
 		const summarizePendingBgTasks = () =>
 			Array.from(pendingBgTasks.values())
@@ -841,12 +866,12 @@ export class ClaudeSessionManager implements SessionManager {
 							});
 						} else if (subtype === "task_notification") {
 							pendingBgTasks.delete(taskId);
-							if (pendingBgTasks.size === 0) clearBgDrainTimer();
 						} else if (subtype === "task_updated") {
 							const pending = pendingBgTasks.get(taskId);
 							const status = terminalTaskUpdateStatus(message);
 							if (pending && status) {
 								pending.terminalStatus = status;
+								pendingBgTasks.delete(taskId);
 							}
 						}
 					} else if (subtype === "task_notification" && toolUseId) {
@@ -856,7 +881,6 @@ export class ClaudeSessionManager implements SessionManager {
 								break;
 							}
 						}
-						if (pendingBgTasks.size === 0) clearBgDrainTimer();
 					}
 				}
 				// A `completed` result while background tasks are still pending is
@@ -867,6 +891,7 @@ export class ClaudeSessionManager implements SessionManager {
 				// The final `completed` (pending drained) and any error terminal
 				// fall through to the terminal branch below.
 				if (isCompletedResult(message) && pendingBgTasks.size > 0) {
+					deferredCompletedResult = message;
 					ensureBgDrainTimer();
 					const meta = buildClaudeStoredMeta(message, model ?? "");
 					if (meta) {
@@ -878,33 +903,23 @@ export class ClaudeSessionManager implements SessionManager {
 					}
 					continue;
 				}
+				if (isTerminalResult(message)) {
+					passthroughTerminalResult(message);
+					return;
+				}
 				// AskUserQuestion tool_use blocks pass through INTACT — the Rust
 				// adapter renders them as the persistent Q&A card (and merges
 				// the tool_result answers into it), so stripping them here
 				// would lose the card on finalize/persist/reload.
 				emitter.passthrough(requestId, message);
-				if (isTerminalResult(message)) {
-					// Terminal result (success OR error) — both shapes carry
-					// `usage`/`modelUsage`, so both should update the ring.
-					// Bail on the first one we see; any steer() still in its
-					// image-load await will find `promptSource.closed` via
-					// the finally block below and return false.
-					const meta = buildClaudeStoredMeta(message, model ?? "");
-					if (meta) {
-						emitter.contextUsageUpdated(
-							requestId,
-							sessionId,
-							JSON.stringify(meta),
-						);
-					}
-					emitter.end(requestId);
+				if (passthroughDeferredCompletedIfReady()) {
 					return;
 				}
 			}
-			if (!this.turns.isAbortRequested(sessionId)) emitter.end(requestId);
+			if (!this.turns.isAbortRequested(sessionId)) endTurnOnce();
 		} catch (err) {
 			if (bgDrainTimedOut) {
-				if (!this.turns.isAbortRequested(sessionId)) emitter.end(requestId);
+				if (!this.turns.isAbortRequested(sessionId)) endTurnOnce();
 				return;
 			}
 			if (isAbortError(err)) {
@@ -1497,6 +1512,7 @@ function isTerminalTaskStatus(status: string): boolean {
 		status === "completed" ||
 		status === "failed" ||
 		status === "cancelled" ||
+		status === "killed" ||
 		status === "canceled" ||
 		status === "errored"
 	);
