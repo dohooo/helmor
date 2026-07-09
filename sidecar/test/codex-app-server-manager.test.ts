@@ -284,15 +284,17 @@ describe("CodexAppServerManager", () => {
 			expect.arrayContaining([
 				expect.objectContaining({
 					id: "gpt-5.6-sol",
-					effortLevels: ["none", "low", "medium", "high", "xhigh", "max"],
+					effortLevels: ["low", "medium", "high", "xhigh", "max", "ultra"],
 					supportsFastMode: true,
 				}),
 				expect.objectContaining({
 					id: "gpt-5.6-terra",
+					effortLevels: ["low", "medium", "high", "xhigh", "max", "ultra"],
 					supportsFastMode: true,
 				}),
 				expect.objectContaining({
 					id: "gpt-5.6-luna",
+					effortLevels: ["low", "medium", "high", "xhigh", "max"],
 					supportsFastMode: true,
 				}),
 				expect.objectContaining({ id: "gpt-5.5" }),

@@ -1100,7 +1100,8 @@ const EFFORT_RANK: Record<string, number> = {
 	medium: 2,
 	high: 3,
 	xhigh: 4,
-	max: 4,
+	max: 5,
+	ultra: 6,
 };
 
 // No fake default — when the SDK doesn't return effort levels for a model

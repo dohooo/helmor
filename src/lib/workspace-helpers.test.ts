@@ -1048,6 +1048,12 @@ describe("clampEffort", () => {
 	it("clamps down to nearest available", () => {
 		expect(clampEffort("max", ["low", "medium"])).toBe("medium");
 	});
+
+	it("clamps ultra down to a model's maximum effort", () => {
+		expect(
+			clampEffort("ultra", ["low", "medium", "high", "xhigh", "max"]),
+		).toBe("max");
+	});
 });
 
 describe("clampEffortToModel", () => {

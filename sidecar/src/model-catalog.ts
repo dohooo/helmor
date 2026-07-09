@@ -1,7 +1,14 @@
 import type { Provider, ProviderModelInfo } from "./session-manager.js";
 
-const GPT_5_6_EFFORT_LEVELS = [
-	"none",
+const GPT_5_6_SOL_TERRA_EFFORT_LEVELS = [
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+	"ultra",
+] as const;
+const GPT_5_6_LUNA_EFFORT_LEVELS = [
 	"low",
 	"medium",
 	"high",
@@ -73,21 +80,21 @@ const MODEL_CATALOG: Record<Provider, readonly ProviderModelInfo[]> = {
 			id: "gpt-5.6-sol",
 			label: "GPT-5.6 Sol",
 			cliModel: "gpt-5.6-sol",
-			effortLevels: GPT_5_6_EFFORT_LEVELS,
+			effortLevels: GPT_5_6_SOL_TERRA_EFFORT_LEVELS,
 			supportsFastMode: true,
 		},
 		{
 			id: "gpt-5.6-terra",
 			label: "GPT-5.6 Terra",
 			cliModel: "gpt-5.6-terra",
-			effortLevels: GPT_5_6_EFFORT_LEVELS,
+			effortLevels: GPT_5_6_SOL_TERRA_EFFORT_LEVELS,
 			supportsFastMode: true,
 		},
 		{
 			id: "gpt-5.6-luna",
 			label: "GPT-5.6 Luna",
 			cliModel: "gpt-5.6-luna",
-			effortLevels: GPT_5_6_EFFORT_LEVELS,
+			effortLevels: GPT_5_6_LUNA_EFFORT_LEVELS,
 			supportsFastMode: true,
 		},
 		{

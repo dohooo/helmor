@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { listProviderModels, pickFastestCodexModel } from "./model-catalog.js";
 
 describe("Codex model catalog", () => {
-	test("lists the GPT-5.6 family with all six effort levels", () => {
+	test("lists the GPT-5.6 family with its runtime effort levels", () => {
 		const models = listProviderModels("codex");
 
 		expect(models.slice(0, 3).map((model) => model.id)).toEqual([
@@ -11,7 +11,22 @@ describe("Codex model catalog", () => {
 			"gpt-5.6-luna",
 		]);
 		expect(models[0]?.effortLevels).toEqual([
-			"none",
+			"low",
+			"medium",
+			"high",
+			"xhigh",
+			"max",
+			"ultra",
+		]);
+		expect(models[1]?.effortLevels).toEqual([
+			"low",
+			"medium",
+			"high",
+			"xhigh",
+			"max",
+			"ultra",
+		]);
+		expect(models[2]?.effortLevels).toEqual([
 			"low",
 			"medium",
 			"high",

@@ -345,17 +345,17 @@ fn codex_section() -> AgentModelSection {
             codex_model(
                 "gpt-5.6-sol",
                 "GPT-5.6 Sol",
-                &["none", "low", "medium", "high", "xhigh", "max"],
+                &["low", "medium", "high", "xhigh", "max", "ultra"],
             ),
             codex_model(
                 "gpt-5.6-terra",
                 "GPT-5.6 Terra",
-                &["none", "low", "medium", "high", "xhigh", "max"],
+                &["low", "medium", "high", "xhigh", "max", "ultra"],
             ),
             codex_model(
                 "gpt-5.6-luna",
                 "GPT-5.6 Luna",
-                &["none", "low", "medium", "high", "xhigh", "max"],
+                &["low", "medium", "high", "xhigh", "max"],
             ),
             codex_model("gpt-5.5", "GPT-5.5", &["low", "medium", "high", "xhigh"]),
             codex_model("gpt-5.4", "GPT-5.4", &["low", "medium", "high", "xhigh"]),
@@ -1068,7 +1068,15 @@ mod tests {
             .all(|model| model.supports_fast_mode));
         assert_eq!(
             sections[1].options[0].effort_levels,
-            vec!["none", "low", "medium", "high", "xhigh", "max"]
+            vec!["low", "medium", "high", "xhigh", "max", "ultra"]
+        );
+        assert_eq!(
+            sections[1].options[1].effort_levels,
+            vec!["low", "medium", "high", "xhigh", "max", "ultra"]
+        );
+        assert_eq!(
+            sections[1].options[2].effort_levels,
+            vec!["low", "medium", "high", "xhigh", "max"]
         );
 
         // No opencode prefs row → Unavailable, no options.
