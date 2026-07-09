@@ -20,7 +20,7 @@ describe("Codex model catalog", () => {
 		]);
 	});
 
-	test("keeps GPT-5.4 Mini for lightweight background work", () => {
-		expect(pickFastestCodexModel()).toBe("gpt-5.4-mini");
+	test("uses GPT-5.6 Luna for lightweight background work", () => {
+		expect(pickFastestCodexModel()).toBe("gpt-5.6-luna");
 	});
 });
