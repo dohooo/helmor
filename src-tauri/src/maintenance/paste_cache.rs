@@ -190,7 +190,7 @@ pub fn destination_dir(root: &Path, session_id: &str) -> Result<PathBuf> {
         bail!(
             "paste-cache: rejecting malformed session_id (len={}, sample prefix={:?})",
             trimmed.len(),
-            &trimmed.chars().take(8).collect::<String>(),
+            trimmed.chars().take(8).collect::<String>(),
         );
     }
     Ok(root.join(trimmed))
