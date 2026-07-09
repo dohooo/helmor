@@ -3,7 +3,10 @@
 //! never touches `~/.codex/config.toml`. Each provider is its own catalog id
 //! (`codex:<id>`) since Codex binds the provider at thread start (no mid-thread switch).
 
-use super::types::{is_enabled, CustomProvider, CustomProviderModel};
+use super::types::{
+    is_enabled, CustomProvider, CustomProviderModel, InterleavedConfig, ModelCost,
+    ModelLimit, ModelModalities, ModelStatus,
+};
 use super::CustomProviderBackend;
 
 const SETTINGS_KEY: &str = "app.codex_custom_providers";
@@ -192,6 +195,41 @@ pub(super) fn parse_models_response(
             slug: slug.to_string(),
             label,
             effort_levels: Vec::new(),
+            reasoning: item.get("reasoning").and_then(serde_json::Value::as_bool),
+            tool_call: item.get("tool_call").and_then(serde_json::Value::as_bool),
+            temperature: item.get("temperature").and_then(serde_json::Value::as_bool),
+            attachment: item.get("attachment").and_then(serde_json::Value::as_bool),
+            limit: item
+                .get("limit")
+                .and_then(|v| serde_json::from_value::<ModelLimit>(v.clone()).ok()),
+            modalities: item
+                .get("modalities")
+                .and_then(|v| serde_json::from_value::<ModelModalities>(v.clone()).ok()),
+            cost: item
+                .get("cost")
+                .and_then(|v| serde_json::from_value::<ModelCost>(v.clone()).ok()),
+            family: item
+                .get("family")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            release_date: item
+                .get("release_date")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            status: item
+                .get("status")
+                .and_then(|v| serde_json::from_value::<ModelStatus>(v.clone()).ok()),
+            interleaved: item
+                .get("interleaved")
+                .and_then(|v| serde_json::from_value::<InterleavedConfig>(v.clone()).ok()),
+            variants: item.get("variants").and_then(|v| {
+                let obj = v.as_object()?;
+                let map: std::collections::BTreeMap<String, serde_json::Value> = obj
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                Some(map)
+            }),
         });
     }
     Ok(out)
@@ -231,6 +269,7 @@ mod tests {
             slug: slug.to_string(),
             label: slug.to_uppercase(),
             effort_levels: Vec::new(),
+            ..Default::default()
         }
     }
 
