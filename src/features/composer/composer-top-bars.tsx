@@ -32,6 +32,15 @@ import { Fragment, type ReactNode } from "react";
  * for the last visible entry. Every docked-family component must accept a
  * `docked` prop and render its closed-bottom variant when false.
  */
+/**
+ * Card-family chrome. Every card bar spreads this as its root class so the
+ * flat look (uniform radius, composer-matched border/background, no shadow)
+ * stays in one place. Add layout-specific bits (margins, padding) at the
+ * call site with `cn(CARD_BAR_CHROME, ...)`.
+ */
+export const CARD_BAR_CHROME =
+	"pointer-events-auto flex w-full flex-col overflow-hidden rounded-lg border border-border/70 bg-background outline-none dark:border-border/40";
+
 export type DockedBar = {
 	key: string;
 	/** The stack needs visibility up front (a component that returns null

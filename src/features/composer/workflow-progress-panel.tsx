@@ -23,6 +23,7 @@ import type { WorkflowAgentRow, WorkflowPart } from "@/lib/api";
 import { I18nText, useI18n } from "@/lib/i18n";
 import { sessionThreadMessagesQueryOptions } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
+import { CARD_BAR_CHROME } from "./composer-top-bars";
 
 /**
  * Derive this session's workflow widgets from the rendered thread cache. The
@@ -328,8 +329,7 @@ export function WorkflowProgressPanel({
 				// Ease-out (fast → slow) so the resize feels like it settles.
 				transition: "height 360ms cubic-bezier(0.22, 1, 0.36, 1)",
 			}}
-			// Flat chrome kept in sync with the composer + task-progress panel.
-			className="pointer-events-auto flex w-full flex-col overflow-hidden rounded-lg border border-border/70 bg-background p-2.5 outline-none dark:border-border/40"
+			className={cn(CARD_BAR_CHROME, "p-2.5")}
 		>
 			<div className="mb-1.5 flex items-center gap-1.5 px-0.5">
 				{level === 0 ? (

@@ -1277,7 +1277,11 @@ export const WorkspaceComposerContainer = memo(
 				) : null}
 
 				<div className="relative z-10">
-					<div className="pointer-events-none absolute inset-x-0 bottom-[calc(100%-1px)] z-20 flex flex-col items-center gap-1">
+					{/* gap-1/pb-1: uniform 4px between stacked bars and 4px between the
+					    lowest overlay bar and whatever sits below (task panel /
+					    composer). Docked bars are NOT here — they live in flow below
+					    and glue to the composer (see composer-top-bars.tsx). */}
+					<div className="pointer-events-none absolute inset-x-0 bottom-[calc(100%-1px)] z-20 flex flex-col items-center gap-1 pb-1.5">
 						{onToggleContextSession ? (
 							<SessionContextInjector
 								candidates={contextSessionCandidates}

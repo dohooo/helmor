@@ -22,6 +22,7 @@ import {
 } from "react";
 import { LazyStreamdown } from "@/components/streamdown-loader";
 import { ShimmerText } from "@/components/ui/shimmer-text";
+import { CARD_BAR_CHROME } from "@/features/composer/composer-top-bars";
 import { formatTokens } from "@/features/composer/context-usage-ring/parse";
 import { formatWorkflowDuration } from "@/features/panel/message-components/content-parts";
 import type { TaskState, TaskStatus, ToolCallPart } from "@/lib/api";
@@ -322,7 +323,7 @@ export function TaskProgressPanel({
 			}}
 			// Flat chrome matching the composer beneath it (border/70 + bg-sidebar,
 			// no shadow); rounded-lg reads calmer than xl at this strip height.
-			className="pointer-events-auto mt-1 mb-1 flex w-full flex-col overflow-hidden rounded-lg border border-border/70 bg-background outline-none dark:border-border/40"
+			className={cn(CARD_BAR_CHROME, "mt-1 mb-1")}
 		>
 			{collapsed ? (
 				<button
