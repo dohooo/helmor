@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentModelSection } from "@/lib/api";
-import { includePinnedLegacyCodexModel } from "./session-model-sections";
+import { includePinnedHiddenModel } from "./session-model-sections";
 
 const SECTIONS: AgentModelSection[] = [
 	{
@@ -18,9 +18,9 @@ const SECTIONS: AgentModelSection[] = [
 	},
 ];
 
-describe("includePinnedLegacyCodexModel", () => {
+describe("includePinnedHiddenModel", () => {
 	it("keeps the hidden model available to an existing Codex session", () => {
-		const result = includePinnedLegacyCodexModel(SECTIONS, {
+		const result = includePinnedHiddenModel(SECTIONS, {
 			agentType: "codex",
 			model: "gpt-5.5",
 		});
@@ -31,9 +31,23 @@ describe("includePinnedLegacyCodexModel", () => {
 		]);
 	});
 
+	it("keeps a hidden Opus model available to an existing Claude session", () => {
+		const result = includePinnedHiddenModel([], {
+			agentType: "claude",
+			model: "claude-opus-4-7[1m]",
+		});
+
+		expect(result[0]).toEqual(
+			expect.objectContaining({
+				id: "claude",
+				options: [expect.objectContaining({ id: "claude-opus-4-7[1m]" })],
+			}),
+		);
+	});
+
 	it("does not add a legacy model to unrelated sessions", () => {
 		expect(
-			includePinnedLegacyCodexModel(SECTIONS, {
+			includePinnedHiddenModel(SECTIONS, {
 				agentType: "claude",
 				model: "gpt-5.5",
 			}),
@@ -57,7 +71,7 @@ describe("includePinnedLegacyCodexModel", () => {
 		];
 
 		expect(
-			includePinnedLegacyCodexModel(withLegacy, {
+			includePinnedHiddenModel(withLegacy, {
 				agentType: "codex",
 				model: "gpt-5.5",
 			}),

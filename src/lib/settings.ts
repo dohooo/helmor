@@ -346,7 +346,8 @@ export type AppSettings = {
 	autoArchiveOnMerge: boolean;
 	onboardingCompleted: boolean;
 	shortcuts: ShortcutOverrides;
-	/** Claude model ids in the picker. `null` = all (default), `[]` = none. */
+	/** Claude model ids in the picker. `null` = recommended official models plus
+	 *  all custom models; `[]` = none. */
 	claudeEnabledModelIds: string[] | null;
 	/** Codex model ids in the picker. `null` = recommended official models plus
 	 *  all custom models; `[]` = none. */

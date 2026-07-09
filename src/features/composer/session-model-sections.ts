@@ -4,13 +4,30 @@ import type {
 	WorkspaceSessionSummary,
 } from "@/lib/api";
 
-const LEGACY_CODEX_MODELS: Record<string, AgentModelOption> = {
+const HIDDEN_MODELS: Record<string, AgentModelOption> = {
+	"claude-opus-4-7[1m]": {
+		id: "claude-opus-4-7[1m]",
+		provider: "claude",
+		label: "Opus 4.7 1M",
+		cliModel: "claude-opus-4-7[1m]",
+		effortLevels: ["low", "medium", "high", "xhigh", "max"],
+		supportsContextUsage: true,
+	},
+	"claude-opus-4-6[1m]": {
+		id: "claude-opus-4-6[1m]",
+		provider: "claude",
+		label: "Opus 4.6 1M",
+		cliModel: "claude-opus-4-6[1m]",
+		effortLevels: ["low", "medium", "high", "max"],
+		supportsFastMode: true,
+		supportsContextUsage: true,
+	},
 	"gpt-5.5": {
 		id: "gpt-5.5",
 		provider: "codex",
 		label: "GPT-5.5",
 		cliModel: "gpt-5.5",
-		effortLevels: ["none", "low", "medium", "high", "xhigh"],
+		effortLevels: ["low", "medium", "high", "xhigh"],
 		supportsFastMode: true,
 		supportsContextUsage: true,
 	},
@@ -19,7 +36,7 @@ const LEGACY_CODEX_MODELS: Record<string, AgentModelOption> = {
 		provider: "codex",
 		label: "GPT-5.4",
 		cliModel: "gpt-5.4",
-		effortLevels: ["none", "low", "medium", "high", "xhigh"],
+		effortLevels: ["low", "medium", "high", "xhigh"],
 		supportsFastMode: true,
 		supportsContextUsage: true,
 	},
@@ -28,19 +45,20 @@ const LEGACY_CODEX_MODELS: Record<string, AgentModelOption> = {
 		provider: "codex",
 		label: "GPT-5.4 Mini",
 		cliModel: "gpt-5.4-mini",
-		effortLevels: ["none", "low", "medium", "high", "xhigh"],
+		effortLevels: ["low", "medium", "high", "xhigh"],
 		supportsFastMode: true,
 		supportsContextUsage: true,
 	},
 };
 
-export function includePinnedLegacyCodexModel(
+export function includePinnedHiddenModel(
 	sections: AgentModelSection[],
 	session: Pick<WorkspaceSessionSummary, "agentType" | "model"> | null,
 ): AgentModelSection[] {
-	if (session?.agentType !== "codex" || !session.model) return sections;
-	const legacyModel = LEGACY_CODEX_MODELS[session.model];
-	if (!legacyModel) return sections;
+	if (!session?.agentType || !session.model) return sections;
+	const hiddenModel = HIDDEN_MODELS[session.model];
+	if (!hiddenModel || hiddenModel.provider !== session.agentType)
+		return sections;
 	if (
 		sections.some((section) =>
 			section.options.some((o) => o.id === session.model),
@@ -49,17 +67,24 @@ export function includePinnedLegacyCodexModel(
 		return sections;
 	}
 
-	const codexIndex = sections.findIndex((section) => section.id === "codex");
-	if (codexIndex === -1) {
+	const sectionIndex = sections.findIndex(
+		(section) => section.id === hiddenModel.provider,
+	);
+	if (sectionIndex === -1) {
 		return [
 			...sections,
-			{ id: "codex", label: "Codex", status: "ready", options: [legacyModel] },
+			{
+				id: hiddenModel.provider,
+				label: hiddenModel.provider === "codex" ? "Codex" : "Claude Code",
+				status: "ready",
+				options: [hiddenModel],
+			},
 		];
 	}
 
 	return sections.map((section, index) =>
-		index === codexIndex
-			? { ...section, options: [...section.options, legacyModel] }
+		index === sectionIndex
+			? { ...section, options: [...section.options, hiddenModel] }
 			: section,
 	);
 }

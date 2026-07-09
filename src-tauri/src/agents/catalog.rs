@@ -38,6 +38,12 @@ pub struct AgentModelSection {
 }
 
 const DEFAULT_CODEX_MODEL_IDS: &[&str] = &["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
+const DEFAULT_CLAUDE_MODEL_IDS: &[&str] = &[
+    "claude-fable-5[1m]",
+    "claude-opus-4-8[1m]",
+    "sonnet",
+    "haiku",
+];
 
 /// The composer/CLI picker catalog: full catalog with the user's model
 /// selection applied. Empty sections are omitted.
@@ -106,9 +112,15 @@ fn apply_official_enabled_filter(
         .into_iter()
         .map(|mut section| {
             match section.id.as_str() {
-                "claude" => section
-                    .options
-                    .retain(|opt| crate::provider::is_enabled(claude_enabled, &opt.id)),
+                "claude" => section.options.retain(|opt| {
+                    claude_enabled.map_or_else(
+                        || {
+                            opt.provider_key.is_some()
+                                || DEFAULT_CLAUDE_MODEL_IDS.contains(&opt.id.as_str())
+                        },
+                        |enabled| crate::provider::is_enabled(Some(enabled), &opt.id),
+                    )
+                }),
                 "codex" => section.options.retain(|opt| {
                     codex_enabled.map_or_else(
                         || {
@@ -345,20 +357,12 @@ fn codex_section() -> AgentModelSection {
                 "GPT-5.6 Luna",
                 &["none", "low", "medium", "high", "xhigh", "max"],
             ),
-            codex_model(
-                "gpt-5.5",
-                "GPT-5.5",
-                &["none", "low", "medium", "high", "xhigh"],
-            ),
-            codex_model(
-                "gpt-5.4",
-                "GPT-5.4",
-                &["none", "low", "medium", "high", "xhigh"],
-            ),
+            codex_model("gpt-5.5", "GPT-5.5", &["low", "medium", "high", "xhigh"]),
+            codex_model("gpt-5.4", "GPT-5.4", &["low", "medium", "high", "xhigh"]),
             codex_model(
                 "gpt-5.4-mini",
                 "GPT-5.4 Mini",
-                &["none", "low", "medium", "high", "xhigh"],
+                &["low", "medium", "high", "xhigh"],
             ),
         ],
     }
@@ -1276,7 +1280,7 @@ mod tests {
     }
 
     #[test]
-    fn official_filter_defaults_to_gpt_5_6_and_keeps_custom_codex_models() {
+    fn official_filter_uses_curated_defaults_and_keeps_custom_codex_models() {
         let custom = codex_custom_model("hundun", "codex:hundun", "custom-model", "Custom");
         let base = model_sections_for_inputs(Vec::new(), vec![custom], None, None, None);
         let filtered = apply_official_enabled_filter(base, None, None);
@@ -1293,6 +1297,36 @@ mod tests {
                 "gpt-5.6-luna",
                 "codex:hundun|custom-model",
             ]
+        );
+        let claude = filtered.iter().find(|s| s.id == "claude").unwrap();
+        assert_eq!(
+            claude
+                .options
+                .iter()
+                .map(|o| o.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "claude-fable-5[1m]",
+                "claude-opus-4-8[1m]",
+                "sonnet",
+                "haiku",
+            ]
+        );
+    }
+
+    #[test]
+    fn official_filter_can_reenable_hidden_opus_models() {
+        let base = model_sections_for_inputs(Vec::new(), Vec::new(), None, None, None);
+        let filtered =
+            apply_official_enabled_filter(base, Some(&["claude-opus-4-7[1m]".to_string()]), None);
+        let claude = filtered.iter().find(|s| s.id == "claude").unwrap();
+        assert_eq!(
+            claude
+                .options
+                .iter()
+                .map(|o| o.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["claude-opus-4-7[1m]"]
         );
     }
 

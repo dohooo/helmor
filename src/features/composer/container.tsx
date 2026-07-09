@@ -73,7 +73,7 @@ import {
 } from "./input-history";
 import type { PermissionPanelProps } from "./permission-panel";
 import { SessionContextInjector } from "./session-context-injector";
-import { includePinnedLegacyCodexModel } from "./session-model-sections";
+import { includePinnedHiddenModel } from "./session-model-sections";
 import type { StartSubmitMode } from "./start-submit-mode";
 import { SubmitQueueList } from "./submit-queue-list";
 import type { UserInputResponseHandler } from "./user-input";
@@ -557,8 +557,7 @@ export const WorkspaceComposerContainer = memo(
 				(session) => session.id === displayedSessionId,
 			) ?? null;
 		const modelSections = useMemo(
-			() =>
-				includePinnedLegacyCodexModel(availableModelSections, currentSession),
+			() => includePinnedHiddenModel(availableModelSections, currentSession),
 			[availableModelSections, currentSession],
 		);
 		const composerContextKey =
