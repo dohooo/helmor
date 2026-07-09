@@ -20,6 +20,7 @@ mod params;
 mod session_id;
 mod state;
 mod stream_hub;
+mod task_state_persist;
 mod workflow_persist;
 
 #[cfg(test)]
@@ -305,6 +306,7 @@ pub(super) fn stream_via_sidecar(
         // task_updated (task_id only) can resolve its run from an earlier
         // task_started.
         let mut workflow_persist = workflow_persist::WorkflowPersistTracker::default();
+        let mut last_task_state_snapshot_json = String::new();
 
         // Short-borrow only. The single-writer pool (max_size=1) is shared
         // with every other write in the app; a long-held handle here would
@@ -1295,37 +1297,96 @@ pub(super) fn stream_via_sidecar(
                         }
 
                         if let Some(pipeline_state) = pipeline.as_mut() {
+                            let task_state_source =
+                                task_state_persist::is_task_state_source_event(&event.raw);
                             let emit = pipeline_state.push_event(&event.raw, &line);
+                            let task_state_update = if task_state_source {
+                                exchange_ctx.as_ref().and_then(|ctx| {
+                                    let tasks = pipeline_state.task_state_snapshot();
+                                    if tasks.is_empty() && last_task_state_snapshot_json.is_empty()
+                                    {
+                                        return None;
+                                    }
+                                    let snapshot_json =
+                                        serde_json::to_string(&tasks).unwrap_or_default();
+                                    Some((ctx.helmor_session_id.clone(), tasks, snapshot_json))
+                                })
+                            } else {
+                                None
+                            };
 
-                            if let (Some(ctx), Some(conn)) =
-                                (&exchange_ctx, &crate::models::db::write_conn().ok())
-                            {
-                                let model_str =
-                                    pipeline_state.accumulator.resolved_model().to_string();
-                                while persisted_turn_count < pipeline_state.accumulator.turns_len()
-                                {
-                                    match persist_turn_message(
-                                        conn,
-                                        ctx,
-                                        pipeline_state.accumulator.turn_at(persisted_turn_count),
-                                        &model_str,
-                                    ) {
-                                        Ok(_) => {
-                                            persisted_turn_count += 1;
+                            if let Some(ctx) = exchange_ctx.as_ref() {
+                                if let Ok(mut conn) = crate::models::db::write_conn() {
+                                    match conn.transaction() {
+                                        Ok(transaction) => {
+                                            let model_str = pipeline_state
+                                                .accumulator
+                                                .resolved_model()
+                                                .to_string();
+                                            let mut next_persisted_turn_count =
+                                                persisted_turn_count;
+                                            let mut persist_failed = false;
+                                            while next_persisted_turn_count
+                                                < pipeline_state.accumulator.turns_len()
+                                            {
+                                                match persist_turn_message(
+                                                    &transaction,
+                                                    ctx,
+                                                    pipeline_state
+                                                        .accumulator
+                                                        .turn_at(next_persisted_turn_count),
+                                                    &model_str,
+                                                ) {
+                                                    Ok(_) => {
+                                                        next_persisted_turn_count += 1;
+                                                    }
+                                                    Err(error) => {
+                                                        tracing::error!(
+                                                            turn = next_persisted_turn_count,
+                                                            "Failed to persist turn: {error}"
+                                                        );
+                                                        persist_failed = true;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+
+                                            // Tee workflow task_* events into durable
+                                            // snapshot rows (see workflow_persist).
+                                            workflow_persist.observe(
+                                                &transaction,
+                                                &ctx.helmor_session_id,
+                                                &event.raw,
+                                            );
+                                            if let Some((_, tasks, _)) = &task_state_update {
+                                                task_state_persist::upsert_task_state_snapshots(
+                                                    &transaction,
+                                                    &ctx.helmor_session_id,
+                                                    tasks,
+                                                );
+                                            }
+
+                                            if !persist_failed {
+                                                match transaction.commit() {
+                                                    Ok(()) => {
+                                                        persisted_turn_count =
+                                                            next_persisted_turn_count;
+                                                    }
+                                                    Err(error) => {
+                                                        tracing::error!(
+                                                            "Failed to commit stream persistence transaction: {error}"
+                                                        );
+                                                    }
+                                                }
+                                            }
                                         }
                                         Err(error) => {
                                             tracing::error!(
-                                                turn = persisted_turn_count,
-                                                "Failed to persist turn: {error}"
+                                                "Failed to start stream persistence transaction: {error}"
                                             );
-                                            break;
                                         }
                                     }
                                 }
-
-                                // Tee workflow task_* events into durable
-                                // snapshot rows (see workflow_persist).
-                                workflow_persist.observe(conn, &ctx.helmor_session_id, &event.raw);
                             }
 
                             match turn_session.handle_stream_event(emit) {
@@ -1339,6 +1400,18 @@ pub(super) fn stream_via_sidecar(
                                         rid = %rid,
                                         error = ?err,
                                         "stream_event transition rejected",
+                                    );
+                                }
+                            }
+
+                            if let Some((session_id, tasks, snapshot_json)) = task_state_update {
+                                if snapshot_json != last_task_state_snapshot_json {
+                                    last_task_state_snapshot_json = snapshot_json;
+                                    actions::apply_action(
+                                        actions::Action::EmitToFrontend(
+                                            AgentStreamEvent::TaskStateUpdate { session_id, tasks },
+                                        ),
+                                        &apply_ctx,
                                     );
                                 }
                             }

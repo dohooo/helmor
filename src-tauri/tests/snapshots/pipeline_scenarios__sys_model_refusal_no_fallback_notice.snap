@@ -1,0 +1,14 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: system
+  id: msg-1
+  content_length: 1
+  content:
+    - type: system-notice
+      severity: error
+      label: Model refused by claude-opus-4-5
+      body: The model refused this request
+  status: ~
+  streaming: ~

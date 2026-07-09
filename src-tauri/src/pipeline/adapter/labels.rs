@@ -182,6 +182,47 @@ pub(super) fn build_system_notice(parsed: Option<&Value>, msg_id: &str) -> Optio
     let parsed = parsed?;
     let sub = parsed.get("subtype").and_then(Value::as_str)?;
     match sub {
+        "notification" => {
+            let text = string_field(parsed, "text");
+            let severity = match parsed.get("priority").and_then(Value::as_str) {
+                Some("high" | "immediate") => NoticeSeverity::Warning,
+                _ => NoticeSeverity::Info,
+            };
+            Some(MessagePart::SystemNotice {
+                id: notice_part_id(msg_id),
+                severity,
+                label: "Notification".to_string(),
+                body: text,
+            })
+        }
+        "informational" => {
+            let content = string_field(parsed, "content");
+            let level = parsed.get("level").and_then(Value::as_str);
+            let prevent_continuation = parsed
+                .get("prevent_continuation")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let severity = if level == Some("warning") || prevent_continuation {
+                NoticeSeverity::Warning
+            } else {
+                NoticeSeverity::Info
+            };
+            let label = match level {
+                Some("warning") => "Warning",
+                Some("suggestion") => "Suggestion",
+                Some("notice") => "Notice",
+                _ => "Info",
+            };
+            Some(MessagePart::SystemNotice {
+                id: notice_part_id(msg_id),
+                severity,
+                label: label.to_string(),
+                body: content,
+            })
+        }
+        "permission_denied" => Some(build_permission_denied_notice(parsed, msg_id)),
+        "model_refusal_fallback" => Some(build_model_refusal_fallback_notice(parsed, msg_id)),
+        "model_refusal_no_fallback" => Some(build_model_refusal_no_fallback_notice(parsed, msg_id)),
         "local_command_output" => {
             let content = parsed
                 .get("content")
@@ -249,6 +290,79 @@ pub(super) fn build_system_notice(parsed: Option<&Value>, msg_id: &str) -> Optio
             })
         }
         _ => None,
+    }
+}
+
+fn string_field(parsed: &Value, key: &str) -> Option<String> {
+    parsed
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string)
+}
+
+fn first_string(fields: impl IntoIterator<Item = Option<String>>) -> Option<String> {
+    fields.into_iter().flatten().next()
+}
+
+fn build_permission_denied_notice(parsed: &Value, msg_id: &str) -> MessagePart {
+    let tool_name = string_field(parsed, "tool_name");
+    let label = match tool_name {
+        Some(name) => format!("Permission denied for {name}"),
+        None => "Permission denied".to_string(),
+    };
+    let body = first_string([
+        string_field(parsed, "decision_reason"),
+        string_field(parsed, "message"),
+        string_field(parsed, "decision_reason_type")
+            .map(|reason_type| format!("Decision: {reason_type}")),
+    ]);
+
+    MessagePart::SystemNotice {
+        id: notice_part_id(msg_id),
+        severity: NoticeSeverity::Warning,
+        label,
+        body,
+    }
+}
+
+fn build_model_refusal_fallback_notice(parsed: &Value, msg_id: &str) -> MessagePart {
+    let label = match string_field(parsed, "fallback_model") {
+        Some(model) => format!("Model refused; retrying with {model}"),
+        None => "Model refused; retrying".to_string(),
+    };
+    let body = first_string([
+        string_field(parsed, "content"),
+        string_field(parsed, "api_refusal_explanation"),
+        string_field(parsed, "api_refusal_category")
+            .map(|category| format!("Category: {category}")),
+    ]);
+
+    MessagePart::SystemNotice {
+        id: notice_part_id(msg_id),
+        severity: NoticeSeverity::Warning,
+        label,
+        body,
+    }
+}
+
+fn build_model_refusal_no_fallback_notice(parsed: &Value, msg_id: &str) -> MessagePart {
+    let label = match string_field(parsed, "original_model") {
+        Some(model) => format!("Model refused by {model}"),
+        None => "Model refused".to_string(),
+    };
+    let body = first_string([
+        string_field(parsed, "content"),
+        string_field(parsed, "api_refusal_explanation"),
+        string_field(parsed, "api_refusal_category")
+            .map(|category| format!("Category: {category}")),
+    ]);
+
+    MessagePart::SystemNotice {
+        id: notice_part_id(msg_id),
+        severity: NoticeSeverity::Error,
+        label,
+        body,
     }
 }
 

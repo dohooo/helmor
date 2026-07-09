@@ -1,0 +1,36 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: msg-1
+  content_length: 1
+  content:
+    - type: tool-call
+      tool_name: Task
+      tool_call_id: toolu_task_kill
+      args_keys:
+        - description
+      args_text_length: 36
+      has_result: false
+      result_kind: ~
+      result_preview: ~
+      streaming_status: ~
+      task_state:
+        id: task_kill
+        tool_use_id: toolu_task_kill
+        task_type: local_agent
+        subagent_type: ~
+        status: killed
+        is_backgrounded: true
+        description: Long-running audit
+        summary: ~
+        total_tokens: ~
+        duration_ms: ~
+        last_tool_name: ~
+        error: terminated by user
+        end_time_ms: 1780015779522
+  status:
+    type: complete
+    reason: stop
+  streaming: ~

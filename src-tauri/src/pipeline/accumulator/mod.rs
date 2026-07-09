@@ -143,7 +143,6 @@ pub struct StreamAccumulator {
     /// matching the finalized render so the live partial nests under its
     /// parent Task/Agent tool call instead of flashing as a top-level bubble.
     pub(super) cur_streaming_parent_id: Option<String>,
-    local_bash_task_refs: HashSet<String>,
     // ── Codex state ──────────────────────────────────────────────────
     /// Per-item delta accumulation for Codex App Server streaming.
     codex_items: HashMap<String, codex::CodexItemState>,
@@ -352,7 +351,6 @@ impl StreamAccumulator {
             cur_asst_template: None,
             cur_asst_block_count: 0,
             cur_streaming_parent_id: None,
-            local_bash_task_refs: HashSet::new(),
             codex_items: codex::new_item_states(),
             codex_partial_idx: None,
             codex_turn_started_at: None,
@@ -412,8 +410,11 @@ impl StreamAccumulator {
                 PushOutcome::StreamingDelta
             }
             Some("tool_progress") => {
-                streaming::handle_tool_progress(self, value);
-                PushOutcome::StreamingDelta
+                if streaming::handle_tool_progress(self, value) {
+                    PushOutcome::Finalized
+                } else {
+                    PushOutcome::StreamingDelta
+                }
             }
 
             // ── Claude finalized full messages ─────────────────────────
@@ -1252,20 +1253,6 @@ impl StreamAccumulator {
             if crate::pipeline::event_filter::is_suppressed_system_subtype(subtype) {
                 return;
             }
-        }
-        // `local_bash` task_* events duplicate the accompanying Bash tool.
-        // Claude omits `task_type` on the later notification, so remember
-        // refs from the start event and apply them to the completion event.
-        if crate::pipeline::event_filter::is_explicit_local_bash_task(value) {
-            crate::pipeline::event_filter::remember_task_refs(
-                value,
-                &mut self.local_bash_task_refs,
-            );
-            return;
-        }
-        if crate::pipeline::event_filter::is_local_bash_task_ref(value, &self.local_bash_task_refs)
-        {
-            return;
         }
         self.collect_message(raw_line, value, MessageRole::System, None);
     }

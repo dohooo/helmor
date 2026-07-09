@@ -24,6 +24,7 @@
 import type { SerializedEditorState } from "lexical";
 import { create } from "zustand";
 import type { PendingUserInput } from "@/features/conversation/pending-user-input";
+import type { TaskState } from "@/lib/api";
 import type { ComposerCustomTag } from "@/lib/composer-insert";
 
 export type PendingPermission = {
@@ -67,6 +68,7 @@ type StreamingState = {
 	pendingPermissionsByContext: Record<string, PendingPermission[]>;
 	pendingUserInputByContext: Record<string, PendingUserInput | null>;
 	userInputResponsePendingByContext: Record<string, boolean>;
+	activeTasksBySession: Record<string, TaskState[]>;
 	interactionWorkspaceByContext: Record<string, string | null>;
 	planReviewByContext: Record<string, boolean>;
 	activeFastPreludes: Record<string, boolean>;
@@ -76,6 +78,8 @@ type StreamingActions = {
 	setPendingUserInput(contextKey: string, value: PendingUserInput | null): void;
 	clearPendingUserInput(contextKey: string): void;
 	setUserInputResponsePending(contextKey: string, value: boolean): void;
+	setActiveTasks(sessionId: string, tasks: TaskState[]): void;
+	clearActiveTasks(sessionId: string): void;
 	appendPendingPermission(
 		contextKey: string,
 		permission: PendingPermission,
@@ -110,6 +114,7 @@ const INITIAL_STATE: StreamingState = {
 	pendingPermissionsByContext: {},
 	pendingUserInputByContext: {},
 	userInputResponsePendingByContext: {},
+	activeTasksBySession: {},
 	interactionWorkspaceByContext: {},
 	planReviewByContext: {},
 	activeFastPreludes: {},
@@ -130,6 +135,14 @@ function omitKey<T>(
 	const next = { ...current };
 	delete next[key];
 	return next;
+}
+
+function areTaskListsEqual(
+	left: readonly TaskState[] | undefined,
+	right: readonly TaskState[],
+): boolean {
+	if (!left || left.length !== right.length) return false;
+	return JSON.stringify(left) === JSON.stringify(right);
 }
 
 export const useStreamingStore = create<StreamingStore>((set) => ({
@@ -182,6 +195,29 @@ export const useStreamingStore = create<StreamingStore>((set) => ({
 					[contextKey]: value,
 				},
 			};
+		}),
+
+	// -------------------------------------------------------------------
+	// activeTasksBySession — live background-task snapshot per Helmor session
+	// -------------------------------------------------------------------
+	setActiveTasks: (sessionId, tasks) =>
+		set((state) => {
+			if (areTaskListsEqual(state.activeTasksBySession[sessionId], tasks)) {
+				return state;
+			}
+			return {
+				activeTasksBySession: {
+					...state.activeTasksBySession,
+					[sessionId]: tasks,
+				},
+			};
+		}),
+
+	clearActiveTasks: (sessionId) =>
+		set((state) => {
+			const stripped = omitKey(state.activeTasksBySession, sessionId);
+			if (stripped === state.activeTasksBySession) return state;
+			return { activeTasksBySession: stripped };
 		}),
 
 	// -------------------------------------------------------------------

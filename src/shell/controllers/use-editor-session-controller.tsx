@@ -13,6 +13,7 @@ import {
 } from "@/lib/editor-session";
 import { translateSource, useI18n } from "@/lib/i18n";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
+import { useShellEvent } from "@/shell/event-bus";
 import {
 	useLatestRef,
 	useStableActions,
@@ -311,6 +312,12 @@ export function useEditorSessionController(
 			if (ok) close();
 		});
 	}, [confirmDiscardEditorChanges]);
+
+	// Bus-driven open for callers without direct access to these actions
+	// (e.g. the composer task panel's output-file link).
+	useShellEvent("open-file-in-editor", (event) => {
+		openFileReference(event.path, event.line);
+	});
 
 	const actions = useStableActions<EditorSessionActions>({
 		openFile,

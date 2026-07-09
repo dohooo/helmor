@@ -75,6 +75,7 @@ import type { PermissionPanelProps } from "./permission-panel";
 import { SessionContextInjector } from "./session-context-injector";
 import type { StartSubmitMode } from "./start-submit-mode";
 import { SubmitQueueList } from "./submit-queue-list";
+import { TaskProgressPanel } from "./task-progress";
 import type { UserInputResponseHandler } from "./user-input";
 import { WorkflowProgressPanel } from "./workflow-progress-panel";
 
@@ -1302,6 +1303,11 @@ export const WorkspaceComposerContainer = memo(
 							disabled={composerUnavailable}
 						/>
 					</div>
+					<TaskProgressPanel
+						sessionId={displayedSessionId}
+						workspaceId={displayedWorkspaceId}
+						repoId={effectiveRepoId}
+					/>
 					<WorkspaceComposer
 						contextKey={composerContextKey}
 						sessionId={displayedSessionId}

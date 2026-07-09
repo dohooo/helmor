@@ -1,0 +1,14 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: system
+  id: msg-1
+  content_length: 1
+  content:
+    - type: system-notice
+      severity: warning
+      label: Model refused; retrying with claude-sonnet-4-5
+      body: Retrying with fallback model
+  status: ~
+  streaming: ~
