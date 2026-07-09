@@ -1291,17 +1291,15 @@ pub fn execute_archive_plan(plan: &ArchivePreparedPlan) -> Result<ArchiveWorkspa
         );
     }
     let git_started = std::time::Instant::now();
-    let archive_commit = match git_ops::current_workspace_head_commit(workspace_dir) {
-        Ok(commit) => {
-            git_ops::verify_commit_exists(repo_root, &commit)?;
-            tracing::debug!(
-                workspace_id,
-                elapsed_ms = git_started.elapsed().as_millis(),
-                "Archive: HEAD resolve + verify finished"
-            );
-            commit
-        }
-        Err(error) => return Err(error),
+    let archive_commit = {
+        let commit = git_ops::current_workspace_head_commit(workspace_dir)?;
+        git_ops::verify_commit_exists(repo_root, &commit)?;
+        tracing::debug!(
+            workspace_id,
+            elapsed_ms = git_started.elapsed().as_millis(),
+            "Archive: HEAD resolve + verify finished"
+        );
+        commit
     };
 
     // Run archive script (best-effort, don't block archive on script failure).
