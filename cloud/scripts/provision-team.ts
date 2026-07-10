@@ -46,6 +46,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { decideBrokerKeyAction, toSecretListOutcome } from "./broker-key";
+import { classifyMigrationError, D1_MIGRATIONS } from "./d1-migrations";
 
 // fileURLToPath (not URL.pathname) so Windows paths don't keep the leading
 // slash (`/C:/…`), which breaks resolve/join.
@@ -417,6 +418,37 @@ async function main(): Promise<void> {
 	);
 	if (schema.code !== 0) {
 		log(`[provision] schema apply failed:\n${schema.stderr}`);
+		process.exit(1);
+	}
+
+	// One-time migrations for PRE-EXISTING databases (P1-4c): schema.sql only
+	// shapes fresh DBs (CREATE TABLE IF NOT EXISTS never backfills a column),
+	// so additive columns are applied here on every provision, tolerating
+	// SQLite's "duplicate column name" — the expected outcome on a fresh DB.
+	// List + rationale + upgrade path live in d1-migrations.ts.
+	for (const migration of D1_MIGRATIONS) {
+		const applied = wrangler(
+			[
+				"d1",
+				"execute",
+				"helmor-team",
+				"--remote",
+				"--command",
+				migration.sql,
+				"--yes",
+			],
+			{ configPath },
+		);
+		if (applied.code === 0) {
+			log(`[provision] migration ${migration.id}: applied`);
+			continue;
+		}
+		const combined = `${applied.stdout}\n${applied.stderr}`;
+		if (classifyMigrationError(combined) === "already-applied") {
+			log(`[provision] migration ${migration.id}: already applied — skipped`);
+			continue;
+		}
+		log(`[provision] migration ${migration.id} failed:\n${combined}`);
 		process.exit(1);
 	}
 

@@ -98,18 +98,18 @@ CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, sent_at);
 
 -- ── One-time migrations for PRE-EXISTING databases ───────────────────────────
--- The CREATE TABLE statements above only add new columns to FRESH databases
--- (a `CREATE TABLE IF NOT EXISTS` no-ops if the table already exists, so it
--- never backfills a column onto an already-bootstrapped table). D1/SQLite has
--- NO `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, and a bare `ALTER` here would
--- abort this whole re-runnable file on fresh/re-run (the column would already
--- exist). So the ALTER is documented — NOT executed — here; the orchestrator
--- runs it ONCE against the live D1 at deploy. It errors harmlessly ("duplicate
--- column name") if the column already exists, which is the expected outcome on
--- a DB created from the CREATE TABLE above.
+-- The CREATE TABLE statements above only shape FRESH databases (a `CREATE
+-- TABLE IF NOT EXISTS` no-ops if the table already exists, so it never
+-- backfills a column onto an already-bootstrapped table), and D1/SQLite has
+-- NO `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` — a bare ALTER here would
+-- abort this whole re-runnable file whenever the column already exists.
 --
--- Phase 1 (cloud_identity_member_id): for a team D1 that predates Phase 1, run:
---   wrangler d1 execute helmor-team --remote --command "ALTER TABLE teams ADD COLUMN cloud_identity_member_id TEXT"
+-- So additive columns for existing DBs live in scripts/d1-migrations.ts, and
+-- provision-team.ts EXECUTES that list against the live D1 on every provision
+-- / re-provision, tolerating SQLite's "duplicate column name" (the expected
+-- outcome on a DB freshly created from the CREATE TABLEs above; round6
+-- P1-4c). When adding a column, add it BOTH to the CREATE TABLE above (fresh
+-- DBs) and as an entry in d1-migrations.ts (pre-existing DBs).
 
 -- WP5 (D2): control-plane model-catalog cache. One row per sandbox holding the
 -- verbatim `list_agent_model_sections` JSON (AgentModelSection[] — catalog
