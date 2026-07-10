@@ -109,9 +109,18 @@ describe("fetchCompanionPort inflight accounting (F-4)", () => {
 	});
 
 	it("decrements when the upstream errors mid-stream", async () => {
+		// Error from pull(), NOT synchronously in start(): pull() only fires
+		// once a consumer is attached and asking for data, which is the real
+		// "mid-stream" shape (a container doesn't die before the reader shows
+		// up). A synchronous start() error rejects the stream before the
+		// pipeThrough/pipeTo chain (and its .catch) is wired, and vitest
+		// reports that as an unhandled rejection — failing the run (exit 1)
+		// even with every assertion green.
 		const body = new ReadableStream<Uint8Array>({
 			start(controller) {
 				controller.enqueue(new TextEncoder().encode("partial"));
+			},
+			pull(controller) {
 				controller.error(new Error("container dropped"));
 			},
 		});
