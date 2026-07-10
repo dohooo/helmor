@@ -31,8 +31,13 @@ impl TaskStateAccumulator {
             return false;
         }
 
-        let Some(task_id) = self.resolve_task_id(msg, value, true) else {
-            return false;
+        let Some(task_id) = self.resolve_task_id(value) else {
+            // Unattributable lifecycle event (neither task_id nor
+            // tool_use_id): swallow it — it is still task noise, not
+            // transcript prose — but do NOT mint a phantom per-event
+            // TaskState keyed by the message id (those would accumulate
+            // unbounded "Untitled task" rows and persist as snapshots).
+            return true;
         };
         let subtype = value.get("subtype").and_then(Value::as_str).unwrap_or("");
         let tool_use_id = value.get("tool_use_id").and_then(Value::as_str);
@@ -139,8 +144,15 @@ impl TaskStateAccumulator {
         let Some(snapshot) = value.get("task_state").or_else(|| value.get("taskState")) else {
             return false;
         };
-        let Ok(state) = serde_json::from_value::<TaskState>(snapshot.clone()) else {
-            return false;
+        let state = match serde_json::from_value::<TaskState>(snapshot.clone()) {
+            Ok(state) => state,
+            Err(error) => {
+                // Never silently drop persisted task history: a TaskState
+                // field rename would otherwise erase every historical
+                // snapshot with no signal.
+                tracing::warn!(%error, "Failed to deserialize persisted task_snapshot row");
+                return false;
+            }
         };
         let task_id = state.id.clone();
         self.link_refs(&task_id, state.tool_use_id.as_deref());
@@ -151,23 +163,18 @@ impl TaskStateAccumulator {
         true
     }
 
-    fn resolve_task_id(
-        &self,
-        msg: &IntermediateMessage,
-        value: &Value,
-        allow_tool_fallback: bool,
-    ) -> Option<String> {
+    /// Events lacking BOTH ids are unattributable — dropping them beats
+    /// minting a phantom per-event TaskState keyed by the message id (which
+    /// would accumulate unbounded "Untitled task" rows that also persist).
+    fn resolve_task_id(&self, value: &Value) -> Option<String> {
         if let Some(id) = value.get("task_id").and_then(Value::as_str) {
             return Some(id.to_string());
         }
-        let Some(tool_use_id) = value.get("tool_use_id").and_then(Value::as_str) else {
-            return Some(msg.id.clone());
-        };
+        let tool_use_id = value.get("tool_use_id").and_then(Value::as_str)?;
         self.tool_to_task
             .get(tool_use_id)
             .cloned()
-            .or_else(|| allow_tool_fallback.then(|| tool_use_id.to_string()))
-            .or_else(|| Some(msg.id.clone()))
+            .or_else(|| Some(tool_use_id.to_string()))
     }
 
     fn link_refs(&mut self, task_id: &str, tool_use_id: Option<&str>) {

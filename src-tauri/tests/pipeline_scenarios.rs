@@ -2747,3 +2747,37 @@ fn auq_claude_split_rows_still_merge_answers() {
     ];
     assert_yaml_snapshot!(run_normalized(msgs));
 }
+
+/// Freezes the persisted `task_snapshot` storage shape: the exact system row
+/// `task_state_persist::upsert_task_state_snapshot` writes must keep
+/// rebuilding the task's terminal state through `convert_historical`. If this
+/// snapshot drifts, historical sessions persisted with the old shape may stop
+/// rebuilding TaskState on reload — treat any diff here as a storage-format
+/// change, not a cosmetic one.
+#[test]
+fn task_state_persisted_snapshot_row_round_trips() {
+    let msgs = vec![
+        task_tool_message("a1", "toolu_task_persisted", "Count repository files"),
+        // Byte-shape mirror of task_state_persist::upsert_task_state_snapshot.
+        system_json(
+            "task-state:session-1:task_persisted",
+            json!({
+                "subtype": "task_snapshot",
+                "task_id": "task_persisted",
+                "tool_use_id": "toolu_task_persisted",
+                "task_state": {
+                    "id": "task_persisted",
+                    "toolUseId": "toolu_task_persisted",
+                    "description": "Count repository files",
+                    "taskType": "local_agent",
+                    "subagentType": "general-purpose",
+                    "status": "killed",
+                    "isBackgrounded": true,
+                    "summary": "Stopped by user",
+                    "usage": {"totalTokens": 2048, "toolUses": 4, "durationMs": 15_000},
+                },
+            }),
+        ),
+    ];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}

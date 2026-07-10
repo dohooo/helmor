@@ -79,7 +79,13 @@ const STATUS_META: Record<TaskStatus, StatusMeta> = {
 };
 
 function isSubagentTask(task: TaskState): boolean {
-	return Boolean(task.subagentType) || task.taskType === "subagent";
+	// The Claude SDK emits task_type "local_agent" for subagents (older
+	// builds used "subagent"); local_bash marks background terminal tasks.
+	return (
+		Boolean(task.subagentType) ||
+		task.taskType === "local_agent" ||
+		task.taskType === "subagent"
+	);
 }
 
 function taskTitle(task: TaskState, fallback: string): string {
@@ -153,8 +159,10 @@ export function TaskProgressPanel({
 	const scrollContentRef = useRef<HTMLDivElement>(null);
 	const activeRef = useRef<HTMLButtonElement>(null);
 	const [collapsed, setCollapsed] = useState(true);
-	const [level, setLevel] = useState<0 | 1>(0);
-	const [itemIndex, setItemIndex] = useState(0);
+	// Detail selection is id-addressed (not index-addressed): if the selected
+	// task disappears from a shrinking/reordering snapshot, the panel falls
+	// back to the list instead of silently showing a different task.
+	const [openId, setOpenId] = useState<string | null>(null);
 	const [highlight, setHighlight] = useState(0);
 	const [height, setHeight] = useState<number | null>(null);
 
@@ -192,16 +200,17 @@ export function TaskProgressPanel({
 	useEffect(() => {
 		if (items.length === 0) {
 			setCollapsed(true);
-			setLevel(0);
-			setItemIndex(0);
+			setOpenId(null);
 			setHighlight(0);
 		}
 	}, [items.length]);
 
+	const detailIndex =
+		openId === null ? -1 : items.findIndex((item) => item.id === openId);
+	const detail = detailIndex >= 0 ? items[detailIndex] : undefined;
+	const level: 0 | 1 = detail ? 1 : 0;
 	const listLen = level === 0 ? items.length : 0;
 	const hi = Math.min(highlight, Math.max(0, listLen - 1));
-	const detail =
-		level === 1 ? items[Math.min(itemIndex, items.length - 1)] : undefined;
 
 	useEffect(() => {
 		activeRef.current?.scrollIntoView({ block: "nearest" });
@@ -213,7 +222,7 @@ export function TaskProgressPanel({
 		? "collapsed"
 		: level === 0
 			? `0:${items.length}`
-			: `1:${itemIndex}:${detail?.kind === "task" ? (detail.task.summary?.length ?? 0) : 0}`;
+			: `1:${openId}:${detail?.kind === "task" ? (detail.task.summary?.length ?? 0) : 0}`;
 	useLayoutEffect(() => {
 		if (items.length === 0) return;
 		const panel = panelRef.current;
@@ -250,14 +259,13 @@ export function TaskProgressPanel({
 	};
 	const descend = () => {
 		if (level === 0 && items.length > 0) {
-			setItemIndex(hi);
-			setLevel(1);
+			setOpenId(items[hi]?.id ?? null);
 		}
 	};
 	const ascend = () => {
 		if (level === 1) {
-			setLevel(0);
-			setHighlight(itemIndex);
+			setHighlight(Math.max(detailIndex, 0));
+			setOpenId(null);
 		}
 	};
 
@@ -309,6 +317,22 @@ export function TaskProgressPanel({
 			? taskTitle(currentItem.task, t("taskPanelUntitledTask"))
 			: (currentItem?.fallback.title ?? "");
 	const doneCount = items.length - runningCount;
+	// Idle aggregate must not paint failures green: surface the worst
+	// terminal status (failed > killed > cancelled > completed).
+	const worstTerminal: TaskStatus = items.some(
+		(item) => item.kind === "task" && item.task.status === "failed",
+	)
+		? "failed"
+		: items.some(
+					(item) => item.kind === "task" && item.task.status === "killed",
+				)
+			? "killed"
+			: items.some(
+						(item) => item.kind === "task" && item.task.status === "cancelled",
+					)
+				? "cancelled"
+				: "completed";
+	const idleStatus = STATUS_META[worstTerminal];
 
 	// One root element for both states so the explicit-height transition
 	// animates the collapse/expand toggle itself, not just level changes.
@@ -359,12 +383,12 @@ export function TaskProgressPanel({
 					<span
 						className={cn(
 							"shrink-0 text-mini",
-							runningCount > 0 ? "text-status-info" : "text-status-success",
+							runningCount > 0 ? "text-status-info" : idleStatus.tone,
 						)}
 					>
 						{runningCount > 0
 							? t("taskPanelStatusRunning")
-							: t("taskPanelStatusCompleted")}
+							: t(idleStatus.labelKey)}
 					</span>
 					<ChevronDown
 						className="size-3.5 shrink-0 text-muted-foreground/40"
@@ -435,8 +459,7 @@ export function TaskProgressPanel({
 											rowRef={index === hi ? activeRef : undefined}
 											onHover={() => setHighlight(index)}
 											onClick={() => {
-												setItemIndex(index);
-												setLevel(1);
+												setOpenId(item.id);
 												refocus();
 											}}
 										/>
