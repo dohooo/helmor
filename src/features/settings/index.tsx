@@ -3,6 +3,7 @@ import {
 	CheckCircle2,
 	ChevronDown,
 	HelpCircle,
+	Info,
 	Settings,
 	Volume2,
 } from "lucide-react";
@@ -818,8 +819,39 @@ function ModelSettingRow({
 						className="min-w-[8rem]"
 					>
 						{effortLevels.map((l) => (
-							<DropdownMenuItem key={l} onClick={() => onChange({ effort: l })}>
-								{effortLabel(l)}
+							<DropdownMenuItem
+								key={l}
+								onClick={() => onChange({ effort: l })}
+								className="flex items-center gap-2"
+							>
+								<span>{effortLabel(l)}</span>
+								{(l === "max" || l === "ultra") && (
+									<TooltipProvider delayDuration={200}>
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<span
+													aria-label={
+														l === "max"
+															? t("effortMaxHint")
+															: t("effortUltraHint")
+													}
+													className="inline-flex cursor-pointer text-muted-foreground/50 hover:text-muted-foreground"
+												>
+													<Info className="size-3" strokeWidth={2} />
+												</span>
+											</TooltipTrigger>
+											<TooltipContent
+												side="right"
+												sideOffset={6}
+												className="max-w-[13rem]"
+											>
+												{l === "max"
+													? t("effortMaxHint")
+													: t("effortUltraHint")}
+											</TooltipContent>
+										</Tooltip>
+									</TooltipProvider>
+								)}
 							</DropdownMenuItem>
 						))}
 					</DropdownMenuContent>

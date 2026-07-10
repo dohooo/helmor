@@ -296,6 +296,8 @@
 	"composerEnableAutoClose": "启用自动关闭",
 	"composerExpectedFormOrUrl": "应为表单或 URL 载荷。",
 	"composerExtraHigh": "超高",
+	"effortMaxHint": "最深推理,单个智能体。",
+	"effortUltraHint": "最深推理 + 自动派生多个子智能体,消耗额度更快。",
 	"composerFailedDeliverResponse": "用户输入响应投递失败。",
 	"composerFailedSendMessage": "消息发送失败。",
 	"composerFormMissingProperties": "表单输入请求缺少字段。",

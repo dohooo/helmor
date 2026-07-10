@@ -296,6 +296,8 @@
 	"composerEnableAutoClose": "Enable Auto Close",
 	"composerExpectedFormOrUrl": "Expected form or url payload.",
 	"composerExtraHigh": "Extra High",
+	"effortMaxHint": "Deepest reasoning, single agent.",
+	"effortUltraHint": "Deepest reasoning + auto multi-agent delegation; uses usage limits faster.",
 	"composerFailedDeliverResponse": "Failed to deliver user-input response.",
 	"composerFailedSendMessage": "Failed to send message.",
 	"composerFormMissingProperties": "Form user-input request is missing properties.",

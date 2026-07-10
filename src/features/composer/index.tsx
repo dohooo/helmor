@@ -11,6 +11,7 @@ import {
 	ChevronDown,
 	ClipboardList,
 	Clock3,
+	Info,
 	Layers,
 	MessageSquareMore,
 	Plus,
@@ -1224,6 +1225,36 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 																			? t("composerExtraHigh")
 																			: level}
 																	</span>
+																	{(level === "max" || level === "ultra") && (
+																		<TooltipProvider delayDuration={200}>
+																			<Tooltip>
+																				<TooltipTrigger asChild>
+																					<span
+																						aria-label={
+																							level === "max"
+																								? t("effortMaxHint")
+																								: t("effortUltraHint")
+																						}
+																						className="inline-flex cursor-pointer text-muted-foreground/50 hover:text-muted-foreground"
+																					>
+																						<Info
+																							className="size-3"
+																							strokeWidth={2}
+																						/>
+																					</span>
+																				</TooltipTrigger>
+																				<TooltipContent
+																					side="right"
+																					sideOffset={6}
+																					className="max-w-[13rem]"
+																				>
+																					{level === "max"
+																						? t("effortMaxHint")
+																						: t("effortUltraHint")}
+																				</TooltipContent>
+																			</Tooltip>
+																		</TooltipProvider>
+																	)}
 																</div>
 																{level === effectiveEffort ? (
 																	<span className="text-mini text-foreground">
