@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.45.0
+
+### Minor Changes
+
+- [#923](https://github.com/dohooo/helmor/pull/923) [`888f8e3`](https://github.com/dohooo/helmor/commit/888f8e3c5f048002e5539eb3f447b9de46ede3e5) Thanks [@dohooo](https://github.com/dohooo)! - Add the GPT-5.6 model family to Codex with a streamlined default picker:
+
+  - Recommend GPT-5.6 Sol by default and expose each model's supported effort levels, including `ultra` on Sol and Terra.
+  - Keep GPT-5.5, GPT-5.4, Opus 4.7, and Opus 4.6 hidden by default but available to re-enable in Settings, without disrupting existing sessions that use them.
+
+- [#924](https://github.com/dohooo/helmor/pull/924) [`2190a8f`](https://github.com/dohooo/helmor/commit/2190a8ffc49319b3d7e4ae7dbd72ec9a7a75b7d2) Thanks [@dohooo](https://github.com/dohooo)! - Give Claude background tasks a proper home above the composer:
+
+  - A compact task bar shows the task in flight with live progress and status, expanding into a per-task detail view — command, terminal output, subagent instructions and report, metrics, and a clickable output file that opens in the editor.
+  - Task states survive session switches and app restarts, and raw "task_updated" system noise no longer leaks into the chat.
+  - Stopping a background task now shows a clear Killed state instead of hanging in Running, and sessions end cleanly once their background tasks finish.
+  - Goal banner and queued follow-ups now dock cleanly against the composer, with only the bottom-most bar keeping its open edge.
+
+- [#918](https://github.com/dohooo/helmor/pull/918) [`dfcd8e2`](https://github.com/dohooo/helmor/commit/dfcd8e239ef06132ad7fa353972272deb2342749) Thanks [@natllian](https://github.com/natllian)! - Add a Vertex AI provider type for Claude Code custom providers:
+  - When adding a provider, you can now pick "Vertex AI" and point Claude Code at a Vertex endpoint or LLM gateway with your GCP project ID.
+  - The gateway token can be stored as plain text or in the macOS Keychain — Keychain setup runs in an in-app terminal, and Claude Code reads the token directly so it never passes through Helmor.
+
+### Patch Changes
+
+- [#901](https://github.com/dohooo/helmor/pull/901) [`2c75929`](https://github.com/dohooo/helmor/commit/2c75929b378f330e97ae5e719581b32285b03c47) Thanks [@dohooo](https://github.com/dohooo)! - Update the bundled Claude Code, Codex, Cursor, and OpenCode coding agents to their latest versions.
+
+- [#922](https://github.com/dohooo/helmor/pull/922) [`5d93835`](https://github.com/dohooo/helmor/commit/5d93835e241a2b631e26d766ef58cbb92f141e21) Thanks [@dohooo](https://github.com/dohooo)! - Fix Claude sessions never finishing their turn after background tasks completed, leaving the conversation stuck streaming indefinitely.
+
+- [#909](https://github.com/dohooo/helmor/pull/909) [`99a8af3`](https://github.com/dohooo/helmor/commit/99a8af36da7262cae273041d0cff50b4f4ffacec) Thanks [@dohooo](https://github.com/dohooo)! - Fix background subagents and background shell commands being killed when an agent finishes its turn — they now run to completion and report their results back instead of silently dying.
+
+- [#927](https://github.com/dohooo/helmor/pull/927) [`a1f97fc`](https://github.com/dohooo/helmor/commit/a1f97fc0df2d45f8c72df95bf456da0c151f8bfa) Thanks [@dohooo](https://github.com/dohooo)! - Fix Claude turns ending the moment background tasks finished, cutting off the agent's follow-up synthesis before it could report the results.
+
+- [#914](https://github.com/dohooo/helmor/pull/914) [`00768a2`](https://github.com/dohooo/helmor/commit/00768a21e0774f3dd4c383aee60ceb3b79825d52) Thanks [@dohooo](https://github.com/dohooo)! - Remove the retired Conductor import flow from onboarding, Settings, and the Helmor CLI.
+
+- [#919](https://github.com/dohooo/helmor/pull/919) [`205da66`](https://github.com/dohooo/helmor/commit/205da6682d03178a0d367bf6e3f4ff8e9fa62c28) Thanks [@natllian](https://github.com/natllian)! - Fix repo avatars rendering blank instead of falling back to the name initials when a repository's icon file can't be displayed (e.g. an empty or undecodable `favicon.ico`).
+
+- [#913](https://github.com/dohooo/helmor/pull/913) [`4069f1e`](https://github.com/dohooo/helmor/commit/4069f1e5be48b1e2991cc200d21a3da7cc079db5) Thanks [@dohooo](https://github.com/dohooo)! - Stacked workspaces now re-target automatically when their base PR merges — the layer above a merged PR moves onto that layer's own base (the repo default branch for a bottom-of-stack merge) instead of staying pinned to the now-merged branch, and stacks already left in this state are healed on launch.
+
+- [#926](https://github.com/dohooo/helmor/pull/926) [`bd5857f`](https://github.com/dohooo/helmor/commit/bd5857f760db76f165d2438ad8aab37c9bc8527b) Thanks [@dohooo](https://github.com/dohooo)! - Fix Codex tool calls failing after the 0.144 upgrade by bundling the new `codex-code-mode-host` companion binary that Codex spawns for code-mode execution.
+
+- [#915](https://github.com/dohooo/helmor/pull/915) [`b5ba1e0`](https://github.com/dohooo/helmor/commit/b5ba1e04cf60b1b71b841c8cf8a657e76218b6cc) Thanks [@dohooo](https://github.com/dohooo)! - Prevent Claude background-task drain from leaving a session loading forever when a task never sends its completion notification.
+
 ## 0.44.0
 
 ### Minor Changes
