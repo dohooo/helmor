@@ -124,6 +124,39 @@ pub struct SendMessageResult {
     pub persisted: bool,
 }
 
+const FALLBACK_DEFAULT_MODEL_ID: &str = "gpt-5.6-sol";
+
+fn load_app_default_model() -> Option<crate::agents::model_ref::StoredModel> {
+    crate::settings::load_setting_value("app.default_model_id")
+        .ok()
+        .flatten()
+        .and_then(|raw| crate::agents::model_ref::parse_stored_model(&raw))
+}
+
+fn select_send_model(
+    explicit_model: Option<&str>,
+    session_model: Option<String>,
+    session_provider: Option<String>,
+    app_default: Option<crate::agents::model_ref::StoredModel>,
+) -> crate::agents::model_ref::StoredModel {
+    if let Some(model_id) = explicit_model {
+        return crate::agents::model_ref::StoredModel {
+            provider: session_provider,
+            model_id: model_id.to_string(),
+        };
+    }
+    if let Some(model_id) = session_model {
+        return crate::agents::model_ref::StoredModel {
+            provider: session_provider,
+            model_id,
+        };
+    }
+    app_default.unwrap_or_else(|| crate::agents::model_ref::StoredModel {
+        provider: None,
+        model_id: FALLBACK_DEFAULT_MODEL_ID.to_string(),
+    })
+}
+
 /// Send a prompt to an AI agent. When the Helmor desktop app is running,
 /// the message is queued as a pending CLI send so the app's shared sidecar
 /// handles it — this gives the frontend live streaming updates. When the
@@ -164,20 +197,25 @@ pub fn send_message(
         },
     };
 
-    // 3. Resolve model — param > session row > app default (Opus 4.8 1M).
+    // 3. Resolve model — param > session row > configured app default > Sol.
     //    Provider hint is required so cursor's `default` doesn't infer to
     //    claude.
     let (session_model, session_provider) =
         crate::models::sessions::get_session_model_and_provider(&session_id)
             .unwrap_or((None, None));
-    let model_id = params
-        .model
-        .as_deref()
-        .map(str::to_string)
-        .or(session_model)
-        .unwrap_or_else(|| "claude-opus-4-8[1m]".to_string());
-    let provider_hint = session_provider.as_deref();
-    let model = crate::agents::resolve_model(&model_id, provider_hint);
+    let app_default = if params.model.is_none() && session_model.is_none() {
+        load_app_default_model()
+    } else {
+        None
+    };
+    let selection = select_send_model(
+        params.model.as_deref(),
+        session_model,
+        session_provider,
+        app_default,
+    );
+    let model_id = selection.model_id;
+    let model = crate::agents::resolve_model(&model_id, selection.provider.as_deref());
 
     // ── App delegation ──────────────────────────────────────────────
     // When the desktop app is running, queue the prompt as a pending
@@ -721,6 +759,63 @@ mod tests {
             std::env::remove_var("HELMOR_DATA_DIR");
             let _ = fs::remove_dir_all(&self.root);
         }
+    }
+
+    #[test]
+    fn send_model_selection_uses_explicit_then_session_then_app_default() {
+        let app_default = crate::agents::model_ref::StoredModel {
+            provider: Some("codex".to_string()),
+            model_id: "gpt-5.6-terra".to_string(),
+        };
+        let explicit = select_send_model(
+            Some("cursor-default"),
+            Some("gpt-5.6-luna".to_string()),
+            Some("cursor".to_string()),
+            Some(app_default.clone()),
+        );
+        assert_eq!(explicit.model_id, "cursor-default");
+        assert_eq!(explicit.provider.as_deref(), Some("cursor"));
+
+        let session = select_send_model(
+            None,
+            Some("gpt-5.6-luna".to_string()),
+            Some("codex".to_string()),
+            Some(app_default.clone()),
+        );
+        assert_eq!(session.model_id, "gpt-5.6-luna");
+        assert_eq!(session.provider.as_deref(), Some("codex"));
+
+        let default = select_send_model(None, None, None, Some(app_default));
+        assert_eq!(default.model_id, "gpt-5.6-terra");
+        assert_eq!(default.provider.as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn send_model_selection_falls_back_to_sol() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let _dir = TestDataDir::new("fallback-default-model");
+        let selection = select_send_model(None, None, None, None);
+        assert_eq!(selection.model_id, FALLBACK_DEFAULT_MODEL_ID);
+        assert_eq!(selection.provider, None);
+
+        let resolved = crate::agents::resolve_model(&selection.model_id, None);
+        assert_eq!(resolved.provider, "codex");
+        assert_eq!(resolved.cli_model, "gpt-5.6-sol");
+    }
+
+    #[test]
+    fn loads_provider_aware_app_default_model() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let _dir = TestDataDir::new("app-default-model");
+        crate::settings::upsert_setting_value(
+            "app.default_model_id",
+            r#"{"provider":"codex","modelId":"gpt-5.6-terra"}"#,
+        )
+        .unwrap();
+
+        let default = load_app_default_model().unwrap();
+        assert_eq!(default.model_id, "gpt-5.6-terra");
+        assert_eq!(default.provider.as_deref(), Some("codex"));
     }
 
     #[test]

@@ -1094,12 +1094,14 @@ export function createLiveThreadMessage({
 // ── Effort-level helpers ──────────────────────────────────────────────
 
 const EFFORT_RANK: Record<string, number> = {
+	none: 0,
 	minimal: 0,
 	low: 1,
 	medium: 2,
 	high: 3,
 	xhigh: 4,
-	max: 4,
+	max: 5,
+	ultra: 6,
 };
 
 // No fake default — when the SDK doesn't return effort levels for a model

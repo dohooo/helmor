@@ -59,13 +59,12 @@ export function useEnsureDefaultModel() {
 		// Repair the default when it's never been set, or was set but is now
 		// definitively gone (wait for every provider to settle first).
 		if (!defaultOption && (settled || !settings.defaultModel)) {
-			// Prefer the pinned Opus 4.8 1M entry over the first listed option —
-			// pricier models (Fable 5) sit above it in the picker but must not
-			// become the app default. A legacy stored "default" id no longer
-			// matches any option, so this re-pins it to the explicit wire id.
+			// GPT-5.6 Sol is the recommended cross-provider default. Opus 4.8
+			// remains the fallback when Codex is unavailable or fully disabled.
 			const claudeOptions =
 				sections.find((s) => s.id === "claude")?.options ?? [];
 			const pickOption =
+				allOptions.find((o) => o.id === "gpt-5.6-sol") ??
 				claudeOptions.find((o) => o.id === "claude-opus-4-8[1m]") ??
 				claudeOptions[0] ??
 				allOptions[0] ??
