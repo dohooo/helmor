@@ -1085,7 +1085,7 @@ describe("WorkspaceComposerContainer", () => {
 		expect(composer).toHaveAttribute("data-submit-disabled", "false");
 	});
 
-	it("renders queued follow-ups as an overlay above the composer", () => {
+	it("renders queued follow-ups docked in flow directly above the composer", () => {
 		const queryClient = createHelmorQueryClient();
 		queryClient.setQueryData(
 			helmorQueryKeys.agentModelSections,
@@ -1156,10 +1156,15 @@ describe("WorkspaceComposerContainer", () => {
 			</TooltipProvider>,
 		);
 
+		// Docked-bar contract (composer-top-bars.tsx): the queue is the
+		// bottom-most visible docked bar, so it renders in normal flow inside
+		// the composer stack (NOT the absolute overlay) with an open bottom.
 		const queueList = screen.getByTestId("submit-queue-list");
 		expect(queueList).toHaveClass("pointer-events-auto");
-		expect(queueList.parentElement).toHaveClass("absolute");
-		expect(queueList.parentElement).toHaveClass("bottom-[calc(100%-1px)]");
+		expect(queueList).toHaveClass("rounded-t-2xl");
+		expect(queueList).toHaveClass("border-b-0");
+		expect(queueList.parentElement).toHaveClass("relative");
+		expect(queueList.parentElement).not.toHaveClass("absolute");
 	});
 
 	describe("/add-dir integration", () => {

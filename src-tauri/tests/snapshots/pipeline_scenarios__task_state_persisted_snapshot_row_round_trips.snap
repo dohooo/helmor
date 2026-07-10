@@ -1,0 +1,36 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: msg-1
+  content_length: 1
+  content:
+    - type: tool-call
+      tool_name: Task
+      tool_call_id: toolu_task_persisted
+      args_keys:
+        - description
+      args_text_length: 40
+      has_result: false
+      result_kind: ~
+      result_preview: ~
+      streaming_status: ~
+      task_state:
+        id: task_persisted
+        tool_use_id: toolu_task_persisted
+        task_type: local_agent
+        subagent_type: general-purpose
+        status: killed
+        is_backgrounded: true
+        description: Count repository files
+        summary: Stopped by user
+        total_tokens: 2048
+        duration_ms: 15000
+        last_tool_name: ~
+        error: ~
+        end_time_ms: ~
+  status:
+    type: complete
+    reason: stop
+  streaming: ~

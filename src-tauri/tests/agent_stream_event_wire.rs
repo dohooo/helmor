@@ -43,6 +43,28 @@ fn wire_format_streaming_partial() {
 }
 
 #[test]
+fn wire_format_task_state_update() {
+    assert_yaml_snapshot!(to_value(AgentStreamEvent::TaskStateUpdate {
+        session_id: "helmor-session-1".into(),
+        tasks: vec![serde_json::from_value(json!({
+            "id": "task-1",
+            "toolUseId": "toolu-1",
+            "description": "Review repository state",
+            "taskType": "local_agent",
+            "subagentType": "Explore",
+            "status": "running",
+            "isBackgrounded": true,
+            "summary": "Reading files",
+            "usage": {"totalTokens": 120, "toolUses": 2, "durationMs": 3000},
+            "lastToolName": "Read",
+            "startedAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-01T00:00:01Z",
+        }))
+        .expect("TaskState parses")],
+    }));
+}
+
+#[test]
 fn wire_format_done() {
     assert_yaml_snapshot!(to_value(AgentStreamEvent::Done {
         provider: "claude".into(),

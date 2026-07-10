@@ -36,6 +36,7 @@ import { stabilizeStreamingMessages } from "@/features/conversation/streaming-ta
 import type {
 	AgentModelOption,
 	AgentStreamEvent,
+	TaskState,
 	ThreadMessageLike,
 } from "@/lib/api";
 import type { ComposerCustomTag } from "@/lib/composer-insert";
@@ -130,6 +131,8 @@ export type StreamDispatchDeps = {
 			contextKey: string,
 			info: { provider: string; providerSessionId: string | null },
 		) => void;
+		setActiveTasks: (sessionId: string, tasks: TaskState[]) => void;
+		clearActiveTasks: (sessionId: string) => void;
 		setComposerRestore: (value: ComposerRestoreState | null) => void;
 	};
 
@@ -153,6 +156,11 @@ export function createStreamEventDispatcher(
 		if (event.kind === "streamingPartial") {
 			deps.accumulator.pendingPartial = event.message;
 			deps.scheduleFlush();
+			return;
+		}
+
+		if (event.kind === "taskStateUpdate") {
+			deps.storeActions.setActiveTasks(event.sessionId, event.tasks);
 			return;
 		}
 
@@ -222,6 +230,7 @@ export function createStreamEventDispatcher(
 			deps.clearPendingPermissions(deps.contextKey);
 			deps.clearPendingUserInput(deps.contextKey);
 			deps.clearFastPrelude(deps.contextKey);
+			deps.storeActions.clearActiveTasks(deps.targetSessionId);
 
 			if (event.kind === "done") {
 				// `event.sessionId` is the *provider* session id (claude/codex
@@ -271,6 +280,7 @@ export function createStreamEventDispatcher(
 			deps.clearPendingPermissions(deps.contextKey);
 			deps.clearPendingUserInput(deps.contextKey);
 			deps.clearFastPrelude(deps.contextKey);
+			deps.storeActions.clearActiveTasks(deps.targetSessionId);
 			if (event.internal) {
 				deps.pushToast(
 					translateSource("composerSomethingWentWrong"),

@@ -19,6 +19,8 @@ type Instance = {
 	sessionId: string;
 	repoId: string;
 	workspaceId: string;
+	agentKind: string | null;
+	bootCommand: string | null;
 	chunks: string[];
 	bufferedBytes: number;
 	truncated: boolean;
@@ -37,6 +39,17 @@ type Listener = {
 	) => void;
 };
 
+export type TerminalSessionSnapshot = {
+	sessionId: string;
+	workspaceId: string;
+	agentKind: string | null;
+	bootCommand: string | null;
+	status: TerminalSessionStatus;
+	exitCode: number | null;
+};
+
+type WorkspaceSessionListener = (sessions: TerminalSessionSnapshot[]) => void;
+
 /** ~2 MB ≈ 20k lines, well beyond xterm's 5000-line scrollback. */
 const MAX_CHUNK_BYTES = 2 * 1024 * 1024;
 
@@ -48,6 +61,11 @@ export function truncationNotice(): string {
 const instances = new Map<string, Instance>();
 /** sessionId → live listener (the mounted xterm) */
 const listeners = new Map<string, Listener>();
+/** workspaceId → observers for message-area terminal sessions. */
+const workspaceSessionListeners = new Map<
+	string,
+	Set<WorkspaceSessionListener>
+>();
 export type PendingBoot = {
 	bootCommand: string;
 	/** claude only: rides the injected --settings file (no CLI flag). */
@@ -82,6 +100,51 @@ function appendChunk(entry: Instance, data: string) {
 function deliver(entry: Instance, data: string) {
 	appendChunk(entry, data);
 	listeners.get(entry.sessionId)?.onChunk(data);
+}
+
+function snapshotForWorkspace(workspaceId: string): TerminalSessionSnapshot[] {
+	return Array.from(instances.values())
+		.filter((entry) => entry.workspaceId === workspaceId)
+		.map((entry) => ({
+			sessionId: entry.sessionId,
+			workspaceId: entry.workspaceId,
+			agentKind: entry.agentKind,
+			bootCommand: entry.bootCommand,
+			status: entry.status,
+			exitCode: entry.exitCode,
+		}));
+}
+
+function emitWorkspaceSessionChange(workspaceId: string) {
+	const subs = workspaceSessionListeners.get(workspaceId);
+	if (!subs) return;
+	const snapshot = snapshotForWorkspace(workspaceId);
+	for (const sub of subs) sub(snapshot);
+}
+
+export function getTerminalSessionsForWorkspace(
+	workspaceId: string,
+): TerminalSessionSnapshot[] {
+	return snapshotForWorkspace(workspaceId);
+}
+
+export function subscribeToWorkspaceTerminalSessions(
+	workspaceId: string,
+	listener: WorkspaceSessionListener,
+): () => void {
+	let set = workspaceSessionListeners.get(workspaceId);
+	if (!set) {
+		set = new Set();
+		workspaceSessionListeners.set(workspaceId, set);
+	}
+	set.add(listener);
+	listener(snapshotForWorkspace(workspaceId));
+	return () => {
+		const current = workspaceSessionListeners.get(workspaceId);
+		if (!current) return;
+		current.delete(listener);
+		if (current.size === 0) workspaceSessionListeners.delete(workspaceId);
+	};
 }
 
 // TUI startup markers — everything before the first one (shell prompt,
@@ -141,6 +204,8 @@ export function ensureTerminal(
 		sessionId,
 		repoId,
 		workspaceId,
+		agentKind,
+		bootCommand,
 		chunks: [],
 		bufferedBytes: 0,
 		truncated: false,
@@ -159,6 +224,7 @@ export function ensureTerminal(
 				: null,
 	};
 	instances.set(sessionId, entry);
+	emitWorkspaceSessionChange(workspaceId);
 
 	void spawnTerminal(
 		repoId,
@@ -196,6 +262,7 @@ export function ensureTerminal(
 					appendChunk(current, tail);
 					listeners.get(sessionId)?.onChunk(tail);
 					listeners.get(sessionId)?.onStatusChange("exited", event.code);
+					emitWorkspaceSessionChange(current.workspaceId);
 					break;
 				}
 				case "error": {
@@ -211,6 +278,7 @@ export function ensureTerminal(
 					current.exitCode = current.exitCode ?? 1;
 					listeners.get(sessionId)?.onChunk(msg);
 					listeners.get(sessionId)?.onStatusChange("exited", current.exitCode);
+					emitWorkspaceSessionChange(current.workspaceId);
 					break;
 				}
 			}
@@ -231,6 +299,7 @@ export function ensureTerminal(
 		current.exitCode = current.exitCode ?? 1;
 		listeners.get(sessionId)?.onChunk(msg);
 		listeners.get(sessionId)?.onStatusChange("exited", current.exitCode);
+		emitWorkspaceSessionChange(current.workspaceId);
 	});
 }
 
@@ -270,6 +339,7 @@ export function closeTerminal(sessionId: string) {
 	if (entry.gate) clearTimeout(entry.gate.timer);
 	instances.delete(sessionId);
 	listeners.delete(sessionId);
+	emitWorkspaceSessionChange(entry.workspaceId);
 	if (entry.status === "running") {
 		void stopTerminal(entry.repoId, entry.workspaceId, sessionId);
 	}
@@ -279,4 +349,15 @@ export function closeTerminal(sessionId: string) {
 	void setTerminalSessionBusy(sessionId, entry.workspaceId, false).catch(
 		() => {},
 	);
+}
+
+/** Reset all state. Test-only. */
+export function __resetTerminalSessionsForTests() {
+	for (const entry of instances.values()) {
+		if (entry.gate) clearTimeout(entry.gate.timer);
+	}
+	instances.clear();
+	listeners.clear();
+	workspaceSessionListeners.clear();
+	pendingBoots.clear();
 }

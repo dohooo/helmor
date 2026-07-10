@@ -52,7 +52,10 @@ export type ShellEvent =
 			 *  a session that already ran a turn resumes its conversation in the TUI.
 			 *  null only when there is no current session to convert. */
 			sessionId: string | null;
-	  };
+	  }
+	// Open a workspace file in the in-app editor (e.g. a background task's
+	// output file clicked in the composer task panel).
+	| { type: "open-file-in-editor"; path: string; line?: number };
 
 export type ShellEventType = ShellEvent["type"];
 

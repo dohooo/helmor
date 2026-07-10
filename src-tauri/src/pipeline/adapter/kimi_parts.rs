@@ -124,6 +124,7 @@ fn render_tool(part: &Value) -> MessagePart {
         result,
         is_error: is_error.then_some(true),
         streaming_status,
+        task_state: None,
         children: Vec::new(),
     }
 }

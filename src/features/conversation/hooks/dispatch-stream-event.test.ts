@@ -91,6 +91,31 @@ describe("createStreamEventDispatcher", () => {
 		vi.restoreAllMocks();
 	});
 
+	it("writes task-state snapshots into the streaming store", () => {
+		const setActiveTasks = vi.fn();
+		const noop = () => {};
+		const dispatch = createStreamEventDispatcher({
+			storeActions: {
+				setActiveTasks,
+				clearActiveTasks: noop,
+				setSendError: noop,
+				setLiveSession: noop,
+				setComposerRestore: noop,
+			},
+		} as unknown as StreamDispatchDeps);
+
+		const tasks = [
+			{
+				id: "task-1",
+				toolUseId: "toolu-1",
+				status: "running" as const,
+			},
+		];
+		dispatch({ kind: "taskStateUpdate", sessionId: "session-1", tasks });
+
+		expect(setActiveTasks).toHaveBeenCalledWith("session-1", tasks);
+	});
+
 	it("drops a stale pending partial on done so it never freezes into the cache", () => {
 		const queryClient = new QueryClient();
 		const optimisticUserMessage = userMessage("u1");
@@ -118,6 +143,7 @@ describe("createStreamEventDispatcher", () => {
 			});
 
 		const noop = () => {};
+		const clearActiveTasks = vi.fn();
 		const deps = {
 			contextKey: "ctx",
 			isOverride: false,
@@ -150,6 +176,8 @@ describe("createStreamEventDispatcher", () => {
 			storeActions: {
 				setSendError: noop,
 				setLiveSession: noop,
+				setActiveTasks: noop,
+				clearActiveTasks,
 				setComposerRestore: noop,
 			},
 			streamingStore: {
@@ -178,5 +206,6 @@ describe("createStreamEventDispatcher", () => {
 			expect.objectContaining({ text: "final answer" }),
 		);
 		expect(accumulator.pendingPartial).toBeNull();
+		expect(clearActiveTasks).toHaveBeenCalledWith("session-1");
 	});
 });

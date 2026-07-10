@@ -263,10 +263,10 @@ fn apply_delta(acc: &mut StreamAccumulator, delta: &Value) {
     }
 }
 
-pub(super) fn handle_tool_progress(acc: &mut StreamAccumulator, value: &Value) {
+pub(super) fn handle_tool_progress(acc: &mut StreamAccumulator, value: &Value) -> bool {
     let tool_use_id = match value.get("tool_use_id").and_then(Value::as_str) {
         Some(id) => id,
-        None => return,
+        None => return false,
     };
     for block in acc.blocks.values_mut() {
         if let StreamingBlock::ToolUse {
@@ -281,6 +281,17 @@ pub(super) fn handle_tool_progress(acc: &mut StreamAccumulator, value: &Value) {
             }
         }
     }
+    let Some(task_id) = value.get("task_id").and_then(Value::as_str) else {
+        return false;
+    };
+    let raw = value.to_string();
+    acc.collect_or_replace(
+        &raw,
+        value,
+        crate::pipeline::types::MessageRole::System,
+        Some(format!("tool-progress:{task_id}")),
+    );
+    true
 }
 
 fn append_to_last_text_block(acc: &mut StreamAccumulator, text: &str) {

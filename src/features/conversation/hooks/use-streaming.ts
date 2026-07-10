@@ -248,6 +248,8 @@ export function useConversationStreaming({
 			setActiveSession: state.setActiveSession,
 			clearActiveSession: state.clearActiveSession,
 			setLiveSession: state.setLiveSession,
+			setActiveTasks: state.setActiveTasks,
+			clearActiveTasks: state.clearActiveTasks,
 			rememberInteractionWorkspace: state.rememberInteractionWorkspace,
 			setPlanReviewActive: state.setPlanReviewActive,
 			clearPlanReview: state.clearPlanReview,
@@ -1195,6 +1197,8 @@ export function useConversationStreaming({
 						storeActions: {
 							setSendError: storeActions.setSendError,
 							setLiveSession: storeActions.setLiveSession,
+							setActiveTasks: storeActions.setActiveTasks,
+							clearActiveTasks: storeActions.clearActiveTasks,
 							setComposerRestore: storeActions.setComposerRestore,
 						},
 						streamingStore,

@@ -1,0 +1,36 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: msg-1
+  content_length: 1
+  content:
+    - type: tool-call
+      tool_name: Bash
+      tool_call_id: toolu_bash_1
+      args_keys:
+        - command
+      args_text_length: 32
+      has_result: false
+      result_kind: ~
+      result_preview: ~
+      streaming_status: ~
+      task_state:
+        id: bash_task_1
+        tool_use_id: toolu_bash_1
+        task_type: local_bash
+        subagent_type: ~
+        status: completed
+        is_backgrounded: true
+        description: cargo test --tests
+        summary: tests passed
+        total_tokens: ~
+        duration_ms: 12000
+        last_tool_name: Bash
+        error: ~
+        end_time_ms: ~
+  status:
+    type: complete
+    reason: stop
+  streaming: ~

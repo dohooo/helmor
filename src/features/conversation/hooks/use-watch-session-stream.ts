@@ -195,6 +195,12 @@ export function useWatchSessionStream({ sessionId, activeStreams }: Args) {
 				scheduleFlush();
 				return;
 			}
+			if (event.kind === "taskStateUpdate") {
+				useStreamingStore
+					.getState()
+					.setActiveTasks(event.sessionId, event.tasks);
+				return;
+			}
 			if (
 				event.kind === "done" ||
 				event.kind === "aborted" ||
@@ -212,6 +218,7 @@ export function useWatchSessionStream({ sessionId, activeStreams }: Args) {
 				// Reconcile to canonical DB rows now the turn is finalized.
 				clearMirroredActiveSession(activeContextKey);
 				void refreshFromDb();
+				useStreamingStore.getState().clearActiveTasks(sessionId);
 			}
 			// permissionRequest / userInputRequest / planCaptured: ignored —
 			// the driving client owns interactive prompts.
@@ -220,6 +227,10 @@ export function useWatchSessionStream({ sessionId, activeStreams }: Args) {
 		const onEvent = (event: AgentStreamEvent) => {
 			if (disposed) return;
 			if (isRoomChatBroadcastEvent(event)) {
+				handle(event);
+				return;
+			}
+			if (event.kind === "taskStateUpdate") {
 				handle(event);
 				return;
 			}
