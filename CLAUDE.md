@@ -13,19 +13,20 @@ bun install                  # Install deps (bun 1.3+). Also runs `bun install` 
 bun run dev                  # Full desktop app: Tauri + Vite (localhost:1420 in webview)
 bun run dev:analyze          # Same as dev, with perf HUD (VITE_HELMOR_PERF_HUD=1)
 bun run build                # tsc + vite build (frontend bundle to dist/)
-bun run typecheck            # tsc --noEmit for frontend AND sidecar
+bun run typecheck            # tsc --noEmit for frontend, sidecar, AND cloud
 bun run lint                 # biome check . + cargo clippy -- -D warnings
 bun run lint:fix             # biome --write + cargo clippy --fix + cargo fmt
 ```
 
-Tests are **three targets** — `bun run test` runs all three (frontend -> sidecar -> rust). Pre-commit hook runs biome on JS/TS and clippy/fmt on Rust.
+Tests are **four targets** — `bun run test` runs all four (frontend -> sidecar -> rust -> cloud). Any gate command exiting non-zero is a red light — never dismiss it as pre-existing noise. Pre-commit hook runs biome on JS/TS and clippy/fmt on Rust.
 
 ```bash
-bun run test                 # All three suites
+bun run test                 # All four suites
 bun run test:frontend        # vitest run (jsdom, @testing-library/react)
 bun run test:sidecar         # cd sidecar && bun test
 bun run test:rust            # cd src-tauri && cargo test
 bun run test:rust:update-snapshots    # INSTA_UPDATE=always
+bun run test:cloud           # cd cloud && bun run test (vitest in workerd via vitest-pool-workers)
 bun run test:watch           # vitest watch (frontend only)
 ```
 
