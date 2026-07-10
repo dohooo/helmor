@@ -45,6 +45,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { decideBrokerKeyAction, toSecretListOutcome } from "./broker-key";
 
 // fileURLToPath (not URL.pathname) so Windows paths don't keep the leading
 // slash (`/C:/…`), which breaks resolve/join.
@@ -434,6 +435,45 @@ async function main(): Promise<void> {
 			stdinValue: `${GITHUB_TOKEN}\n`,
 			configPath,
 		});
+	}
+
+	// BROKER_ENC_KEY — the AES-256-GCM key the identity brokers (Codex /
+	// Claude / Forge DOs) encrypt member credentials with. A fresh account
+	// never had it (P1-1b: authorize threw on the undefined key → blind 500),
+	// so provision generates it — but ⚠️ ONLY when it is confidently absent:
+	// rotating an existing key bricks every stored identity. Decision logic +
+	// its four branches live in broker-key.ts (unit-tested); inconclusive
+	// checks FAIL the run rather than guess.
+	const secretList = wrangler(["secret", "list"], { configPath });
+	const brokerKeyAction = decideBrokerKeyAction(
+		toSecretListOutcome(secretList),
+	);
+	if (brokerKeyAction === "fail") {
+		log(
+			`[provision] couldn't determine whether BROKER_ENC_KEY already exists (secret list failed):\n${secretList.stderr || secretList.stdout}`,
+		);
+		log(
+			"[provision] refusing to write it blindly — overwriting an existing key would invalidate every stored agent identity. Check connectivity/login and retry.",
+		);
+		process.exit(1);
+	}
+	if (brokerKeyAction === "put") {
+		// 32 random bytes, standard base64 — exactly what the DOs' atob-based
+		// base64ToBytes expects for AES-256. The value is never logged.
+		const brokerKey = randomBytes(32).toString("base64");
+		const putBrokerKey = wrangler(["secret", "put", "BROKER_ENC_KEY"], {
+			stdinValue: `${brokerKey}\n`,
+			configPath,
+		});
+		if (putBrokerKey.code !== 0) {
+			log(`[provision] BROKER_ENC_KEY put failed:\n${putBrokerKey.stderr}`);
+			process.exit(1);
+		}
+		log("[provision] generated BROKER_ENC_KEY (was not set).");
+	} else {
+		log(
+			"[provision] BROKER_ENC_KEY already set — left untouched (rotating would invalidate stored identities).",
+		);
 	}
 	progress("provision", "done", "Backend resources ready.");
 

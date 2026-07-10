@@ -109,6 +109,12 @@ export class ClaudeIdentity extends DurableObject<ClaudeIdentityEnv> {
 	// Copied verbatim from codex-identity.ts (same primitive, same shared key).
 
 	private async importKey(): Promise<CryptoKey> {
+		// Fresh-deployment guard (round6 P1-1b) — same as codex-identity.ts.
+		if (!this.env.BROKER_ENC_KEY) {
+			throw new Error(
+				"BROKER_ENC_KEY is not configured on this Worker — re-run team setup (provisioning generates it), then authorize again.",
+			);
+		}
 		const raw = base64ToBytes(this.env.BROKER_ENC_KEY);
 		return crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, [
 			"encrypt",

@@ -1,10 +1,19 @@
 # Helmor Team Cloud Sandbox — Worker control plane (Phase 0, stateless thin
 # proxy). Deploy:  cd cloud && bun install && bunx wrangler deploy
 #
-# Secrets (set before first deploy):
+# Secrets (set before first deploy; the in-app provisioner sets all of these):
 #   bunx wrangler secret put HELMOR_COMPANION_TOKEN   # capability token the
 #                                                     # container's serve accepts
 #   bunx wrangler secret put GITHUB_TOKEN             # PAT for PR6 clone/push
+#   bunx wrangler secret put BROKER_ENC_KEY           # AES-256-GCM key (32 raw
+#                                                     # bytes, base64) the Codex/
+#                                                     # Claude/Forge identity DOs
+#                                                     # encrypt credentials with.
+#                                                     # ⚠️ NEVER rotate on an
+#                                                     # account with stored
+#                                                     # identities — it bricks
+#                                                     # them all (provision only
+#                                                     # writes it when absent).
 #
 # Preview URLs (proxyToSandbox) need a custom domain with wildcard DNS in
 # production — add a [[routes]] block on your zone. For local dev, `wrangler dev`

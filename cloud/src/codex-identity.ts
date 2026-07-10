@@ -381,6 +381,15 @@ export class CodexIdentity extends DurableObject<CodexIdentityEnv> {
 	// ── crypto (AES-GCM, key from env.BROKER_ENC_KEY) ────────────────────────
 
 	private async importKey(): Promise<CryptoKey> {
+		// Fresh-deployment guard (round6 P1-1b): a Worker provisioned before the
+		// provisioner generated BROKER_ENC_KEY has it undefined — atob() would
+		// throw an opaque error the top level wraps as a blind 500. Name the
+		// real problem and the fix instead.
+		if (!this.env.BROKER_ENC_KEY) {
+			throw new Error(
+				"BROKER_ENC_KEY is not configured on this Worker — re-run team setup (provisioning generates it), then authorize again.",
+			);
+		}
 		const raw = base64ToBytes(this.env.BROKER_ENC_KEY);
 		return crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, [
 			"encrypt",

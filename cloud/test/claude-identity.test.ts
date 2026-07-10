@@ -114,6 +114,29 @@ describe("ClaudeIdentity DO", () => {
 				}),
 			).rejects.toThrow();
 		});
+
+		it("names the real problem when BROKER_ENC_KEY is missing entirely (round6 P1-1b)", async () => {
+			// A Worker provisioned before the provisioner generated the key has it
+			// undefined — the old atob(undefined) crash surfaced as a blind 500.
+			// (ForgeIdentity carries the identical guard — code copied verbatim,
+			// covered by these twin suites.)
+			const stub = env.CLAUDE_IDENTITY.get(
+				env.CLAUDE_IDENTITY.idFromName(`nokey-${Math.random()}`),
+			);
+			await expect(
+				onDo(stub, async (doi) => {
+					const doiEnv = (doi as unknown as { env: { BROKER_ENC_KEY: string } })
+						.env;
+					const realKey = doiEnv.BROKER_ENC_KEY;
+					doiEnv.BROKER_ENC_KEY = "";
+					try {
+						await doi.store("tok-should-not-persist");
+					} finally {
+						doiEnv.BROKER_ENC_KEY = realKey;
+					}
+				}),
+			).rejects.toThrow(/BROKER_ENC_KEY is not configured/);
+		});
 	});
 
 	// (b) store / mintToken / status happy paths.
