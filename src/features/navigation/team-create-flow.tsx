@@ -2,6 +2,7 @@ import {
 	AlertTriangle,
 	ArrowLeft,
 	Check,
+	Copy,
 	ExternalLink,
 	KeyRound,
 	Loader2,
@@ -320,11 +321,14 @@ export function TeamCreateFlow({
 				<div className="mt-4 flex flex-col gap-2">
 					<p className="text-mini text-status-danger leading-tight">{error}</p>
 					{/* R5-A: no more "Advanced setup" fallback — manual Worker URL /
-					    token entry left the product. Retry is the recovery path. */}
+					    token entry left the product. Retry is the recovery path;
+					    "Copy details" feeds a bug report (sidebar feedback button)
+					    when retrying can't help. */}
 					<div className="flex items-center gap-2">
 						<Button size="sm" onClick={() => void run()}>
 							Try again
 						</Button>
+						<CopyErrorButton error={error} />
 					</div>
 				</div>
 			) : null}
@@ -344,6 +348,29 @@ export function TeamCreateFlow({
 				</p>
 			) : null}
 		</div>
+	);
+}
+
+function CopyErrorButton({ error }: { error: string | null }) {
+	const [copied, setCopied] = useState(false);
+	const handleCopy = useCallback(() => {
+		if (!error || !navigator.clipboard?.writeText) {
+			return;
+		}
+		void navigator.clipboard.writeText(error).then(() => {
+			setCopied(true);
+			setTimeout(() => setCopied(false), 1500);
+		});
+	}, [error]);
+	return (
+		<Button variant="outline" size="sm" onClick={handleCopy}>
+			{copied ? (
+				<Check className="size-3.5" strokeWidth={2.4} />
+			) : (
+				<Copy className="size-3.5" strokeWidth={1.8} />
+			)}
+			{copied ? "Copied" : "Copy details"}
+		</Button>
 	);
 }
 

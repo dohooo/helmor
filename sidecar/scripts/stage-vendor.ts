@@ -45,6 +45,7 @@ import {
 	opencodeArchivePlan,
 	resolveVendorTarget,
 	type TargetInfo,
+	WRANGLER_VERSION,
 } from "./vendor-platform.ts";
 
 /** Host platform flag: Windows needs `.exe` suffixes, zip extraction via
@@ -988,18 +989,18 @@ function stageCursorWorkerDeps(target: TargetInfo): string {
 	);
 
 	verifyCursorWorkerArch(dest, npmOs, npmArch);
-	signCursorWorkerMachOs(dest);
+	signMachOsUnder(join(dest, "node_modules"), "cursor worker");
 	return dest;
 }
 
-/// The staged node_modules ships native Mach-O (rg, cursorsandbox) that arrive
-/// ad-hoc/linker-signed. Tauri's signing doesn't reach nested Resources, so
-/// re-sign each with our Developer ID + hardened runtime (no entitlements —
-/// none of them JIT) or notarization rejects the bundle. No-op when not signing
-/// (dev) and skips non-Mach-O (e.g. Windows PE).
-function signCursorWorkerMachOs(dest: string): void {
+/// A staged node_modules tree can ship native Mach-O (cursor worker: rg,
+/// cursorsandbox; team-cloud: esbuild) that arrives ad-hoc/linker-signed.
+/// Tauri's signing doesn't reach nested Resources, so re-sign each with our
+/// Developer ID + hardened runtime (no entitlements — none of them JIT) or
+/// notarization rejects the bundle. No-op when not signing (dev) and skips
+/// non-Mach-O (e.g. Windows PE).
+function signMachOsUnder(root: string, label: string): void {
 	if (!process.env.APPLE_SIGNING_IDENTITY?.trim()) return;
-	const root = join(dest, "node_modules");
 	if (!existsSync(root)) return;
 	let signed = 0;
 	const stack = [root];
@@ -1018,7 +1019,7 @@ function signCursorWorkerMachOs(dest: string): void {
 			}
 		}
 	}
-	console.log(`[stage-vendor] cursor worker: signed ${signed} Mach-O file(s)`);
+	console.log(`[stage-vendor] ${label}: signed ${signed} Mach-O file(s)`);
 }
 
 function isMachO(path: string): boolean {
@@ -1070,6 +1071,198 @@ function verifyCursorWorkerArch(
 	console.log(
 		`[stage-vendor] cursor worker deps verified (${npmOs}-${npmArch})`,
 	);
+}
+
+// ---------------------------------------------------------------------------
+// Team-cloud provisioning toolkit — the in-app "Create a team" engine for
+// RELEASE builds (round6 P1-1a). Stages `vendor/team-cloud/` as a
+// self-contained mirror of the repo's cloud/ dir: prebuilt provision scripts
+// (single-file .mjs, run by the vendored Node runtime), the Worker source +
+// config template + schema (wrangler bundles the Worker from source on the
+// operator's machine at deploy), and a PRUNED wrangler node_modules tree.
+//
+// The prune ("keep the JS, drop the payloads"): wrangler's CLI top-level-
+// requires miniflare + workerd, so those PACKAGES must stay resolvable — but
+// their heavy payloads (the 107MB workerd native binary, present TWICE:
+// postinstall copy + platform package; sharp/@img, miniflare's local-asset
+// dep) are only exec'd / lazy-loaded by local-dev paths (`wrangler dev`,
+// `d1 execute --local`, asset optimization) that provisioning never touches.
+// Provisioning uses only remote verbs — whoami/login, d1 create/list/execute
+// --remote, r2 bucket create, secret put/list, deploy, containers list/delete
+// — all validated green against the pruned tree (189MB → 67MB; method +
+// per-verb evidence: .agent-contexts/team-cloud-round6/class1-findings.md F1).
+// ---------------------------------------------------------------------------
+
+const CLOUD_ROOT = join(SIDECAR_ROOT, "..", "cloud");
+
+/// The Worker's runtime dep, read from cloud/package.json so the staged tree
+/// can never drift from what the repo's Worker source imports.
+function readCloudSandboxVersion(): string {
+	const pkg = JSON.parse(
+		readFileSync(join(CLOUD_ROOT, "package.json"), "utf8"),
+	) as { dependencies?: Record<string, string> };
+	const version = pkg.dependencies?.["@cloudflare/sandbox"];
+	if (!version || !/^\d/.test(version)) {
+		throw new Error(
+			`[stage-vendor] cloud/package.json must pin @cloudflare/sandbox exactly (got ${version ?? "nothing"})`,
+		);
+	}
+	return version;
+}
+
+function stageTeamCloudTooling(target: TargetInfo): string {
+	const dest = join(DIST_VENDOR, "team-cloud");
+	rmSync(dest, { recursive: true, force: true });
+	mkdirSync(join(dest, "scripts"), { recursive: true });
+
+	// 1. Provision scripts → single-file .mjs for the vendored Node runtime.
+	//    `bun build --target=node` fails the build loudly if someone adds a
+	//    Bun-only API or an import the bundle can't carry.
+	for (const stem of ["provision-team", "team-containers"]) {
+		execFileSync(
+			process.execPath,
+			[
+				"build",
+				join(CLOUD_ROOT, "scripts", `${stem}.ts`),
+				"--target=node",
+				"--outfile",
+				join(dest, "scripts", `${stem}.mjs`),
+			],
+			{ stdio: "inherit" },
+		);
+	}
+
+	// 2. Worker payload, laid out exactly like the repo's cloud/ dir so the
+	//    scripts' `cloudRoot = resolve(scriptDir, "..")` works unchanged.
+	copyFile(join(CLOUD_ROOT, "wrangler.toml"), join(dest, "wrangler.toml"));
+	copyFile(join(CLOUD_ROOT, "schema.sql"), join(dest, "schema.sql"));
+	cpSync(join(CLOUD_ROOT, "src"), join(dest, "src"), { recursive: true });
+
+	// 3. wrangler + the Worker's runtime dep, installed for the BUNDLE target
+	//    (same cross-arch mechanism as the cursor worker lane above).
+	writeFileSync(
+		join(dest, "package.json"),
+		`${JSON.stringify(
+			{
+				name: "helmor-team-cloud-tooling",
+				private: true,
+				dependencies: {
+					wrangler: WRANGLER_VERSION,
+					"@cloudflare/sandbox": readCloudSandboxVersion(),
+				},
+			},
+			null,
+			2,
+		)}\n`,
+	);
+	const npmOs = target.os === "windows" ? "win32" : "darwin";
+	const npmArch = target.arch;
+	console.log(
+		`[stage-vendor] installing wrangler@${WRANGLER_VERSION} for ${npmOs}-${npmArch} (team-cloud tooling)`,
+	);
+	const installCommand = IS_WINDOWS ? "npm.cmd" : process.execPath;
+	execFileSync(
+		installCommand,
+		["install", `--cpu=${npmArch}`, `--os=${npmOs}`],
+		{
+			cwd: dest,
+			stdio: "inherit",
+			env: {
+				...process.env,
+				npm_config_target_arch: npmArch,
+				npm_config_target_platform: npmOs,
+				npm_config_arch: npmArch,
+				npm_config_platform: npmOs,
+			},
+		},
+	);
+
+	// 4. THE PRUNE (see lane comment): payloads only — the packages stay
+	//    resolvable. Also drop the now-dangling .bin shims for workerd, so the
+	//    bundler never trips over broken symlinks.
+	const nm = join(dest, "node_modules");
+	const workerdPlatformDirs = existsSync(join(nm, "@cloudflare"))
+		? readdirSync(join(nm, "@cloudflare"))
+				.filter((n) => n.startsWith("workerd-"))
+				.map((n) => join(nm, "@cloudflare", n, "bin"))
+		: [];
+	const binShims = existsSync(join(nm, ".bin"))
+		? readdirSync(join(nm, ".bin"))
+				.filter((n) => n.startsWith("workerd"))
+				.map((n) => join(nm, ".bin", n))
+		: [];
+	const pruneTargets = [
+		join(nm, "workerd", "bin"),
+		join(nm, "sharp"),
+		join(nm, "@img"),
+		...workerdPlatformDirs,
+		...binShims,
+	];
+	for (const p of pruneTargets) {
+		rmSync(p, { recursive: true, force: true });
+	}
+
+	// 5. Integrity assertions — a release build FAILS here rather than shipping
+	//    a bundle that can't create a team (the exact class of miss P1-1a was).
+	const mustExist = [
+		"scripts/provision-team.mjs",
+		"scripts/team-containers.mjs",
+		"wrangler.toml",
+		"schema.sql",
+		"src/index.ts",
+		"node_modules/wrangler/bin/wrangler.js",
+		"node_modules/@cloudflare/sandbox/package.json",
+		// top-level-required by wrangler's CLI — the prune must keep the JS:
+		"node_modules/miniflare/package.json",
+		"node_modules/workerd/package.json",
+		`node_modules/@esbuild/${npmOs}-${npmArch}/package.json`,
+	];
+	for (const rel of mustExist) {
+		if (!existsSync(join(dest, rel))) {
+			throw new Error(
+				`[stage-vendor] team-cloud lane incomplete: missing ${rel} — a bundle without it cannot create teams`,
+			);
+		}
+	}
+	for (const p of pruneTargets) {
+		if (existsSync(p)) {
+			throw new Error(
+				`[stage-vendor] team-cloud prune failed: ${p} still present`,
+			);
+		}
+	}
+	// Cross-arch guard, mirroring verifyCursorWorkerArch: exactly the bundle
+	// target's esbuild platform package, no wrong-arch stray.
+	const strayEsbuild = readdirSync(join(nm, "@esbuild")).filter(
+		(n) => n !== `${npmOs}-${npmArch}`,
+	);
+	if (strayEsbuild.length > 0) {
+		throw new Error(
+			`[stage-vendor] team-cloud: unexpected esbuild platform package(s): ${strayEsbuild.join(", ")}`,
+		);
+	}
+
+	// 6. Load smoke — run wrangler's entry under the staging host's runtime
+	//    (arch-safe even when cross-staging: --version execs no native
+	//    payload). Proves the pruned tree still RESOLVES, which is the only
+	//    thing the prune could break.
+	const versionOut = execFileSync(
+		process.execPath,
+		[join(nm, "wrangler", "bin", "wrangler.js"), "--version"],
+		{
+			encoding: "utf8",
+			env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
+		},
+	).trim();
+	if (!versionOut.includes(WRANGLER_VERSION)) {
+		throw new Error(
+			`[stage-vendor] team-cloud wrangler load smoke failed: expected ${WRANGLER_VERSION}, got "${versionOut}"`,
+		);
+	}
+
+	// 7. Sign nested Mach-Os — post-prune that's just esbuild.
+	signMachOsUnder(nm, "team-cloud");
+	return dest;
 }
 
 // ---------------------------------------------------------------------------
@@ -1137,13 +1330,26 @@ if (!IS_LINUX)
 // ----- llama.cpp (local LLM server for auto-rename / Local AI — desktop only) -----
 if (!IS_LINUX) stageOptional("llama-cpp", () => stageLlamaCppBinaries(target));
 
-// ----- Cursor worker deps — release builds only (set by the `build` script).
-// Dev resolves @cursor/sdk from sidecar/node_modules, so `dev:prepare` skips
-// this ~minute-long install. Node runtime is staged separately (see CI).
-// Desktop only — the Linux serve image doesn't ship the cursor worker. -----
-if (!IS_LINUX && process.env.HELMOR_STAGE_CURSOR_WORKER === "1") {
+// ----- Cursor worker deps + team-cloud tooling — release builds only (flags
+// set by the `build` script). Dev resolves @cursor/sdk from
+// sidecar/node_modules and runs cloud/scripts under PATH bun, so
+// `dev:prepare` skips these ~minute-long installs. Desktop only — the Linux
+// serve image ships neither. The vendored Node runtime rides along whenever
+// anything staged here needs it at runtime (cursor worker, team-cloud
+// provision scripts). -----
+const STAGE_CURSOR_WORKER = process.env.HELMOR_STAGE_CURSOR_WORKER === "1";
+const STAGE_TEAM_CLOUD = process.env.HELMOR_STAGE_TEAM_CLOUD === "1";
+if (!IS_LINUX && (STAGE_CURSOR_WORKER || STAGE_TEAM_CLOUD)) {
 	stageNodeRuntime(target);
+}
+if (!IS_LINUX && STAGE_CURSOR_WORKER) {
 	stageCursorWorkerDeps(target);
+}
+// stageOptional like the other lanes: a Windows staging failure downgrades to
+// a warning (feature degrades to the truthful in-app error); macOS stays
+// strict — the integrity asserts inside FAIL the release build.
+if (!IS_LINUX && STAGE_TEAM_CLOUD) {
+	stageOptional("team-cloud", () => stageTeamCloudTooling(target));
 }
 
 // ----- Summary -----
@@ -1156,9 +1362,14 @@ console.log(`  gh          ${humanSize(join(DIST_VENDOR, "gh"))}`);
 console.log(`  glab        ${humanSize(join(DIST_VENDOR, "glab"))}`);
 console.log(`  cloudflared ${humanSize(join(DIST_VENDOR, "cloudflared"))}`);
 console.log(`  llama-cpp   ${humanSize(join(DIST_VENDOR, "llama-cpp"))}`);
-if (process.env.HELMOR_STAGE_CURSOR_WORKER === "1") {
+if (STAGE_CURSOR_WORKER || STAGE_TEAM_CLOUD) {
 	console.log(`  node        ${humanSize(join(DIST_VENDOR, "node"))}`);
+}
+if (STAGE_CURSOR_WORKER) {
 	console.log(
 		`  cursor-worker ${humanSize(join(DIST_VENDOR, "cursor-worker"))}`,
 	);
+}
+if (STAGE_TEAM_CLOUD) {
+	console.log(`  team-cloud  ${humanSize(join(DIST_VENDOR, "team-cloud"))}`);
 }

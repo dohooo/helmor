@@ -35,7 +35,7 @@
 		"test:e2e:ui": "playwright test --ui",
 		"test:e2e:headed": "playwright test --headed",
 		"dev:e2e": "vite --config vite.e2e.config.ts",
-		"typecheck": "tsc --noEmit && cd sidecar && bunx tsc --noEmit && cd ../cloud && bunx tsc --noEmit",
+		"typecheck": "tsc --noEmit && cd sidecar && bunx tsc --noEmit && cd ../cloud && bun run typecheck",
 		"tauri": "tauri",
 		"lint": "biome check . --config-path=./biome.json && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
 		"lint:fix": "biome check . --write --config-path=./biome.json && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --fix --allow-dirty -- -D warnings && cargo fmt --manifest-path src-tauri/Cargo.toml --all",

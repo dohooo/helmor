@@ -229,6 +229,17 @@ export const LLAMA_SHA256: Readonly<{ arm64: string; x64: string }> = {
 // SHA256 from https://nodejs.org/dist/v$VER/SHASUMS256.txt and wipe
 // sidecar/.bundle-cache.
 export const NODE_VERSION = "24.17.0";
+
+// wrangler staged into vendor/team-cloud/ (the in-app team provisioner's
+// toolchain — stage-vendor's team-cloud lane). Exact pin: the staged tree is
+// the one the provision verbs were validated against after the payload prune
+// (see .agent-contexts/team-cloud-round6/class1-findings.md F1). Keep it
+// inside cloud/package.json's `wrangler` devDependency range so dev
+// (cloud/node_modules) and release exercise the same major. Bumping: update
+// here, re-run `bun run build` in sidecar/ (the lane re-installs + re-runs its
+// load smoke), then re-run a real provision before shipping.
+export const WRANGLER_VERSION = "4.100.0";
+
 export const NODE_SHA256: Readonly<{
 	darwin: Record<DarwinArch, string>;
 	windows: Record<DarwinArch, string>;

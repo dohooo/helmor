@@ -1,16 +1,18 @@
 //! In-app team-cloud auto-deploy. A thin Rust layer over the provision ENGINE
-//! (`cloud/scripts/provision-team.ts`): it locates Bun + the script, runs it,
-//! and forwards the script's JSON progress protocol to the frontend over an
-//! `ipc::Channel` while returning the terminal result.
+//! (`cloud/scripts/provision-team.ts`): it resolves the script + a JS runtime
+//! via [`tooling`], runs it, and forwards the script's JSON progress protocol
+//! to the frontend over an `ipc::Channel` while returning the terminal result.
 //!
-//! DEV-first: the script is a repo file, resolved relative to the working dir
-//! (like `resolve_sidecar_path`). A release build doesn't bundle it yet, so the
-//! command surfaces a clear "use Advanced setup" error there — the frontend's
-//! create-flow already falls back gracefully.
+//! Dev runs the repo `.ts` under PATH bun; a release bundle runs the staged
+//! `vendor/team-cloud/scripts/*.mjs` under the vendored Node runtime, with
+//! wrangler + the Worker source shipping in the same staged payload
+//! (stage-vendor.ts's team-cloud lane) — see `tooling` for the exact rules.
 //!
 //! Secrets (the Cloudflare OAuth token wrangler holds, the generated admin
 //! token) stay inside the script/wrangler process; only the Worker URL + admin
 //! token are returned, and nothing is logged from here.
+
+mod tooling;
 
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
@@ -21,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 
 use super::common::CmdResult;
+use tooling::CloudScript;
 
 /// One streamed step of the deploy, mirrored from the script's `progress` lines.
 /// Serializes to `{ step, status, message }` (matches `TeamDeployProgress` in
@@ -78,55 +81,42 @@ enum ScriptLine {
     },
 }
 
-/// Locate a `cloud/scripts/<name>` helper. Mirrors `resolve_sidecar_path`'s dev
-/// resolution: Tauri dev sets cwd to `src-tauri/`, so check the parent too. A
-/// release build doesn't bundle these yet.
-fn resolve_cloud_script(name: &str) -> anyhow::Result<PathBuf> {
-    if let Ok(cwd) = std::env::current_dir() {
-        for base in [cwd.as_path(), cwd.parent().unwrap_or(cwd.as_path())] {
-            let candidate = base.join("cloud/scripts").join(name);
-            if candidate.is_file() {
-                return Ok(candidate);
-            }
-        }
-    }
-    anyhow::bail!(
-        "Team cloud tooling isn't available in this build yet (cloud/scripts/{name} isn't bundled). Use Advanced setup in Settings → Team, or run a dev build."
-    )
-}
-
-/// The provision engine. An env override aids manual testing.
-fn resolve_provision_script() -> anyhow::Result<PathBuf> {
+/// The provision engine. An env override aids manual testing / the
+/// adversarial harness.
+fn resolve_provision_script() -> anyhow::Result<CloudScript> {
     if let Ok(path) = std::env::var("HELMOR_PROVISION_SCRIPT") {
         let p = PathBuf::from(path);
         if p.is_file() {
-            return Ok(p);
+            return Ok(tooling::for_override(p));
         }
     }
-    resolve_cloud_script("provision-team.ts")
+    tooling::resolve("provision-team")
 }
 
 /// Run the provision script, forwarding progress to `channel`, returning the
 /// terminal result. Blocking — call from `spawn_blocking`.
+///
+/// No `current_dir`: the scripts are cwd-independent (they locate their own
+/// payload via `import.meta.url` and give wrangler a writable temp dir — the
+/// bundled copy lives in the app's read-only Resources).
 fn run_provision(channel: Channel<TeamDeployProgress>) -> anyhow::Result<TeamDeployResult> {
-    let script = resolve_provision_script()?;
-    let cloud_dir = script.parent().and_then(|p| p.parent());
+    let CloudScript { runtime, script } = resolve_provision_script()?;
 
-    let mut command = Command::new(crate::platform::executable::resolve_for_spawn("bun"));
+    let mut command = Command::new(&runtime);
     command
-        .arg("run")
         .arg(&script)
         .env("WRANGLER_SEND_METRICS", "false")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
-    if let Some(dir) = cloud_dir {
-        command.current_dir(dir);
-    }
 
-    let mut child = command
-        .spawn()
-        .context("Failed to start the team provisioner (is Bun installed?)")?;
+    let mut child = command.spawn().with_context(|| {
+        format!(
+            "Failed to start the team provisioner ({} {})",
+            runtime.display(),
+            script.display()
+        )
+    })?;
 
     let stdout = child
         .stdout
@@ -189,26 +179,25 @@ pub async fn deploy_team_cloud(
 
 /// Run a `cloud/scripts` helper and capture its stdout (the machine payload).
 /// Blocking — call from `spawn_blocking`.
-fn run_cloud_script_capture(script_name: &str, args: &[&str]) -> anyhow::Result<String> {
-    let script = resolve_cloud_script(script_name)?;
-    let cloud_dir = script.parent().and_then(|p| p.parent());
+fn run_cloud_script_capture(script_stem: &str, args: &[&str]) -> anyhow::Result<String> {
+    let CloudScript { runtime, script } = tooling::resolve(script_stem)?;
 
-    let mut command = Command::new(crate::platform::executable::resolve_for_spawn("bun"));
+    let mut command = Command::new(&runtime);
     command
-        .arg("run")
         .arg(&script)
         .args(args)
         .env("WRANGLER_SEND_METRICS", "false")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
-    if let Some(dir) = cloud_dir {
-        command.current_dir(dir);
-    }
 
-    let output = command
-        .output()
-        .context("Failed to run the team-containers helper (is Bun installed?)")?;
+    let output = command.output().with_context(|| {
+        format!(
+            "Failed to run the team-containers helper ({} {})",
+            runtime.display(),
+            script.display()
+        )
+    })?;
     if !output.status.success() {
         anyhow::bail!(
             "team-containers {} failed (exit {:?})",
@@ -225,7 +214,7 @@ fn run_cloud_script_capture(script_name: &str, args: &[&str]) -> anyhow::Result<
 #[tauri::command]
 pub async fn list_team_containers() -> CmdResult<String> {
     let json = tauri::async_runtime::spawn_blocking(|| {
-        run_cloud_script_capture("team-containers.ts", &["list"])
+        run_cloud_script_capture("team-containers", &["list"])
     })
     .await
     .map_err(|e| anyhow::anyhow!("list task join failed: {e}"))??;
@@ -236,7 +225,7 @@ pub async fn list_team_containers() -> CmdResult<String> {
 #[tauri::command]
 pub async fn delete_team_container(id: String) -> CmdResult<()> {
     tauri::async_runtime::spawn_blocking(move || {
-        run_cloud_script_capture("team-containers.ts", &["delete", &id])
+        run_cloud_script_capture("team-containers", &["delete", &id])
     })
     .await
     .map_err(|e| anyhow::anyhow!("delete task join failed: {e}"))??;

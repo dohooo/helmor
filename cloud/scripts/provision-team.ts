@@ -8,9 +8,13 @@
 // WHY a standalone script (not Rust spawning wrangler step-by-step): the
 // CF-interaction complexity lives here in readable TS you can run + verify +
 // fix directly (`bun run cloud/scripts/provision-team.ts`), instead of as blind
-// Rust. The Rust command (`deploy_team_cloud`) is a thin layer: it makes sure a
-// `wrangler` binary is available (fetched on demand via the bundled node+npm),
-// runs this script, and forwards the progress JSON to the UI.
+// Rust. The Rust command (`deploy_team_cloud`) is a thin layer: it locates this
+// script (repo `cloud/scripts/*.ts` in dev; the staged
+// `vendor/team-cloud/scripts/provision-team.mjs` in a release bundle) plus a JS
+// runtime (PATH `bun` in dev; the vendored Node in release), runs it, and
+// forwards the progress JSON to the UI. `wrangler` is NOT expected on the
+// operator's machine: it ships inside the same payload next to this script and
+// is self-resolved below (see WRANGLER_JS).
 //
 // PROTOCOL (stdout = machine, stderr = human):
 //   each step emits one JSON line  {"kind":"progress","step":...,"status":...}
@@ -33,21 +37,36 @@ import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
 	appendFileSync,
+	existsSync,
 	mkdtempSync,
 	readFileSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const scriptDir = new URL(".", import.meta.url).pathname;
+// fileURLToPath (not URL.pathname) so Windows paths don't keep the leading
+// slash (`/C:/…`), which breaks resolve/join.
+const scriptDir = dirname(fileURLToPath(import.meta.url));
 const cloudRoot = resolve(scriptDir, "..");
 
-/** `wrangler` to invoke. The Rust layer passes the on-demand-fetched binary via
- *  HELMOR_WRANGLER_BIN; running from the repo falls back to the local install. */
-const WRANGLER =
-	process.env.HELMOR_WRANGLER_BIN ||
-	resolve(cloudRoot, "node_modules/.bin/wrangler");
+/** `wrangler` to invoke. HELMOR_WRANGLER_BIN (manual override / harness) is
+ *  spawned directly; otherwise we run wrangler's JS entry from the
+ *  node_modules NEXT TO this script (repo `cloud/node_modules` in dev, staged
+ *  `vendor/team-cloud/node_modules` in a release bundle) under OUR OWN runtime
+ *  (`process.execPath` — bun in dev, the vendored Node in release). Spawning
+ *  the JS entry instead of the `.bin/wrangler` shim matters: the shim's
+ *  `#!/usr/bin/env node` shebang needs a PATH `node`, and a Finder-launched
+ *  app has no such PATH. */
+const WRANGLER_BIN_OVERRIDE = process.env.HELMOR_WRANGLER_BIN || "";
+const WRANGLER_JS = resolve(cloudRoot, "node_modules/wrangler/bin/wrangler.js");
+
+/** Writable working directory for every wrangler invocation. wrangler scratches
+ *  under its project dir (`.wrangler/`), and in a release bundle `cloudRoot`
+ *  lives in the app's READ-ONLY Resources — so wrangler must never run with its
+ *  cwd there. */
+const workDir = mkdtempSync(join(tmpdir(), "helmor-team-wrangler-"));
 
 /** Optional image OVERRIDE. Empty ⇒ deploy the tag committed in `wrangler.toml`
  *  — the SINGLE source of truth, kept in lockstep with publish-team-image.yml.
@@ -114,15 +133,19 @@ function wrangler(
 	const fullArgs = opts.configPath
 		? [...args, "--config", opts.configPath]
 		: args;
-	const result = spawnSync(WRANGLER, fullArgs, {
-		cwd: cloudRoot,
-		input: opts.stdinValue,
-		stdio: opts.inheritStdio
-			? ["inherit", "inherit", "inherit"]
-			: ["pipe", "pipe", "pipe"],
-		encoding: "utf8",
-		env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
-	});
+	const result = spawnSync(
+		WRANGLER_BIN_OVERRIDE || process.execPath,
+		WRANGLER_BIN_OVERRIDE ? fullArgs : [WRANGLER_JS, ...fullArgs],
+		{
+			cwd: workDir,
+			input: opts.stdinValue,
+			stdio: opts.inheritStdio
+				? ["inherit", "inherit", "inherit"]
+				: ["pipe", "pipe", "pipe"],
+			encoding: "utf8",
+			env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
+		},
+	);
 	return {
 		code: result.status ?? 1,
 		stdout: result.stdout ?? "",
@@ -311,13 +334,31 @@ async function verifyLive(
 }
 
 async function main(): Promise<void> {
-	log(`[provision] wrangler: ${WRANGLER}`);
+	if (!WRANGLER_BIN_OVERRIDE && !existsSync(WRANGLER_JS)) {
+		log(
+			`[provision] fatal: wrangler is missing from this build (expected ${WRANGLER_JS}). ` +
+				"In a release bundle that means vendor/team-cloud/node_modules didn't ship — reinstall Helmor. " +
+				"In a repo checkout, run `bun install` in cloud/ first.",
+		);
+		process.exit(1);
+	}
+	log(
+		`[provision] wrangler: ${WRANGLER_BIN_OVERRIDE || `${process.execPath} ${WRANGLER_JS}`}`,
+	);
 	log(`[provision] image:    ${resolveImage()}`);
 
 	// 1) LOGIN — reuse `wrangler login` (OAuth loopback). whoami first so an
-	//    already-authenticated operator skips the browser dance.
+	//    already-authenticated operator skips the browser dance. Detected by
+	//    OUTPUT, not exit code: wrangler 4.100 `whoami` exits 0 even when
+	//    logged out (it prints "You are not authenticated…"), so exit-code-only
+	//    detection silently skipped the browser login on every fresh machine
+	//    and provisioning face-planted later at the first authed call
+	//    (round6 P1-1a, caught by the dimension-1 clean-shell smoke).
 	progress("login", "start", "Checking Cloudflare sign-in…");
-	if (wrangler(["whoami"]).code !== 0) {
+	const who = wrangler(["whoami"]);
+	const needsLogin =
+		who.code !== 0 || /not authenticated/i.test(`${who.stdout}\n${who.stderr}`);
+	if (needsLogin) {
 		log("[provision] not logged in — launching `wrangler login` (browser)…");
 		const login = wrangler(["login"], { inheritStdio: true });
 		if (login.code !== 0) {
@@ -359,7 +400,8 @@ async function main(): Promise<void> {
 		// Non-fatal: backups are an enhancement, the team still works without R2.
 	}
 
-	// Schema into the freshly-created D1.
+	// Schema into the freshly-created D1. Absolute path — wrangler's cwd is a
+	// temp workDir (never cloudRoot, which is read-only in a release bundle).
 	const schema = wrangler(
 		[
 			"d1",
@@ -367,7 +409,7 @@ async function main(): Promise<void> {
 			"helmor-team",
 			"--remote",
 			"--file",
-			"./schema.sql",
+			join(cloudRoot, "schema.sql"),
 			"--yes",
 		],
 		{ configPath },

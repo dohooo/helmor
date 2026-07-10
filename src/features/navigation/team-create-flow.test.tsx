@@ -202,19 +202,25 @@ describe("TeamCreateFlow", () => {
 		expect(mocks.switchTeamMode).not.toHaveBeenCalled();
 	});
 
-	it("surfaces a failure with Retry only — no Advanced-setup fallback (R5-A)", async () => {
+	it("surfaces a failure with Retry + Copy details — no Advanced-setup fallback (R5-A)", async () => {
 		mocks.deployTeamCloud.mockRejectedValue(new Error("boom"));
+		const writeText = vi.fn(() => Promise.resolve());
+		Object.assign(navigator, { clipboard: { writeText } });
 		render(<TeamCreateFlow onBack={vi.fn()} onDone={vi.fn()} />);
 
 		fireEvent.click(screen.getByRole("button", { name: CONNECT }));
 
 		await screen.findByText(/didn't finish/i);
 		// Manual Worker URL / token entry left the product — the error phase
-		// offers Try again and nothing else.
+		// offers Try again plus Copy details (for a bug report), nothing else.
 		expect(
 			screen.queryByRole("button", { name: /Advanced setup/i }),
 		).toBeNull();
 		expect(screen.getByRole("button", { name: /Try again/i })).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: /Copy details/i }));
+		expect(writeText).toHaveBeenCalledWith(
+			expect.stringContaining("didn't finish"),
+		);
 	});
 
 	it("persists the admin token on the creator's machine after deploy (R5-A)", async () => {

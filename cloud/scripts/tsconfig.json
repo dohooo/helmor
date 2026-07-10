@@ -1,0 +1,25 @@
+{
+	// Typecheck for cloud/scripts (chained from cloud's `bun run typecheck`).
+	// Separate from ../tsconfig.json on purpose: these scripts run under Node
+	// (release: the vendored Node in the app bundle) / bun (dev), so they get
+	// "node" types — NOT @cloudflare/workers-types, and NOT bun types, so an
+	// accidental Bun-only API in the release-critical scripts fails right here.
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "ESNext",
+		"moduleResolution": "Bundler",
+		"lib": ["ES2022"],
+		"types": ["node"],
+		"strict": true,
+		"noEmit": true,
+		"skipLibCheck": true,
+		"esModuleInterop": true,
+		"forceConsistentCasingInFileNames": true
+	},
+	"include": ["./**/*.ts"],
+	// local-docker-team.ts is a bun-runtime dev harness (uses the `Bun` global
+	// and imports ../src/local-dev/*, which needs workers-types) — checking it
+	// here would force bun+workers types onto every script and defeat the
+	// node-only guarantee above. It stays outside the type gate, as before.
+	"exclude": ["./local-docker-team.ts"]
+}
