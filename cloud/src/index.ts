@@ -871,6 +871,38 @@ async function route(
 	return response;
 }
 
+/** Validate a caller-supplied clone root (P1-2c). Returns the normalized root
+ *  (no trailing slash) or `null` when the input is unsafe. Empty input keeps
+ *  the historical default `/workspace`. The value ends up interpolated into
+ *  `sandbox.exec` shell strings (the SDK exec takes a single string — there is
+ *  no argv form), so the defense is a strict character whitelist plus
+ *  segment-level `.` / `..` rejection: every accepted path is, by
+ *  construction, inside /workspace and free of shell metacharacters. */
+export function sanitizeCloneRoot(requested: string): string | null {
+	if (!requested) return "/workspace";
+	const normalized = requested.replace(/\/+$/, "");
+	if (normalized === "/workspace") return normalized;
+	if (!normalized.startsWith("/workspace/")) return null;
+	const segments = normalized.slice("/workspace/".length).split("/");
+	for (const segment of segments) {
+		if (
+			segment === "." ||
+			segment === ".." ||
+			!/^[A-Za-z0-9._-]+$/.test(segment)
+		) {
+			return null;
+		}
+	}
+	return normalized;
+}
+
+/** POSIX single-quote shell escaping for values interpolated into
+ *  `sandbox.exec` strings. Belt-and-suspenders on top of the whitelist above —
+ *  also used for the clone URL, which legally may contain quotes. */
+function shq(value: string): string {
+	return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
 /**
  * Team-mode "add repository" (BUG-3). A plain `git clone` inside the container
  * fails: the serve subprocess sees /workspace as EROFS (only the Sandbox SDK can
@@ -923,9 +955,18 @@ export async function handleTeamClone(
 	// would escape it. targetDir mirrors a local clone: <root>/<name>.
 	const requested =
 		typeof body.cloneDirectory === "string" ? body.cloneDirectory.trim() : "";
-	const root = requested.startsWith("/workspace")
-		? requested.replace(/\/+$/, "")
-		: "/workspace";
+	const root = sanitizeCloneRoot(requested);
+	if (root === null) {
+		// P1-2c: the path is interpolated into `sandbox.exec` shell strings, so
+		// anything outside the strict whitelist (prefix bypass like
+		// "/workspaceevil", `..`/`.` traversal, shell metacharacters) is an
+		// explicit 400 — never a silent fallback that would turn an attack
+		// input into a "successful" clone somewhere unexpected.
+		return jsonError(
+			400,
+			'clone: cloneDirectory must be /workspace or a /workspace/<subdir> path (segments limited to [A-Za-z0-9._-], no "." / "..")',
+		);
+	}
 	const targetDir = `${root}/${name}`;
 
 	// 1. Clone onto the persistent volume via the SDK (serve cannot write it).
@@ -981,17 +1022,17 @@ export async function handleTeamClone(
 	// error now than a repo that wedges every workspace create later.
 	try {
 		const refFetch = await sandbox.exec(
-			`git -C '${targetDir}' fetch origin '+refs/heads/*:refs/remotes/origin/*'`,
+			`git -C ${shq(targetDir)} fetch origin '+refs/heads/*:refs/remotes/origin/*'`,
 		);
 		if (refFetch.exitCode !== 0) {
-			await sandbox.exec(`rm -rf '${targetDir}'`).catch(() => {});
+			await sandbox.exec(`rm -rf ${shq(targetDir)}`).catch(() => {});
 			return jsonError(
 				502,
 				`git fetch (remote-tracking refs) failed after clone (exit ${refFetch.exitCode}): ${refFetch.stderr?.slice(0, 300) ?? ""}`,
 			);
 		}
 	} catch (error) {
-		await sandbox.exec(`rm -rf '${targetDir}'`).catch(() => {});
+		await sandbox.exec(`rm -rf ${shq(targetDir)}`).catch(() => {});
 		return jsonError(
 			502,
 			`git fetch (remote-tracking refs) failed after clone: ${(error as Error).message}`,
@@ -1025,9 +1066,10 @@ export async function handleTeamClone(
 		// The clone landed but registration failed (transient serve error).
 		// Leaving the dir behind wedges a retry on the "already exists" clone
 		// error (the local Rust path cleans up on failure for the same reason),
-		// so remove it best-effort. targetDir is sanitized (/workspace/<safe-name>).
+		// so remove it best-effort. targetDir passed `sanitizeCloneRoot` +
+		// `inferRepoName`'s whitelist and is shq-quoted on top.
 		try {
-			await sandbox.exec(`rm -rf '${targetDir}'`);
+			await sandbox.exec(`rm -rf ${shq(targetDir)}`);
 		} catch {
 			// best-effort — surface the original register error regardless
 		}

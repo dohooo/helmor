@@ -62,14 +62,16 @@ async function allWorkspaces(): Promise<WorkspaceRow[]> {
 
 /** The request the Worker's proxy hands handleTeamClone: a POST carrying the
  *  clone body, with the derived member auth already on it. */
-function forwardedClone(gitUrl: string): Request {
+function forwardedClone(gitUrl: string, cloneDirectory?: string): Request {
 	return new Request("https://team.test/rpc/clone_repository_from_url", {
 		method: "POST",
 		headers: {
 			"content-type": "application/json",
 			Authorization: "Bearer member-token",
 		},
-		body: JSON.stringify({ gitUrl }),
+		body: JSON.stringify(
+			cloneDirectory === undefined ? { gitUrl } : { gitUrl, cloneDirectory },
+		),
 	});
 }
 
@@ -275,5 +277,75 @@ describe("handleTeamClone — remote-tracking refs (R3-E)", () => {
 		const body = (await res.json()) as { message: string };
 		expect(body.message).toContain("remote-tracking refs");
 		expect(execCalls.some((cmd) => cmd.startsWith("rm -rf"))).toBe(true);
+	});
+});
+
+// P1-2c litmus suite: `cloneDirectory` is caller-controlled and is interpolated
+// into `sandbox.exec` shell strings, so anything outside a strict
+// `/workspace(/<safe-segment>)*` shape must be a 400 — BEFORE the SDK checkout
+// runs. Each attack case pins one historical bypass of the old
+// `startsWith("/workspace")` check.
+describe("handleTeamClone — cloneDirectory injection hygiene (P1-2c)", () => {
+	const okBody = { repositoryId: "repo-1", createdRepository: true };
+
+	async function cloneWithDir(dir: string) {
+		const { sandbox, execCalls } = fakeSandbox({ ok: true, body: okBody });
+		const res = await handleTeamClone(
+			forwardedClone("https://github.com/acme/foo.git", dir),
+			sandbox,
+			8080,
+			env as unknown as import("../src/index").Env,
+		);
+		return { res, execCalls };
+	}
+
+	it("rejects a prefix bypass ('/workspaceevil' passes startsWith)", async () => {
+		const { res, execCalls } = await cloneWithDir("/workspaceevil");
+		expect(res.status).toBe(400);
+		expect(execCalls).toHaveLength(0); // nothing reached the shell
+	});
+
+	it("rejects `..` traversal out of /workspace", async () => {
+		const { res, execCalls } = await cloneWithDir("/workspace/../../etc");
+		expect(res.status).toBe(400);
+		expect(execCalls).toHaveLength(0);
+	});
+
+	it("rejects a `.` segment", async () => {
+		const { res } = await cloneWithDir("/workspace/./x");
+		expect(res.status).toBe(400);
+	});
+
+	it("rejects shell metacharacters (quote breakout / command injection)", async () => {
+		const { res, execCalls } = await cloneWithDir(
+			"/workspace/a'; rm -rf --no-preserve-root /; echo '",
+		);
+		expect(res.status).toBe(400);
+		expect(execCalls).toHaveLength(0);
+	});
+
+	it("accepts a safe nested directory and clones under it", async () => {
+		const { res, execCalls } = await cloneWithDir("/workspace/sub.dir_ok-1");
+		expect(res.status).toBe(200);
+		expect(
+			execCalls.some((cmd) => cmd.includes("/workspace/sub.dir_ok-1/foo")),
+		).toBe(true);
+	});
+
+	it("accepts a trailing slash on a safe directory", async () => {
+		const { res } = await cloneWithDir("/workspace/nested/");
+		expect(res.status).toBe(200);
+	});
+
+	it("empty / absent cloneDirectory still defaults to /workspace", async () => {
+		const { sandbox, execCalls } = fakeSandbox({ ok: true, body: okBody });
+		const res = await handleTeamClone(
+			forwardedClone("https://github.com/acme/foo.git"),
+			sandbox,
+			8080,
+			env as unknown as import("../src/index").Env,
+		);
+		expect(res.status).toBe(200);
+		expect(execCalls.some((cmd) => cmd.includes("/workspace/foo"))).toBe(true);
 	});
 });
