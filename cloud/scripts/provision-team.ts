@@ -48,6 +48,7 @@ import { fileURLToPath } from "node:url";
 import { decideBrokerKeyAction, toSecretListOutcome } from "./broker-key";
 import { classifyMigrationError, D1_MIGRATIONS } from "./d1-migrations";
 import { pollHealth } from "./verify-live";
+import { decideWranglerCommand, findNodeOnPath } from "./wrangler-runtime";
 
 // fileURLToPath (not URL.pathname) so Windows paths don't keep the leading
 // slash (`/C:/…`), which breaks resolve/join.
@@ -57,13 +58,26 @@ const cloudRoot = resolve(scriptDir, "..");
 /** `wrangler` to invoke. HELMOR_WRANGLER_BIN (manual override / harness) is
  *  spawned directly; otherwise we run wrangler's JS entry from the
  *  node_modules NEXT TO this script (repo `cloud/node_modules` in dev, staged
- *  `vendor/team-cloud/node_modules` in a release bundle) under OUR OWN runtime
- *  (`process.execPath` — bun in dev, the vendored Node in release). Spawning
- *  the JS entry instead of the `.bin/wrangler` shim matters: the shim's
- *  `#!/usr/bin/env node` shebang needs a PATH `node`, and a Finder-launched
- *  app has no such PATH. */
-const WRANGLER_BIN_OVERRIDE = process.env.HELMOR_WRANGLER_BIN || "";
+ *  `vendor/team-cloud/node_modules` in a release bundle) under a NODE runtime
+ *  — never bun, which swallows wrangler's output (round6 F-A; decision rules +
+ *  rationale in wrangler-runtime.ts). Spawning the JS entry instead of the
+ *  `.bin/wrangler` shim matters: the shim's `#!/usr/bin/env node` shebang
+ *  needs a PATH `node`, and a Finder-launched app has no such PATH. */
 const WRANGLER_JS = resolve(cloudRoot, "node_modules/wrangler/bin/wrangler.js");
+const wranglerNodeHint = process.env.HELMOR_WRANGLER_NODE || "";
+const wranglerCmd = decideWranglerCommand({
+	overrideBin: process.env.HELMOR_WRANGLER_BIN || "",
+	wranglerJs: WRANGLER_JS,
+	execPath: process.execPath,
+	isBun: Boolean(process.versions.bun),
+	nodeHint:
+		wranglerNodeHint && existsSync(wranglerNodeHint) ? wranglerNodeHint : "",
+	pathNode: findNodeOnPath(
+		process.env.PATH,
+		process.platform === "win32",
+		existsSync,
+	),
+});
 
 /** Writable working directory for every wrangler invocation. wrangler scratches
  *  under its project dir (`.wrangler/`), and in a release bundle `cloudRoot`
@@ -137,8 +151,8 @@ function wrangler(
 		? [...args, "--config", opts.configPath]
 		: args;
 	const result = spawnSync(
-		WRANGLER_BIN_OVERRIDE || process.execPath,
-		WRANGLER_BIN_OVERRIDE ? fullArgs : [WRANGLER_JS, ...fullArgs],
+		wranglerCmd.argv0,
+		[...wranglerCmd.prefixArgs, ...fullArgs],
 		{
 			cwd: workDir,
 			input: opts.stdinValue,
@@ -348,7 +362,7 @@ async function verifyLive(
 }
 
 async function main(): Promise<void> {
-	if (!WRANGLER_BIN_OVERRIDE && !existsSync(WRANGLER_JS)) {
+	if (wranglerCmd.prefixArgs.length > 0 && !existsSync(WRANGLER_JS)) {
 		log(
 			`[provision] fatal: wrangler is missing from this build (expected ${WRANGLER_JS}). ` +
 				"In a release bundle that means vendor/team-cloud/node_modules didn't ship — reinstall Helmor. " +
@@ -356,8 +370,11 @@ async function main(): Promise<void> {
 		);
 		process.exit(1);
 	}
+	if (wranglerCmd.warning) {
+		log(`[provision] ⚠️ ${wranglerCmd.warning}`);
+	}
 	log(
-		`[provision] wrangler: ${WRANGLER_BIN_OVERRIDE || `${process.execPath} ${WRANGLER_JS}`}`,
+		`[provision] wrangler: ${[wranglerCmd.argv0, ...wranglerCmd.prefixArgs].join(" ")}`,
 	);
 	log(`[provision] image:    ${resolveImage()}`);
 

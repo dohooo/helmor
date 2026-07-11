@@ -11,30 +11,44 @@
 // Human-readable wrangler chatter goes to stderr; only the machine payload is
 // on stdout. wrangler is self-resolved from the node_modules next to this
 // script (repo cloud/ in dev, staged vendor/team-cloud in a release bundle) and
-// run under our own runtime — same contract as provision-team.ts
-// (HELMOR_WRANGLER_BIN stays as a manual override).
+// run under a node runtime — never bun, which swallows wrangler's output
+// (round6 F-A) — same contract as provision-team.ts; decision rules live in
+// wrangler-runtime.ts (HELMOR_WRANGLER_BIN stays as a manual override).
 
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { decideWranglerCommand, findNodeOnPath } from "./wrangler-runtime";
 
 const cloudRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const WRANGLER_BIN_OVERRIDE = process.env.HELMOR_WRANGLER_BIN || "";
 const WRANGLER_JS = resolve(cloudRoot, "node_modules/wrangler/bin/wrangler.js");
+const nodeHint = process.env.HELMOR_WRANGLER_NODE || "";
+const wranglerCmd = decideWranglerCommand({
+	overrideBin: process.env.HELMOR_WRANGLER_BIN || "",
+	wranglerJs: WRANGLER_JS,
+	execPath: process.execPath,
+	isBun: Boolean(process.versions.bun),
+	nodeHint: nodeHint && existsSync(nodeHint) ? nodeHint : "",
+	pathNode: findNodeOnPath(
+		process.env.PATH,
+		process.platform === "win32",
+		existsSync,
+	),
+});
+if (wranglerCmd.warning) {
+	process.stderr.write(`⚠️ ${wranglerCmd.warning}\n`);
+}
 
 function wrangler(args: string[], input?: string) {
 	// cwd: never cloudRoot — it's read-only inside a release bundle.
-	return spawnSync(
-		WRANGLER_BIN_OVERRIDE || process.execPath,
-		WRANGLER_BIN_OVERRIDE ? args : [WRANGLER_JS, ...args],
-		{
-			cwd: tmpdir(),
-			input,
-			encoding: "utf8",
-			env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
-		},
-	);
+	return spawnSync(wranglerCmd.argv0, [...wranglerCmd.prefixArgs, ...args], {
+		cwd: tmpdir(),
+		input,
+		encoding: "utf8",
+		env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
+	});
 }
 
 const [action, id] = process.argv.slice(2);

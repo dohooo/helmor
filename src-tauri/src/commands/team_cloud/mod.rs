@@ -109,6 +109,11 @@ fn run_provision(channel: Channel<TeamDeployProgress>) -> anyhow::Result<TeamDep
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
+    // wrangler must run under node, never bun (bun swallows its output —
+    // round6 F-A); hand the script the vendored Node when this build has one.
+    if let Some(node) = tooling::vendored_node() {
+        command.env("HELMOR_WRANGLER_NODE", node);
+    }
 
     let mut child = command.spawn().with_context(|| {
         format!(
@@ -190,6 +195,10 @@ fn run_cloud_script_capture(script_stem: &str, args: &[&str]) -> anyhow::Result<
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
+    // Same wrangler-under-node hint as run_provision (round6 F-A).
+    if let Some(node) = tooling::vendored_node() {
+        command.env("HELMOR_WRANGLER_NODE", node);
+    }
 
     let output = command.output().with_context(|| {
         format!(

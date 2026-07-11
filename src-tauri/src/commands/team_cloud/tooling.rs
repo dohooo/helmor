@@ -8,7 +8,10 @@
 //! app gets a minimal PATH without bun or node (round6 P1-1a). The staged
 //! payload also carries wrangler + the Worker source; the scripts self-resolve
 //! wrangler relative to their own location, so nothing here needs to know
-//! where wrangler lives.
+//! where wrangler lives — EXCEPT a runtime hint: wrangler must never run under
+//! bun (it swallows wrangler's output, round6 F-A), so the spawn points pass
+//! the vendored Node's path as `HELMOR_WRANGLER_NODE` when it exists (see
+//! [`vendored_node`]) and the scripts pick their wrangler runtime from it.
 
 use std::path::{Path, PathBuf};
 
@@ -65,6 +68,21 @@ pub fn for_override(script: PathBuf) -> CloudScript {
             .unwrap_or_else(|| crate::platform::executable::resolve_for_spawn("node"))
     };
     CloudScript { runtime, script }
+}
+
+/// The vendored Node runtime, if this build carries one (release bundles
+/// always do; a debug build has it at `target/debug/vendor/node/` once staged).
+/// Used as the `HELMOR_WRANGLER_NODE` hint so the cloud scripts run wrangler
+/// under node even when the script itself runs under bun (round6 F-A). `None`
+/// (nothing staged) is fine — the scripts fall back to a PATH `node`.
+pub fn vendored_node() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| vendored_node_in(&exe))
+}
+
+fn vendored_node_in(exe: &Path) -> Option<PathBuf> {
+    find_in_roots(&resource_roots(exe), &node_relative())
 }
 
 /// `Ok(None)` = not a bundled install (caller falls through to the "missing"
@@ -185,6 +203,23 @@ mod tests {
         let exe = root.path().join("Helmor.app/Contents/MacOS/Helmor");
 
         assert!(resolve_bundled(&exe, "provision-team").unwrap().is_none());
+    }
+
+    #[test]
+    fn vendored_node_hint_requires_the_file_to_exist() {
+        let root = tempfile::tempdir().unwrap();
+        let exe = root.path().join("Helmor.app/Contents/MacOS/Helmor");
+
+        // Nothing staged → no hint (scripts fall back to PATH node).
+        assert!(vendored_node_in(&exe).is_none());
+
+        let node = root.path().join(format!(
+            "Helmor.app/Contents/Resources/vendor/node/{}",
+            node_name()
+        ));
+        write_file(&node);
+
+        assert_eq!(vendored_node_in(&exe), Some(node));
     }
 
     #[test]
