@@ -310,10 +310,15 @@ async fn dispatch(
             Ok(Value::Null)
         }
         "save_pasted_image" => to_value(crate::commands::system_commands::save_pasted_image(arg_string(&args, "data")?, arg_string(&args, "mediaType")?, arg_string(&args, "sessionId")?).await?),
-        "save_text_file_as" => {
-            crate::commands::system_commands::save_text_file_as(arg_string(&args, "path")?, arg_string(&args, "contents")?).await?;
-            Ok(Value::Null)
-        }
+        // P1-2b: `save_text_file_as` is DELIBERATELY not dispatchable here. It
+        // writes an arbitrary ABSOLUTE path whose only safety model is the
+        // LOCAL save dialog — which no remote caller has: over team RPC any
+        // member could write any container file, and a phone browser cannot
+        // even open the dialog to produce a path. The frontend routes it
+        // LOCAL_ONLY. (`save_pasted_image` stays: a phone paste must land the
+        // image on the host running the agent, and its write path is derived
+        // from the session id, never caller-controlled.) See
+        // `desktop_host_commands_stay_delisted_from_team_rpc` below.
         "set_session_context_usage" => {
             crate::commands::session_commands::set_session_context_usage(app.clone(), arg_string(&args, "sessionId")?, arg_string(&args, "meta")?).await?;
             Ok(Value::Null)
@@ -626,6 +631,31 @@ fn is_secret_setting_key(key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::is_secret_setting_key;
+
+    /// P1-2b: `save_text_file_as` must NOT be dispatchable over team RPC —
+    /// it writes an arbitrary absolute path, gated only by the LOCAL save
+    /// dialog, which the remote path bypasses: any team member could write
+    /// any container file. An unmatched command falls through to the
+    /// "Unknown companion command" rejection.
+    ///
+    /// Source-level guard: `dispatch` is bound to `AppHandle<Wry>`, so it
+    /// cannot be invoked under the mock runtime in unit tests; asserting the
+    /// match arm stays deleted is the strongest in-process tripwire
+    /// available. The frontend side is pinned by the LOCAL_ONLY routing test
+    /// in `src/lib/command-classes.test.ts`.
+    #[test]
+    fn desktop_host_commands_stay_delisted_from_team_rpc() {
+        let src = include_str!("rpc.rs");
+        // This test spells the needle with ESCAPED quotes, so it never
+        // self-matches: any occurrence of the plainly-quoted form is a match
+        // arm re-listed in `dispatch`.
+        let cmd = "\"save_text_file_as\"";
+        let occurrences = src.matches(cmd).count();
+        assert_eq!(
+            occurrences, 0,
+            "{cmd} looks re-listed in the team RPC dispatcher ({occurrences} occurrences)"
+        );
+    }
 
     #[test]
     fn redacts_credential_keys() {

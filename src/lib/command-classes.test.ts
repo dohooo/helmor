@@ -99,5 +99,9 @@ describe("command-classes registry", () => {
 		// The R3-A reclassification that motivated the registry: editors live
 		// on this Mac, never the container.
 		expect(LOCAL_ONLY_COMMANDS.has("detect_installed_editors")).toBe(true);
+		// P1-2b: the save dialog + file write are desktop-host concerns; the
+		// remote path let any team member write any container file (and the
+		// download landed in the container instead of on the user's Mac).
+		expect(LOCAL_ONLY_COMMANDS.has("save_text_file_as")).toBe(true);
 	});
 });

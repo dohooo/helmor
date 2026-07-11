@@ -62,9 +62,14 @@ export const COMMAND_CLASSES: Record<string, CommandClass> = {
 	subscribe_local_llm_downloads: "LOCAL_ONLY",
 	// R3-A: editors are installed on THIS Mac — detecting them inside the
 	// cloud container answered the wrong question (and woke the sandbox on
-	// every boot). The companion dispatch still implements it (harmless);
-	// the frontend simply never routes it remotely anymore.
+	// every boot). P1-2b delisted it from the companion dispatcher too.
 	detect_installed_editors: "LOCAL_ONLY",
+	// P1-2b: an arbitrary-absolute-path write whose safety model is the LOCAL
+	// save dialog — and in team mode the user wants the download on THEIR Mac,
+	// not inside the container. LOCAL_ONLY both closes the remote write and
+	// makes "Download as CSV/Markdown" actually land locally. Delisted from
+	// the companion dispatcher too (companion/rpc.rs).
+	save_text_file_as: "LOCAL_ONLY",
 
 	// ---------------------------------------------------------------------
 	// CONTROL_PLANE — served without the container in team mode.
@@ -316,7 +321,6 @@ export const COMMAND_CLASSES: Record<string, CommandClass> = {
 	reveal_workspace_in_main_window: "PASSIVE",
 	show_image_in_finder: "PASSIVE",
 	copy_image_to_clipboard: "PASSIVE",
-	save_text_file_as: "PASSIVE",
 	// Window / app chrome (desktop concerns; remote dispatch no-ops)
 	toggle_quick_panel: "PASSIVE",
 	hide_quick_panel: "PASSIVE",

@@ -71,6 +71,13 @@ const LOCAL_ONLY: &[&str] = &[
     // Pure CPU on the desktop — never proxied to the container, which would defeat
     // reading history while the sandbox sleeps.
     "convert_historical_records",
+    // P1-2b: an arbitrary-ABSOLUTE-path write whose only safety model is the
+    // local save dialog. Over team RPC any member could write any container
+    // file, and a phone browser cannot open the dialog to produce a path in
+    // the first place — zero legitimate remote use, so the dispatch arm is
+    // deliberately deleted (guarded by rpc.rs's
+    // `desktop_host_commands_stay_delisted_from_team_rpc`).
+    "save_text_file_as",
 ];
 // NOTE (R2-D): `read/write/delete_query_cache` are NOT in this list even
 // though the frontend's `LOCAL_ONLY_INVOKES` forces them local — the
