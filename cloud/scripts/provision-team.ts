@@ -47,6 +47,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { decideBrokerKeyAction, toSecretListOutcome } from "./broker-key";
 import { classifyMigrationError, D1_MIGRATIONS } from "./d1-migrations";
+import { pollHealth } from "./verify-live";
 
 // fileURLToPath (not URL.pathname) so Windows paths don't keep the leading
 // slash (`/C:/…`), which breaks resolve/join.
@@ -265,35 +266,54 @@ async function probeVerify(
  *  returns. Returns a human error NAMING the failing stage, or null on success.
  *  A permanent container error or a cold start that never finishes is a HARD fail
  *  — setup must not go green on a backend that can't run a turn (the old VERIFY
- *  step was a no-op progress marker). Agent-identity readiness isn't checked here
- *  (this runs pre-authorize on the admin token); the create-flow's Finish gate
- *  owns that. */
+ *  step was a no-op progress marker). A 401/403 is retried within a grace window
+ *  (round6 F-C): provision rotates HELMOR_COMPANION_TOKEN right before this, and
+ *  CF secret propagation lags a few seconds — see pollHealth / verify-live.ts.
+ *  Agent-identity readiness isn't checked here (this runs pre-authorize on the
+ *  admin token); the create-flow's Finish gate owns that. */
 /** WP6.1: POST `/admin/destroy-sandbox` so any WARM container (holding the
  *  PREVIOUS companion token) is scaled to zero before verify — the next request
  *  cold-starts and injects the freshly-rotated token, so a Reset→re-provision no
  *  longer 401s and recovery needs no manual `wrangler`. Best-effort: a non-2xx or
- *  network error is logged and swallowed (verify still catches a token mismatch). */
+ *  network error is logged and swallowed (verify still catches a token mismatch).
+ *  A 401/403 gets a couple of bounded retries: the call authenticates with the
+ *  token that was JUST rotated, and CF secret propagation lags a few seconds
+ *  (round6 F-C, measured ~3-10s live) — still never fatal. */
 async function destroyWarmContainer(
 	workerUrl: string,
 	token: string,
 ): Promise<void> {
 	const base = workerUrl.replace(/\/+$/, "");
-	try {
-		const res = await fetch(`${base}/admin/destroy-sandbox`, {
-			method: "POST",
-			headers: { Authorization: `Bearer ${token}` },
-		});
-		log(
-			res.ok
-				? "[provision] destroyed any warm container (next request cold-starts fresh)"
-				: `[provision] destroy-sandbox HTTP ${res.status} (non-fatal; verify is the backstop)`,
-		);
-	} catch (error) {
-		log(
-			`[provision] destroy-sandbox failed (non-fatal): ${
-				error instanceof Error ? error.message : error
-			}`,
-		);
+	for (let attempt = 1; ; attempt++) {
+		try {
+			const res = await fetch(`${base}/admin/destroy-sandbox`, {
+				method: "POST",
+				headers: { Authorization: `Bearer ${token}` },
+			});
+			if (
+				!res.ok &&
+				(res.status === 401 || res.status === 403) &&
+				attempt < 3
+			) {
+				log(
+					`[provision] destroy-sandbox HTTP ${res.status} — likely the rotated token still propagating; retrying (${attempt}/2)…`,
+				);
+				await sleep(5000);
+				continue;
+			}
+			log(
+				res.ok
+					? "[provision] destroyed any warm container (next request cold-starts fresh)"
+					: `[provision] destroy-sandbox HTTP ${res.status} (non-fatal; verify is the backstop)`,
+			);
+		} catch (error) {
+			log(
+				`[provision] destroy-sandbox failed (non-fatal): ${
+					error instanceof Error ? error.message : error
+				}`,
+			);
+		}
+		return;
 	}
 }
 
@@ -302,22 +322,14 @@ async function verifyLive(
 	token: string,
 ): Promise<string | null> {
 	const base = workerUrl.replace(/\/+$/, "");
-	// (a) Container start — poll /v1/health (through ensureServe) up to the ceiling.
-	const deadline = Date.now() + VERIFY_TIMEOUT_MS;
-	for (;;) {
-		const health = await probeVerify(`${base}/v1/health`, token);
-		if (health.ok) break;
-		if (health.permanent) {
-			return `Container start: ${health.message ?? "permanent error"}`;
-		}
-		if (health.status === 401 || health.status === 403) {
-			return `Worker auth: the admin token was rejected (HTTP ${health.status}).`;
-		}
-		if (Date.now() >= deadline) {
-			return "Container start: the sandbox didn't finish starting in time.";
-		}
-		await sleep(3000);
-	}
+	// (a) Container start — poll /v1/health (through ensureServe) up to the
+	//     ceiling, with a 401/403 grace window for secret propagation. Loop
+	//     semantics live in verify-live.ts (unit-tested).
+	const healthErr = await pollHealth({
+		probe: () => probeVerify(`${base}/v1/health`, token),
+		timeoutMs: VERIFY_TIMEOUT_MS,
+	});
+	if (healthErr) return healthErr;
 	// (b) Model catalog — the composer's blocking query; proves the serve host
 	//     answers RPC, not just /v1/health.
 	const models = await probeVerify(
