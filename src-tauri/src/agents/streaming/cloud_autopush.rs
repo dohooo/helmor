@@ -32,7 +32,12 @@ fn enabled() -> bool {
 /// Commit + push the workspace's uncommitted work after a finalized turn.
 /// No-op (returns immediately) on the desktop. Runs on a detached thread so it
 /// never blocks the streaming loop.
-pub(super) fn maybe_autopush_after_turn(working_directory: &str, acting_member: Option<&str>) {
+pub(super) fn maybe_autopush_after_turn(
+    app: &tauri::AppHandle,
+    working_directory: &str,
+    acting_member: Option<&str>,
+    session_id: &str,
+) {
     if !enabled() {
         return;
     }
@@ -41,18 +46,94 @@ pub(super) fn maybe_autopush_after_turn(working_directory: &str, acting_member: 
     // thread can't read the ambient acting-member (thread-local), so capture it
     // here. `None` (desktop / no member) → the global git identity, unchanged.
     let member = acting_member.map(str::to_string);
+    let session_id = session_id.to_string();
+    let app = app.clone();
     std::thread::Builder::new()
         .name("cloud-autopush".into())
         .spawn(move || {
-            if let Err(error) = autopush(Path::new(&dir), member.as_deref()) {
-                tracing::warn!(
-                    error = %format!("{error:#}"),
-                    dir = %dir,
-                    "cloud auto-push failed"
+            if autopush_and_record(Path::new(&dir), member.as_deref(), &session_id) {
+                // A failure notice row landed in the session — tell live
+                // clients to refetch so the user sees it before idle destroy.
+                crate::ui_sync::publish(
+                    &app,
+                    crate::ui_sync::UiMutationEvent::SessionTurnPersisted { session_id },
                 );
             }
         })
         .ok();
+}
+
+/// Body of the detached auto-push thread. Returns `true` when the push failed
+/// AND a session-level failure notice was recorded (the caller then broadcasts
+/// a UI invalidation); `false` on success or when recording itself failed.
+fn autopush_and_record(
+    workspace_dir: &Path,
+    acting_member: Option<&str>,
+    session_id: &str,
+) -> bool {
+    let Err(error) = autopush(workspace_dir, acting_member) else {
+        return false;
+    };
+    tracing::warn!(
+        error = %format!("{error:#}"),
+        dir = %workspace_dir.display(),
+        "cloud auto-push failed"
+    );
+    // P1-5a: a swallowed warn means the user idles into a disk wipe with no
+    // idea their work never reached the remote. Leave a session-level notice
+    // so it renders in chat (adapter's existing `type:"error"` arm) and
+    // survives in the DB backup.
+    match record_autopush_failure(session_id, &error) {
+        Ok(()) => true,
+        Err(record_error) => {
+            tracing::warn!(
+                error = %format!("{record_error:#}"),
+                "cloud auto-push failure could not be recorded to the session"
+            );
+            false
+        }
+    }
+}
+
+/// Longest failure detail (chars) carried into the session notice. Full detail
+/// stays in the tracing log; the chat row only needs enough to orient.
+const FAILURE_DETAIL_MAX_CHARS: usize = 300;
+
+/// Insert a `role=system` / `type:"error"` row into `session_messages` so the
+/// failure renders through the pipeline's existing error arm (no new content
+/// shape). Opens a short-lived connection like `checkpoint_db` — the detached
+/// thread has no pool access.
+///
+/// Token-safety: `detail` is git stderr/stdout only (`git/ops.rs::
+/// handle_git_failure`) — argv, where the `http.extraheader` Authorization
+/// value rides since P1-8a, is never echoed by git or by our error chain.
+fn record_autopush_failure(session_id: &str, error: &anyhow::Error) -> anyhow::Result<()> {
+    let detail: String = format!("{error:#}")
+        .chars()
+        .take(FAILURE_DETAIL_MAX_CHARS)
+        .collect();
+    let content = serde_json::json!({
+        "type": "error",
+        "message": format!(
+            "Cloud auto-push failed — this turn's work is NOT backed up to the \
+             git remote and may be lost when the workspace goes to sleep. ({detail})"
+        ),
+    })
+    .to_string();
+    let path = crate::data_dir::db_path()?;
+    let conn = rusqlite::Connection::open(&path)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    let msg_id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    conn.execute(
+        r#"
+            INSERT INTO session_messages (
+              id, session_id, role, content, created_at, sent_at
+            ) VALUES (?1, ?2, 'system', ?3, ?4, ?4)
+        "#,
+        rusqlite::params![msg_id, session_id, content, now],
+    )?;
+    Ok(())
 }
 
 /// Fold the SQLite WAL back into `helmor.db` after a finalized turn so the
@@ -165,6 +246,124 @@ mod tests {
         // Leave the connection open so the write lands in `-wal` (a TRUNCATE
         // checkpoint with no other readers will still fold + truncate it).
         drop(conn);
+    }
+
+    /// Build a file-backed helmor.db (record_autopush_failure opens its own
+    /// connection via `data_dir::db_path`, so in-memory won't do) with the real
+    /// schema and one session row.
+    fn seed_session_db(data_dir: &std::path::Path, session_id: &str) {
+        env::set_var("HELMOR_DATA_DIR", data_dir);
+        let path = crate::data_dir::db_path().unwrap();
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        crate::schema::ensure_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, workspace_id, status) VALUES (?1, 'w1', 'idle')",
+            [session_id],
+        )
+        .unwrap();
+    }
+
+    fn read_system_messages(session_id: &str) -> Vec<String> {
+        let path = crate::data_dir::db_path().unwrap();
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT content FROM session_messages WHERE session_id = ?1 AND role = 'system'",
+            )
+            .unwrap();
+        let rows = stmt
+            .query_map([session_id], |row| row.get::<_, String>(0))
+            .unwrap();
+        rows.map(Result::unwrap).collect()
+    }
+
+    /// Init a git repo with one uncommitted file and an unreachable https
+    /// remote, so `autopush` takes the full commit+push path and the push
+    /// fails — the same shape as a real "creator token revoked / network down"
+    /// failure in the container.
+    fn seed_failing_repo(dir: &std::path::Path) {
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?} failed: {out:?}");
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.name", "t"]);
+        run(&["config", "user.email", "t@example.com"]);
+        // Port 1 on localhost: connection refused immediately, no network.
+        run(&["remote", "add", "origin", "https://127.0.0.1:1/nowhere.git"]);
+        std::fs::write(dir.join("work.txt"), "unpushed work").unwrap();
+    }
+
+    /// P1-5a: a failing push must leave a session-level system notice (not
+    /// just a swallowed tracing::warn), and the notice body must never carry
+    /// auth material — git errors are stderr-only (git/ops.rs
+    /// handle_git_failure), argv (where the `http.extraheader` token rides)
+    /// is never echoed.
+    #[test]
+    fn failed_push_records_session_notice_without_auth_material() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let repo_dir = tempfile::tempdir().unwrap();
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        seed_session_db(data_dir.path(), "s-autopush");
+        seed_failing_repo(repo_dir.path());
+
+        let recorded = autopush_and_record(repo_dir.path(), None, "s-autopush");
+
+        assert!(recorded, "failure must report as recorded");
+        let messages = read_system_messages("s-autopush");
+        assert_eq!(
+            messages.len(),
+            1,
+            "exactly one failure notice: {messages:?}"
+        );
+        let content: serde_json::Value = serde_json::from_str(&messages[0]).unwrap();
+        assert_eq!(content["type"], "error");
+        let body = content["message"].as_str().unwrap();
+        assert!(
+            body.contains("auto-push failed"),
+            "user-facing failure text present: {body}"
+        );
+        // Pin the no-token property: nothing that smells like the argv auth
+        // header may reach the persisted message.
+        for needle in [
+            "Authorization",
+            "Basic ",
+            "extraheader",
+            "x-access-token",
+            "oauth2:",
+        ] {
+            assert!(
+                !body.contains(needle),
+                "auth material {needle:?} leaked into notice: {body}"
+            );
+        }
+        env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    /// A clean push (nothing to do) must not leave any notice row.
+    #[test]
+    fn successful_autopush_records_nothing() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let repo_dir = tempfile::tempdir().unwrap();
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        seed_session_db(data_dir.path(), "s-clean");
+        // Repo with no changes at all → autopush early-returns Ok.
+        let out = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+
+        let recorded = autopush_and_record(repo_dir.path(), None, "s-clean");
+
+        assert!(!recorded);
+        assert!(read_system_messages("s-clean").is_empty());
+        env::remove_var("HELMOR_DATA_DIR");
     }
 
     #[test]

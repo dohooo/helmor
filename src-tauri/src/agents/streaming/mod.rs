@@ -817,8 +817,10 @@ pub(super) fn stream_via_sidecar(
                                         // commit + push the turn's work so the
                                         // ephemeral sandbox never loses code.
                                         cloud_autopush::maybe_autopush_after_turn(
+                                            &app,
                                             &turn_session.ctx.working_directory,
                                             author_id_copy.as_deref(),
+                                            &ctx.helmor_session_id,
                                         );
                                         // Cloud serve mode only (env-gated):
                                         // fold the WAL into helmor.db NOW

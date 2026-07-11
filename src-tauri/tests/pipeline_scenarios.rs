@@ -68,6 +68,27 @@ fn err_role_plain_text() {
     assert_yaml_snapshot!(run_normalized(msgs));
 }
 
+// P1-5a: the cloud auto-push failure notice — a `role=system` row with the
+// existing `type:"error"` content shape, inserted out-of-band by
+// `cloud_autopush::record_autopush_failure`. Locks that it renders as a
+// system error label (via the adapter's error arm) on historical reload.
+#[test]
+fn cloud_autopush_failure_notice_renders_as_system_error() {
+    let content = json!({
+        "type": "error",
+        "message": "Cloud auto-push failed — this turn's work is NOT backed up \
+                    to the git remote and may be lost when the workspace goes \
+                    to sleep. (Failed to push branch main to origin: fatal: \
+                    unable to access 'https://github.com/o/r.git/')",
+    });
+    let msgs = vec![make_record(
+        "ap1",
+        "system",
+        &serde_json::to_string(&content).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
 #[test]
 fn err_raw_json_content() {
     let raw = serde_json::to_string(&json!({ "content": "inner error" })).unwrap();
