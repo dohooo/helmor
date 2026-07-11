@@ -27,6 +27,7 @@ import {
 	lookupMemberId,
 	readBackupHandle,
 	readCloudIdentityMemberId,
+	readForgeIdentityMemberId,
 	TEAM_ID,
 	writeBackupHandle,
 } from "./team";
@@ -1379,43 +1380,58 @@ export async function handleTeamEventPublish(
  *  `HELMOR_FORGE_MEMBERS_PATH`. */
 const FORGE_MEMBERS_PATH = "/tmp/helmor-forge-members.json";
 
-/** Collect every member's forge creds from their `ForgeIdentity` DOs, keyed by
- *  member id. Members with nothing stored are omitted. */
-async function collectMemberForgeCreds(
+/** Per-member entry in the injected forge-creds file. Non-creator entries
+ *  carry ONLY the (non-secret) login — for per-member commit authorship —
+ *  never a token. */
+export type ForgeMemberEntry = {
+	githubToken?: string;
+	glabConfigYml?: string;
+	login?: string;
+	/** Marks the team's forge creator (the only entry carrying tokens); the
+	 *  in-container loader falls back to this entry's tokens for every acting
+	 *  member (creator-identity model, round6 P1-2a). */
+	creator?: boolean;
+};
+
+/** Collect the forge creds to inject, keyed by member id (round6 P1-2a).
+ *  ONLY the team's forge creator (`teams.forge_identity_member_id`,
+ *  first-authorizer-wins) gets their DO minted for tokens — every other
+ *  member contributes just their login (commit authorship), so a container
+ *  compromise leaks at most ONE member's forge tokens instead of the whole
+ *  team's. No creator bound yet → no tokens at all (same as before anyone
+ *  authorized). */
+export async function collectMemberForgeCreds(
 	env: Env,
-): Promise<
-	Record<
-		string,
-		{ githubToken?: string; glabConfigYml?: string; login?: string }
-	>
-> {
+): Promise<Record<string, ForgeMemberEntry>> {
 	const { results } = await env.DB.prepare(
 		"SELECT id, github_login FROM members",
 	).all<{ id: string; github_login: string | null }>();
-	const out: Record<
-		string,
-		{ githubToken?: string; glabConfigYml?: string; login?: string }
-	> = {};
+	const creatorId = await readForgeIdentityMemberId(env).catch(() => null);
+	const out: Record<string, ForgeMemberEntry> = {};
 	for (const row of results ?? []) {
-		try {
-			const stub = env.FORGE_IDENTITY.get(
-				env.FORGE_IDENTITY.idFromName(row.id),
-			);
-			const minted = await stub.mint();
-			if (
-				minted &&
-				!("error" in minted) &&
-				(minted.githubToken || minted.glabConfigYml)
-			) {
-				out[row.id] = {
-					githubToken: minted.githubToken,
-					glabConfigYml: minted.glabConfigYml,
-					login: row.github_login ?? undefined,
-				};
+		const entry: ForgeMemberEntry = { login: row.github_login ?? undefined };
+		if (row.id === creatorId) {
+			try {
+				const stub = env.FORGE_IDENTITY.get(
+					env.FORGE_IDENTITY.idFromName(row.id),
+				);
+				const minted = await stub.mint();
+				if (
+					minted &&
+					!("error" in minted) &&
+					(minted.githubToken || minted.glabConfigYml)
+				) {
+					entry.githubToken = minted.githubToken;
+					entry.glabConfigYml = minted.glabConfigYml;
+					entry.creator = true;
+				}
+			} catch {
+				// Creator DO read failed → inject login-only; forge ops degrade to
+				// unauthenticated until the next (re-)inject, never to another
+				// member's token.
 			}
-		} catch {
-			// Skip a member whose DO read failed; the rest still inject.
 		}
+		if (entry.login || entry.creator) out[row.id] = entry;
 	}
 	return out;
 }

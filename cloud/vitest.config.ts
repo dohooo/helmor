@@ -32,11 +32,14 @@ const workersOptions = {
 		durableObjects: {
 			CODEX_IDENTITY: { className: "CodexIdentity" },
 			CLAUDE_IDENTITY: { className: "ClaudeIdentity" },
+			FORGE_IDENTITY: { className: "ForgeIdentity" },
 		},
 		// A 32-byte AES key, base64-encoded, for the DO's at-rest crypto.
 		// Deterministic so encrypt/decrypt round-trips are reproducible.
 		bindings: {
 			BROKER_ENC_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+			// The single-team routing key putForgeIdentity's teams upsert binds.
+			HELMOR_SANDBOX_ID: "sandbox-test",
 			// The DO refreshes against this in tests; every test stubs `fetch`
 			// to answer it, so an unstubbed / stray call is loud.
 			CODEX_REFRESH_TOKEN_URL_OVERRIDE: "https://oauth.test.invalid/token",

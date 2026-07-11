@@ -24,11 +24,19 @@ CREATE TABLE IF NOT EXISTS members (
 -- persistence). `cloud_identity_member_id` (Phase 1) is the GitHub numeric id
 -- of the member whose `CodexIdentity` Durable Object backs this team's cloud
 -- run identity (v1: one team -> one identity); NULL until a member authorizes.
+-- `forge_identity_member_id` (round6 P1-2a) is the GitHub numeric id of the
+-- team's forge "creator": the FIRST member to store forge creds
+-- (first-authorizer-wins, unlike cloud identity's last-writer-wins). Only this
+-- member's tokens are injected into the container; every push reuses the
+-- creator's forge identity by design (user product ruling — a non-creator
+-- racing to authorize first is the same accepted edge as cloud identity).
+-- NULL until a member authorizes forge.
 CREATE TABLE IF NOT EXISTS teams (
   id                       TEXT PRIMARY KEY,
   sandbox_id               TEXT NOT NULL,
   backup_handle            TEXT,
-  cloud_identity_member_id TEXT
+  cloud_identity_member_id TEXT,
+  forge_identity_member_id TEXT
 );
 
 -- Denormalized, read-only mirror of the sandbox's workspaces (fed by a sync

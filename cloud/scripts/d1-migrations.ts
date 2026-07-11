@@ -27,6 +27,14 @@ export const D1_MIGRATIONS: readonly D1Migration[] = [
 		id: "0001-teams-cloud-identity-member-id",
 		sql: "ALTER TABLE teams ADD COLUMN cloud_identity_member_id TEXT",
 	},
+	{
+		// Round6 P1-2a: the team's forge "creator" binding
+		// (first-forge-authorizer-wins; see schema.sql). Pre-existing DBs hit
+		// "no such column" on putForgeIdentity / collectMemberForgeCreds
+		// without it.
+		id: "0002-teams-forge-identity-member-id",
+		sql: "ALTER TABLE teams ADD COLUMN forge_identity_member_id TEXT",
+	},
 ];
 
 /** Classify a failed `wrangler d1 execute --command` output. SQLite's

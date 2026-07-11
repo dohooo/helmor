@@ -78,6 +78,9 @@ export interface LocalTeamSnapshot {
 			id: string;
 			sandbox_id: string;
 			cloud_identity_member_id: string | null;
+			/** The team's forge "creator" (round6 P1-2a): the FIRST member to
+			 *  store forge creds. Only their tokens reach the container. */
+			forge_identity_member_id?: string | null;
 		}
 	>;
 	members: Record<string, LocalTeamMember>;
@@ -210,6 +213,9 @@ export class InMemoryLocalTeamRegistry implements LocalTeamRegistry {
 			sandbox_id: sandboxId,
 			cloud_identity_member_id:
 				this.snapshotState.teams[LOCAL_TEAM_ID]?.cloud_identity_member_id ??
+				null,
+			forge_identity_member_id:
+				this.snapshotState.teams[LOCAL_TEAM_ID]?.forge_identity_member_id ??
 				null,
 		};
 		this.changed();
@@ -488,8 +494,25 @@ export class InMemoryLocalTeamRegistry implements LocalTeamRegistry {
 		};
 		this.snapshotState.forgeCredentials[memberId] = merged;
 		this.snapshotState.forgeIdentities[memberId] = forgeStatusFromInput(merged);
+		// Bind the team's forge creator (first-authorizer-wins, round6 P1-2a) —
+		// mirrors the Worker's `teams.forge_identity_member_id` semantics. A
+		// later PUT by another member stores their creds but never rebinds.
+		const team = this.snapshotState.teams[LOCAL_TEAM_ID];
+		this.snapshotState.teams[LOCAL_TEAM_ID] = {
+			id: LOCAL_TEAM_ID,
+			sandbox_id: team?.sandbox_id ?? "local-docker",
+			cloud_identity_member_id: team?.cloud_identity_member_id ?? null,
+			forge_identity_member_id: team?.forge_identity_member_id ?? memberId,
+		};
 		this.changed();
 		return { changed: Boolean(prev) };
+	}
+
+	/** The team's bound forge creator (round6 P1-2a), or null. */
+	forgeIdentityMemberId(): string | null {
+		return (
+			this.snapshotState.teams[LOCAL_TEAM_ID]?.forge_identity_member_id ?? null
+		);
 	}
 
 	async getForgeIdentity(memberId: string): Promise<ForgeIdentityStatus> {
@@ -517,6 +540,9 @@ export class InMemoryLocalTeamRegistry implements LocalTeamRegistry {
 			sandbox_id:
 				this.snapshotState.teams[LOCAL_TEAM_ID]?.sandbox_id ?? "local-docker",
 			cloud_identity_member_id: memberId,
+			forge_identity_member_id:
+				this.snapshotState.teams[LOCAL_TEAM_ID]?.forge_identity_member_id ??
+				null,
 		};
 	}
 

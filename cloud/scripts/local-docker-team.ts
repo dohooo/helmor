@@ -360,25 +360,34 @@ function prepareCodexHome() {
  *  hosts.yml the Linux gh reads directly; glab keeps its token in plaintext
  *  config.yml, so that's copied as-is. Best-effort — a missing CLI / logged-out
  *  host just skips that provider. */
-/** Mirror the registry's per-member forge creds to the file the container's
- *  `member_creds` loader reads (`{ memberId: { githubToken?, glabConfigYml? } }`).
- *  Rewritten on every registry change so a live `PUT /team/forge-identity` is
- *  picked up by the running container via mtime reload. */
+/** Mirror the registry's forge creds to the file the container's
+ *  `member_creds` loader reads. Round6 P1-2a: ONLY the team's forge creator
+ *  (`forge_identity_member_id`, first-authorizer-wins) gets tokens — flagged
+ *  `creator: true` — while every other member contributes just their login
+ *  (commit authorship). Rewritten on every registry change so a live
+ *  `PUT /team/forge-identity` is picked up by the container via mtime reload. */
 function writeForgeMembersFile(snapshot: LocalTeamSnapshot) {
 	mkdirSync(forgeMembersDir, { recursive: true, mode: 0o700 });
 	chmodSync(forgeMembersDir, 0o700);
-	// Merge each member's login (for per-member commit authorship) alongside their
-	// creds into the shape the in-container loader reads.
+	const creatorId = Object.values(snapshot.teams ?? {})[0]
+		?.forge_identity_member_id;
 	const members: Record<
 		string,
-		{ githubToken?: string; glabConfigYml?: string; login?: string }
+		{
+			githubToken?: string;
+			glabConfigYml?: string;
+			login?: string;
+			creator?: boolean;
+		}
 	> = {};
-	for (const [memberId, creds] of Object.entries(
-		snapshot.forgeCredentials ?? {},
-	)) {
-		members[memberId] = {
-			...creds,
-			login: snapshot.members[memberId]?.github_login,
+	for (const [memberId, member] of Object.entries(snapshot.members ?? {})) {
+		members[memberId] = { login: member.github_login };
+	}
+	if (creatorId && snapshot.forgeCredentials?.[creatorId]) {
+		members[creatorId] = {
+			...snapshot.forgeCredentials[creatorId],
+			login: snapshot.members[creatorId]?.github_login,
+			creator: true,
 		};
 	}
 	writeFileSync(forgeMembersFile, `${JSON.stringify(members, null, 2)}\n`, {

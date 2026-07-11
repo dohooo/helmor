@@ -1,17 +1,24 @@
 //! Per-member forge credentials available to the running serve host.
 //!
-//! Team mode injects EVERY member's gh/glab creds into the shared container; this
-//! store holds them keyed by member id. The forge layer reads the
-//! [`acting_member`](super::acting_member) and looks up the matching token to run
-//! gh/glab AS that member (true per-member).
+//! Team mode (round6 P1-2a) injects ONE member's tokens into the shared
+//! container: the team's forge "creator" (`teams.forge_identity_member_id`,
+//! first-authorizer-wins), marked `creator: true` in the injected file. Every
+//! other member's entry carries only their (non-secret) login, kept for
+//! per-member commit authorship. Token lookups resolve the acting member's own
+//! entry first and FALL BACK to the creator's tokens — so every member's
+//! git/gh/glab network ops run under the creator's forge identity (the
+//! intended creator-identity model; user product ruling), while a container
+//! compromise can leak at most that single member's tokens.
 //!
 //! Source of truth = a JSON file at `$HELMOR_FORGE_MEMBERS_PATH` (written by the
 //! local-docker launcher / the cloud cold-start injection), shaped
-//! `{ "<memberId>": { "githubToken"?, "glabConfigYml"? } }`. It is reloaded
-//! lazily when its mtime changes, so a live re-sync (the launcher rewrites the
-//! file on a new `PUT /team/forge-identity`) is picked up WITHOUT a container
-//! restart. No env var (desktop) → empty store → every lookup `None` → the forge
-//! layer falls back to the repo-bound account, unchanged.
+//! `{ "<memberId>": { "githubToken"?, "glabConfigYml"?, "login"?, "creator"? } }`.
+//! (Pre-P1-2a files without the `creator` flag still parse — there is simply no
+//! fallback entry.) It is reloaded lazily when its mtime changes, so a live
+//! re-sync (the launcher rewrites the file on a new `PUT /team/forge-identity`)
+//! is picked up WITHOUT a container restart. No env var (desktop) → empty store
+//! → every lookup `None` → the forge layer falls back to the repo-bound
+//! account, unchanged.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -37,6 +44,9 @@ pub(crate) struct MemberForgeCreds {
 #[derive(Default)]
 struct StoreState {
     creds: HashMap<String, MemberForgeCreds>,
+    /// The member id flagged `creator: true` in the injected file — the token
+    /// fallback for acting members without their own tokens (P1-2a).
+    creator_id: Option<String>,
     /// The (path, mtime) the current `creds` were loaded from, to skip reloads
     /// when nothing changed.
     loaded: Option<(PathBuf, Option<SystemTime>)>,
@@ -45,6 +55,8 @@ struct StoreState {
 static STORE: LazyLock<RwLock<StoreState>> = LazyLock::new(|| RwLock::new(StoreState::default()));
 
 /// Wire shape of the injected JSON (camelCase, matching the upload body).
+/// `creator` (P1-2a) marks the single token-bearing entry; absent on
+/// pre-P1-2a files, which therefore load with no fallback entry.
 #[derive(Deserialize)]
 struct RawMemberCreds {
     #[serde(rename = "githubToken")]
@@ -52,6 +64,7 @@ struct RawMemberCreds {
     #[serde(rename = "glabConfigYml")]
     glab_config_yml: Option<String>,
     login: Option<String>,
+    creator: Option<bool>,
 }
 
 fn source_path() -> Option<PathBuf> {
@@ -74,24 +87,31 @@ fn ensure_fresh() {
         }
     }
 
-    let creds = load_file(&path);
+    let (creds, creator_id) = load_file(&path);
     if let Ok(mut state) = STORE.write() {
         state.creds = creds;
+        state.creator_id = creator_id;
         state.loaded = Some((path, mtime));
     }
 }
 
-/// Parse the injected members file into the in-memory shape. A missing /
-/// malformed file yields an empty map (every lookup falls back).
-fn load_file(path: &PathBuf) -> HashMap<String, MemberForgeCreds> {
+/// Parse the injected members file into the in-memory shape plus the creator
+/// member id (the `creator: true` entry, if any). A missing / malformed file
+/// yields an empty map (every lookup falls back).
+fn load_file(path: &PathBuf) -> (HashMap<String, MemberForgeCreds>, Option<String>) {
     let Ok(text) = std::fs::read_to_string(path) else {
-        return HashMap::new();
+        return (HashMap::new(), None);
     };
     let Ok(raw) = serde_json::from_str::<HashMap<String, RawMemberCreds>>(&text) else {
-        return HashMap::new();
+        return (HashMap::new(), None);
     };
-    raw.into_iter()
+    let mut creator_id = None;
+    let creds = raw
+        .into_iter()
         .map(|(member_id, entry)| {
+            if entry.creator == Some(true) {
+                creator_id = Some(member_id.clone());
+            }
             let glab_tokens = entry
                 .glab_config_yml
                 .as_deref()
@@ -106,7 +126,8 @@ fn load_file(path: &PathBuf) -> HashMap<String, MemberForgeCreds> {
                 },
             )
         })
-        .collect()
+        .collect();
+    (creds, creator_id)
 }
 
 fn github_token(member_id: &str) -> Option<String> {
@@ -130,20 +151,40 @@ fn glab_token(member_id: &str, host: &str) -> Option<String> {
         .cloned()
 }
 
-/// The acting member's github.com token, if any (team mode). Only github.com —
-/// GHE falls back to the repo-bound account.
+/// The creator's member id, if the injected file flagged one (team mode).
+fn creator_id() -> Option<String> {
+    STORE.read().ok()?.creator_id.clone()
+}
+
+/// The acting member's github.com token (team mode), falling back to the
+/// creator's token (P1-2a creator-identity model) when the acting member has
+/// none — or when NO acting member is bound at all (e.g. the detached
+/// auto-push thread). Desktop (empty store, no creator) still resolves `None`
+/// everywhere → repo-bound account, unchanged. Only github.com — GHE falls
+/// back to the repo-bound account.
 pub(crate) fn acting_github_token(host: &str) -> Option<String> {
     if host != GITHUB_HOST {
         return None;
     }
     ensure_fresh();
-    github_token(&super::acting_member::current()?)
+    if let Some(member) = super::acting_member::current() {
+        if let Some(token) = github_token(&member) {
+            return Some(token);
+        }
+    }
+    github_token(&creator_id()?)
 }
 
-/// The acting member's glab token for `host`, if any (team mode).
+/// The acting member's glab token for `host` (team mode), with the same
+/// creator fallback as [`acting_github_token`].
 pub(crate) fn acting_glab_token(host: &str) -> Option<String> {
     ensure_fresh();
-    glab_token(&super::acting_member::current()?, host)
+    if let Some(member) = super::acting_member::current() {
+        if let Some(token) = glab_token(&member, host) {
+            return Some(token);
+        }
+    }
+    glab_token(&creator_id()?, host)
 }
 
 /// All of a specific member's forge creds (token + login), for callers that know
@@ -199,8 +240,14 @@ mod tests {
 
     /// Test-only: install creds directly, bypassing the file source.
     fn set_for_test(creds: HashMap<String, MemberForgeCreds>) {
+        set_for_test_with_creator(creds, None);
+    }
+
+    /// Test-only: install creds + a creator binding (P1-2a fallback).
+    fn set_for_test_with_creator(creds: HashMap<String, MemberForgeCreds>, creator: Option<&str>) {
         let mut state = STORE.write().unwrap();
         state.creds = creds;
+        state.creator_id = creator.map(str::to_string);
         // Pin a sentinel so `ensure_fresh` (no env var in tests) never clobbers it.
         state.loaded = None;
     }
@@ -232,8 +279,94 @@ mod tests {
         );
     }
 
+    /// The STORE is process-global; serialize the tests that mutate it.
+    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn load_file_picks_up_creator_flag_and_tolerates_its_absence() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("members.json");
+
+        // New (P1-2a) shape: the creator entry carries tokens + the flag.
+        std::fs::write(
+            &path,
+            r#"{"c1":{"githubToken":"gho_c1","login":"creator","creator":true},"m2":{"login":"member2"}}"#,
+        )
+        .unwrap();
+        let (creds, creator) = load_file(&path);
+        assert_eq!(creator.as_deref(), Some("c1"));
+        assert_eq!(creds["c1"].github_token.as_deref(), Some("gho_c1"));
+        assert_eq!(creds["m2"].github_token, None);
+        assert_eq!(creds["m2"].login.as_deref(), Some("member2"));
+
+        // Pre-P1-2a shape (no creator flag) still parses — just no fallback.
+        std::fs::write(&path, r#"{"m1":{"githubToken":"gho_x"}}"#).unwrap();
+        let (creds, creator) = load_file(&path);
+        assert_eq!(creator, None);
+        assert_eq!(creds["m1"].github_token.as_deref(), Some("gho_x"));
+    }
+
+    #[test]
+    fn tokens_fall_back_to_creator_for_other_members_and_unbound_threads() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        set_for_test_with_creator(
+            HashMap::from([
+                (
+                    "c1".to_string(),
+                    MemberForgeCreds {
+                        github_token: Some("gho_creator".to_string()),
+                        glab_tokens: HashMap::from([(
+                            "ngit.hundun.cn".to_string(),
+                            "glpat_creator".to_string(),
+                        )]),
+                        login: Some("creator".to_string()),
+                    },
+                ),
+                (
+                    "m2".to_string(),
+                    MemberForgeCreds {
+                        github_token: None,
+                        glab_tokens: HashMap::new(),
+                        login: Some("member2".to_string()),
+                    },
+                ),
+            ]),
+            Some("c1"),
+        );
+
+        // A non-creator acting member has no own token → creator's token
+        // (creator-identity model: their pushes run AS the creator).
+        super::super::acting_member::scope_thread(Some("m2".to_string()), || {
+            assert_eq!(
+                acting_github_token("github.com").as_deref(),
+                Some("gho_creator")
+            );
+            assert_eq!(
+                acting_glab_token("ngit.hundun.cn").as_deref(),
+                Some("glpat_creator")
+            );
+            // Hosts nobody has a token for still resolve None.
+            assert_eq!(acting_glab_token("gitlab.com"), None);
+        });
+
+        // No acting member bound (e.g. the detached auto-push thread) → the
+        // creator's token, so post-turn pushes keep working once the remote
+        // URL no longer embeds one (P1-8a).
+        assert_eq!(
+            acting_github_token("github.com").as_deref(),
+            Some("gho_creator")
+        );
+
+        // Authorship lookups do NOT fall back — the commit is still attributed
+        // to the actual member (or the global identity), never to the creator.
+        assert_eq!(member_for("m2").unwrap().login.as_deref(), Some("member2"));
+
+        set_for_test(HashMap::new()); // leave the global store clean
+    }
+
     #[test]
     fn acting_tokens_resolve_via_thread_local() {
+        let _guard = TEST_LOCK.lock().unwrap();
         set_for_test(HashMap::from([(
             "m1".to_string(),
             MemberForgeCreds {
@@ -257,8 +390,11 @@ mod tests {
             assert_eq!(acting_glab_token("gitlab.com").as_deref(), None);
         });
 
-        // No acting member bound → no override (desktop path).
+        // No acting member bound and NO creator flagged → no override
+        // (desktop path, and pre-P1-2a injected files).
         assert_eq!(acting_github_token("github.com"), None);
         assert_eq!(acting_glab_token("ngit.hundun.cn"), None);
+
+        set_for_test(HashMap::new()); // leave the global store clean
     }
 }

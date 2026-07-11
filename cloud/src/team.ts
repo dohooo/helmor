@@ -582,10 +582,14 @@ async function getClaudeIdentity(env: Env): Promise<unknown> {
  * PUT /team/forge-identity (AUTHENTICATED MEMBER) — store the member's forge
  * credentials (gh token / glab config) in their OWN `ForgeIdentity` DO.
  *
- * TRUE per-member (unlike Claude/Codex's "one team -> one identity"): every
- * member's DO is independent, keyed by their own member id. There is NO
- * `teams.cloud_identity_member_id` binding — at cold start the container injects
- * ALL members' creds and the forge layer selects by the acting member.
+ * Every member's DO is independent (keyed by their own member id), but since
+ * round6 P1-2a only ONE member's tokens ever reach the container: the team's
+ * forge "creator", bound below as `teams.forge_identity_member_id` —
+ * FIRST-authorizer-wins (a later PUT by another member still stores their DO,
+ * but never rebinds the column). A non-creator racing to authorize first is
+ * the same accepted TOFU edge as cloud identity. Cold start injects the
+ * creator's tokens only; the forge layer falls back to them for every acting
+ * member (creator-identity model, user product ruling).
  *
  * SECURITY: same trust boundary as the Claude route — member id comes SOLELY
  * from the bearer->`invites.member_id` mapping (never client-supplied). Tokens
@@ -597,7 +601,34 @@ async function putForgeIdentity(
 	input: { githubToken?: string; glabConfigYml?: string },
 ): Promise<{ changed: boolean }> {
 	const stub = env.FORGE_IDENTITY.get(env.FORGE_IDENTITY.idFromName(memberId));
-	return stub.store(input);
+	const result = await stub.store(input);
+
+	// Bind the team's forge creator (first-authorizer-wins). Mirrors
+	// putCloudIdentity's single-row upsert, except COALESCE keeps an existing
+	// binding instead of overwriting it.
+	await env.DB.prepare(
+		`INSERT INTO teams (id, sandbox_id, forge_identity_member_id) VALUES (?1, ?2, ?3)
+		 ON CONFLICT(id) DO UPDATE SET forge_identity_member_id =
+		   COALESCE(teams.forge_identity_member_id, excluded.forge_identity_member_id)`,
+	)
+		.bind(TEAM_ID, env.HELMOR_SANDBOX_ID, memberId)
+		.run();
+
+	return result;
+}
+
+/** Read the team's bound forge-creator member id (round6 P1-2a), or null when
+ *  no member has authorized forge yet. Exported for the cold-start creds
+ *  injection in index.ts (`collectMemberForgeCreds`). */
+export async function readForgeIdentityMemberId(
+	env: Env,
+): Promise<string | null> {
+	const row = await env.DB.prepare(
+		"SELECT forge_identity_member_id FROM teams WHERE id = ?1",
+	)
+		.bind(TEAM_ID)
+		.first<{ forge_identity_member_id: string | null }>();
+	return row?.forge_identity_member_id ?? null;
 }
 
 /**

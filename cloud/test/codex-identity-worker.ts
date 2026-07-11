@@ -9,6 +9,7 @@
 
 export { ClaudeIdentity } from "../src/claude-identity";
 export { CodexIdentity } from "../src/codex-identity";
+export { ForgeIdentity } from "../src/forge-identity";
 
 // A no-op default fetch handler keeps the Worker valid; the tests drive the DO
 // directly via `runInDurableObject`, never through this fetch.
