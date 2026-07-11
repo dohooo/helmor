@@ -29,8 +29,10 @@ Read these only when needed:
 - Exception: Helmor's composer is a Lexical `contenteditable`, not a native input. If `webview_keyboard type` fails with the current bridge, `document.execCommand("insertText", false, text)` after real MCP focus/click is the last-resort smoke-test input path. Label it as a fallback and verify visible state afterward.
 - If you start `ipc_monitor`, always stop it before finishing, even if the task fails.
 - Save screenshots or scratch logs under `.agent-contexts/<task-slug>/` when working inside this repository.
-- If a Settings dialog appears stuck visible with `data-state="closed"`, press `Cmd+,` to reopen it, then `Escape` to close. Verify `document.querySelectorAll('[role="dialog"]').length === 0` and `main[aria-hidden]` is absent.
-- If `webview_execute_js` or console log reads start timing out while screenshots and `driver_session status` still work, restart only the MCP driver session (`driver_session stop appIdentifier=9223`, then `driver_session start port=9223`). Do not restart the Helmor dev build unless the bridge cannot reconnect.
+- Never call `location.reload()` in the webview: it drops the `__TAURI__` injection (console shows `__TAURI__ not available`) and every backend invoke afterwards fails. To reset frontend state, restart the dev app.
+- Bring Helmor frontmost (e.g. `osascript -e 'tell application "Helmor" to activate'`) before interacting or screenshotting. An unfocused window freezes Radix open-animations at `opacity: 0` (`data-state="open"` yet invisible) and screenshot frames can be stale; when unfocused evidence looks blank or outdated, trust DOM reads over screenshots.
+- If a Settings dialog appears stuck visible with `data-state="closed"`, press `Cmd+,` to reopen it, then `Escape` to close. Verify `document.querySelectorAll('[role="dialog"]').length === 0` and `main[aria-hidden]` is absent. An OPEN Settings dialog likewise blocks clicks on the sidebar and menus behind it (`main[aria-hidden]`) — close it first instead of clicking through.
+- If `webview_execute_js` or console log reads start timing out while screenshots and `driver_session status` still work, restart only the MCP driver session (`driver_session stop appIdentifier=9223`, then `driver_session start port=9223`). Do not restart the Helmor dev build unless the bridge cannot reconnect. Separately, scripts that assign `window.fetch` or inject `<script>` can report a bridge timeout even though they executed — confirm the side effect with a follow-up read-only call before retrying.
 - If you launch a disposable app with `HELMOR_DATA_DIR` for validation, create both the data dir and its `run/` subdir first. Missing `run/` can make the UI sync socket fail to bind, leaving backend mutations invisible until you force a reveal or restart.
 - Treat this skill as an operation hint, not an authoritative source of truth. The local UI can drift ahead of these recipes. If a recipe fails three times, stop repeating it mechanically: take a fresh screenshot/snapshot, reason from the visible UI, and inspect the relevant code if needed.
 - Keep this skill self-improving by proposal, not silent mutation. When you discover a better path, missing pitfall, stale selector, or unverified workaround, record a candidate update under `.agent-contexts/<task-slug>/skill-update-candidates.md` with the scenario, failing attempts, evidence, proposed recipe, and verification status. Ask the user before editing this skill unless the current user request explicitly asks you to update it.
@@ -73,7 +75,7 @@ If accessibility fails with `aria-api library not loaded`, immediately use:
 webview_dom_snapshot { "windowId": "main", "type": "structure" }
 ```
 
-Avoid taking screenshots with `maxWidth` when you need click coordinates. A scaled screenshot changes the coordinate space; direct `webview_interact { "x": ..., "y": ... }` expects the webview's real coordinates from `getBoundingClientRect()` or `manage_window info`.
+Avoid taking screenshots with `maxWidth` when you need click coordinates. A scaled screenshot changes the coordinate space; direct `webview_interact { "x": ..., "y": ... }` expects the webview's real coordinates from `getBoundingClientRect()` or `manage_window info`. Screenshots are 2x-retina PNGs and may additionally be displayed scaled — never eyeball click coordinates off a screenshot; always derive CSS-pixel coordinates from `getBoundingClientRect()`, and re-derive them each round (window size shifts across restarts).
 
 Use this stable mental map:
 
@@ -158,6 +160,7 @@ Important constraints:
 - Do not inject Promise chains in handlers for this bridge path; use `transformCallback` callback ids as shown.
 - Keep the helper only for debug sessions. It mutates the visible DOM by adding a small fixed button; remove or ignore it before taking polished UI screenshots.
 - Use the returned raw `scriptType` when reading buffers. Run actions can appear as values such as `run:run:<id>` because action ids may already include a `run:` prefix.
+- In team mode the helper still hits the LOCAL Rust backend: `__TAURI_INTERNALS__.ipc` bypasses the frontend's companion routing, so commands like `list_workspace_groups` return local data, not team data. For deterministic team-backend checks use read-only `wrangler d1 execute` or `/team/*` curl with a member token instead.
 
 ## Workspace Operations
 
@@ -473,6 +476,9 @@ ipc_monitor { "action": "start" }
 ipc_get_captured { "filter": "COMMAND_NAME" }
 ipc_monitor { "action": "stop" }
 ```
+
+- Team-cloud provisioning evidence (dev builds): the provision script's stderr goes through `Stdio::inherit` into the `bun run dev` terminal — NOT `{data_dir}/logs/`. Tail the dev-terminal output (or its redirect file) and grep `[provision]`. Related: `wrangler tail --format json` emits pretty-printed consecutive JSON objects, not JSONL — use a streaming raw decoder, not per-line parsing.
+- Short-lived toasts (sonner, ~4s) are easy to miss with manual screenshots: collect them with a 250ms `setInterval` polling `[data-sonner-toast]` into a `window` variable, then read the variable.
 
 ## Verification Pattern
 
