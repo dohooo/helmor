@@ -231,6 +231,16 @@ fn checkpoint_db() -> anyhow::Result<()> {
 }
 
 fn autopush(workspace_dir: &Path, acting_member: Option<&str>) -> anyhow::Result<()> {
+    // REG-R6-1: chat-room sessions run in a plain directory with no git repo —
+    // "not a repo" is "nothing to push", not a failure, so skip silently
+    // (no warn, no P1-5a notice; before this guard every chat turn recorded a
+    // loud "Cloud auto-push failed" error row). `.git` is a directory in a
+    // normal clone and a file in a linked worktree — `exists()` covers both;
+    // autopush workspace dirs are always the clone root, never a subdirectory.
+    if !workspace_dir.join(".git").exists() {
+        return Ok(());
+    }
+
     // Nothing changed → nothing to do (the common case mid-conversation when a
     // turn only read files / answered a question).
     if git_ops::working_tree_clean(workspace_dir)? {
@@ -397,6 +407,29 @@ mod tests {
                 "auth material {needle:?} leaked into notice: {body}"
             );
         }
+        env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    /// REG-R6-1: a chat-room session's working dir is a plain directory (no
+    /// git repo at all) — "not a repo" is "nothing to push", not a failure.
+    /// It must record NO session notice (before the guard, every chat turn
+    /// left a loud "Cloud auto-push failed" error row via the P1-5a path).
+    #[test]
+    fn non_git_dir_is_silently_skipped_without_notice() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let plain_dir = tempfile::tempdir().unwrap();
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        seed_session_db(data_dir.path(), "s-chat");
+        // No `git init`: this mirrors a team chat room's scratch directory.
+        std::fs::write(plain_dir.path().join("note.txt"), "chat scratch").unwrap();
+
+        let recorded = autopush_and_record(plain_dir.path(), None, "s-chat");
+
+        assert!(!recorded, "non-repo dir must not report a recorded failure");
+        assert!(
+            read_system_messages("s-chat").is_empty(),
+            "non-repo dir must leave zero notice rows"
+        );
         env::remove_var("HELMOR_DATA_DIR");
     }
 
