@@ -13,7 +13,18 @@ import {
 	getSandbox,
 	proxyToSandbox,
 } from "@cloudflare/sandbox";
+import {
+	containerFetchThroughPort,
+	HEALTH_CHECK_TIMEOUT_MS,
+	healthOk,
+	withTimeout,
+} from "./container-net";
 import { parseGlabTokens } from "./forge-config";
+import {
+	FORGE_INJECT_TIMEOUT_MS,
+	FORGE_MEMBERS_PATH,
+	injectForgeMembers,
+} from "./forge-creds";
 import {
 	cachedCatalogResponse,
 	MODEL_CATALOG_RPC,
@@ -26,12 +37,21 @@ import {
 	createWorkerTeamGatewayStore,
 	handleTeamRoute,
 	lookupMemberId,
+	type ReauthRestartableSandbox,
 	readBackupHandle,
 	readCloudIdentityMemberId,
-	readForgeIdentityMemberId,
+	restartSandboxForReauth,
 	TEAM_ID,
 	writeBackupHandle,
 } from "./team";
+
+// Re-exported so the existing consumers/tests keep one import surface.
+export { healthOk } from "./container-net";
+export {
+	collectMemberForgeCreds,
+	type ForgeMemberEntry,
+} from "./forge-creds";
+
 import {
 	deriveGatewayHeaders,
 	inferRepoName,
@@ -300,6 +320,19 @@ export class Sandbox extends CloudflareSandbox<Env> {
 		await this.destroy();
 	}
 
+	/** Round6 P1-4a: the restart a cloud-identity re-authorize needs. Same
+	 *  backup-then-destroy sequence as the idle path above — NEVER a bare
+	 *  `destroy()`, which would roll /home/helmor back to the LAST snapshot and
+	 *  lose everything since (the `/admin/destroy-sandbox` route skips the
+	 *  backup on purpose — that one is a deliberate provision-time reset; this
+	 *  one runs against a LIVE team). Called over DO RPC from
+	 *  `restartSandboxForReauth` (team.ts); callers guard with a `healthOk`
+	 *  probe first, so this only ever runs against a serving container. */
+	async backupThenDestroyForReauth(): Promise<void> {
+		await this.backupBeforeSleep();
+		await this.destroy();
+	}
+
 	private async backupBeforeSleep(): Promise<void> {
 		// HARD rule: this must NEVER block the stop. `onActivityExpired` runs this
 		// THEN calls `super` (the SIGTERM). If `createBackup` HANGS, `super` never
@@ -405,7 +438,6 @@ export interface Env {
 
 /** Boot script staged in the image (Xvfb daemon → readiness → `helmor serve`). */
 const SERVE_START_CMD = "/usr/local/bin/helmor-start-serve";
-const HEALTH_CHECK_TIMEOUT_MS = 1_500;
 const RESTORE_BACKUP_TIMEOUT_MS = 15_000;
 /** R3-E: hard deadline for plain (non-stream) /rpc proxy hops. Generous —
  *  finalize/clone-scale work legitimately takes tens of seconds — but finite,
@@ -436,7 +468,6 @@ export async function proxyPlainRpcWithDeadline(
 }
 const START_PROCESS_TIMEOUT_MS = 90_000;
 const IDENTITY_MINT_TIMEOUT_MS = 15_000;
-const FORGE_INJECT_TIMEOUT_MS = 15_000;
 const SERVE_READY_TIMEOUT_MS = 180_000;
 const SERVE_POLL_INTERVAL_MS = 500;
 
@@ -666,8 +697,12 @@ async function route(
 
 	// Admin/member op: restart the sandbox so the NEXT request cold-starts and
 	// re-mints the Codex auth.json — needed to apply a re-authorization or a
-	// broker change without waiting for an idle sleep. `stop()` is graceful;
-	// /workspace persists and the DB restores from R2 on the next cold start.
+	// broker change without waiting for an idle sleep. Round6 P1-4a: this used
+	// to `stop()` (SIGTERM), which `helmor serve` IGNORES — the VM stayed up
+	// caching the old credential and nothing ever re-minted. Now it goes
+	// through the same guarded backup-then-destroy as the identity reauth
+	// path: snapshot /home/helmor first (a bare destroy would roll back to the
+	// last idle snapshot), then SIGKILL so the next request truly cold-starts.
 	// Gated to an authenticated member (X-Helmor-Member-Id, set by
 	// deriveForwardedRequest) or the admin token.
 	if (url.pathname === "/admin/restart-sandbox") {
@@ -684,11 +719,15 @@ async function route(
 				{ status: 401, headers: { "content-type": "application/json" } },
 			);
 		}
-		await sandbox.stop();
+		await restartSandboxForReauth(
+			sandbox as unknown as ReauthRestartableSandbox,
+			() => healthOk(sandbox, port),
+		);
 		return new Response(
 			JSON.stringify({
 				ok: true,
-				message: "sandbox stopped; the next request cold-starts and re-mints",
+				message:
+					"sandbox backed up and destroyed; the next request cold-starts and re-mints",
 			}),
 			{ headers: { "content-type": "application/json" } },
 		);
@@ -1473,79 +1512,6 @@ export async function handleTeamEventPublish(
 	});
 }
 
-/** Where the per-member forge creds file is written in the container. OUTSIDE
- *  the backed-up `/home` tree so plaintext tokens never enter an R2 backup and a
- *  restore can't shadow a fresh injection. Matches the in-container loader's
- *  `HELMOR_FORGE_MEMBERS_PATH`. */
-const FORGE_MEMBERS_PATH = "/tmp/helmor-forge-members.json";
-
-/** Per-member entry in the injected forge-creds file. Non-creator entries
- *  carry ONLY the (non-secret) login — for per-member commit authorship —
- *  never a token. */
-export type ForgeMemberEntry = {
-	githubToken?: string;
-	glabConfigYml?: string;
-	login?: string;
-	/** Marks the team's forge creator (the only entry carrying tokens); the
-	 *  in-container loader falls back to this entry's tokens for every acting
-	 *  member (creator-identity model, round6 P1-2a). */
-	creator?: boolean;
-};
-
-/** Collect the forge creds to inject, keyed by member id (round6 P1-2a).
- *  ONLY the team's forge creator (`teams.forge_identity_member_id`,
- *  first-authorizer-wins) gets their DO minted for tokens — every other
- *  member contributes just their login (commit authorship), so a container
- *  compromise leaks at most ONE member's forge tokens instead of the whole
- *  team's. No creator bound yet → no tokens at all (same as before anyone
- *  authorized). */
-export async function collectMemberForgeCreds(
-	env: Env,
-): Promise<Record<string, ForgeMemberEntry>> {
-	const { results } = await env.DB.prepare(
-		"SELECT id, github_login FROM members",
-	).all<{ id: string; github_login: string | null }>();
-	const creatorId = await readForgeIdentityMemberId(env).catch(() => null);
-	const out: Record<string, ForgeMemberEntry> = {};
-	for (const row of results ?? []) {
-		const entry: ForgeMemberEntry = { login: row.github_login ?? undefined };
-		if (row.id === creatorId) {
-			try {
-				const stub = env.FORGE_IDENTITY.get(
-					env.FORGE_IDENTITY.idFromName(row.id),
-				);
-				const minted = await stub.mint();
-				if (
-					minted &&
-					!("error" in minted) &&
-					(minted.githubToken || minted.glabConfigYml)
-				) {
-					entry.githubToken = minted.githubToken;
-					entry.glabConfigYml = minted.glabConfigYml;
-					entry.creator = true;
-				}
-			} catch {
-				// Creator DO read failed → inject login-only; forge ops degrade to
-				// unauthenticated until the next (re-)inject, never to another
-				// member's token.
-			}
-		}
-		if (entry.login || entry.creator) out[row.id] = entry;
-	}
-	return out;
-}
-
-/** Write the collected per-member forge creds into the running container at
- *  {@link FORGE_MEMBERS_PATH}. The in-container `member_creds` loader hot-reloads
- *  it via mtime, so this doubles as the live re-inject on re-authorize. */
-async function injectForgeMembers(
-	sandbox: CloudflareSandbox,
-	env: Env,
-): Promise<void> {
-	const creds = await collectMemberForgeCreds(env);
-	await sandbox.writeFile(FORGE_MEMBERS_PATH, JSON.stringify(creds));
-}
-
 /** Rewrite an https clone URL to embed the acting member's forge token so the
  *  SDK `gitCheckout` (which has no auth option) can clone private repos AS that
  *  member. Returns the URL unchanged for non-https, already-credentialed, or
@@ -1950,76 +1916,6 @@ export async function ensureServe(
 		await sleep(pollIntervalMs);
 	} while (Date.now() < deadline);
 	throw new Error("companion /v1/health did not respond in time");
-}
-
-export async function healthOk(
-	sandbox: CloudflareSandbox,
-	port: number,
-	timeoutMs = HEALTH_CHECK_TIMEOUT_MS,
-): Promise<boolean> {
-	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), timeoutMs);
-	try {
-		const res = await withTimeout(
-			containerFetchThroughPort(
-				sandbox,
-				new Request(`http://localhost:${port}/v1/health`, {
-					signal: controller.signal,
-				}),
-				port,
-			),
-			timeoutMs,
-			"health check",
-		);
-		return res.ok;
-	} catch {
-		return false;
-	} finally {
-		clearTimeout(timeout);
-	}
-}
-
-function containerFetchThroughPort(
-	sandbox: CloudflareSandbox,
-	request: Request,
-	port: number,
-): Promise<Response> {
-	const url = new URL(request.url);
-	const target = `http://localhost:${port}${url.pathname}${url.search}`;
-	const proxyUrl = new URL(request.url);
-	proxyUrl.pathname = `/__helmor-companion/${port}${url.pathname}`;
-	const init: RequestInit = {
-		method: request.method,
-		headers: request.headers,
-		signal: request.signal,
-	};
-	if (request.method !== "GET" && request.method !== "HEAD") {
-		init.body = request.body;
-	}
-	const fetchThroughDurableObject = (sandbox as { fetch?: typeof fetch }).fetch;
-	if (fetchThroughDurableObject) {
-		return fetchThroughDurableObject(new Request(proxyUrl.toString(), init));
-	}
-	return sandbox.containerFetch(target, init, port);
-}
-
-async function withTimeout<T>(
-	promise: Promise<T>,
-	timeoutMs: number,
-	label: string,
-): Promise<T> {
-	let timeout: ReturnType<typeof setTimeout> | null = null;
-	const timeoutPromise = new Promise<never>((_, reject) => {
-		timeout = setTimeout(
-			() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
-			timeoutMs,
-		);
-	});
-	try {
-		return await Promise.race([promise, timeoutPromise]);
-	} finally {
-		if (timeout) clearTimeout(timeout);
-	}
 }
 
 /**

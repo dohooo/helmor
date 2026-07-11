@@ -11,6 +11,8 @@
 // All queries are parameterized (`prepare().bind()`) — never interpolated.
 
 import { type DirectoryBackup, getSandbox } from "@cloudflare/sandbox";
+import { healthOk } from "./container-net";
+import { reinjectForgeMembersIfServing } from "./forge-creds";
 import type { Env } from "./index";
 import {
 	handleTeamGatewayRoute,
@@ -22,6 +24,9 @@ import {
 	type TeamSyncInput,
 } from "./team-gateway/core";
 
+// Re-exported from its new home (forge-creds.ts) so existing importers keep
+// working — the binding logic moved next to the injection paths it feeds.
+export { readForgeIdentityMemberId } from "./forge-creds";
 export { TEAM_ID };
 
 /** Map an invite token to its accepted member id (null if unknown/unaccepted). */
@@ -107,9 +112,25 @@ export async function handleTeamRoute(
 	);
 }
 
+/** Side-effect hooks the identity PUT routes fire on success (round6 P1-4a).
+ *  Injectable so tests can pin the WIRING (a PUT must trigger its effect)
+ *  without a real Sandbox DO in the isolate; production uses the defaults. */
+export type TeamGatewayStoreDeps = {
+	/** Live members-file re-inject after a forge (re-)authorization. */
+	reinjectForgeCreds: (env: Env) => Promise<void>;
+	/** Guarded backup-then-destroy after a cloud-identity (re-)authorization. */
+	restartForReauth: (env: Env) => Promise<void>;
+};
+
+const DEFAULT_STORE_DEPS: TeamGatewayStoreDeps = {
+	reinjectForgeCreds: reinjectForgeCredsLive,
+	restartForReauth: stopSandboxForReauth,
+};
+
 export function createWorkerTeamGatewayStore(
 	env: Env,
 	url: URL,
+	deps: TeamGatewayStoreDeps = DEFAULT_STORE_DEPS,
 ): TeamGatewayStore {
 	return {
 		classifyBearer: (token) => classifyBearer(env, token),
@@ -119,13 +140,13 @@ export function createWorkerTeamGatewayStore(
 		listMembers: () => listMembers(env),
 		listWorkspaces: () => listWorkspaces(env),
 		putCodexIdentity: (memberId, input) =>
-			putCloudIdentity(env, memberId, input),
+			putCloudIdentity(env, memberId, input, deps),
 		getCodexIdentity: () => getCloudIdentity(env),
 		putClaudeIdentity: (memberId, input) =>
-			putClaudeIdentity(env, memberId, input),
+			putClaudeIdentity(env, memberId, input, deps),
 		getClaudeIdentity: () => getClaudeIdentity(env),
 		putForgeIdentity: (memberId, input) =>
-			putForgeIdentity(env, memberId, input),
+			putForgeIdentity(env, memberId, input, deps),
 		getForgeIdentity: (memberId) => getForgeIdentity(env, memberId),
 		syncTeamData: (input) => syncTeamData(env, input),
 		listSessions: (workspaceId) => listSessions(env, workspaceId),
@@ -465,6 +486,7 @@ async function putCloudIdentity(
 	env: Env,
 	memberId: string,
 	input: { refreshToken: string; idToken: string },
+	deps: TeamGatewayStoreDeps = DEFAULT_STORE_DEPS,
 ): Promise<{ accountId: string | null; changed: boolean }> {
 	const stub = env.CODEX_IDENTITY.get(env.CODEX_IDENTITY.idFromName(memberId));
 	const result = await stub.putRefreshToken(input.refreshToken, input.idToken);
@@ -479,7 +501,7 @@ async function putCloudIdentity(
 		.bind(TEAM_ID, env.HELMOR_SANDBOX_ID, memberId)
 		.run();
 
-	if (result.changed) await stopSandboxForReauth(env);
+	if (result.changed) await deps.restartForReauth(env);
 	return { accountId: result.accountId, changed: result.changed };
 }
 
@@ -528,6 +550,7 @@ async function putClaudeIdentity(
 	env: Env,
 	memberId: string,
 	input: { oauthToken: string },
+	deps: TeamGatewayStoreDeps = DEFAULT_STORE_DEPS,
 ): Promise<{ changed: boolean }> {
 	const stub = env.CLAUDE_IDENTITY.get(
 		env.CLAUDE_IDENTITY.idFromName(memberId),
@@ -546,27 +569,85 @@ async function putClaudeIdentity(
 		.bind(TEAM_ID, env.HELMOR_SANDBOX_ID, memberId)
 		.run();
 
-	if (result.changed) await stopSandboxForReauth(env);
+	if (result.changed) await deps.restartForReauth(env);
 	return { changed: result.changed };
 }
 
+/** The one Sandbox DO capability the reauth restart needs — the custom
+ *  `backupThenDestroyForReauth` method on the `Sandbox` class (index.ts),
+ *  reached over DO RPC. Structural so tests can pass a spy; the production
+ *  stub is the `getSandbox` proxy, which passes unknown properties through to
+ *  the raw DO stub (verified in the SDK source), so the custom method
+ *  dispatches — only TypeScript needs the cast. */
+export type ReauthRestartableSandbox = {
+	backupThenDestroyForReauth(): Promise<void>;
+};
+
 /**
- * After a cloud identity is (re)authorized, stop the sandbox so the NEXT request
- * cold-starts and re-mints + re-injects the new credential into a FRESH serve.
- * start-serve.sh is idempotent ("bail if serve already running"), so a serve
- * that started BEFORE authorization never picks up the new token on its own —
- * without this the user has to manually restart. Best-effort: the identity is
- * already persisted, so a missing/idle sandbox just cold-starts fresh anyway.
+ * Restart a SERVING sandbox so a just-(re)authorized cloud identity takes
+ * effect (round6 P1-4a). Codex/Claude tokens are `startProcess` ENV on the
+ * serve — they cannot hot-reload — so the container must truly restart:
+ * backup-then-DESTROY (SIGKILL). The previous `stop()` (SIGTERM) was a no-op
+ * lie: `helmor serve` ignores SIGTERM, the VM stayed up (active:1) caching the
+ * old credential, and nothing ever re-minted (see the idle path's
+ * `onActivityExpired` in index.ts for the live-verified evidence).
+ *
+ * Rules (both architect-mandated):
+ *  - NEVER a bare `destroy()`: back up first, or /home/helmor rolls back to
+ *    the last idle snapshot and everything since is lost.
+ *  - `probe` (healthOk, non-waking) gates the whole thing: a container that
+ *    isn't serving has no serve to kill and NO REAL DISK to snapshot (scaled
+ *    to zero = ephemeral disk), so backing it up would capture garbage — skip
+ *    entirely; the next cold start re-mints the fresh identity anyway.
+ *
+ * Best-effort: the identity is already persisted, so any failure here just
+ * means the change applies on the next cold start instead of immediately.
  */
+export async function restartSandboxForReauth(
+	sandbox: ReauthRestartableSandbox,
+	probe: () => Promise<boolean>,
+): Promise<void> {
+	try {
+		if (!(await probe())) return;
+		await sandbox.backupThenDestroyForReauth();
+	} catch {
+		// ignore — store already succeeded; next cold start applies it regardless
+	}
+}
+
+/** Env-wiring for {@link restartSandboxForReauth} (the default
+ *  `restartForReauth` store dep). */
 async function stopSandboxForReauth(env: Env): Promise<void> {
 	try {
 		const sandbox = getSandbox(
 			env.Sandbox,
 			env.HELMOR_SANDBOX_ID ?? "helmor-team-0",
 		);
-		await sandbox.stop();
+		const port = Number(env.HELMOR_COMPANION_PORT ?? "8080");
+		await restartSandboxForReauth(
+			sandbox as unknown as ReauthRestartableSandbox,
+			() => healthOk(sandbox, port),
+		);
 	} catch {
 		// ignore — store already succeeded; next cold start applies it regardless
+	}
+}
+
+/** Env-wiring for the live forge-creds re-inject (the default
+ *  `reinjectForgeCreds` store dep) — see
+ *  {@link reinjectForgeMembersIfServing} for the guard semantics. */
+async function reinjectForgeCredsLive(env: Env): Promise<void> {
+	try {
+		const sandbox = getSandbox(
+			env.Sandbox,
+			env.HELMOR_SANDBOX_ID ?? "helmor-team-0",
+		);
+		const port = Number(env.HELMOR_COMPANION_PORT ?? "8080");
+		await reinjectForgeMembersIfServing(sandbox, env, () =>
+			healthOk(sandbox, port),
+		);
+	} catch {
+		// ignore — creds are persisted in the DO; the next cold start injects them
 	}
 }
 
@@ -612,6 +693,7 @@ async function putForgeIdentity(
 	env: Env,
 	memberId: string,
 	input: { githubToken?: string; glabConfigYml?: string },
+	deps: TeamGatewayStoreDeps = DEFAULT_STORE_DEPS,
 ): Promise<{ changed: boolean }> {
 	const stub = env.FORGE_IDENTITY.get(env.FORGE_IDENTITY.idFromName(memberId));
 	const result = await stub.store(input);
@@ -627,21 +709,17 @@ async function putForgeIdentity(
 		.bind(TEAM_ID, env.HELMOR_SANDBOX_ID, memberId)
 		.run();
 
-	return result;
-}
+	// Round6 P1-4a: rewrite the RUNNING container's members file so the fresh
+	// credential takes effect immediately (mtime hot-reload — no restart).
+	// Before this, injection ran ONLY at cold start, so authorizing forge left
+	// a warm container's creds stale until a manual destroy (class2 rollout:
+	// private clone failed with `could not read Username`). UNCONDITIONAL (no
+	// `result.changed` gate, unlike the cloud-identity restart): one writeFile
+	// is cheap + idempotent, and re-injecting on an unchanged token self-heals
+	// an earlier failed injection.
+	await deps.reinjectForgeCreds(env);
 
-/** Read the team's bound forge-creator member id (round6 P1-2a), or null when
- *  no member has authorized forge yet. Exported for the cold-start creds
- *  injection in index.ts (`collectMemberForgeCreds`). */
-export async function readForgeIdentityMemberId(
-	env: Env,
-): Promise<string | null> {
-	const row = await env.DB.prepare(
-		"SELECT forge_identity_member_id FROM teams WHERE id = ?1",
-	)
-		.bind(TEAM_ID)
-		.first<{ forge_identity_member_id: string | null }>();
-	return row?.forge_identity_member_id ?? null;
+	return result;
 }
 
 /**
