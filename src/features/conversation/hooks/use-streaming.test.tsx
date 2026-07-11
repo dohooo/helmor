@@ -1783,6 +1783,7 @@ describe("useConversationStreaming", () => {
 						context: e.context,
 						payload: e.payload,
 						enqueuedAt: 0,
+						generation: 0,
 					})) ?? [],
 				findById: (id) => {
 					for (const list of store.values()) {
@@ -1793,6 +1794,7 @@ describe("useConversationStreaming", () => {
 								context: match.context,
 								payload: match.payload,
 								enqueuedAt: 0,
+								generation: 0,
 							};
 						}
 					}
@@ -1824,6 +1826,7 @@ describe("useConversationStreaming", () => {
 						context: head.context,
 						payload: head.payload,
 						enqueuedAt: 0,
+						generation: 0,
 					};
 				},
 				clear: (sessionId) => {
@@ -3572,6 +3575,63 @@ describe("useConversationStreaming", () => {
 
 			// Send error set so the composer can show a failure state.
 			expect(result.current.activeSendError).toBe("network error");
+		});
+
+		// Round6 P1-7b: a submit that awaits across an in-place transport switch
+		// (team↔local) must NOT fire the old backend's session ids into the new
+		// transport — it bails before any side effect (no optimistic row, no
+		// send). The pre-send await here is loadRepoPreferences (repoId set).
+		it("drops a submit whose await spanned a transport switch", async () => {
+			const { bumpTransportGeneration } = await import(
+				"@/lib/transport-generation"
+			);
+			apiMocks.loadRepoPreferences.mockImplementation(async () => {
+				// The in-place switch lands while this submit is awaiting.
+				bumpTransportGeneration();
+				return null;
+			});
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+			const { Wrapper, queryClient } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						repoId: "repo-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: noopSubmitQueue,
+						activeStreams: NO_ACTIVE_STREAMS,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "hello from the old backend",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
+			// No send, no optimistic side effects — the submit was dropped whole.
+			expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
+			const cachedThread = queryClient.getQueryData<unknown[]>(
+				sessionThreadCacheKey("session-1"),
+			);
+			expect(!cachedThread || cachedThread.length === 0).toBe(true);
+			expect(warn).toHaveBeenCalledWith(
+				"[conversation] dropped a submit that spanned a transport switch",
+			);
 		});
 
 		// Round6 P1-6a: on the companion transport a room-chat failure arrives

@@ -51,6 +51,7 @@ import {
 import { isTauriRuntime } from "./platform";
 import { getTeamConfig, isTeamModeActive } from "./team-mode";
 import { reportWakeOutcome } from "./team-readiness";
+import { getTransportGeneration } from "./transport-generation";
 
 export type { UnlistenFn };
 
@@ -771,9 +772,15 @@ function flushMicroWrites(): void {
 	const queued = drainMicroWrites();
 	if (queued.length === 0) return;
 	flushingMicroWrites = true;
+	// Round6 P1-7a (in-flight half): a replay pass that spans an in-place
+	// transport switch would send the REST of the old backend's queue to the
+	// new backend. Snapshot the generation and stop the loop the moment it
+	// moves — the remaining entries reference sessions that don't exist there.
+	const flushGeneration = getTransportGeneration();
 	void (async () => {
 		try {
 			for (const { cmd, args } of queued) {
+				if (getTransportGeneration() !== flushGeneration) return;
 				// Still PASSIVE: a replay must never wake the sandbox. If it went
 				// back to sleep mid-flush, companionInvoke re-queues the rest.
 				await companionInvoke(cmd, args).catch(() => {});

@@ -134,6 +134,21 @@ export function drainMicroWrites(): QueuedMicroWrite[] {
 	return drained;
 }
 
+/**
+ * Reset for an in-place transport switch (round6 P1-7a). The queue is a
+ * MODULE-LEVEL singleton, so it survives the app-subtree remount — and its
+ * entries reference the OLD backend's session/workspace ids. Without this,
+ * Team A's queued micro-writes replayed against Team B on the first
+ * successful post-switch invoke (`flushMicroWrites`). Also clears the asleep
+ * flag: it described the old backend's container, and `setCompanionAsleep`
+ * notifies subscribers so the sidebar staleness indicator resets too.
+ * Listeners are NOT cleared — they belong to mounted components.
+ */
+export function resetCompanionAsleep(): void {
+	microWriteQueue = [];
+	setCompanionAsleep(false);
+}
+
 /** Test-only reset. */
 export function resetCompanionAsleepForTests(): void {
 	companionAsleep = false;

@@ -60,6 +60,7 @@ import type { FollowUpBehavior } from "@/lib/settings";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import type { TeamMember } from "@/lib/team-api";
 import { getTeamConfig, isTeamModeActive } from "@/lib/team-mode";
+import { getTransportGeneration } from "@/lib/transport-generation";
 import type { SubmitQueueApi } from "@/lib/use-submit-queue";
 import { showWorkspaceBrokenToast } from "@/lib/workspace-broken-toast";
 import {
@@ -707,6 +708,11 @@ export function useConversationStreaming({
 
 			const contextKey = targetContextKey;
 			const teamModeActive = isTeamModeActive();
+			// Round6 P1-7b: pin the transport identity this submit started under.
+			// A submit that awaits across an in-place team↔local switch would
+			// otherwise fire OLD-backend session ids into the NEW transport —
+			// re-checked after the awaits below, before any send/side effect.
+			const submitGeneration = getTransportGeneration();
 
 			// Optimistic messages render the sender's OWN avatar/name instantly
 			// (the client knows who it is; the server still stamps the trusted
@@ -1000,6 +1006,16 @@ export function useConversationStreaming({
 			const repoPreferences = targetRepoId
 				? await loadRepoPreferences(targetRepoId).catch(() => null)
 				: null;
+			// Round6 P1-7b: the await above may have spanned an in-place transport
+			// switch. Bail BEFORE any side effect (title seed, optimistic append,
+			// the send itself) — this submit's session ids belong to the old
+			// backend; the remounted tree owns the new one.
+			if (getTransportGeneration() !== submitGeneration) {
+				console.warn(
+					"[conversation] dropped a submit that spanned a transport switch",
+				);
+				return;
+			}
 			// The general-preference preamble is prepended ONLY on the wire
 			// to the agent (Rust side stitches it onto `prompt_prefix`).
 			// `trimmedPrompt` is what the user typed — that's what we

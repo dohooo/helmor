@@ -5,6 +5,7 @@ import {
 	isCompanionAsleep,
 	isQueueableMicroWrite,
 	queueMicroWrite,
+	resetCompanionAsleep,
 	resetCompanionAsleepForTests,
 	setCompanionAsleep,
 	shouldDropWhenAsleep,
@@ -57,6 +58,29 @@ describe("companion-asleep", () => {
 		]);
 		// Drain empties the queue.
 		expect(drainMicroWrites()).toEqual([]);
+	});
+
+	// Round6 P1-7a: on an in-place transport switch, Team A's queued
+	// micro-writes must never replay against Team B — the switch effect in
+	// app-providers.tsx calls this alongside resetSubmitQueue.
+	it("resetCompanionAsleep clears the queue + asleep flag but keeps listeners", () => {
+		queueMicroWrite("mark_session_read", { sessionId: "team-a-session" });
+		setCompanionAsleep(true);
+		let notified = 0;
+		const unlisten = subscribeCompanionAsleep(() => {
+			notified += 1;
+		});
+
+		resetCompanionAsleep();
+
+		// Nothing left to replay into the new backend.
+		expect(drainMicroWrites()).toEqual([]);
+		// The stale "old backend is asleep" flag cleared — and the flip NOTIFIED
+		// the still-registered listener (listeners belong to mounted components
+		// and must survive the reset).
+		expect(isCompanionAsleep()).toBe(false);
+		expect(notified).toBe(1);
+		unlisten();
 	});
 
 	it("drops the oldest entry (with a warning) on overflow", () => {

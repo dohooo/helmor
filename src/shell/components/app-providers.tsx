@@ -16,6 +16,7 @@ import { AppOnboarding } from "@/features/onboarding";
 import type { SettingsSection } from "@/features/settings";
 import { SettingsDialog } from "@/features/settings";
 import { InviteAcceptHost } from "@/features/team/invite-accept-host";
+import { resetCompanionAsleep } from "@/lib/companion-asleep";
 import { I18nText } from "@/lib/i18n";
 import { getPendingPairingToken, isRemoteTransport } from "@/lib/ipc";
 import { isTauriRuntime } from "@/lib/platform";
@@ -101,6 +102,10 @@ export function AppProviders({
 		prevGenerationRef.current = transportGeneration;
 		resetStreamingStore();
 		resetSubmitQueue();
+		// Round6 P1-7a: the asleep micro-write queue is a module singleton too —
+		// without this, Team A's queued writes (read marks, pins, drafts)
+		// replayed against Team B on the first successful post-switch invoke.
+		resetCompanionAsleep();
 		resetSessionThreadPagination();
 		void router.navigate({ to: "/" });
 	}, [transportGeneration]);
