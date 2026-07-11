@@ -22,6 +22,7 @@ import {
 	writeModelCatalog,
 } from "./model-catalog";
 import {
+	clearBackupHandle,
 	createWorkerTeamGatewayStore,
 	handleTeamRoute,
 	lookupMemberId,
@@ -1282,6 +1283,58 @@ export function idleBackupOptions(timestamp: string) {
  *  hold in the DO isolate (the OOM-wedge failure mode this guards against). */
 export const BACKUP_SIZE_WARN_BYTES = 50 * 1024 * 1024;
 
+/** SDK parity: `restoreBackup` treats a backup as expired when
+ *  `now + 60s > createdAt + ttl` (see @cloudflare/sandbox doRestoreBackup*).
+ *  The pre-check must use the same buffer so it never says "fine" for an
+ *  archive the SDK would refuse (that residual window falls back to the loud
+ *  path and self-heals on the next wake's pre-check). */
+const BACKUP_EXPIRY_BUFFER_MS = 60 * 1000;
+
+/**
+ * P1-3a deterministic expiry pre-check: is this backup provably gone?
+ *
+ * Reads the SDK's own metadata object (`backups/<id>/meta.json` in the
+ * backup bucket — the exact source `restoreBackup` consults) and applies the
+ * exact same createdAt+ttl arithmetic. Never classifies restore ERRORS —
+ * the SDK's typed BackupExpiredError doesn't reliably survive the DO RPC
+ * boundary (workerd keeps message + prototype name only), and a
+ * message-heuristic that misreads OOM as expiry would silently mask dead
+ * containers. Structurally, this check can only say "gone" when the
+ * metadata source of truth proves it.
+ *
+ * Returns "missing" (meta object deleted — the post-TTL state), "expired"
+ * (meta present, TTL arithmetic says past due), or null (healthy / can't
+ * tell → proceed to restore, where any failure stays loud).
+ */
+export async function backupGone(
+	env: Env,
+	handle: DirectoryBackup,
+): Promise<"expired" | "missing" | null> {
+	try {
+		const meta = await env.BACKUP_BUCKET?.get(`backups/${handle.id}/meta.json`);
+		// R2 `get` returns null for a definitively absent object; `undefined`
+		// here means no bucket binding (can't tell → restore decides).
+		if (meta === null) return "missing";
+		if (!meta) return null;
+		const parsed = (await meta.json()) as {
+			createdAt?: string;
+			ttl?: number;
+		};
+		const createdAt = new Date(parsed.createdAt ?? "").getTime();
+		if (Number.isNaN(createdAt) || typeof parsed.ttl !== "number") {
+			return null;
+		}
+		if (Date.now() + BACKUP_EXPIRY_BUFFER_MS > createdAt + parsed.ttl * 1000) {
+			return "expired";
+		}
+		return null;
+	} catch {
+		// Pre-check is best-effort: on any R2/parse hiccup, proceed to the
+		// real restore — its failures are loud, never silently empty.
+		return null;
+	}
+}
+
 export async function warnIfBackupOversized(
 	env: Env,
 	handle: DirectoryBackup,
@@ -1727,6 +1780,27 @@ export async function ensureServe(
 			return null;
 		});
 		if (!handle) return;
+		// P1-3a: deterministic expiry pre-check BEFORE restore. A team idle
+		// past the backup TTL (3 days) has its archive deleted by CF, but the
+		// D1 handle lived forever — restore then failed every wake and the
+		// (correct for OOM) loud path below wedged the team permanently. The
+		// data was already gone at expiry; the right behavior is a clean
+		// empty start, like a brand-new team. Decided from the SDK's own R2
+		// metadata (same createdAt+ttl arithmetic restoreBackup applies), so
+		// a restore FAILURE is never interpreted as expiry — OOM/timeout/
+		// corruption still hit the loud 503 below (R3-D preserved).
+		const gone = await backupGone(env, handle);
+		if (gone) {
+			console.log(
+				`Phase 2b backup ${gone} (idled past its TTL) — clearing stale handle, clean empty start`,
+			);
+			await clearBackupHandle(env).catch((error) => {
+				// Clear is best-effort: the pre-check reaches the same verdict
+				// on the next wake.
+				console.error("Phase 2b stale-handle clear failed", error);
+			});
+			return;
+		}
 		try {
 			await withTimeout(
 				sandbox.restoreBackup(handle),

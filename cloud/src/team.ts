@@ -79,6 +79,19 @@ export async function writeBackupHandle(
 }
 
 /**
+ * Drop a stale backup handle (P1-3a). Called when the pre-restore expiry
+ * check proves the archive is gone (past TTL / deleted) — the handle would
+ * otherwise wedge every future wake on a restore that can never succeed.
+ */
+export async function clearBackupHandle(env: Env): Promise<void> {
+	await env.DB.prepare(
+		"UPDATE teams SET backup_handle = NULL WHERE sandbox_id = ?1",
+	)
+		.bind(env.HELMOR_SANDBOX_ID)
+		.run();
+}
+
+/**
  * Handle `/team/*` registry routes. Returns null for any other path so the
  * caller falls through to the container proxy.
  */
