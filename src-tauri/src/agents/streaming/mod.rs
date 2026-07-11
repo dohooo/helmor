@@ -269,6 +269,14 @@ pub(super) fn stream_via_sidecar(
 
     tauri::async_runtime::spawn_blocking(move || {
         let stream_started_at = Instant::now();
+        // P1-3b / R2-F4a (Codex half), cloud serve only (env-gated, desktop
+        // no-op): prune `$CODEX_HOME/.tmp` when this worker exits — success,
+        // persist failure, abort, error, or panic (finally semantics; see the
+        // guard's doc for why the exclude-list approach was abandoned). A
+        // LOCAL drops before the closure's captured environment, so the prune
+        // lands before the event Channel's EOF triggers the Worker's
+        // post-stream backup.
+        let _codex_tmp_prune = cloud_autopush::CodexTmpPruneGuard;
         tracing::info!(
             rid = %rid,
             helmor_session_id = ?hsid_copy,

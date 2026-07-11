@@ -1270,20 +1270,32 @@ async function backupAndStore(
  *  derived directory MUST ship its rematerialize path (see
  *  src-tauri/src/workspace/rematerialize.rs) or add it to the backup.
  *
- *  R3-D: `.codex/.tmp` is Codex's plugin-marketplace clone cache — fully
- *  regenerable and 76MB+ in practice. Backing it up inflated the archive
- *  ~700x (70KB → 48MB), and restoring that archive blew the Sandbox DO's
- *  isolate memory limit in `restoreBackup`, wedging EVERY subsequent wake
- *  (P0 OBS-R3C-3). Provider dirs live under the backed-up tree since F4a —
- *  any future cache they grow must be excluded here too (the size alarm
- *  below is the tripwire). */
+ *  🚨 TOP-LEVEL NAMES ONLY — a nested "dir/sub" pattern makes the
+ *  container's (older) squashfs-tools drop the ENTIRE parent tree, not just
+ *  the subdirectory. R2-F4a first hit this on `.claude`; the class3+4
+ *  rollout autopsy (2026-07-11) caught it again on `.codex`: the nested
+ *  `.codex/.tmp` exclude silently dropped the whole `.codex` session-thread
+ *  tree from BOTH backup paths, so Codex resume came back empty after every
+ *  sleep. Pinned by idle-backup-excludes.test.ts (no `/` in any pattern).
+ *
+ *  R3-D OOM guard, relocated: `.codex/.tmp` (Codex's plugin-marketplace
+ *  clone cache, 76MB+ — backing it up once inflated the archive ~700x,
+ *  70KB → 48MB, and OOM-wedged every restore, P0 OBS-R3C-3) is now pruned
+ *  CONTAINER-SIDE with finally semantics at the end of every agent turn —
+ *  success, persist failure, abort, or panic (src-tauri
+ *  cloud_autopush::CodexTmpPruneGuard) — so mksquashfs never sees it and
+ *  this list stays top-level-only. Accepted residual window (architect,
+ *  2026-07-11): the idle expiry deliberately ignores in-flight requests
+ *  (R3-A), so a LONG turn can be snapshotted mid-flight before its
+ *  end-of-turn prune — that one archive may carry a fat `.codex/.tmp`.
+ *  Rare (long turn × idle race), NOT silent: `warnIfBackupOversized` is
+ *  the tripwire, and the next turn's prune self-heals the disk. */
 export const BACKUP_EXCLUDES = [
 	"workspaces",
 	"cache",
 	"logs",
 	"run",
 	"local-llm",
-	".codex/.tmp",
 ];
 
 /** Options for the idle (pre-sleep) backup taken by `backupBeforeSleep`.
@@ -1295,14 +1307,15 @@ export const BACKUP_EXCLUDES = [
  *  had already fixed (P1-3b). One list, one place to maintain.
  *
  *  R2-F4a history, for the next person tempted to fork this list: nested
- *  "dir/sub" exclude patterns once made mksquashfs drop the ENTIRE `.claude`
- *  tree from idle archives. `.codex/.tmp` IS such a nested pattern — the
- *  post-turn path has since carried it safely (R3-D autopsy: 48MB→8KB with
- *  `.claude` intact), and both paths call the same SDK `createBackup`
- *  (localBucket mode), but the idle archive still gets its own autopsy at
- *  rollout before this is trusted (`.claude`/`.codex` present, `.codex/.tmp`
- *  absent). If that autopsy ever finds `.claude` missing, prune container-
- *  side instead of re-forking the excludes.
+ *  "dir/sub" exclude patterns make the container's mksquashfs drop the
+ *  ENTIRE parent tree — it hit `.claude` first, and the class3+4 rollout
+ *  autopsy (2026-07-11) proved the then-listed `.codex/.tmp` pattern was
+ *  dropping the whole `.codex` tree from BOTH paths all along (the R3-D
+ *  autopsy had only asserted `.claude` + size, never `.codex`). The list is
+ *  now top-level-only; `.codex/.tmp` is pruned container-side instead (see
+ *  BACKUP_EXCLUDES doc above). The rollout autopsy contract for this path:
+ *  `.claude` present, `.codex` present, `.codex/.tmp` absent, archive
+ *  single-digit MB.
  *
  *  Exported so a test can pin `excludes` to BACKUP_EXCLUDES by identity. */
 export function idleBackupOptions(timestamp: string) {

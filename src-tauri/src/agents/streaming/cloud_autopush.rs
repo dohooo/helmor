@@ -159,6 +159,62 @@ pub(super) fn maybe_checkpoint_db_after_turn() {
     }
 }
 
+/// P1-3b / R2-F4a (Codex half): `$CODEX_HOME/.tmp` is Codex's
+/// plugin-marketplace clone cache — 76MB+ of regenerable state under the
+/// backed-up `/home/helmor` tree. It used to be handled by a nested
+/// `.codex/.tmp` entry in the Worker's `BACKUP_EXCLUDES`, but the container's
+/// older squashfs-tools drops the ENTIRE parent tree for a nested exclude
+/// pattern — the class3+4 rollout autopsy (2026-07-11) proved the whole
+/// `.codex` session-thread tree was silently missing from BOTH backup paths,
+/// so Codex resume came back empty after every sleep. The exclude list is
+/// top-level-only now (pinned in cloud/test/idle-backup-excludes.test.ts) and
+/// the cache is pruned HERE instead, before any backup can see it.
+///
+/// FINALLY semantics (architect ruling, 2026-07-11): the guard fires when the
+/// stream worker exits — success, persist failure, abort, error, or panic —
+/// so a failed turn can never leave a fat `.tmp` for the idle backup to
+/// swallow (that was hole "a" in the post-turn-only design). Residual window,
+/// accepted + non-silent: the idle expiry deliberately ignores in-flight
+/// requests (R3-A), so a LONG turn can be snapshotted mid-flight before this
+/// guard fires — the Worker's `warnIfBackupOversized` is the tripwire and the
+/// next turn's prune self-heals the disk.
+///
+/// Drop-order note for the wiring site: this is a LOCAL of the stream worker
+/// closure, so it drops before the closure's captured environment — including
+/// the event `Channel` whose EOF triggers the Worker's post-stream backup —
+/// which makes the post-turn archive deterministically pruned too.
+pub(super) struct CodexTmpPruneGuard;
+
+impl Drop for CodexTmpPruneGuard {
+    fn drop(&mut self) {
+        prune_codex_tmp();
+    }
+}
+
+/// Remove `$CODEX_HOME/.tmp` (best-effort). No-op on the desktop (env gate)
+/// and when the directory is already absent. A real removal failure is a
+/// WARN, never a panic — but it means the next backup may be oversized, so
+/// the message points at the size-warn tripwire.
+fn prune_codex_tmp() {
+    if !enabled() {
+        return;
+    }
+    let tmp = crate::platform::paths::codex_home_dir().join(".tmp");
+    match std::fs::remove_dir_all(&tmp) {
+        Ok(()) => {
+            tracing::debug!(dir = %tmp.display(), "pruned codex tmp cache ahead of backup");
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                dir = %tmp.display(),
+                "codex tmp prune failed — the next backup may exceed the size budget (warnIfBackupOversized is the tripwire)"
+            );
+        }
+    }
+}
+
 fn checkpoint_db() -> anyhow::Result<()> {
     let path = crate::data_dir::db_path()?;
     // Short-lived connection: open, checkpoint, drop. This seam runs after
@@ -411,5 +467,89 @@ mod tests {
 
         env::remove_var(AUTOPUSH_ENV);
         env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    /// Build a fake `$CODEX_HOME` with a `.tmp` cache marker and a sibling
+    /// `sessions/` tree that must survive the prune.
+    fn seed_codex_home(codex_home: &std::path::Path) {
+        std::fs::create_dir_all(codex_home.join(".tmp")).unwrap();
+        std::fs::write(codex_home.join(".tmp/cache-marker"), "exclude-me").unwrap();
+        std::fs::create_dir_all(codex_home.join("sessions")).unwrap();
+        std::fs::write(codex_home.join("sessions/keep"), "keep-me").unwrap();
+    }
+
+    #[test]
+    fn prune_guard_removes_tmp_and_keeps_session_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        env::set_var(AUTOPUSH_ENV, "1");
+        env::set_var("CODEX_HOME", dir.path());
+        seed_codex_home(dir.path());
+
+        drop(CodexTmpPruneGuard);
+
+        assert!(
+            !dir.path().join(".tmp").exists(),
+            ".tmp cache pruned before any backup can see it"
+        );
+        assert!(
+            dir.path().join("sessions/keep").exists(),
+            "sibling session tree (the R2-F4a payload) survives"
+        );
+
+        env::remove_var(AUTOPUSH_ENV);
+        env::remove_var("CODEX_HOME");
+    }
+
+    #[test]
+    fn prune_guard_fires_on_panic_too_finally_semantics() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        env::set_var(AUTOPUSH_ENV, "1");
+        env::set_var("CODEX_HOME", dir.path());
+        seed_codex_home(dir.path());
+
+        // The architect-ruled "finally" contract: a turn that dies mid-flight
+        // (persist failure surfaces as an early exit; worst case a panic)
+        // must STILL prune — otherwise the idle backup swallows the fat
+        // `.tmp` now that the exclude list no longer shields it (hole "a").
+        let result = std::panic::catch_unwind(|| {
+            let _prune = CodexTmpPruneGuard;
+            panic!("simulated mid-turn death");
+        });
+        assert!(result.is_err(), "the panic itself propagates");
+        assert!(
+            !dir.path().join(".tmp").exists(),
+            ".tmp pruned even when the worker dies (finally semantics)"
+        );
+
+        env::remove_var(AUTOPUSH_ENV);
+        env::remove_var("CODEX_HOME");
+    }
+
+    #[test]
+    fn prune_is_a_noop_on_the_desktop_and_on_missing_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        env::set_var("CODEX_HOME", dir.path());
+        seed_codex_home(dir.path());
+
+        // Desktop (gate unset): the user's real ~/.codex/.tmp must never be
+        // touched.
+        env::remove_var(AUTOPUSH_ENV);
+        drop(CodexTmpPruneGuard);
+        assert!(
+            dir.path().join(".tmp/cache-marker").exists(),
+            "desktop is a hard no-op"
+        );
+
+        // Gate on + directory already absent: silent success, no panic.
+        env::set_var(AUTOPUSH_ENV, "1");
+        std::fs::remove_dir_all(dir.path().join(".tmp")).unwrap();
+        drop(CodexTmpPruneGuard);
+        assert!(!dir.path().join(".tmp").exists());
+
+        env::remove_var(AUTOPUSH_ENV);
+        env::remove_var("CODEX_HOME");
     }
 }

@@ -107,10 +107,15 @@ describe("R3-D backup/restore health", () => {
 		expect(startCalls).toBe(1);
 	});
 
-	// The excludes list is the P0's actual fix: `.codex/.tmp` (the Codex
-	// plugin-marketplace cache) inflated the archive 700x and OOM'd restore.
-	it("backup excludes cover the regenerable provider cache", () => {
-		expect(BACKUP_EXCLUDES).toContain(".codex/.tmp");
+	// R3-D's original fix listed `.codex/.tmp` here — but the class3+4
+	// rollout autopsy (2026-07-11, R2-F4a Codex half) proved the container's
+	// older mksquashfs drops the ENTIRE parent tree for a nested exclude, so
+	// that pattern was silently discarding the whole `.codex` session-thread
+	// tree. The OOM guard moved container-side (cloud_autopush::
+	// CodexTmpPruneGuard, finally semantics per turn); the list is
+	// top-level-only now (pinned in idle-backup-excludes.test.ts).
+	it("backup excludes stay top-level disposable trees (no provider-cache nesting)", () => {
+		expect(BACKUP_EXCLUDES).not.toContain(".codex/.tmp");
 		// Pre-existing disposable trees stay excluded.
 		for (const dir of ["workspaces", "cache", "logs", "run", "local-llm"]) {
 			expect(BACKUP_EXCLUDES).toContain(dir);
