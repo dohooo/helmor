@@ -3574,6 +3574,79 @@ describe("useConversationStreaming", () => {
 			expect(result.current.activeSendError).toBe("network error");
 		});
 
+		// Round6 P1-6a: on the companion transport a room-chat failure arrives
+		// IN-BAND — the 200 x-ndjson headers already left, so the Rust side
+		// (stream.rs run_and_surface, R3-B) delivers the terminal error as a
+		// `{kind:"error"}` event on the callback while the invoke RESOLVES.
+		// The old no-op callback swallowed it: the optimistic bubble stayed up
+		// over a message that never persisted.
+		it("team mode + no @agent + IN-BAND error event: rolls back + surfaces the error", async () => {
+			teamModeMocks.isTeamModeActive.mockReturnValue(true);
+			apiMocks.postRoomChatMessage.mockImplementation(
+				async (
+					_request: unknown,
+					onEvent: (event: {
+						kind: string;
+						message: string;
+						persisted: boolean;
+						internal: boolean;
+					}) => void,
+				) => {
+					// The stream carries the terminal error, then the invoke
+					// resolves normally — NO rejection on this transport.
+					onEvent({
+						kind: "error",
+						message: "Failed to persist room chat message: DB write failed",
+						persisted: false,
+						internal: false,
+					});
+				},
+			);
+
+			const { Wrapper, queryClient } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: noopSubmitQueue,
+						activeStreams: NO_ACTIVE_STREAMS,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "hello team",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
+			expect(apiMocks.postRoomChatMessage).toHaveBeenCalledOnce();
+
+			// The optimistic bubble must NOT survive — the message never persisted.
+			const cachedThread = queryClient.getQueryData<unknown[]>(
+				sessionThreadCacheKey("session-1"),
+			);
+			expect(!cachedThread || cachedThread.length === 0).toBe(true);
+
+			// And the failure is user-visible, not swallowed.
+			expect(result.current.activeSendError).toBe(
+				"Failed to persist room chat message: DB write failed",
+			);
+		});
+
 		it("team mode + @agent: promptPrefix contains room-context block, prompt stays trimmedPrompt", async () => {
 			// Verifies the context-carry assembler fold: when there are
 			// isRoomChat messages since the last agent turn, the

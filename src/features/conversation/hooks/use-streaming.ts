@@ -766,24 +766,10 @@ export function useConversationStreaming({
 					storeActions.setComposerRestore(null);
 				}
 				storeActions.setSendError(contextKey, null);
-				try {
-					await postRoomChatMessage(
-						{
-							helmorSessionId: targetSessionId,
-							clientMessageId: roomMsgId,
-							prompt: trimmedPrompt,
-							files: filePaths.length > 0 ? filePaths : null,
-							images: imagePaths.length > 0 ? imagePaths : null,
-							pastedTexts: pastedTexts.length > 0 ? pastedTexts : null,
-						},
-						() => {
-							// Room-chat broadcast events are handled by the session stream
-							// watcher (use-watch-session-stream). This callback is a no-op
-							// on the sender side — the optimistic bubble above is already
-							// in the cache and will be reconciled on reload/reload.
-						},
-					);
-				} catch (err) {
+				// Shared failure path for BOTH error transports (round6 P1-6a):
+				// roll the optimistic bubble back, restore the draft, surface the
+				// error — the message must never pretend it was sent.
+				const failRoomChat = (message: string) => {
 					restoreSnapshot(queryClient, targetSessionId, rollback);
 					if (!isOverride) {
 						storeActions.setComposerRestore({
@@ -796,10 +782,35 @@ export function useConversationStreaming({
 							nonce: Date.now(),
 						});
 					}
-					storeActions.setSendError(
-						contextKey,
-						err instanceof Error ? err.message : String(err),
+					storeActions.setSendError(contextKey, message);
+				};
+				try {
+					await postRoomChatMessage(
+						{
+							helmorSessionId: targetSessionId,
+							clientMessageId: roomMsgId,
+							prompt: trimmedPrompt,
+							files: filePaths.length > 0 ? filePaths : null,
+							images: imagePaths.length > 0 ? imagePaths : null,
+							pastedTexts: pastedTexts.length > 0 ? pastedTexts : null,
+						},
+						(event) => {
+							// Success delivery rides the session-stream watcher / broadcast
+							// (room chat never streams content over THIS channel) — but a
+							// FAILURE does arrive here on the companion transport: the 200
+							// x-ndjson headers have already left, so the Rust side
+							// (stream.rs run_and_surface, R3-B) sends the terminal error
+							// IN-BAND as `{kind:"error"}`. Swallowing it (the old no-op)
+							// left the optimistic bubble up over a message that never
+							// persisted (round6 P1-6a). On the desktop transport the same
+							// failure rejects the invoke → the catch below.
+							if (event.kind === "error") {
+								failRoomChat(event.message);
+							}
+						},
 					);
+				} catch (err) {
+					failRoomChat(err instanceof Error ? err.message : String(err));
 				}
 				return;
 			}
