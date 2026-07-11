@@ -587,8 +587,23 @@ export function WorkspaceHoverCard({
 				closeDuringDrag,
 			);
 	}, []);
+	// Radix hover-card's internal `handleOpen` (called from both trigger
+	// pointerenter and focus, i.e. twice per click) overwrites its pending
+	// open-timer ref without clearing it, so the earlier timer is orphaned and
+	// survives unmount (its unmount cleanup only clears the latest ref). When
+	// that orphan fires it synchronously invokes this controlled callback —
+	// after unmount, and in vitest potentially after environment teardown,
+	// where touching `document` throws. Invalidate the callback on unmount.
+	const unmountedRef = useRef(false);
+	useEffect(() => {
+		unmountedRef.current = false;
+		return () => {
+			unmountedRef.current = true;
+		};
+	}, []);
 	const handleOpenChange = useCallback(
 		(open: boolean) => {
+			if (unmountedRef.current) return;
 			if (
 				open &&
 				document.documentElement.getAttribute(
