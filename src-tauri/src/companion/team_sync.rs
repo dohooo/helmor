@@ -376,6 +376,13 @@ async fn post_sync(cfg: &SyncConfig, payload: &SyncPayload) -> Result<()> {
 ///   - Stage C realtime: relay EVERY event to the team hub (`/team/event`) so
 ///     members see it live WITHOUT the container holding a desktop stream.
 ///   - Stage B data mirror: the session/message subset → D1 (`/team/sync`).
+///
+/// ORDERING (round6 P1-6b): for an event with a Stage-B target, the broadcast
+/// rides the SAME task as the mirror and fires only after the mirror attempt
+/// completes. Broadcasting concurrently let the (single-POST) broadcast beat
+/// the mirror's read-DB+PUT to the receivers, whose active refetch then read a
+/// D1 that didn't have the row yet — the WP3 race R2-E's correction A reopened.
+/// Events with no Stage-B target keep the immediate broadcast path.
 pub fn on_ui_mutation<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: &UiMutationEvent) {
     // `try_state` (not `state`) so this never panics in a test app that didn't
     // `.manage(TeamSync)`. Gates both jobs below.
@@ -386,24 +393,31 @@ pub fn on_ui_mutation<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: &UiMu
         return;
     }
 
-    // Stage C — realtime: broadcast EVERY ui-mutation. Serialize here (the event
-    // is borrowed) then move the owned line into the spawn.
-    if let Ok(body) = serde_json::to_string(&EventEnvelope {
+    // Serialize the broadcast envelope up front (the event is borrowed).
+    let broadcast_body = serde_json::to_string(&EventEnvelope {
         event: "ui-mutation",
         data: event,
-    }) {
-        let app_evt = app.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Some(sync) = app_evt.try_state::<TeamSync>() {
-                if let Err(error) = sync.broadcast_event(body).await {
-                    tracing::warn!(error = %format!("{error:#}"), "team_sync: event broadcast failed");
-                }
-            }
-        });
-    }
+    })
+    .ok();
 
     // Stage B — data mirror: only the session/message subset hits D1.
     let (session_id, workspace_id) = stage_b_targets(event);
+
+    // Stage C — realtime. Mirrored events DEFER their broadcast to the Stage-B
+    // task below (P1-6b, see the fn docs); everything else broadcasts now.
+    if !defers_broadcast(event) {
+        if let Some(body) = broadcast_body.clone() {
+            let app_evt = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Some(sync) = app_evt.try_state::<TeamSync>() {
+                    if let Err(error) = sync.broadcast_event(body).await {
+                        tracing::warn!(error = %format!("{error:#}"), "team_sync: event broadcast failed");
+                    }
+                }
+            });
+        }
+    }
+
     if session_id.is_none() && workspace_id.is_none() {
         return;
     }
@@ -427,6 +441,11 @@ pub fn on_ui_mutation<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: &UiMu
         });
     }
 
+    // One task: mirror to completion, THEN broadcast (P1-6b). A failed mirror
+    // attempt still broadcasts (best-effort — the receiver falls back to the
+    // next event / backfill reconcile), but the systematic broadcast-first
+    // race is gone: by broadcast time the row is in D1 on every success path.
+    let deferred_broadcast = defers_broadcast(event).then_some(broadcast_body).flatten();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let Some(sync) = app.try_state::<TeamSync>() else {
@@ -442,7 +461,21 @@ pub fn on_ui_mutation<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: &UiMu
                 tracing::warn!(error = %format!("{error:#}"), workspace_id = %wid, "team_sync: workspace mirror failed");
             }
         }
+        if let Some(body) = deferred_broadcast {
+            if let Err(error) = sync.broadcast_event(body).await {
+                tracing::warn!(error = %format!("{error:#}"), "team_sync: event broadcast failed");
+            }
+        }
     });
+}
+
+/// Round6 P1-6b: does this event's broadcast wait for its Stage-B mirror?
+/// Exactly the events with a Stage-B target — their receivers react by READING
+/// the D1 mirror, so the row must be there before the event fans out. Pure so
+/// the classification is unit-testable next to `stage_b_targets`.
+fn defers_broadcast(event: &UiMutationEvent) -> bool {
+    let (session_id, workspace_id) = stage_b_targets(event);
+    session_id.is_some() || workspace_id.is_some()
 }
 
 /// Classify which Stage B mirror target(s) a ui-mutation drives: `(session_id,
@@ -729,5 +762,47 @@ mod tests {
         });
         assert_eq!(session_id, None);
         assert_eq!(workspace_id.as_deref(), Some("w1"));
+    }
+
+    /// Round6 P1-6b: every Stage-B-mirrored event DEFERS its broadcast until
+    /// the mirror attempt completes — the receivers' active refetch reads the
+    /// D1 mirror, so broadcasting first let them read a D1 without the row
+    /// (the WP3 race R2-E's correction A reopened). The deferral rides
+    /// `on_ui_mutation`'s single Stage-B task (mirror awaits, then broadcast),
+    /// so pinning the CLASSIFICATION here pins which events take that path.
+    #[test]
+    fn stage_b_mirrored_events_defer_their_broadcast() {
+        for event in [
+            UiMutationEvent::RoomChatMessageAppended {
+                session_id: "s1".into(),
+                author_id: Some("42".into()),
+            },
+            UiMutationEvent::SessionMessagesAppended {
+                session_id: "s1".into(),
+            },
+            UiMutationEvent::SessionTurnPersisted {
+                session_id: "s1".into(),
+            },
+            UiMutationEvent::SessionListChanged {
+                workspace_id: "w1".into(),
+            },
+        ] {
+            assert!(
+                defers_broadcast(&event),
+                "Stage-B event must defer its broadcast: {event:?}"
+            );
+        }
+    }
+
+    /// Non-mirrored events keep the immediate broadcast path — deferral would
+    /// add mirror-RTT latency to realtime signals with no D1 read to protect.
+    #[test]
+    fn non_mirrored_events_broadcast_immediately() {
+        assert!(!defers_broadcast(&UiMutationEvent::WorkspaceListChanged));
+        assert!(!defers_broadcast(
+            &UiMutationEvent::WorkspaceGitStateChanged {
+                workspace_id: "w1".into(),
+            }
+        ));
     }
 }

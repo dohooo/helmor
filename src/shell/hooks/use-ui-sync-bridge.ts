@@ -146,10 +146,19 @@ export function handleUiMutation(
 			// R2-E (correction A): the watch stream is TURN-DRIVEN now, so a
 			// teammate's room chat (no turn) can't arrive over it anymore. For
 			// the session the user is LOOKING AT, refetch actively — it reads
-			// the D1 mirror (Stage B wrote the row before this event fanned
-			// out), not the container, and the WP3 merge rules make an active
-			// refetch safe (the historical "none" was belt-and-suspenders, not
-			// a requirement). Background sessions keep the cheap mark-stale.
+			// the D1 mirror, not the container, and the WP3 merge rules make an
+			// active refetch safe (the historical "none" was belt-and-suspenders,
+			// not a requirement). Background sessions keep the cheap mark-stale.
+			//
+			// Round6 P1-6b: this active refetch is only correct because the
+			// container SEQUENCES the fan-out — team_sync.rs's on_ui_mutation
+			// broadcasts a Stage-B-mirrored event AFTER its mirror attempt
+			// completes, so by the time this handler runs, the row is in D1 on
+			// every success path. (Correction A originally shipped with the two
+			// legs racing concurrently — the broadcast usually won and this
+			// refetch read a D1 without the row.) The one residual gap is a
+			// FAILED best-effort mirror: the broadcast still goes out and this
+			// refetch misses; the next event / startup backfill reconciles.
 			const displayedSessionId = options.getDisplayedSessionId?.() ?? null;
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.sessionMessages(event.sessionId),
