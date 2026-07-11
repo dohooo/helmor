@@ -1171,7 +1171,9 @@ fn resolve_push_status(
 /// Process-level auth args for a network op against `remote` in `dir`
 /// (team-cloud member tokens; empty on desktop / ssh remotes — zero
 /// behavior change). See `workspace::rematerialize::auth_config_args`.
-fn network_auth_args(dir: &str, remote: &str) -> Vec<String> {
+/// `pub(crate)` since P1-8a: the remote URL no longer embeds a token, so
+/// EVERY network git verb must inject auth this way.
+pub(crate) fn network_auth_args(dir: &str, remote: &str) -> Vec<String> {
     let url = run_git(["-C", dir, "remote", "get-url", remote], None).unwrap_or_default();
     crate::workspace::rematerialize::auth_config_args(&url)
 }
@@ -1362,7 +1364,12 @@ pub fn verify_remote_ref_exists(workspace_dir: &Path, remote: &str, branch: &str
 /// published — e.g. a push that never updated the local ref, or a pruned ref.
 pub fn remote_branch_exists(workspace_dir: &Path, remote: &str, branch: &str) -> bool {
     let workspace_dir = workspace_dir.display().to_string();
-    run_git_with_timeout(
+    // P1-8a: the remote URL no longer embeds a token (scrubbed after clone),
+    // so this network call needs the same per-invocation auth injection as
+    // push/fetch — otherwise private-repo publish checks silently report
+    // "missing" in team mode.
+    let mut args = network_auth_args(&workspace_dir, remote);
+    args.extend(
         [
             "-C",
             workspace_dir.as_str(),
@@ -1371,12 +1378,12 @@ pub fn remote_branch_exists(workspace_dir: &Path, remote: &str, branch: &str) ->
             "--heads",
             remote,
             branch,
-        ],
-        None,
-        GIT_NETWORK_TIMEOUT,
-    )
-    .map(|output| !output.trim().is_empty())
-    .unwrap_or(false)
+        ]
+        .map(String::from),
+    );
+    run_git_with_timeout(&args, None, GIT_NETWORK_TIMEOUT)
+        .map(|output| !output.trim().is_empty())
+        .unwrap_or(false)
 }
 
 /// Resolve `refs/remotes/<remote>/<branch>` to its current commit SHA.

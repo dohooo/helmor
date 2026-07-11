@@ -1799,19 +1799,24 @@ fn resolve_head_from_local_symbolic_ref(repo_root: &Path, remote: &str) -> Resul
 /// Query the remote via `git ls-remote --symref <remote> HEAD` to discover
 /// the default branch. Only transfers a few bytes — much cheaper than a fetch.
 fn resolve_head_from_ls_remote(repo_root: &Path, remote: &str) -> Result<String> {
-    let output = git_ops::run_git_with_timeout(
+    let repo_root_arg = repo_root.display().to_string();
+    // P1-8a: the remote URL no longer embeds a token, so default-branch
+    // resolution against a private remote needs the same per-invocation auth
+    // injection as push/fetch (empty on desktop — zero behavior change).
+    let mut args = git_ops::network_auth_args(&repo_root_arg, remote);
+    args.extend(
         [
             "-C",
-            &repo_root.display().to_string(),
+            repo_root_arg.as_str(),
             "ls-remote",
             "--symref",
             remote,
             "HEAD",
-        ],
-        None,
-        git_ops::GIT_NETWORK_TIMEOUT,
-    )
-    .with_context(|| format!("Failed to query HEAD from remote \"{remote}\""))?;
+        ]
+        .map(String::from),
+    );
+    let output = git_ops::run_git_with_timeout(&args, None, git_ops::GIT_NETWORK_TIMEOUT)
+        .with_context(|| format!("Failed to query HEAD from remote \"{remote}\""))?;
 
     // Output format: "ref: refs/heads/main\tHEAD\n<sha>\tHEAD\n"
     for line in output.lines() {

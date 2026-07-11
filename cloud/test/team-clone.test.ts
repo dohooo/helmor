@@ -25,6 +25,7 @@ declare global {
 	namespace Cloudflare {
 		interface Env {
 			DB: D1Database;
+			FORGE_IDENTITY: import("../src/index").Env["FORGE_IDENTITY"];
 		}
 	}
 }
@@ -347,5 +348,90 @@ describe("handleTeamClone — cloneDirectory injection hygiene (P1-2c)", () => {
 		);
 		expect(res.status).toBe(200);
 		expect(execCalls.some((cmd) => cmd.includes("/workspace/foo"))).toBe(true);
+	});
+});
+
+// P1-8a suite: an authenticated clone embeds the minted token in the URL (the
+// SDK gitCheckout has no auth option), which git persists into the container's
+// `.git/config` remote line — readable by any member. After the R3-E refs
+// fetch (which still rides the token'd origin), the Worker must scrub it with
+// `git remote set-url origin <clean URL>` — and a scrub failure is FATAL (rm
+// -rf + 502), never a clone that leaves a token on disk.
+describe("handleTeamClone — token never persists in .git/config (P1-8a)", () => {
+	const okBody = { repositoryId: "repo-1", createdRepository: true };
+	const CLEAN_URL = "https://github.com/acme/foo.git";
+
+	/** A clone request authenticated as member `42`, whose ForgeIdentity DO
+	 *  holds a gh token (stored through the REAL DO). */
+	async function memberClone(): Promise<Request> {
+		const stub = env.FORGE_IDENTITY.get(env.FORGE_IDENTITY.idFromName("42"));
+		await stub.store({ githubToken: "gho_secret42" });
+		return new Request("https://team.test/rpc/clone_repository_from_url", {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				Authorization: "Bearer member-token",
+				"X-Helmor-Member-Id": "42",
+			},
+			body: JSON.stringify({ gitUrl: CLEAN_URL }),
+		});
+	}
+
+	it("scrubs the token'd origin URL after the refs fetch (ordering pinned)", async () => {
+		const { sandbox, execCalls } = fakeSandbox({ ok: true, body: okBody });
+		const res = await handleTeamClone(
+			await memberClone(),
+			sandbox,
+			8080,
+			env as unknown as import("../src/index").Env,
+		);
+		expect(res.status).toBe(200);
+
+		const fetchIdx = execCalls.findIndex((c) => c.includes("fetch origin"));
+		const setUrlIdx = execCalls.findIndex((c) =>
+			c.includes("remote set-url origin"),
+		);
+		expect(fetchIdx).toBeGreaterThanOrEqual(0);
+		expect(setUrlIdx).toBeGreaterThan(fetchIdx); // fetch still rides the token'd origin
+		// The rewritten URL is the CLEAN one — no userinfo, no token.
+		expect(execCalls[setUrlIdx]).toContain(CLEAN_URL);
+		expect(execCalls[setUrlIdx]).not.toContain("gho_secret42");
+		expect(execCalls[setUrlIdx]).not.toContain("x-access-token");
+	});
+
+	it("a failing scrub is FATAL: rm -rf + 502, never a token left on disk", async () => {
+		const execCalls: string[] = [];
+		const sandbox = {
+			gitCheckout: async () => ({ success: true, exitCode: 0 }),
+			containerFetch: async () => new Response("{}", { status: 200 }),
+			exec: async (cmd: string) => {
+				execCalls.push(cmd);
+				if (cmd.includes("remote set-url")) {
+					return { success: false, exitCode: 1, stderr: "boom" };
+				}
+				return { success: true, exitCode: 0 };
+			},
+		} as unknown as import("@cloudflare/sandbox").Sandbox;
+
+		const res = await handleTeamClone(
+			await memberClone(),
+			sandbox,
+			8080,
+			env as unknown as import("../src/index").Env,
+		);
+		expect(res.status).toBe(502);
+		expect(execCalls.some((c) => c.startsWith("rm -rf"))).toBe(true);
+	});
+
+	it("an unauthenticated (public) clone runs NO scrub — the URL never had a token", async () => {
+		const { sandbox, execCalls } = fakeSandbox({ ok: true, body: okBody });
+		const res = await handleTeamClone(
+			forwardedClone(CLEAN_URL), // no member header → plain URL
+			sandbox,
+			8080,
+			env as unknown as import("../src/index").Env,
+		);
+		expect(res.status).toBe(200);
+		expect(execCalls.some((c) => c.includes("remote set-url"))).toBe(false);
 	});
 });

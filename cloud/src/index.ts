@@ -1040,6 +1040,36 @@ export async function handleTeamClone(
 		);
 	}
 
+	// P1-8a: an authenticated clone embedded the minted token in the URL (the
+	// SDK gitCheckout has no auth option), and git persisted it verbatim into
+	// `.git/config`'s remote line — plaintext, readable by every member of the
+	// shared container. Scrub it back to the clean URL now that the clone +
+	// refs fetch (which still rode the token'd origin) are done. Later
+	// fetch/push auth rides per-invocation argv headers instead
+	// (`auth_config_args` in the container, backed by the P1-2a creator
+	// fallback — rolling back P1-2a requires rolling this back too). A scrub
+	// failure is FATAL: better a failed add than a token left on disk.
+	if (cloneUrl !== gitUrl) {
+		try {
+			const scrub = await sandbox.exec(
+				`git -C ${shq(targetDir)} remote set-url origin ${shq(gitUrl)}`,
+			);
+			if (scrub.exitCode !== 0) {
+				await sandbox.exec(`rm -rf ${shq(targetDir)}`).catch(() => {});
+				return jsonError(
+					502,
+					`git remote set-url (token scrub) failed after clone (exit ${scrub.exitCode}): ${scrub.stderr?.slice(0, 300) ?? ""}`,
+				);
+			}
+		} catch (error) {
+			await sandbox.exec(`rm -rf ${shq(targetDir)}`).catch(() => {});
+			return jsonError(
+				502,
+				`git remote set-url (token scrub) failed after clone: ${(error as Error).message}`,
+			);
+		}
+	}
+
 	// 2. Register the now-on-disk repo via the EXISTING companion RPC, which owns
 	//    the container DB. Reuse the derived member auth from `forwarded`; build
 	//    fresh headers so a stale content-length can't corrupt the new body.
