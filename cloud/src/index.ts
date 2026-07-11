@@ -314,24 +314,11 @@ export class Sandbox extends CloudflareSandbox<Env> {
 		try {
 			await Promise.race([
 				(async () => {
-					const handle = await this.createBackup({
-						dir: "/home/helmor",
-						localBucket: true,
-						name: `helmor-idle-${new Date().toISOString()}`,
-						ttl: 259200, // 3 days
-						// R2-F4a POST-MORTEM: keep this list IDENTICAL to
-						// backupAndStore's. Nested "dir/sub" exclude patterns made
-						// mksquashfs drop the ENTIRE .claude tree from idle backups
-						// (verified by archive autopsy: the idle backup with nested
-						// globs had no .claude at all, while the post-turn backup
-						// with only these five top-level names carried the threads)
-						// — which silently defeated the provider-state relocation.
-						// Archives stay small (~75KB with threads); if provider
-						// noise ever threatens the 15s budget, prune it container-
-						// side instead of risking this exclude semantics again.
-						excludes: ["workspaces", "cache", "logs", "run", "local-llm"],
-					});
+					const handle = await this.createBackup(
+						idleBackupOptions(new Date().toISOString()),
+					);
 					await writeBackupHandle(this.helmorEnv, handle);
+					await warnIfBackupOversized(this.helmorEnv, handle);
 					// F-5 boundary, observable in `wrangler tail`: the idle path
 					// backs up BEFORE destroy; /admin/destroy-sandbox intentionally
 					// does not (a deliberate reset).
@@ -1258,6 +1245,35 @@ export const BACKUP_EXCLUDES = [
 	"local-llm",
 	".codex/.tmp",
 ];
+
+/** Options for the idle (pre-sleep) backup taken by `backupBeforeSleep`.
+ *
+ *  Excludes are the SHARED `BACKUP_EXCLUDES` constant — the same one
+ *  `backupAndStore` (post-turn) uses. This used to be an inline copy that
+ *  drifted: it lost `.codex/.tmp` when R3-D added it, so idle backups
+ *  re-inflated (48MB) and re-opened the restore-OOM wedge the post-turn path
+ *  had already fixed (P1-3b). One list, one place to maintain.
+ *
+ *  R2-F4a history, for the next person tempted to fork this list: nested
+ *  "dir/sub" exclude patterns once made mksquashfs drop the ENTIRE `.claude`
+ *  tree from idle archives. `.codex/.tmp` IS such a nested pattern — the
+ *  post-turn path has since carried it safely (R3-D autopsy: 48MB→8KB with
+ *  `.claude` intact), and both paths call the same SDK `createBackup`
+ *  (localBucket mode), but the idle archive still gets its own autopsy at
+ *  rollout before this is trusted (`.claude`/`.codex` present, `.codex/.tmp`
+ *  absent). If that autopsy ever finds `.claude` missing, prune container-
+ *  side instead of re-forking the excludes.
+ *
+ *  Exported so a test can pin `excludes` to BACKUP_EXCLUDES by identity. */
+export function idleBackupOptions(timestamp: string) {
+	return {
+		dir: "/home/helmor",
+		localBucket: true,
+		name: `helmor-idle-${timestamp}`,
+		ttl: 259200, // 3 days
+		excludes: BACKUP_EXCLUDES,
+	};
+}
 
 /** R3-D: backup size budget alarm. Healthy backups (SQLite DB + provider
  *  state, caches excluded) are single-digit MB; the alarm threshold is ~10x
