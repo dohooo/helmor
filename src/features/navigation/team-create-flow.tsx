@@ -19,7 +19,11 @@ import {
 } from "@/lib/api";
 import { openUrl } from "@/lib/platform-bridge";
 import { acceptInvite, createTeam, mintInvite } from "@/lib/team-api";
-import { saveTeamAdminToken, type TeamConfig } from "@/lib/team-mode";
+import {
+	getTeamAdminToken,
+	saveTeamAdminToken,
+	type TeamConfig,
+} from "@/lib/team-mode";
 import { switchTeamMode } from "@/lib/team-switch";
 import { describeUnknownError } from "@/lib/workspace-helpers";
 
@@ -136,6 +140,12 @@ export function TeamCreateFlow({
 		let stageError: string | null = null;
 		try {
 			const result = await deployTeamCloud({
+				// Round6 P1-4b: a re-provision (this machine already holds the
+				// team's admin token) REUSES that token instead of rotating —
+				// a mid-run failure can then never desync desktop vs Worker.
+				// "Leave team" clears the stored token, so a re-create falls
+				// back to the rotate-on-provision path.
+				existingAdminToken: getTeamAdminToken(),
 				onProgress: (event: TeamDeployProgress) => {
 					setStepStatus((current) => ({
 						...current,

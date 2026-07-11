@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 	),
 	acceptInvite: vi.fn(() => Promise.resolve({ ok: true, memberId: "123" })),
 	saveTeamAdminToken: vi.fn(),
+	getTeamAdminToken: vi.fn((): string | null => null),
 	openUrl: vi.fn(),
 	publishShellEvent: vi.fn(),
 	codexAuthorize: vi.fn(),
@@ -40,6 +41,7 @@ vi.mock("@/lib/team-switch", () => ({ switchTeamMode: mocks.switchTeamMode }));
 vi.mock("@/lib/team-mode", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@/lib/team-mode")>()),
 	saveTeamAdminToken: mocks.saveTeamAdminToken,
+	getTeamAdminToken: mocks.getTeamAdminToken,
 }));
 vi.mock("@/lib/team-api", () => ({
 	createTeam: mocks.createTeam,
@@ -89,6 +91,9 @@ const CONNECT = /Connect Cloudflare & deploy/i;
 afterEach(() => {
 	cleanup();
 	vi.clearAllMocks();
+	// clearAllMocks keeps a mockReturnValue override — restore the default
+	// "no stored admin token" so the reuse test can't leak into its neighbors.
+	mocks.getTeamAdminToken.mockImplementation(() => null);
 	// Restore the default resolvable identity for the next test.
 	mocks.teamIdentity.identity = { githubId: "123", login: "admin" };
 	// Reset the Finish-gate authorized-state (a plain primitive, untouched by
@@ -98,6 +103,43 @@ afterEach(() => {
 });
 
 describe("TeamCreateFlow", () => {
+	// Round6 P1-4b: a re-provision must hand the desktop's stored admin token
+	// to the provision engine, which then REUSES it instead of rotating —
+	// otherwise a mid-run failure strands the Worker on a token the desktop
+	// never received (the F-B lockout).
+	it("passes the stored admin token to deployTeamCloud (re-provision reuse)", async () => {
+		mocks.getTeamAdminToken.mockReturnValue("hlm_desktop_held");
+		mocks.deployTeamCloud.mockResolvedValue({
+			kind: "deployed",
+			workerUrl: "https://team.example.workers.dev",
+			adminToken: "hlm_desktop_held",
+		});
+		render(<TeamCreateFlow onBack={vi.fn()} onDone={vi.fn()} />);
+
+		fireEvent.click(screen.getByRole("button", { name: CONNECT }));
+		await screen.findByRole("button", { name: /^Finish$/i });
+
+		expect(mocks.deployTeamCloud).toHaveBeenCalledWith(
+			expect.objectContaining({ existingAdminToken: "hlm_desktop_held" }),
+		);
+	});
+
+	it("passes null on a fresh machine (no stored token → rotation preserved)", async () => {
+		mocks.deployTeamCloud.mockResolvedValue({
+			kind: "deployed",
+			workerUrl: "https://team.example.workers.dev",
+			adminToken: "hlm_freshly_generated",
+		});
+		render(<TeamCreateFlow onBack={vi.fn()} onDone={vi.fn()} />);
+
+		fireEvent.click(screen.getByRole("button", { name: CONNECT }));
+		await screen.findByRole("button", { name: /^Finish$/i });
+
+		expect(mocks.deployTeamCloud).toHaveBeenCalledWith(
+			expect.objectContaining({ existingAdminToken: null }),
+		);
+	});
+
 	it("deploys + bootstraps, then authorizes agents before switching in", async () => {
 		mocks.deployTeamCloud.mockResolvedValue({
 			kind: "deployed",

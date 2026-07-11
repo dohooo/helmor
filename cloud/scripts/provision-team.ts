@@ -45,6 +45,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveAdminToken } from "./admin-token";
 import { decideBrokerKeyAction, toSecretListOutcome } from "./broker-key";
 import { classifyMigrationError, D1_MIGRATIONS } from "./d1-migrations";
 import { pollHealth } from "./verify-live";
@@ -482,7 +483,21 @@ async function main(): Promise<void> {
 	}
 
 	// Admin/companion token — the bearer the desktop saves + the Worker accepts.
-	const adminToken = `hlm_${randomBytes(24).toString("hex")}`;
+	// Round6 P1-4b: on a RE-provision the desktop passes its currently-held
+	// token (HELMOR_EXISTING_COMPANION_TOKEN) and provision REUSES it instead
+	// of rotating — `secret put` then writes the value the desktop already
+	// holds, so no mid-run failure can leave desktop and Worker on different
+	// tokens (F-B lockout), and a pre-existing mismatch self-heals. A fresh
+	// team (no token held) still rotates; the value itself is never logged.
+	const { token: adminToken, reused: reusedAdminToken } = resolveAdminToken(
+		process.env.HELMOR_EXISTING_COMPANION_TOKEN,
+		() => `hlm_${randomBytes(24).toString("hex")}`,
+	);
+	log(
+		reusedAdminToken
+			? "[provision] reusing the desktop's existing companion token (no rotation)"
+			: "[provision] generated a fresh companion token",
+	);
 	const putToken = wrangler(["secret", "put", "HELMOR_COMPANION_TOKEN"], {
 		stdinValue: `${adminToken}\n`,
 		configPath,

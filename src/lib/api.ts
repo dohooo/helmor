@@ -1126,6 +1126,12 @@ export type TeamDeployResult =
  */
 export async function deployTeamCloud(args?: {
 	onProgress?: (event: TeamDeployProgress) => void;
+	/** Round6 P1-4b: the desktop's currently-held companion token, present on
+	 *  a RE-provision. Provision reuses it instead of rotating, so a mid-run
+	 *  failure can't leave the desktop and the Worker on different tokens.
+	 *  Absent/null (fresh team, or after Leave team cleared it) → provision
+	 *  generates a fresh token (rotation preserved). Never logged. */
+	existingAdminToken?: string | null;
 }): Promise<TeamDeployResult> {
 	const channel = new Channel<TeamDeployProgress>();
 	if (args?.onProgress) {
@@ -1133,6 +1139,7 @@ export async function deployTeamCloud(args?: {
 	}
 	return await invoke<TeamDeployResult>("deploy_team_cloud", {
 		channel,
+		existingAdminToken: args?.existingAdminToken ?? null,
 	});
 }
 

@@ -99,7 +99,10 @@ fn resolve_provision_script() -> anyhow::Result<CloudScript> {
 /// No `current_dir`: the scripts are cwd-independent (they locate their own
 /// payload via `import.meta.url` and give wrangler a writable temp dir — the
 /// bundled copy lives in the app's read-only Resources).
-fn run_provision(channel: Channel<TeamDeployProgress>) -> anyhow::Result<TeamDeployResult> {
+fn run_provision(
+    channel: Channel<TeamDeployProgress>,
+    existing_admin_token: Option<String>,
+) -> anyhow::Result<TeamDeployResult> {
     let CloudScript { runtime, script } = resolve_provision_script()?;
 
     let mut command = Command::new(&runtime);
@@ -113,6 +116,17 @@ fn run_provision(channel: Channel<TeamDeployProgress>) -> anyhow::Result<TeamDep
     // round6 F-A); hand the script the vendored Node when this build has one.
     if let Some(node) = tooling::vendored_node() {
         command.env("HELMOR_WRANGLER_NODE", node);
+    }
+    // Round6 P1-4b: on a RE-provision, hand the script the desktop's
+    // currently-held companion token so it REUSES it instead of rotating —
+    // a mid-run failure then can't leave desktop and Worker on different
+    // tokens. Secret discipline: env to the child process only, never logged.
+    if let Some(token) = existing_admin_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
+        command.env("HELMOR_EXISTING_COMPANION_TOKEN", token);
     }
 
     let mut child = command.spawn().with_context(|| {
@@ -172,13 +186,20 @@ fn run_provision(channel: Channel<TeamDeployProgress>) -> anyhow::Result<TeamDep
 /// Stand up a fresh team-cloud backend on the operator's own Cloudflare account
 /// (drives `wrangler` via the provision script). LOCAL_ONLY — runs on the
 /// desktop host (wrangler + the browser sign-in live here, not in the sandbox).
+///
+/// `existing_admin_token` (round6 P1-4b): the desktop's currently-held
+/// companion token, present on a re-provision — forwarded to the script as
+/// `HELMOR_EXISTING_COMPANION_TOKEN` so it reuses instead of rotating. Never
+/// logged or echoed.
 #[tauri::command]
 pub async fn deploy_team_cloud(
     channel: Channel<TeamDeployProgress>,
+    existing_admin_token: Option<String>,
 ) -> CmdResult<TeamDeployResult> {
-    let result = tauri::async_runtime::spawn_blocking(move || run_provision(channel))
-        .await
-        .map_err(|e| anyhow::anyhow!("provision task join failed: {e}"))??;
+    let result =
+        tauri::async_runtime::spawn_blocking(move || run_provision(channel, existing_admin_token))
+            .await
+            .map_err(|e| anyhow::anyhow!("provision task join failed: {e}"))??;
     Ok(result)
 }
 
