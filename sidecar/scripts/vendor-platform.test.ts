@@ -112,12 +112,29 @@ describe("vendor platform boundary", () => {
 			cloudflaredArch: "amd64",
 		});
 
-		// gh is the one forge CLI staged on Linux: a `.tar.gz` nesting `bin/gh`.
+		// Both forge CLIs stage on Linux: `.tar.gz` archives nesting `bin/<cli>`.
 		expect(ghArchivePlan(linuxTargetInfoForArch("x64"))).toEqual({
 			slug: "gh_2.95.0_linux_amd64",
 			archiveName: "gh_2.95.0_linux_amd64.tar.gz",
 			url: "https://github.com/cli/cli/releases/download/v2.95.0/gh_2.95.0_linux_amd64.tar.gz",
 			sha256: "",
+		});
+		// P1-8b: glab must stage into the Linux team image too — GitLab MR
+		// actions in team mode deterministically failed without it. SHAs pinned
+		// from upstream checksums.txt (URL in stage-vendor.ts's header comment).
+		expect(glabArchivePlan(linuxTargetInfoForArch("x64"))).toEqual({
+			slug: "glab_1.103.0_linux_amd64",
+			archiveName: "glab_1.103.0_linux_amd64.tar.gz",
+			url: "https://gitlab.com/gitlab-org/cli/-/releases/v1.103.0/downloads/glab_1.103.0_linux_amd64.tar.gz",
+			sha256:
+				"6264d0de9e3b8f8bcafd368dfeaa19948ae680372a206b0b21038b1daabfaf58",
+		});
+		expect(glabArchivePlan(linuxTargetInfoForArch("arm64"))).toEqual({
+			slug: "glab_1.103.0_linux_arm64",
+			archiveName: "glab_1.103.0_linux_arm64.tar.gz",
+			url: "https://gitlab.com/gitlab-org/cli/-/releases/v1.103.0/downloads/glab_1.103.0_linux_arm64.tar.gz",
+			sha256:
+				"100811e68f405531254f35b074d42afee3c9e4350855a9a528207170066a65cb",
 		});
 	});
 

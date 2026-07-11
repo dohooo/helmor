@@ -44,9 +44,18 @@ export const GH_SHA256 = {
 } as const;
 
 export const GLAB_VERSION = "1.103.0";
+// Per-OS (darwin + linux since P1-8b: the Linux team image needs glab for
+// GitLab MR actions). Pulled from upstream checksums.txt (URL in
+// stage-vendor.ts's header comment).
 export const GLAB_SHA256 = {
-	arm64: "fea5a07e6b41dfd04585c1ba08deaf95cd7e9b320a86d056f65415e254732fe3",
-	amd64: "c32fb1df724bc3cee2da828b24e19a3f518f4b4d382410984eb4a415498284da",
+	darwin: {
+		arm64: "fea5a07e6b41dfd04585c1ba08deaf95cd7e9b320a86d056f65415e254732fe3",
+		amd64: "c32fb1df724bc3cee2da828b24e19a3f518f4b4d382410984eb4a415498284da",
+	},
+	linux: {
+		arm64: "100811e68f405531254f35b074d42afee3c9e4350855a9a528207170066a65cb",
+		amd64: "6264d0de9e3b8f8bcafd368dfeaa19948ae680372a206b0b21038b1daabfaf58",
+	},
 } as const;
 
 export const CLOUDFLARED_VERSION = "2026.6.1";
@@ -452,7 +461,8 @@ export function ghArchivePlan(target: TargetInfo): ArchivePlan {
 
 export function glabArchivePlan(target: TargetInfo): ArchivePlan {
 	const arch = target.glabArch;
-	// macOS: `glab_<ver>_darwin_<arch>.tar.gz`; Windows: `..._windows_<arch>.zip`.
+	// macOS/Linux: `glab_<ver>_<os>_<arch>.tar.gz` nesting `bin/glab`;
+	// Windows: `..._windows_<arch>.zip`.
 	if (target.os === "windows") {
 		const slug = `glab_${GLAB_VERSION}_windows_${arch}`;
 		return {
@@ -462,12 +472,13 @@ export function glabArchivePlan(target: TargetInfo): ArchivePlan {
 			sha256: "",
 		};
 	}
-	const slug = `glab_${GLAB_VERSION}_darwin_${arch}`;
+	const os = target.os === "linux" ? "linux" : "darwin";
+	const slug = `glab_${GLAB_VERSION}_${os}_${arch}`;
 	return {
 		slug,
 		archiveName: `${slug}.tar.gz`,
 		url: `https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/${slug}.tar.gz`,
-		sha256: GLAB_SHA256[arch],
+		sha256: GLAB_SHA256[os][arch],
 	};
 }
 

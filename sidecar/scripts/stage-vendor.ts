@@ -1318,10 +1318,12 @@ if (!IS_LINUX) stageOptional("kimi", () => stageKimiBinary(target));
 
 // ----- gh + glab (forge CLIs) -----
 // Wrapped in stageOptional so a missing/unpublished Windows artifact downgrades
-// to a warning; on macOS stageOptional re-throws, keeping staging strict. gh is
-// staged everywhere (PR6 boot clone / push needs it); glab stays desktop-only.
+// to a warning; on macOS stageOptional re-throws, keeping staging strict. Both
+// stage everywhere: gh for the PR6 boot clone / push, glab since P1-8b for
+// GitLab MR actions in the Linux team image (start-serve.sh already put
+// vendor/glab on PATH and wires its credential helper — it just wasn't there).
 stageOptional("gh", () => stageGhBinary(target));
-if (!IS_LINUX) stageOptional("glab", () => stageGlabBinary(target));
+stageOptional("glab", () => stageGlabBinary(target));
 
 // ----- cloudflared (mobile-companion tunnel — desktop only) -----
 if (!IS_LINUX)
