@@ -117,6 +117,19 @@ fn list_github_logins(host: &str) -> Result<Vec<String>> {
     if let Some(cached) = logins_cache::get(host) {
         return Ok(cached);
     }
+    // Fold the injected team-member login(s) into the gh-CLI logins, then cache
+    // the merged set. Doing the merge here (rather than inside `cli_github_logins`)
+    // keeps BOTH the real-login and the unauthenticated-empty paths team-aware.
+    let logins = merge_injected_logins(host, cli_github_logins(host)?);
+    logins_cache::put(host, logins.clone());
+    Ok(logins)
+}
+
+/// The gh-CLI half of [`list_github_logins`]: the logins `gh auth status`
+/// reports for `host`. `Ok(empty)` when the host has no gh CLI login (cached by
+/// the caller as a real "no logins" answer); `Err` only on a hard failure
+/// (gh missing / network), which bypasses the cache.
+fn cli_github_logins(host: &str) -> Result<Vec<String>> {
     let output = run_command(
         "gh",
         ["auth", "status", "--hostname", host, "--json", "hosts"],
@@ -125,10 +138,6 @@ fn list_github_logins(host: &str) -> Result<Vec<String>> {
 
     if !output.success {
         if looks_like_unauthenticated(&command_detail(&output)) {
-            // Cache the empty result too — "no logins on this host"
-            // is a real answer worth dedupe'ing for 30s. Hard errors
-            // (network, gh missing, etc.) bypass the cache below.
-            logins_cache::put(host, Vec::new());
             return Ok(Vec::new());
         }
         return Err(anyhow!(
@@ -136,10 +145,29 @@ fn list_github_logins(host: &str) -> Result<Vec<String>> {
             command_detail(&output)
         ));
     }
+    parse_logins_for_host(&output.stdout, host)
+}
 
-    let logins = parse_logins_for_host(&output.stdout, host)?;
-    logins_cache::put(host, logins.clone());
-    Ok(logins)
+/// Team mode injects ONE member's github.com token (the creator; P1-2a) that the
+/// shared container uses for ALL git/gh network ops — but it is never written to
+/// gh's `hosts.yml`, so `gh auth status` can't see it. Surface the injected
+/// login(s) so forge detection (`list_forge_logins` → `auto_bind_repo_account`
+/// → the "Connect GitHub" badge) reflects the identity the container CAN push
+/// with, instead of reporting "not connected" for a reachable repo. Desktop has
+/// no injected store → no-op (byte-identical to the pre-change behaviour).
+fn merge_injected_logins(host: &str, logins: Vec<String>) -> Vec<String> {
+    dedup_append(logins, crate::forge::member_creds::github_logins(host))
+}
+
+/// Append `extra` onto `base`, skipping logins already present. Order-stable:
+/// gh-CLI logins keep their position, injected logins follow.
+fn dedup_append(mut base: Vec<String>, extra: Vec<String>) -> Vec<String> {
+    for login in extra {
+        if !base.iter().any(|existing| existing == &login) {
+            base.push(login);
+        }
+    }
+    base
 }
 
 /// All non-empty logins for `host`. State filtering is intentionally
@@ -912,5 +940,34 @@ mod tests {
     #[test]
     fn parse_repo_push_permission_errors_on_malformed_json() {
         assert!(parse_repo_push_permission("not json").is_err());
+    }
+
+    // ---------------- dedup_append (injected-login merge) ----------------
+
+    #[test]
+    fn dedup_append_adds_new_and_skips_present_preserving_order() {
+        // gh-CLI logins keep their order; injected logins not already present
+        // are appended; duplicates are dropped.
+        assert_eq!(
+            dedup_append(
+                vec!["cli-a".to_string(), "shared".to_string()],
+                vec!["shared".to_string(), "injected".to_string()],
+            ),
+            vec![
+                "cli-a".to_string(),
+                "shared".to_string(),
+                "injected".to_string()
+            ],
+        );
+        // The team-mode shape: no gh CLI login, one injected creator login.
+        assert_eq!(
+            dedup_append(Vec::new(), vec!["dohooo".to_string()]),
+            vec!["dohooo".to_string()],
+        );
+        // Desktop shape: injected empty → base unchanged.
+        assert_eq!(
+            dedup_append(vec!["desktop-user".to_string()], Vec::new()),
+            vec!["desktop-user".to_string()],
+        );
     }
 }

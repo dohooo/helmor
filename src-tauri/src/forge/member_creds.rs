@@ -156,6 +156,36 @@ fn creator_id() -> Option<String> {
     STORE.read().ok()?.creator_id.clone()
 }
 
+/// GitHub logins the shared container can actually authenticate as (team mode):
+/// every injected member that carries a github.com token — the creator (P1-2a
+/// creator-identity) plus any member with their own token. Empty on desktop (no
+/// injected store) and for non-github hosts.
+///
+/// The gh account enumeration surfaces these (see `github/accounts.rs`) so forge
+/// detection sees the identity the container really acts under. The injected
+/// token is used for git/gh network ops but is NEVER written to gh's `hosts.yml`,
+/// so `gh auth status` alone reports zero logins — which left the "Connect
+/// GitHub" badge stuck as unauthenticated even for a repo the container can push
+/// to (DF-R6-* team-cloud forge status).
+pub(crate) fn github_logins(host: &str) -> Vec<String> {
+    if host != GITHUB_HOST {
+        return Vec::new();
+    }
+    ensure_fresh();
+    let Ok(state) = STORE.read() else {
+        return Vec::new();
+    };
+    let mut logins: Vec<String> = state
+        .creds
+        .values()
+        .filter(|creds| creds.github_token.is_some())
+        .filter_map(|creds| creds.login.clone())
+        .collect();
+    logins.sort();
+    logins.dedup();
+    logins
+}
+
 /// The acting member's github.com token (team mode), falling back to the
 /// creator's token (P1-2a creator-identity model) when the acting member has
 /// none — or when NO acting member is bound at all (e.g. the detached
@@ -396,5 +426,47 @@ mod tests {
         assert_eq!(acting_glab_token("ngit.hundun.cn"), None);
 
         set_for_test(HashMap::new()); // leave the global store clean
+    }
+
+    #[test]
+    fn github_logins_surfaces_only_token_bearing_members() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        set_for_test_with_creator(
+            HashMap::from([
+                (
+                    "c1".to_string(),
+                    MemberForgeCreds {
+                        github_token: Some("gho_creator".to_string()),
+                        glab_tokens: HashMap::new(),
+                        login: Some("dohooo".to_string()),
+                    },
+                ),
+                (
+                    "m2".to_string(),
+                    MemberForgeCreds {
+                        github_token: None,
+                        glab_tokens: HashMap::new(),
+                        login: Some("member2".to_string()),
+                    },
+                ),
+            ]),
+            Some("c1"),
+        );
+
+        // Only the token-bearer (here the creator) is an account the container
+        // can authenticate as; the login-only member is skipped.
+        assert_eq!(github_logins("github.com"), vec!["dohooo".to_string()]);
+        // No per-member token for GHE / non-github hosts here.
+        assert!(github_logins("ghe.corp.example").is_empty());
+
+        set_for_test(HashMap::new());
+    }
+
+    #[test]
+    fn github_logins_empty_without_injected_store() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        set_for_test(HashMap::new());
+        // Desktop (no injected members) surfaces nothing → enumeration unchanged.
+        assert!(github_logins("github.com").is_empty());
     }
 }
