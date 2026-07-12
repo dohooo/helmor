@@ -22,6 +22,7 @@ import {
 	type TodoListPart,
 	type WorkflowPart,
 } from "@/lib/api";
+import { toastCaughtError } from "@/lib/error-toast";
 import { I18nText, translateSource, useI18n } from "@/lib/i18n";
 import { convertFileSrc } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
@@ -341,7 +342,8 @@ async function copyImage(part: ImagePart) {
 		await copyImageBlobToClipboard(await imageBlob(part));
 		toast.success(translateSource("panelImageCopied"));
 	} catch (error) {
-		toast.error(translateSource("panelCopyFailed"), {
+		// DF-R6-A: silent for typed asleep; same-text toasts don't stack.
+		toastCaughtError(error, translateSource("panelCopyFailed"), {
 			description: String(error),
 		});
 	}
@@ -351,7 +353,8 @@ async function showInFinder(path: string) {
 	try {
 		await showImageInFinder(path);
 	} catch (error) {
-		toast.error(translateSource("panelUnableShowImageFinder"), {
+		// DF-R6-A: silent for typed asleep; same-text toasts don't stack.
+		toastCaughtError(error, translateSource("panelUnableShowImageFinder"), {
 			description: String(error),
 		});
 	}

@@ -34,6 +34,7 @@ import type {
 	ComposerCustomTag,
 	ResolvedComposerInsertRequest,
 } from "@/lib/composer-insert";
+import { toastCaughtError } from "@/lib/error-toast";
 import { I18nText, useI18n } from "@/lib/i18n";
 import {
 	agentModelSectionsQueryOptions,
@@ -459,7 +460,9 @@ export const WorkspaceComposerContainer = memo(
 				});
 			},
 			onError: (error) => {
-				toast.error(
+				// DF-R6-A: silent for typed asleep; same-text toasts don't stack.
+				toastCaughtError(
+					error,
 					error instanceof Error
 						? error.message
 						: "Failed to update linked directories",
@@ -1058,7 +1061,10 @@ export const WorkspaceComposerContainer = memo(
 					if (arg === "pause" || arg === "clear") {
 						if (activeGoal) {
 							void mutateCodexGoal(displayedSessionId, arg).catch((err) => {
-								toast.error(
+								// DF-R6-A: silent for typed asleep; same-text toasts
+								// don't stack.
+								toastCaughtError(
+									err,
 									err instanceof Error ? err.message : `Failed to ${arg} goal`,
 								);
 							});
