@@ -71,6 +71,33 @@ export const COMMAND_CLASSES: Record<string, CommandClass> = {
 	// the companion dispatcher too (companion/rpc.rs).
 	save_text_file_as: "LOCAL_ONLY",
 
+	// DF-R6-D: desktop-host interactive-auth PTYs. Each runs a macOS-local
+	// process whose effect exists only on THIS Mac — the `gh|glab auth login`
+	// OAuth callback to localhost, `claude|codex login` driving the Mac browser
+	// + desktop main window, and `security add-generic-password` writing the
+	// macOS login keychain. Misclassified as WAKE/PASSIVE they routed to the team
+	// container (spawn → "Unknown companion command"; the control verbs silently
+	// no-op'd), so "Connect GitHub" couldn't start. In team mode they must run on
+	// the local Tauri host, like the cloud-identity authorizers above. The spawn_*
+	// verbs carry a Channel<ScriptEvent>; ipc.ts bridges the team-mode
+	// CompanionChannel back to a native Channel so the PTY still streams. NB: the
+	// workspace `terminal` / `repo_script` families deliberately stay WAKE — those
+	// genuinely run inside the container where the workspace lives, so LOCAL_ONLY
+	// would misroute container work to the desktop.
+	spawn_forge_cli_auth_terminal: "LOCAL_ONLY",
+	stop_forge_cli_auth_terminal: "LOCAL_ONLY",
+	write_forge_cli_auth_terminal_stdin: "LOCAL_ONLY",
+	resize_forge_cli_auth_terminal: "LOCAL_ONLY",
+	spawn_agent_login_terminal: "LOCAL_ONLY",
+	open_agent_login_terminal: "LOCAL_ONLY",
+	stop_agent_login_terminal: "LOCAL_ONLY",
+	write_agent_login_terminal_stdin: "LOCAL_ONLY",
+	resize_agent_login_terminal: "LOCAL_ONLY",
+	spawn_keychain_store_terminal: "LOCAL_ONLY",
+	stop_keychain_store_terminal: "LOCAL_ONLY",
+	write_keychain_store_terminal_stdin: "LOCAL_ONLY",
+	resize_keychain_store_terminal: "LOCAL_ONLY",
+
 	// ---------------------------------------------------------------------
 	// CONTROL_PLANE — served without the container in team mode.
 	// ---------------------------------------------------------------------
@@ -154,16 +181,8 @@ export const COMMAND_CLASSES: Record<string, CommandClass> = {
 	execute_repo_stop_command: "WAKE",
 	stop_repo_script: "WAKE",
 	write_repo_script_stdin: "WAKE",
-	spawn_agent_login_terminal: "WAKE",
-	open_agent_login_terminal: "WAKE",
-	stop_agent_login_terminal: "WAKE",
-	write_agent_login_terminal_stdin: "WAKE",
-	spawn_forge_cli_auth_terminal: "WAKE",
-	stop_forge_cli_auth_terminal: "WAKE",
-	write_forge_cli_auth_terminal_stdin: "WAKE",
-	spawn_keychain_store_terminal: "WAKE",
-	stop_keychain_store_terminal: "WAKE",
-	write_keychain_store_terminal_stdin: "WAKE",
+	// NB: the forge_cli_auth / agent_login / keychain_store terminal families are
+	// LOCAL_ONLY (desktop-host auth PTYs) — see the DF-R6-D block above.
 	// Settings / config writes (explicit, rare)
 	update_app_settings: "WAKE",
 	update_repo_scripts: "WAKE",
@@ -311,9 +330,6 @@ export const COMMAND_CLASSES: Record<string, CommandClass> = {
 	set_terminal_session_busy: "PASSIVE",
 	resize_terminal: "PASSIVE",
 	resize_repo_script: "PASSIVE",
-	resize_agent_login_terminal: "PASSIVE",
-	resize_forge_cli_auth_terminal: "PASSIVE",
-	resize_keychain_store_terminal: "PASSIVE",
 	open_file_in_editor: "PASSIVE",
 	open_workspace_in_editor: "PASSIVE",
 	open_workspace_in_finder: "PASSIVE",

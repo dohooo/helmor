@@ -111,6 +111,46 @@ describe("ipc transport switch", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
+	it("bridges a team-mode CompanionChannel to a native Tauri Channel for a LOCAL_ONLY streaming command (DF-R6-D)", async () => {
+		configureTeamBackend();
+		activateTeamMode();
+		const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+		const ipc = await freshIpc();
+
+		// In team mode the Channel Proxy builds a CompanionChannel, not a Tauri one.
+		const channel = new ipc.Channel<unknown>();
+		expect(channel).not.toBeInstanceOf(FakeTauriChannel);
+		const received: unknown[] = [];
+		channel.onmessage = (m) => {
+			received.push(m);
+		};
+
+		await ipc.invoke("spawn_forge_cli_auth_terminal", {
+			provider: "github",
+			host: null,
+			instanceId: "i1",
+			channel,
+		});
+
+		// LOCAL_ONLY → native Tauri host, never the team Worker's /rpc-stream.
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(tauriInvoke).toHaveBeenCalledTimes(1);
+		const calls = tauriInvoke.mock.calls as unknown as Array<
+			[string, { channel: unknown }]
+		>;
+		expect(calls[0][0]).toBe("spawn_forge_cli_auth_terminal");
+		// The channel handed to the native backend MUST be a real Tauri Channel —
+		// a CompanionChannel serializes to `{}` and Rust's Channel<T> can't parse it.
+		const passed = calls[0][1].channel as FakeTauriChannel & {
+			onmessage: ((m: unknown) => void) | null;
+		};
+		expect(passed).toBeInstanceOf(FakeTauriChannel);
+		// Events the native channel emits reach the original CompanionChannel handler.
+		passed.onmessage?.({ type: "stdout", data: "hi" });
+		expect(received).toEqual([{ type: "stdout", data: "hi" }]);
+	});
+
 	it("uses the local asset protocol for known-local files in desktop team mode", async () => {
 		configureTeamBackend();
 		activateTeamMode();

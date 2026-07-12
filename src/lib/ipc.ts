@@ -548,20 +548,54 @@ export type HelmorInvokeOptions = Partial<InvokeOptions> & {
 	wakeIntent?: boolean;
 };
 
+/**
+ * Rewrite any {@link CompanionChannel} in a command's args into a real Tauri
+ * {@link Channel} before it reaches the native backend.
+ *
+ * In desktop team mode the transport is remote, so the `Channel` Proxy builds
+ * CompanionChannels — but a LOCAL_ONLY command (e.g. the DF-R6-D `gh auth login`
+ * / `claude login` / keychain PTYs) still runs on THIS Mac's Tauri host, which
+ * streams over a real `tauri::ipc::Channel`. A CompanionChannel serializes to
+ * `{}` — it has no `__TAURI_TO_IPC_KEY__` — so the Rust `Channel<T>` argument
+ * fails to deserialize and the PTY never starts. Swap in a native Channel and
+ * forward its messages to the CompanionChannel's handler so callers are unchanged.
+ */
+function bridgeLocalChannels(args?: InvokeArgs): InvokeArgs | undefined {
+	if (!isPlainArgs(args)) return args;
+	let rewritten: Record<string, unknown> | undefined;
+	for (const [key, value] of Object.entries(args)) {
+		if (value instanceof CompanionChannel) {
+			const companion = value as CompanionChannel<unknown>;
+			const native = new TauriChannel<unknown>();
+			native.onmessage = (message) => companion.onmessage?.(message);
+			rewritten ??= { ...args };
+			rewritten[key] = native;
+		}
+	}
+	return rewritten ?? args;
+}
+
 export function invoke<T>(
 	cmd: string,
 	args?: InvokeArgs,
 	options?: HelmorInvokeOptions,
 ): Promise<T> {
-	if (!transport.remote || (isTauriRuntime() && LOCAL_ONLY_INVOKES.has(cmd))) {
+	const localOnly = isTauriRuntime() && LOCAL_ONLY_INVOKES.has(cmd);
+	if (!transport.remote || localOnly) {
 		// Preserve the original call arity so tests asserting
 		// `invoke).toHaveBeenCalledWith("cmd")` (no trailing undefineds) keep
 		// matching. `wakeIntent` is remote-transport metadata — never Tauri's.
 		const { wakeIntent: _wakeIntent, ...tauriOptions } = options ?? {};
+		// A LOCAL_ONLY command reached the native host while the transport is remote
+		// (desktop team mode): its args may carry a CompanionChannel the native
+		// backend can't deserialize — bridge it to a real Tauri Channel so the PTY
+		// streams (DF-R6-D). Pure-local mode already builds native Channels, so skip.
+		const nativeArgs =
+			transport.remote && localOnly ? bridgeLocalChannels(args) : args;
 		if (options !== undefined && "headers" in tauriOptions) {
-			return tauriInvoke<T>(cmd, args, tauriOptions as InvokeOptions);
+			return tauriInvoke<T>(cmd, nativeArgs, tauriOptions as InvokeOptions);
 		}
-		if (args !== undefined) return tauriInvoke<T>(cmd, args);
+		if (nativeArgs !== undefined) return tauriInvoke<T>(cmd, nativeArgs);
 		return tauriInvoke<T>(cmd);
 	}
 	return companionInvoke<T>(cmd, args, options?.wakeIntent);

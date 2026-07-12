@@ -105,3 +105,51 @@ describe("command-classes registry", () => {
 		expect(LOCAL_ONLY_COMMANDS.has("save_text_file_as")).toBe(true);
 	});
 });
+
+describe("DF-R6-D desktop-host auth terminals route LOCAL_ONLY", () => {
+	// `gh|glab auth login` (OAuth → localhost on this Mac), `claude|codex login`
+	// (drives the Mac browser + desktop main window), and `security
+	// add-generic-password` (macOS login keychain) all run on THIS Mac. In team
+	// mode they must route to the local Tauri host, never the container — otherwise
+	// "Connect GitHub" can't start (the terminal errors "Unable to start login.").
+	const DESKTOP_HOST_AUTH_TERMINALS = [
+		"spawn_forge_cli_auth_terminal",
+		"stop_forge_cli_auth_terminal",
+		"write_forge_cli_auth_terminal_stdin",
+		"resize_forge_cli_auth_terminal",
+		"spawn_agent_login_terminal",
+		"open_agent_login_terminal",
+		"stop_agent_login_terminal",
+		"write_agent_login_terminal_stdin",
+		"resize_agent_login_terminal",
+		"spawn_keychain_store_terminal",
+		"stop_keychain_store_terminal",
+		"write_keychain_store_terminal_stdin",
+		"resize_keychain_store_terminal",
+	];
+	it.each(DESKTOP_HOST_AUTH_TERMINALS)("%s is LOCAL_ONLY", (cmd) => {
+		expect(COMMAND_CLASSES[cmd]).toBe("LOCAL_ONLY");
+		expect(LOCAL_ONLY_COMMANDS.has(cmd)).toBe(true);
+	});
+
+	// Boundary guard (the handoff's "别误伤真该 WAKE 的"): the workspace terminal /
+	// repo-script families run INSIDE the container in team mode, so they must NOT
+	// be swept into LOCAL_ONLY even though they share the desktop no-op whitelist in
+	// companion/rpc.rs. LOCAL_ONLY here would misroute container work to the desktop.
+	const CONTAINER_BOUND_STAY_NON_LOCAL = [
+		"spawn_terminal",
+		"stop_terminal",
+		"write_terminal_stdin",
+		"resize_terminal",
+		"execute_repo_script",
+		"stop_repo_script",
+		"write_repo_script_stdin",
+		"resize_repo_script",
+	];
+	it.each(
+		CONTAINER_BOUND_STAY_NON_LOCAL,
+	)("%s stays classified but NOT LOCAL_ONLY", (cmd) => {
+		expect(COMMAND_CLASSES[cmd]).toBeDefined();
+		expect(COMMAND_CLASSES[cmd]).not.toBe("LOCAL_ONLY");
+	});
+});
