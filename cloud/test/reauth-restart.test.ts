@@ -110,6 +110,16 @@ describe("restartSandboxForReauth (guard semantics)", () => {
 	});
 });
 
+/** Minimal decodable id_token: header.payload.sig with a base64url JSON
+ *  payload carrying `chatgpt_account_id` (what `decodeAccountId` reads). */
+function fakeIdToken(accountId: string): string {
+	const payload = btoa(JSON.stringify({ chatgpt_account_id: accountId }))
+		.replace(/\+/g, "-")
+		.replace(/\//g, "_")
+		.replace(/=+$/, "");
+	return `h.${payload}.sig`;
+}
+
 describe("cloud-identity PUT wiring (P1-4a)", () => {
 	function storeWithSpy(): {
 		store: ReturnType<typeof createWorkerTeamGatewayStore>;
@@ -145,6 +155,50 @@ describe("cloud-identity PUT wiring (P1-4a)", () => {
 			oauthToken: "sk-ant-oat01-first-auth",
 		});
 		expect(counts.restarts).toBe(0);
+	});
+
+	// OBS-R6-1: the Codex DO's `changed` means "account_id switched" (identity
+	// hygiene only — its docstring says so), so a SAME-account re-authorization
+	// (the common brick-recovery / token-expiry path) reported changed=false and
+	// the warm container kept serving with the OLD startProcess-env auth until
+	// natural sleep. The restart must key off "a token was actually stored"
+	// (`stored`), not off account hygiene. Every successful Codex PUT stores a
+	// token, so every PUT restarts — `restartSandboxForReauth` itself guards the
+	// not-serving case (no container touch when scaled to zero).
+	it("putCodexIdentity fires the restart hook on a SAME-account re-authorization", async () => {
+		const { store, counts } = storeWithSpy();
+		await store.putCodexIdentity("200", {
+			refreshToken: "rt-first",
+			idToken: fakeIdToken("acct-same"),
+		});
+		await store.putCodexIdentity("200", {
+			refreshToken: "rt-reauth",
+			idToken: fakeIdToken("acct-same"),
+		});
+		expect(counts.restarts).toBe(2);
+		expect(counts.reinjects).toBe(0);
+	});
+
+	it("putCodexIdentity fires the restart hook on the FIRST authorization (warm no-identity container)", async () => {
+		const { store, counts } = storeWithSpy();
+		await store.putCodexIdentity("201", {
+			refreshToken: "rt-first",
+			idToken: fakeIdToken("acct-a"),
+		});
+		expect(counts.restarts).toBe(1);
+	});
+
+	it("putCodexIdentity still restarts on an account switch (changed path regression)", async () => {
+		const { store, counts } = storeWithSpy();
+		await store.putCodexIdentity("202", {
+			refreshToken: "rt-a",
+			idToken: fakeIdToken("acct-a"),
+		});
+		await store.putCodexIdentity("202", {
+			refreshToken: "rt-b",
+			idToken: fakeIdToken("acct-b"),
+		});
+		expect(counts.restarts).toBe(2);
 	});
 
 	it("putClaudeIdentity fires the restart hook on a RE-authorization", async () => {

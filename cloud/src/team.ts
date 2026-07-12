@@ -501,7 +501,13 @@ async function putCloudIdentity(
 		.bind(TEAM_ID, env.HELMOR_SANDBOX_ID, memberId)
 		.run();
 
-	if (result.changed) await deps.restartForReauth(env);
+	// OBS-R6-1: restart whenever a token was actually stored, not only on an
+	// account switch. The Codex DO's `changed` is account hygiene (docstring:
+	// "identity hygiene only"), so a SAME-account re-authorization reported
+	// changed=false and the warm container kept its old startProcess-env auth
+	// (401 token_invalidated until natural sleep). `restartForReauth` itself
+	// guards the not-serving case.
+	if (result.stored || result.changed) await deps.restartForReauth(env);
 	return { accountId: result.accountId, changed: result.changed };
 }
 

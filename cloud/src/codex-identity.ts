@@ -78,7 +78,17 @@ interface RefreshResponse {
 	refresh_token?: string;
 }
 
-export type PutResult = { accountId: string | null; changed: boolean };
+export type PutResult = {
+	accountId: string | null;
+	/** Account hygiene ONLY: the account_id differs from a previously-stored
+	 *  one. NOT a "restart needed" signal — see `stored`. */
+	changed: boolean;
+	/** A token was actually written by THIS call (OBS-R6-1). The Worker keys
+	 *  the container restart off this: a warm serve holds its auth as
+	 *  startProcess env, so ANY stored token needs a restart to take effect —
+	 *  including a same-account re-authorization, where `changed` is false. */
+	stored: boolean;
+};
 
 export type MintResult =
 	| { authJson: ChatgptAuthJson; accountId: string }
@@ -142,7 +152,7 @@ export class CodexIdentity extends DurableObject<CodexIdentityEnv> {
 			KEY_ACCESS_EXP,
 		]);
 
-		return { accountId, changed };
+		return { accountId, changed, stored: true };
 	}
 
 	/**
