@@ -18,6 +18,9 @@ const AUTH_PHRASES = [
 	"no cloud identity",
 	"needs re-authorization",
 	"token expired",
+	// DF-R6-C: the broker's server-side invalidation verdict (the token was
+	// revoked/superseded — re-auth is the only fix).
+	"token_invalidated",
 ];
 
 // Lowercased substrings that mark a subscription/billing problem

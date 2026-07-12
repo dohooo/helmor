@@ -146,6 +146,35 @@ describe("AgentStatusCard (R5-A)", () => {
 		expect(screen.getByText("Authorized · long-lived")).toBeTruthy();
 	});
 
+	// DF-R6-C: honest copy — an unverified stored token must not claim "Valid".
+	it("labels the stored-token lifetime as 'Stored · expires in', not 'Valid for'", () => {
+		setCodex({
+			hasToken: true,
+			accessExp: Math.floor(Date.now() / 1000) + 9 * 24 * 3600,
+		});
+		render(<AgentStatusCard cfg={CFG} />);
+		fireEvent.click(screen.getByRole("button", { name: /Agent status/i }));
+		expect(screen.getByText(/Stored · expires in 9d/)).toBeTruthy();
+		expect(screen.queryByText(/Valid for/)).toBeNull();
+	});
+
+	// DF-R6-C: a turn-observed auth invalidation overrides the storage-derived
+	// lifetime — the card must flip to "Re-authorize needed" even while the
+	// stored expiry is days away.
+	it("shows 'Re-authorize needed' when the auth-invalidated flag is set", () => {
+		setCodex(
+			{
+				hasToken: true,
+				accessExp: Math.floor(Date.now() / 1000) + 9 * 24 * 3600,
+			},
+			{ needsReauthorize: true, authInvalidated: true },
+		);
+		render(<AgentStatusCard cfg={CFG} />);
+		fireEvent.click(screen.getByRole("button", { name: /Agent status/i }));
+		expect(screen.getByText("Re-authorize needed")).toBeTruthy();
+		expect(screen.queryByText(/expires in/)).toBeNull();
+	});
+
 	it("wires Re-authorize to the codex authorize action", () => {
 		setCodex({ hasToken: true });
 		mocks.claude.status = { hasToken: true };

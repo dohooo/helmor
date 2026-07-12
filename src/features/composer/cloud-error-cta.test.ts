@@ -14,6 +14,10 @@ describe("classifyCloudError", () => {
 		expect(classifyCloudError(message)).toBe(expected);
 	});
 
+	it("recognizes the broker's token_invalidated fingerprint (DF-R6-C)", () => {
+		expect(classifyCloudError("stream error: token_invalidated")).toBe("auth");
+	});
+
 	it("is case-insensitive", () => {
 		expect(classifyCloudError("UNAUTHORIZED")).toBe("auth");
 		expect(classifyCloudError("Agent SDK Credit exhausted")).toBe("billing");

@@ -1,4 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSyncExternalStore } from "react";
+import {
+	clearCloudAuthInvalidated,
+	isCloudAuthInvalidated,
+	subscribeCloudAuthInvalidated,
+} from "@/features/team/cloud-auth-invalidated";
 import { authorizeCloudCodexIdentity } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import {
@@ -48,6 +54,13 @@ export interface UseCloudIdentity {
 	 * error — the recovery is the same Authorize button.
 	 */
 	needsReauthorize: boolean;
+	/**
+	 * DF-R6-C: a live turn observed an auth failure (401 token_invalidated
+	 * etc.) for this provider — the stored state may still LOOK healthy, but
+	 * the token is dead server-side. Overrides the storage-derived lifetime in
+	 * the status card; cleared by a successful re-authorization.
+	 */
+	authInvalidated: boolean;
 	authorize: () => void;
 	refetch: () => void;
 }
@@ -111,6 +124,9 @@ export function useCloudIdentity(cfg: TeamConfig | null): UseCloudIdentity {
 		// (display-only) so the Agent status card can show a human identity.
 		onSuccess: (result) => {
 			if (result.email) saveCodexIdentityEmail(result.email);
+			// DF-R6-C: a successful re-authorization is the recovery path — clear
+			// the turn-observed "authorization invalid" flag.
+			clearCloudAuthInvalidated("codex");
 		},
 		// On success (and on failure — a partial run may still have changed
 		// state) re-read the identity so the panel reflects the live DO.
@@ -122,6 +138,12 @@ export function useCloudIdentity(cfg: TeamConfig | null): UseCloudIdentity {
 	});
 
 	const status = statusQuery.data;
+
+	// DF-R6-C: turn-observed invalidation (module-level flag, session-scoped).
+	const authInvalidated = useSyncExternalStore(
+		subscribeCloudAuthInvalidated,
+		() => isCloudAuthInvalidated("codex"),
+	);
 
 	return {
 		status,
@@ -135,7 +157,10 @@ export function useCloudIdentity(cfg: TeamConfig | null): UseCloudIdentity {
 					? String(authorizeMutation.error)
 					: null,
 		needsReauthorize:
-			(status?.bricked ?? false) || isCloudIdentityExpired(status),
+			(status?.bricked ?? false) ||
+			isCloudIdentityExpired(status) ||
+			authInvalidated,
+		authInvalidated,
 		authorize: () => authorizeMutation.mutate(),
 		refetch: () => {
 			void statusQuery.refetch();

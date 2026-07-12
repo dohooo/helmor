@@ -1,4 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSyncExternalStore } from "react";
+import {
+	clearCloudAuthInvalidated,
+	isCloudAuthInvalidated,
+	subscribeCloudAuthInvalidated,
+} from "@/features/team/cloud-auth-invalidated";
 import { authorizeCloudClaudeIdentity } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import {
@@ -39,6 +45,10 @@ export interface UseCloudClaudeIdentity {
 	isAuthorizing: boolean;
 	/** Human-readable error from the authorize round-trip, or `null`. */
 	error: string | null;
+	/** DF-R6-C: a live turn observed an auth failure for cloud Claude — the
+	 *  token is dead server-side even if `hasToken` still reads true. Cleared
+	 *  by a successful re-authorization. */
+	authInvalidated: boolean;
 	authorize: () => void;
 	refetch: () => void;
 }
@@ -87,12 +97,23 @@ export function useCloudClaudeIdentity(
 		},
 		// On success (and on failure — a partial run may still have changed
 		// state) re-read the identity so the panel reflects the live DO.
+		// DF-R6-C: a successful re-authorization clears the turn-observed
+		// "authorization invalid" flag.
+		onSuccess: () => {
+			clearCloudAuthInvalidated("claude");
+		},
 		onSettled: () => {
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.cloudClaudeIdentity(cfg?.url ?? "__none__"),
 			});
 		},
 	});
+
+	// DF-R6-C: turn-observed invalidation (module-level flag, session-scoped).
+	const authInvalidated = useSyncExternalStore(
+		subscribeCloudAuthInvalidated,
+		() => isCloudAuthInvalidated("claude"),
+	);
 
 	return {
 		status: statusQuery.data,
@@ -105,6 +126,7 @@ export function useCloudClaudeIdentity(
 				: authorizeMutation.error
 					? String(authorizeMutation.error)
 					: null,
+		authInvalidated,
 		authorize: () => authorizeMutation.mutate(),
 		refetch: () => {
 			void statusQuery.refetch();

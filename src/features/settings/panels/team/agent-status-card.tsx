@@ -31,7 +31,10 @@ export function AgentStatusCard({ cfg }: { cfg: TeamConfig }) {
 	const codexAuthorized = codex.status?.hasToken ?? false;
 	const claudeAuthorized = claude.status?.hasToken ?? false;
 	const anyAuthorized = codexAuthorized || claudeAuthorized;
-	const needsAction = codex.needsReauthorize || (!loading && !anyAuthorized);
+	const needsAction =
+		codex.needsReauthorize ||
+		claude.authInvalidated ||
+		(!loading && !anyAuthorized);
 	const open = manualOpen ?? (!loading && !anyAuthorized);
 
 	return (
@@ -67,7 +70,7 @@ export function AgentStatusCard({ cfg }: { cfg: TeamConfig }) {
 					<AgentRow
 						name="Codex"
 						identity={codexIdentityLine(codex.status)}
-						lifetime={codexLifetime(codex.status)}
+						lifetime={codexLifetime(codex.status, codex.authInvalidated)}
 						authorized={codexAuthorized}
 						busy={codex.isAuthorizing}
 						error={codex.error}
@@ -78,7 +81,7 @@ export function AgentStatusCard({ cfg }: { cfg: TeamConfig }) {
 						identity={
 							claudeAuthorized ? "Authorized · long-lived" : "Not authorized"
 						}
-						lifetime={null}
+						lifetime={claude.authInvalidated ? "Re-authorize needed" : null}
 						authorized={claudeAuthorized}
 						busy={claude.isAuthorizing}
 						error={claude.error}
@@ -149,16 +152,21 @@ function codexIdentityLine(
 	return getCodexIdentityEmail() ?? status.accountId ?? "Authorized";
 }
 
-/** Compact lifetime label ("Valid for 27d", "Expired — re-authorize"). */
+/** Compact lifetime label ("Stored · expires in 27d", "Expired — re-authorize",
+ *  "Re-authorize needed"). DF-R6-C: a turn-observed invalidation overrides the
+ *  storage-derived lifetime (the stored expiry can't see a server-side revoke),
+ *  and the healthy label says "Stored", not "Valid" — we never verified it. */
 function codexLifetime(
 	status: CloudCodexIdentityStatus | undefined,
+	authInvalidated: boolean,
 ): string | null {
+	if (authInvalidated) return "Re-authorize needed";
 	if (!status?.hasToken) return null;
 	if (status.bricked || isCloudIdentityExpired(status)) {
 		return "Expired — re-authorize";
 	}
 	if (status.accessExp == null) return null;
-	return `Valid for ${formatDuration(status.accessExp * 1000 - Date.now())}`;
+	return `Stored · expires in ${formatDuration(status.accessExp * 1000 - Date.now())}`;
 }
 
 function formatDuration(ms: number): string {

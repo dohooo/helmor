@@ -33,6 +33,7 @@ import type {
 } from "@/features/conversation/state/streaming-store";
 import { nestStreamingChildPartial } from "@/features/conversation/streaming-child-nesting";
 import { stabilizeStreamingMessages } from "@/features/conversation/streaming-tail-collapse";
+import { noteCloudAuthTurnError } from "@/features/team/cloud-auth-invalidated";
 import type {
 	AgentModelOption,
 	AgentStreamEvent,
@@ -276,6 +277,17 @@ export function createStreamEventDispatcher(
 		}
 
 		if (event.kind === "error") {
+			// DF-R6-C: a cloud auth failure (401 token_invalidated etc.) flips the
+			// provider's "authorization invalid" flag so the status card stops
+			// showing a healthy stored lifetime, refreshes the identity query, and
+			// notifies once. No-op outside team mode / for non-auth errors.
+			noteCloudAuthTurnError({
+				message: event.message,
+				provider: deps.model.provider,
+				queryClient: deps.queryClient,
+				notify: (message) =>
+					deps.pushToast(message, translateSource("error"), "destructive"),
+			});
 			deps.cleanup();
 			deps.clearPendingPermissions(deps.contextKey);
 			deps.clearPendingUserInput(deps.contextKey);
