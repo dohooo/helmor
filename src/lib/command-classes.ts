@@ -98,6 +98,14 @@ export const COMMAND_CLASSES: Record<string, CommandClass> = {
 	write_keychain_store_terminal_stdin: "LOCAL_ONLY",
 	resize_keychain_store_terminal: "LOCAL_ONLY",
 
+	// Desktop OS global-hotkey registration (Tauri global-shortcut API). Like the
+	// auth PTYs above it acts only on THIS Mac — routing it to the team container
+	// as PASSIVE made it fail with the typed asleep error on every (re)mount in
+	// team mode, and its catch site toasted that as red "sandbox asleep" spam
+	// (debug-loop). LOCAL_ONLY both stops the pointless container round-trip and
+	// lets the hotkey actually register in team mode.
+	sync_global_hotkey: "LOCAL_ONLY",
+
 	// ---------------------------------------------------------------------
 	// CONTROL_PLANE — served without the container in team mode.
 	// ---------------------------------------------------------------------
@@ -340,7 +348,6 @@ export const COMMAND_CLASSES: Record<string, CommandClass> = {
 	// Window / app chrome (desktop concerns; remote dispatch no-ops)
 	toggle_quick_panel: "PASSIVE",
 	hide_quick_panel: "PASSIVE",
-	sync_global_hotkey: "PASSIVE",
 	enter_onboarding_window_mode: "PASSIVE",
 	exit_onboarding_window_mode: "PASSIVE",
 	enter_mini_window_mode: "PASSIVE",

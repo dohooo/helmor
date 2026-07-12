@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
-import { toast } from "sonner";
 import { type OsGlobalHotkeyId, syncGlobalHotkey } from "@/lib/api";
+import { toastCaughtError } from "@/lib/error-toast";
 import { translateSource } from "@/lib/i18n";
 import type { ShortcutOverrides } from "@/lib/settings";
 import { isQuickPanelWindow } from "@/lib/window-role";
@@ -40,7 +40,12 @@ export function useGlobalHotkeySync({
 					const key = hotkey ?? "<disabled>";
 					if (lastFailureRef.current.get(id) !== key) {
 						lastFailureRef.current.set(id, key);
-						toast.error(
+						// DF-R6-A hygiene: silent for the typed companion-asleep error
+						// (defense-in-depth — sync_global_hotkey is LOCAL_ONLY now, so
+						// it no longer routes to the sleeping container), deduped id
+						// for any real registration failure.
+						toastCaughtError(
+							error,
 							error instanceof Error
 								? error.message
 								: translateSource("miscFailedRegisterGlobalHotkey"),

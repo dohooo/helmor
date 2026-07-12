@@ -152,4 +152,15 @@ describe("DF-R6-D desktop-host auth terminals route LOCAL_ONLY", () => {
 		expect(COMMAND_CLASSES[cmd]).toBeDefined();
 		expect(COMMAND_CLASSES[cmd]).not.toBe("LOCAL_ONLY");
 	});
+
+	// debug-loop (round6): sync_global_hotkey registers a macOS OS global hotkey
+	// (Tauri global-shortcut API) — a desktop op like the auth PTYs above. It was
+	// PASSIVE, so team mode routed it to the sleeping container; the typed asleep
+	// error hit useGlobalHotkeySync's catch → toast.error, spamming red "sandbox
+	// asleep" toasts on every switch/remount. LOCAL_ONLY stops the container
+	// round-trip (and actually registers the hotkey in team mode).
+	it("routes sync_global_hotkey LOCAL_ONLY", () => {
+		expect(COMMAND_CLASSES.sync_global_hotkey).toBe("LOCAL_ONLY");
+		expect(LOCAL_ONLY_COMMANDS.has("sync_global_hotkey")).toBe(true);
+	});
 });
