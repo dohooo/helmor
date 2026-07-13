@@ -131,3 +131,16 @@ CREATE TABLE IF NOT EXISTS model_catalog (
   payload    TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+-- Lever A: workspace-detail mirror. One row per workspace holding the
+-- container's exact `get_workspace` WorkspaceDetail JSON (opaque payload,
+-- versionless — the shape is owned by the Rust serializer). Fed by the
+-- container's write-through (PUT /team/sync) on workspace mutations + a full
+-- push at serve startup; lets team mode answer the switch-time detail read
+-- with the container ASLEEP. The Worker's write path also runs this CREATE
+-- (self-healing), so pre-existing D1 databases gain the table on first write.
+CREATE TABLE IF NOT EXISTS workspace_details (
+  workspace_id TEXT PRIMARY KEY,
+  payload      TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+);

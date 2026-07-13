@@ -16,6 +16,7 @@ import type {
 import { setSessionThreadPaginationState } from "./session-thread-pagination";
 import {
 	getTeamGitSnapshot,
+	getTeamWorkspaceDetail,
 	listTeamSessionMessages,
 	listTeamSessions,
 	publishPresenceEvent,
@@ -2019,6 +2020,19 @@ export async function prewarmSlashCommandsForRepo(
 export async function loadWorkspaceDetail(
 	workspaceId: string,
 ): Promise<WorkspaceDetail | null> {
+	// Team mode: read the D1 workspace-detail mirror (Lever A) so switching
+	// never depends on the live container — `get_workspace` was the ONLY
+	// switch-time input still proxied over /rpc, and a sleeping container
+	// fast-fails it. A null mirror (never synced yet) falls through to the
+	// live call; with the container asleep that rejects like before, which
+	// the selection prime treats as best-effort.
+	if (isTeamModeActive()) {
+		const cfg = getTeamConfig();
+		if (cfg) {
+			const detail = await getTeamWorkspaceDetail(cfg, workspaceId);
+			if (detail !== null) return detail as WorkspaceDetail;
+		}
+	}
 	try {
 		return await invoke<WorkspaceDetail>("get_workspace", { workspaceId });
 	} catch (error) {

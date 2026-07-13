@@ -152,6 +152,7 @@ export function createWorkerTeamGatewayStore(
 		listSessions: (workspaceId) => listSessions(env, workspaceId),
 		listSessionMessages: (sessionId) => listSessionMessages(env, sessionId),
 		getGitSnapshot: (workspaceId) => getGitSnapshot(env, workspaceId),
+		getWorkspaceDetail: (workspaceId) => getWorkspaceDetail(env, workspaceId),
 	};
 }
 
@@ -312,6 +313,57 @@ async function getGitSnapshot(
 	}
 }
 
+/** Lever A workspace-detail mirror. Same contract as git_snapshots: own table
+ * (write-path self-heal CREATE — no migration step for existing deployments),
+ * opaque payload holding the container's exact `get_workspace` WorkspaceDetail
+ * serialization. Answers the desktop's switch-time detail read with the
+ * container asleep. */
+const CREATE_WORKSPACE_DETAILS_SQL = `CREATE TABLE IF NOT EXISTS workspace_details (
+	workspace_id TEXT PRIMARY KEY,
+	payload TEXT NOT NULL,
+	updated_at TEXT NOT NULL
+)`;
+
+async function putWorkspaceDetails(
+	env: Env,
+	rows: NonNullable<TeamSyncInput["workspaceDetails"]>,
+): Promise<void> {
+	const valid = rows.filter(
+		(row) =>
+			row?.workspaceId && row.detail !== undefined && row.detail !== null,
+	);
+	if (valid.length === 0) return;
+	await env.DB.prepare(CREATE_WORKSPACE_DETAILS_SQL).run();
+	await env.DB.batch(
+		valid.map((row) =>
+			env.DB.prepare(
+				`INSERT INTO workspace_details (workspace_id, payload, updated_at)
+				 VALUES (?1, ?2, datetime('now'))
+				 ON CONFLICT(workspace_id) DO UPDATE SET
+				   payload = excluded.payload, updated_at = excluded.updated_at`,
+			).bind(row.workspaceId, JSON.stringify(row.detail)),
+		),
+	);
+}
+
+async function getWorkspaceDetail(
+	env: Env,
+	workspaceId: string,
+): Promise<unknown | null> {
+	if (!workspaceId) return null;
+	try {
+		const row = await env.DB.prepare(
+			"SELECT payload FROM workspace_details WHERE workspace_id = ?1",
+		)
+			.bind(workspaceId)
+			.first<{ payload: string }>();
+		return row ? JSON.parse(row.payload) : null;
+	} catch {
+		// Table not created yet (no detail ever pushed) — not an error.
+		return null;
+	}
+}
+
 /**
  * Stage B write-through (PUT /team/sync, container→D1). Upserts session rows,
  * APPENDS message rows (immutable — `ON CONFLICT DO NOTHING`), and applies
@@ -326,6 +378,10 @@ async function syncTeamData(
 	// R2-E: git snapshot rides the same sync payload; separate table + upsert.
 	if (input.gitSnapshot) {
 		await putGitSnapshot(env, input.gitSnapshot);
+	}
+	// Lever A: workspace-detail mirror rides the same payload; own table.
+	if (input.workspaceDetails?.length) {
+		await putWorkspaceDetails(env, input.workspaceDetails);
 	}
 	const stmts: ReturnType<typeof env.DB.prepare>[] = [];
 	for (const s of input.sessions ?? []) {

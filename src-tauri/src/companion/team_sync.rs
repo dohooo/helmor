@@ -106,6 +106,20 @@ struct SyncPayload {
     /// awake for the whole attended session).
     #[serde(skip_serializing_if = "Option::is_none")]
     git_snapshot: Option<GitSnapshot>,
+    /// Lever A: workspace-detail mirror rows so team mode answers the
+    /// switch-time `get_workspace` from D1 with the container asleep.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    workspace_details: Vec<WorkspaceDetailRow>,
+}
+
+/// Zero shape invention (same contract as [`GitSnapshot`]): `detail` is the
+/// exact `get_workspace` `WorkspaceDetail` serialization, stored opaque by the
+/// Worker, so the frontend team branch consumes the D1 copy with the SAME type.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceDetailRow {
+    workspace_id: String,
+    detail: serde_json::Value,
 }
 
 /// Zero shape invention: the two fields serialize the exact structs the
@@ -193,8 +207,7 @@ impl TeamSync {
             &SyncPayload {
                 sessions: vec![session],
                 messages,
-                replace_workspace_sessions: None,
-                git_snapshot: None,
+                ..Default::default()
             },
         )
         .await?;
@@ -226,12 +239,55 @@ impl TeamSync {
             cfg,
             &SyncPayload {
                 sessions,
-                messages: vec![],
                 replace_workspace_sessions: Some(ReplaceWorkspaceSessions {
                     workspace_id: workspace_id.to_string(),
                     session_ids,
                 }),
-                git_snapshot: None,
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    /// Lever A: mirror one workspace's `get_workspace` detail to D1. Fired on
+    /// the workspace-metadata events (see [`workspace_detail_target`]); cheap —
+    /// a single SQLite row read, no git subprocesses.
+    async fn sync_workspace_detail(&self, workspace_id: &str) -> Result<()> {
+        let Some(cfg) = self.config.as_ref() else {
+            return Ok(());
+        };
+        let wid = workspace_id.to_string();
+        let row =
+            tauri::async_runtime::spawn_blocking(move || read_workspace_detail(&wid)).await??;
+        // Workspace gone (deleted between event + read) — nothing to mirror.
+        let Some(row) = row else {
+            return Ok(());
+        };
+        post_sync(
+            cfg,
+            &SyncPayload {
+                workspace_details: vec![row],
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    /// Lever A: mirror EVERY workspace's detail — `WorkspaceListChanged`
+    /// (create / archive / delete carries no id) and the startup backfill.
+    async fn sync_all_workspace_details(&self) -> Result<()> {
+        let Some(cfg) = self.config.as_ref() else {
+            return Ok(());
+        };
+        let rows = tauri::async_runtime::spawn_blocking(read_all_workspace_details).await??;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        post_sync(
+            cfg,
+            &SyncPayload {
+                workspace_details: rows,
+                ..Default::default()
             },
         )
         .await
@@ -258,6 +314,11 @@ impl TeamSync {
             if let Err(error) = self.sync_session(session_id).await {
                 tracing::warn!(error = %format!("{error:#}"), session_id = %session_id, "team_sync: backfill session failed");
             }
+        }
+        // Lever A: mirror every workspace's detail so pre-existing workspaces
+        // are covered without waiting for their first mutation.
+        if let Err(error) = self.sync_all_workspace_details().await {
+            tracing::warn!(error = %format!("{error:#}"), "team_sync: backfill workspace details failed");
         }
         tracing::info!(
             workspaces = workspace_ids.len(),
@@ -315,10 +376,8 @@ impl TeamSync {
         post_sync(
             cfg,
             &SyncPayload {
-                sessions: vec![],
-                messages: vec![],
-                replace_workspace_sessions: None,
                 git_snapshot: Some(snapshot),
+                ..Default::default()
             },
         )
         .await
@@ -402,6 +461,8 @@ pub fn on_ui_mutation<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: &UiMu
 
     // Stage B — data mirror: only the session/message subset hits D1.
     let (session_id, workspace_id) = stage_b_targets(event);
+    // Lever A — workspace-detail mirror target (rides the same deferred task).
+    let detail_target = workspace_detail_target(event);
 
     // Stage C — realtime. Mirrored events DEFER their broadcast to the Stage-B
     // task below (P1-6b, see the fn docs); everything else broadcasts now.
@@ -441,7 +502,7 @@ pub fn on_ui_mutation<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: &UiMu
         });
     }
 
-    if session_id.is_none() && workspace_id.is_none() {
+    if session_id.is_none() && workspace_id.is_none() && detail_target.is_none() {
         return;
     }
 
@@ -465,6 +526,19 @@ pub fn on_ui_mutation<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: &UiMu
                 tracing::warn!(error = %format!("{error:#}"), workspace_id = %wid, "team_sync: workspace mirror failed");
             }
         }
+        match detail_target {
+            Some(WorkspaceDetailTarget::One(wid)) => {
+                if let Err(error) = sync.sync_workspace_detail(&wid).await {
+                    tracing::warn!(error = %format!("{error:#}"), workspace_id = %wid, "team_sync: workspace detail mirror failed");
+                }
+            }
+            Some(WorkspaceDetailTarget::All) => {
+                if let Err(error) = sync.sync_all_workspace_details().await {
+                    tracing::warn!(error = %format!("{error:#}"), "team_sync: workspace details mirror failed");
+                }
+            }
+            None => {}
+        }
         if let Some(body) = deferred_broadcast {
             if let Err(error) = sync.broadcast_event(body).await {
                 tracing::warn!(error = %format!("{error:#}"), "team_sync: event broadcast failed");
@@ -473,13 +547,14 @@ pub fn on_ui_mutation<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: &UiMu
     });
 }
 
-/// Round6 P1-6b: does this event's broadcast wait for its Stage-B mirror?
-/// Exactly the events with a Stage-B target — their receivers react by READING
-/// the D1 mirror, so the row must be there before the event fans out. Pure so
-/// the classification is unit-testable next to `stage_b_targets`.
+/// Round6 P1-6b: does this event's broadcast wait for its D1 mirror?
+/// Exactly the events with a Stage-B target OR a workspace-detail target —
+/// their receivers react by READING the D1 mirror, so the row must be there
+/// before the event fans out. Pure so the classification is unit-testable
+/// next to `stage_b_targets` / `workspace_detail_target`.
 fn defers_broadcast(event: &UiMutationEvent) -> bool {
     let (session_id, workspace_id) = stage_b_targets(event);
-    session_id.is_some() || workspace_id.is_some()
+    session_id.is_some() || workspace_id.is_some() || workspace_detail_target(event).is_some()
 }
 
 /// Classify which Stage B mirror target(s) a ui-mutation drives: `(session_id,
@@ -498,6 +573,31 @@ fn stage_b_targets(event: &UiMutationEvent) -> (Option<String>, Option<String>) 
         _ => None,
     };
     (session_id, workspace_id)
+}
+
+/// Lever A: which workspace-detail mirror push a ui-mutation drives, if any.
+/// `One` covers the events that change ONE workspace's `get_workspace` output
+/// (rename / status / active session / PR fields / session counts); `All`
+/// covers `WorkspaceListChanged` (create / archive / delete — no id on the
+/// event). Git-watcher events are deliberately NOT detail targets: the header's
+/// dirty/ahead-behind chips read the separate git-snapshot mirror, and the
+/// detail's DB-backed fields don't change on watcher ticks.
+#[derive(Debug, PartialEq, Eq)]
+enum WorkspaceDetailTarget {
+    One(String),
+    All,
+}
+
+fn workspace_detail_target(event: &UiMutationEvent) -> Option<WorkspaceDetailTarget> {
+    match event {
+        UiMutationEvent::WorkspaceChanged { workspace_id }
+        | UiMutationEvent::SessionListChanged { workspace_id }
+        | UiMutationEvent::WorkspaceChangeRequestChanged { workspace_id } => {
+            Some(WorkspaceDetailTarget::One(workspace_id.clone()))
+        }
+        UiMutationEvent::WorkspaceListChanged => Some(WorkspaceDetailTarget::All),
+        _ => None,
+    }
 }
 
 /// Workspace whose git snapshot must be re-mirrored to D1 for this event, or
@@ -577,6 +677,37 @@ fn read_workspace_session_rows(workspace_id: &str) -> Result<Vec<SyncSession>> {
     )?;
     let rows = statement.query_map([workspace_id], map_session_row)?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
+/// Lever A: one workspace's detail as the exact `get_workspace` serialization
+/// (blocking: one SQLite row read + the cheap `record_to_detail` touches).
+/// `None` ⇒ the workspace row is gone.
+fn read_workspace_detail(workspace_id: &str) -> Result<Option<WorkspaceDetailRow>> {
+    let Some(record) = crate::models::workspaces::load_workspace_record_by_id(workspace_id)? else {
+        return Ok(None);
+    };
+    let detail = crate::workspace::workspaces::record_to_detail(record);
+    Ok(Some(WorkspaceDetailRow {
+        workspace_id: workspace_id.to_string(),
+        detail: serde_json::to_value(detail)?,
+    }))
+}
+
+/// Lever A: every workspace's detail row (the `All` target + startup backfill).
+fn read_all_workspace_details() -> Result<Vec<WorkspaceDetailRow>> {
+    let ids = {
+        let conn = db::read_conn()?;
+        let mut statement = conn.prepare("SELECT id FROM workspaces")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<std::result::Result<Vec<String>, _>>()?
+    };
+    let mut details = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let Some(row) = read_workspace_detail(&id)? {
+            details.push(row);
+        }
+    }
+    Ok(details)
 }
 
 /// Distinct workspace ids that currently have any session (backfill scope).
@@ -671,7 +802,6 @@ mod tests {
     #[test]
     fn empty_arrays_are_omitted() {
         let payload = SyncPayload {
-            sessions: Vec::new(),
             messages: vec![SyncMessage {
                 id: "m1".into(),
                 session_id: "s1".into(),
@@ -681,13 +811,13 @@ mod tests {
                 created_at: None,
                 author_id: None,
             }],
-            replace_workspace_sessions: None,
-            git_snapshot: None,
+            ..Default::default()
         };
         let json = serde_json::to_value(&payload).unwrap();
         assert!(json.get("sessions").is_none());
         assert!(json.get("messages").is_some());
         assert!(json.get("replaceWorkspaceSessions").is_none());
+        assert!(json.get("workspaceDetails").is_none());
     }
 
     /// The authoritative-set prune field must serialize to
@@ -696,19 +826,83 @@ mod tests {
     #[test]
     fn replace_workspace_sessions_serializes_as_camel_case() {
         let payload = SyncPayload {
-            sessions: Vec::new(),
-            messages: Vec::new(),
             replace_workspace_sessions: Some(ReplaceWorkspaceSessions {
                 workspace_id: "w1".into(),
                 session_ids: vec!["s1".into(), "s2".into()],
             }),
-            git_snapshot: None,
+            ..Default::default()
         };
         let json = serde_json::to_value(&payload).unwrap();
         assert_eq!(json["replaceWorkspaceSessions"]["workspaceId"], "w1");
         assert_eq!(json["replaceWorkspaceSessions"]["sessionIds"][0], "s1");
         assert_eq!(json["replaceWorkspaceSessions"]["sessionIds"][1], "s2");
         assert!(json.get("sessions").is_none());
+    }
+
+    /// Lever A wire contract: the detail mirror row must serialize to
+    /// `workspaceDetails: [{workspaceId, detail}]` — the Worker's
+    /// `TeamSyncInput.workspaceDetails` keys the upsert off this exact shape.
+    #[test]
+    fn workspace_details_serialize_as_camel_case() {
+        let payload = SyncPayload {
+            workspace_details: vec![WorkspaceDetailRow {
+                workspace_id: "w1".into(),
+                detail: serde_json::json!({ "id": "w1", "title": "Feature" }),
+            }],
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(json["workspaceDetails"][0]["workspaceId"], "w1");
+        assert_eq!(json["workspaceDetails"][0]["detail"]["title"], "Feature");
+        assert!(json.get("workspace_details").is_none());
+        assert!(json.get("sessions").is_none());
+    }
+
+    /// Lever A routing: exactly the workspace-metadata events drive a detail
+    /// push — `One` for id-carrying events, `All` for `WorkspaceListChanged`
+    /// (create / archive / delete has no id). Git-watcher events are NOT
+    /// detail targets (the header's dirty chips read the git-snapshot mirror).
+    #[test]
+    fn workspace_detail_targets_route_metadata_events_only() {
+        assert_eq!(
+            workspace_detail_target(&UiMutationEvent::WorkspaceChanged {
+                workspace_id: "w1".into(),
+            }),
+            Some(WorkspaceDetailTarget::One("w1".into())),
+        );
+        assert_eq!(
+            workspace_detail_target(&UiMutationEvent::SessionListChanged {
+                workspace_id: "w1".into(),
+            }),
+            Some(WorkspaceDetailTarget::One("w1".into())),
+        );
+        assert_eq!(
+            workspace_detail_target(&UiMutationEvent::WorkspaceChangeRequestChanged {
+                workspace_id: "w1".into(),
+            }),
+            Some(WorkspaceDetailTarget::One("w1".into())),
+        );
+        assert_eq!(
+            workspace_detail_target(&UiMutationEvent::WorkspaceListChanged),
+            Some(WorkspaceDetailTarget::All),
+        );
+        for event in [
+            UiMutationEvent::WorkspaceGitStateChanged {
+                workspace_id: "w1".into(),
+            },
+            UiMutationEvent::WorkspaceFilesChanged {
+                workspace_id: "w1".into(),
+            },
+            UiMutationEvent::SessionTurnPersisted {
+                session_id: "s1".into(),
+            },
+        ] {
+            assert_eq!(
+                workspace_detail_target(&event),
+                None,
+                "must not be a detail target: {event:?}"
+            );
+        }
     }
 
     /// The realtime envelope must serialize to `{"event":"ui-mutation","data":…}`
@@ -803,24 +997,36 @@ mod tests {
             UiMutationEvent::SessionListChanged {
                 workspace_id: "w1".into(),
             },
+            // Lever A: detail-mirrored events defer too — team receivers of
+            // WorkspaceChanged/WorkspaceListChanged refetch workspace detail,
+            // which now reads the D1 mirror (same P1-6b stale-read race).
+            UiMutationEvent::WorkspaceChanged {
+                workspace_id: "w1".into(),
+            },
+            UiMutationEvent::WorkspaceChangeRequestChanged {
+                workspace_id: "w1".into(),
+            },
+            UiMutationEvent::WorkspaceListChanged,
         ] {
             assert!(
                 defers_broadcast(&event),
-                "Stage-B event must defer its broadcast: {event:?}"
+                "mirrored event must defer its broadcast: {event:?}"
             );
         }
     }
 
     /// Non-mirrored events keep the immediate broadcast path — deferral would
     /// add mirror-RTT latency to realtime signals with no D1 read to protect.
+    /// (Git-watcher events stay immediate: their git-snapshot mirror push is
+    /// throttled/fire-and-forget by design, not a read-after-broadcast dep.)
     #[test]
     fn non_mirrored_events_broadcast_immediately() {
-        assert!(!defers_broadcast(&UiMutationEvent::WorkspaceListChanged));
         assert!(!defers_broadcast(
             &UiMutationEvent::WorkspaceGitStateChanged {
                 workspace_id: "w1".into(),
             }
         ));
+        assert!(!defers_broadcast(&UiMutationEvent::ActiveStreamsChanged));
     }
 
     /// Regression: the git-snapshot mirror must run BEFORE `on_ui_mutation`'s

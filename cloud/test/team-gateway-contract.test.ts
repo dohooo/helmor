@@ -204,6 +204,53 @@ describe("shared Team Gateway contract", () => {
 		expect(unauth.status).toBe(401);
 	});
 
+	it("workspace detail: PUT /team/sync stores it; GET /team/workspace-detail reads it (Lever A)", async () => {
+		const { store } = makeStore();
+		const memberToken = await acceptMember(store);
+		const detail = {
+			id: "w1",
+			title: "Feature branch",
+			mode: "worktree",
+			state: "ready",
+			activeSessionId: "s1",
+		};
+		const put = await teamRoute(store, "/team/sync", {
+			method: "PUT",
+			headers: auth(ADMIN_TOKEN),
+			body: JSON.stringify({
+				workspaceDetails: [{ workspaceId: "w1", detail }],
+			}),
+		});
+		expect(put.status).toBe(200);
+
+		// A member reads the mirror with the sandbox asleep.
+		const read = await teamRoute(
+			store,
+			"/team/workspace-detail?workspaceId=w1",
+			{ headers: auth(memberToken) },
+		);
+		expect(read.status).toBe(200);
+		expect(await read.json()).toEqual({
+			detail: expect.objectContaining({ id: "w1", title: "Feature branch" }),
+		});
+
+		// Unknown workspace → null, not an error.
+		const miss = await teamRoute(
+			store,
+			"/team/workspace-detail?workspaceId=nope",
+			{ headers: auth(memberToken) },
+		);
+		expect(await miss.json()).toEqual({ detail: null });
+
+		// Unauthorized read rejected.
+		const unauth = await teamRoute(
+			store,
+			"/team/workspace-detail?workspaceId=w1",
+			{},
+		);
+		expect(unauth.status).toBe(401);
+	});
+
 	it("mirrors sessions + messages via /team/sync and serves them sandbox-independently", async () => {
 		const { store } = makeStore();
 		const memberToken = await acceptMember(store);

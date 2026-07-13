@@ -43,6 +43,9 @@ export interface TeamGatewayStore {
 	listSessionMessages(sessionId: string): Promise<unknown[]>;
 	/** R2-E: read one workspace's git snapshot from the mirror (null = none). */
 	getGitSnapshot(workspaceId: string): Promise<unknown | null>;
+	/** Lever A: read one workspace's detail mirror — the switch-time
+	 *  `get_workspace` answer without waking the sandbox (null = never synced). */
+	getWorkspaceDetail(workspaceId: string): Promise<unknown | null>;
 }
 
 /** Container → Worker write-through payload (PUT /team/sync). Field names are
@@ -86,6 +89,11 @@ export interface TeamSyncInput {
 		gitStatus?: unknown;
 		changes?: unknown;
 	} | null;
+	/** Lever A: workspace-detail mirror rows — the container's exact
+	 *  `get_workspace` WorkspaceDetail serialization, stored opaque (same
+	 *  contract as `gitSnapshot`). Lets team mode answer the switch-time
+	 *  detail read from D1 with the container asleep. */
+	workspaceDetails?: Array<{ workspaceId: string; detail: unknown }>;
 	deletedSessionIds?: string[];
 	deletedMessageIds?: string[];
 	/** Authoritative session-id set for one workspace: any D1 session for this
@@ -283,6 +291,15 @@ export async function handleTeamGatewayRoute(
 			}
 			const wsId = url.searchParams.get("workspaceId") ?? "";
 			return json({ snapshot: await store.getGitSnapshot(wsId) });
+		}
+		case "GET /team/workspace-detail": {
+			// Lever A: member-or-admin read of the workspace-detail mirror — the
+			// switch-time `get_workspace` answer without waking the sandbox.
+			if ((await auth()).caller === "unauthorized") {
+				return json({ code: "Unauthorized" }, 401);
+			}
+			const wsId = url.searchParams.get("workspaceId") ?? "";
+			return json({ detail: await store.getWorkspaceDetail(wsId) });
 		}
 		case "GET /team/messages": {
 			// Member-or-admin read of the message mirror (raw rows → the desktop

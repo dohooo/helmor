@@ -71,6 +71,8 @@ export function createLocalTeamGatewayStore(
 			options.registry.listSessionMessages(sessionId),
 		getGitSnapshot: (workspaceId) =>
 			options.registry.getGitSnapshot(workspaceId),
+		getWorkspaceDetail: (workspaceId) =>
+			options.registry.getWorkspaceDetail(workspaceId),
 	};
 }
 

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	acceptInvite,
 	createTeam,
+	getTeamWorkspaceDetail,
 	InviteAcceptFailure,
 	listTeamMembers,
 	listTeamWorkspaces,
@@ -154,6 +155,64 @@ describe("listTeamMembers / listTeamWorkspaces", () => {
 			"https://team.example.com/team/members",
 			{ headers: {} },
 		);
+	});
+});
+
+describe("getTeamWorkspaceDetail", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("GETs /team/workspace-detail and unwraps the detail payload", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValue(
+				new Response(
+					JSON.stringify({ detail: { id: "w1", title: "Feature" } }),
+					{ status: 200 },
+				),
+			);
+		vi.stubGlobal("fetch", fetchMock);
+
+		const detail = await getTeamWorkspaceDetail(
+			{ url: "https://team.example.com", token: "hlm_tok" },
+			"w1",
+		);
+		expect(detail).toEqual({ id: "w1", title: "Feature" });
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://team.example.com/team/workspace-detail?workspaceId=w1",
+			{ headers: { Authorization: "Bearer hlm_tok" } },
+		);
+	});
+
+	it("returns null when the mirror has no row for the workspace", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi
+				.fn()
+				.mockResolvedValue(
+					new Response(JSON.stringify({ detail: null }), { status: 200 }),
+				),
+		);
+		await expect(
+			getTeamWorkspaceDetail(
+				{ url: "https://team.example.com", token: "hlm_tok" },
+				"w1",
+			),
+		).resolves.toBeNull();
+	});
+
+	it("throws on a non-2xx response", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(new Response("", { status: 500 })),
+		);
+		await expect(
+			getTeamWorkspaceDetail(
+				{ url: "https://team.example.com", token: "hlm_tok" },
+				"w1",
+			),
+		).rejects.toThrow(/HTTP 500/);
 	});
 });
 

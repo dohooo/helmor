@@ -368,6 +368,28 @@ export async function getTeamGitSnapshot(
 	return body.snapshot ?? null;
 }
 
+/** `GET /team/workspace-detail` — the D1 workspace-detail mirror (Lever A):
+ *  the exact `get_workspace` WorkspaceDetail serialization pushed by the
+ *  container. Null when never synced (pre-mirror deploy / workspace created
+ *  before the first backfill). Readable with the sandbox asleep. */
+export async function getTeamWorkspaceDetail(
+	cfg: TeamConfig,
+	workspaceId: string,
+): Promise<unknown | null> {
+	const base = normalizeUrl(cfg.url);
+	const res = await fetch(
+		`${base}/team/workspace-detail?workspaceId=${encodeURIComponent(workspaceId)}`,
+		{ headers: authHeaders(cfg) },
+	);
+	if (!res.ok) {
+		throw new Error(
+			`Failed to load team workspace detail (HTTP ${res.status})`,
+		);
+	}
+	const body = (await res.json()) as { detail?: unknown | null };
+	return body.detail ?? null;
+}
+
 /** `GET /team/messages` — the D1 message mirror for a session (raw rows). */
 export async function listTeamSessionMessages(
 	cfg: TeamConfig,

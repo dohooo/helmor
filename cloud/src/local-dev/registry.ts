@@ -150,6 +150,8 @@ export interface LocalTeamRegistry {
 	/** R2-E: git snapshot mirror (in-memory for local-dev). */
 	getGitSnapshot(workspaceId: string): Promise<unknown | null>;
 	putGitSnapshot(snapshot: { workspaceId: string }): Promise<void>;
+	/** Lever A: workspace-detail mirror (in-memory for local-dev). */
+	getWorkspaceDetail(workspaceId: string): Promise<unknown | null>;
 	putCodexIdentity(
 		memberId: string,
 		input: { refreshToken: string; idToken: string },
@@ -319,6 +321,11 @@ export class InMemoryLocalTeamRegistry implements LocalTeamRegistry {
 		if (input.gitSnapshot) {
 			await this.putGitSnapshot(input.gitSnapshot);
 		}
+		for (const row of input.workspaceDetails ?? []) {
+			if (row?.workspaceId && row.detail !== undefined && row.detail !== null) {
+				this.workspaceDetails.set(row.workspaceId, row.detail);
+			}
+		}
 		for (const s of input.sessions ?? []) {
 			if (!s?.id || !s.workspaceId) continue;
 			this.snapshotState.sessions[s.id] = {
@@ -399,6 +406,12 @@ export class InMemoryLocalTeamRegistry implements LocalTeamRegistry {
 	async putGitSnapshot(snapshot: { workspaceId: string }): Promise<void> {
 		if (snapshot?.workspaceId)
 			this.gitSnapshots.set(snapshot.workspaceId, snapshot);
+	}
+
+	private workspaceDetails = new Map<string, unknown>();
+
+	async getWorkspaceDetail(workspaceId: string): Promise<unknown | null> {
+		return this.workspaceDetails.get(workspaceId) ?? null;
 	}
 
 	async listSessionMessages(sessionId: string): Promise<LocalMessageRow[]> {
