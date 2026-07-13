@@ -422,6 +422,12 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 
 	const hasWorkspaceDetail = workspace !== null;
 	const hasWorkspaceSessions = sessionsQuery.data !== undefined;
+	// EmptyState gate: only a successfully resolved (or error-with-held-data)
+	// session list may prove a workspace empty. While the list is pending or
+	// errored with nothing cached (team-cloud asleep on a never-cached
+	// workspace), the panel must keep the cold placeholder — "Nothing here
+	// yet" would be a guess, and a flickering one.
+	const sessionsResolved = !displayedWorkspaceId || hasWorkspaceSessions;
 	const hasWorkspaceContent = hasWorkspaceDetail || sessions.length > 0;
 	const hasResolvedWorkspace = hasWorkspaceDetail && hasWorkspaceSessions;
 	const hasResolvedSessionMessages = messagesQuery.data !== undefined;
@@ -660,6 +666,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			sessionPanes={sessionPanes}
 			loadingWorkspace={loadingWorkspace}
 			loadingSession={loadingSession}
+			sessionsResolved={sessionsResolved}
 			refreshingWorkspace={refreshingWorkspace}
 			refreshingSession={refreshingSession}
 			sending={sending}

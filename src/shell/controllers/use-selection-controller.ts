@@ -284,8 +284,18 @@ export function useSelectionController(
 
 	const primeWorkspaceDisplay = useCallback(
 		async (workspaceId: string) => {
+			// Workspace detail is best-effort: in team-cloud mode it is the only
+			// prime input answered by the live container (PASSIVE /rpc), and a
+			// sleeping container fast-fails it with ContainerAsleep. Rejecting the
+			// whole prime on that would collapse the cold-display hold into the
+			// blank placeholder long before the D1-served session list arrives —
+			// the exact old→blank→new flicker the hold exists to prevent. The
+			// session list is the load-bearing input; the panel's own detail
+			// observer still surfaces detail errors/refetches independently.
 			const [workspaceDetail, workspaceSessions] = await Promise.all([
-				queryClient.ensureQueryData(workspaceDetailQueryOptions(workspaceId)),
+				queryClient
+					.ensureQueryData(workspaceDetailQueryOptions(workspaceId))
+					.catch(() => null),
 				queryClient.ensureQueryData(workspaceSessionsQueryOptions(workspaceId)),
 			]);
 
@@ -913,13 +923,25 @@ export function useSelectionController(
 				return;
 			}
 
+			// Bound the await-before-commit (same contract as the workspace
+			// flip's COLD_DISPLAY_HOLD_MAX_MS): a cold thread fetch that
+			// outlives the cap lands the target session anyway — the panel
+			// shows its loading pane and the settled fetch fills it in.
+			// Without this a slow first D1 round-trip in team mode reads as a
+			// dead click (old thread pinned, no feedback, no upper bound).
+			const holdTimerId = window.setTimeout(() => {
+				if (sessionSelectionRequestRef.current !== requestId) return;
+				store.setState({ displayedSessionId: sessionId });
+			}, COLD_DISPLAY_HOLD_MAX_MS);
 			void queryClient
 				.ensureQueryData(sessionThreadMessagesQueryOptions(sessionId))
 				.then(() => {
+					window.clearTimeout(holdTimerId);
 					if (sessionSelectionRequestRef.current !== requestId) return;
 					store.setState({ displayedSessionId: sessionId });
 				})
 				.catch(() => {
+					window.clearTimeout(holdTimerId);
 					if (sessionSelectionRequestRef.current !== requestId) return;
 					store.setState({ displayedSessionId: sessionId });
 				});

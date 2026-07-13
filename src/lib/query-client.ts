@@ -565,6 +565,12 @@ export function workspaceDetailQueryOptions(workspaceId: string) {
 		queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
 		queryFn: () => loadWorkspaceDetail(workspaceId),
 		staleTime: 0,
+		// Header/chrome fields render from the last-known detail immediately
+		// (stale-while-revalidate via staleTime 0 + focus refetch). Matters in
+		// team-cloud mode: a sleeping container fast-fails this query, and
+		// without a persisted value the workspace header stays blank until the
+		// container wakes.
+		meta: PERSIST_META,
 	});
 }
 

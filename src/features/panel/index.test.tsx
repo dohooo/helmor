@@ -333,6 +333,41 @@ describe("WorkspacePanel", () => {
 		);
 	});
 
+	// EmptyState gate: only a resolved session list may prove a workspace
+	// empty. While the list is unresolved (pending, or errored with nothing
+	// cached — team-cloud asleep on a never-cached workspace) the panel keeps
+	// the cold placeholder instead of flashing "Nothing here yet".
+	it("keeps the cold placeholder instead of EmptyState while sessions are unresolved", () => {
+		const baseProps = {
+			workspace: WORKSPACE,
+			sessions: [] as WorkspaceSessionSummary[],
+			selectedSessionId: null,
+			sessionPanes: [],
+			sending: false,
+		};
+		const queryClient = createHelmorQueryClient();
+		const { rerender } = render(
+			<TooltipProvider delayDuration={0}>
+				<QueryClientProvider client={queryClient}>
+					<WorkspacePanel {...baseProps} sessionsResolved={false} />
+				</QueryClientProvider>
+			</TooltipProvider>,
+		);
+
+		expect(screen.queryByText("No session selected")).toBeNull();
+
+		// Once the list resolves (empty for real), EmptyState is allowed.
+		rerender(
+			<TooltipProvider delayDuration={0}>
+				<QueryClientProvider client={queryClient}>
+					<WorkspacePanel {...baseProps} sessionsResolved={true} />
+				</QueryClientProvider>
+			</TooltipProvider>,
+		);
+
+		expect(screen.getByText("No session selected")).toBeInTheDocument();
+	});
+
 	it("shows star collection progress on the workspace name text button", async () => {
 		const user = userEvent.setup();
 
