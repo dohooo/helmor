@@ -62,6 +62,6 @@ jobs:
           # CF Containers reject `:latest`, so deploys reference the pinned tag;
           # `:latest` is kept only as a human-facing convenience pointer.
           tags: |
-            docker.io/caspianzhao/helmor-team-sandbox:0.1.15
+            docker.io/caspianzhao/helmor-team-sandbox:0.1.16
             docker.io/caspianzhao/helmor-team-sandbox:latest
           provenance: false
