@@ -85,9 +85,9 @@ export const CODEX_SHA256: Readonly<
 		arm64: "cb744fdc070465597c58d058bf11d04b4c8ed35952e4d9ce3beeca9216d8580d",
 		x64: "fdd8158fdd0088fe577f2811b8f09b01be09907a0d63bbd8b3a658e4ee96dda0",
 	},
-	"0.144.2": {
-		arm64: "eca3a24b054f992a2989fc455354a5ce37bdc7bc0221d9ebf3c6a9feb234a16b",
-		x64: "5a18018929e441d0680ecee4e93cfe1b5a87a044f12b28bac5e241a453cb45a8",
+	"0.144.3": {
+		arm64: "d9779cc540a5dbe9ee7cf62bd2848962c26b8d5b6fbcbbb1389ccd0ff84fdb24",
+		x64: "8c2733ac55cdc9d0b69f20130fda68aea69373bea3da5f28f8edbf5b2a811e59",
 	},
 };
 
