@@ -51,28 +51,83 @@ pub(super) fn maybe_autopush_after_turn(
     std::thread::Builder::new()
         .name("cloud-autopush".into())
         .spawn(move || {
-            if autopush_and_record(Path::new(&dir), member.as_deref(), &session_id) {
-                // A failure notice row landed in the session — tell live
-                // clients to refetch so the user sees it before idle destroy.
-                crate::ui_sync::publish(
-                    &app,
-                    crate::ui_sync::UiMutationEvent::SessionTurnPersisted { session_id },
-                );
+            match autopush_and_record(Path::new(&dir), member.as_deref(), &session_id) {
+                AutopushOutcome::Committed => {
+                    // The autopush just committed + pushed this turn's work, so
+                    // it is the AUTHORITATIVE source of that git change —
+                    // announce it directly. The container git fs-watcher does
+                    // not fire reliably (and races the aggressive post-turn
+                    // idle-destroy), so without this the D1 git-snapshot mirror
+                    // never re-reads and every team inspector's Git panel stays
+                    // empty. `WorkspaceGitStateChanged` is a `git_snapshot_target`
+                    // in `companion::team_sync`, which fires `sync_git_snapshot`
+                    // in the same window this push completes in (before the
+                    // commit-reaching origin is followed by idle-destroy).
+                    // Best-effort: a missing workspace / read error just skips
+                    // the publish (never crashes the detached thread).
+                    match crate::models::sessions::workspace_id_for_session(&session_id) {
+                        Ok(Some(workspace_id)) => {
+                            crate::ui_sync::publish(
+                                &app,
+                                crate::ui_sync::UiMutationEvent::WorkspaceGitStateChanged {
+                                    workspace_id,
+                                },
+                            );
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            tracing::warn!(
+                                error = %format!("{error:#}"),
+                                session_id = %session_id,
+                                "cloud auto-push: workspace lookup for git-state publish failed"
+                            );
+                        }
+                    }
+                }
+                AutopushOutcome::FailureRecorded => {
+                    // A failure notice row landed in the session — tell live
+                    // clients to refetch so the user sees it before idle destroy.
+                    crate::ui_sync::publish(
+                        &app,
+                        crate::ui_sync::UiMutationEvent::SessionTurnPersisted { session_id },
+                    );
+                }
+                AutopushOutcome::NoOp | AutopushOutcome::FailureUnrecorded => {}
             }
         })
         .ok();
 }
 
-/// Body of the detached auto-push thread. Returns `true` when the push failed
-/// AND a session-level failure notice was recorded (the caller then broadcasts
-/// a UI invalidation); `false` on success or when recording itself failed.
+/// What a post-turn auto-push attempt did, so [`maybe_autopush_after_turn`]'s
+/// detached thread can broadcast the matching UI invalidation exactly once.
+#[derive(Debug, PartialEq, Eq)]
+enum AutopushOutcome {
+    /// A real commit + push landed on `origin`. The caller announces
+    /// `WorkspaceGitStateChanged` so the `team_sync` git-snapshot mirror
+    /// re-reads (the container fs-watcher can't be relied on to fire it).
+    Committed,
+    /// Nothing to push (not a repo / clean tree / nothing staged). Silent.
+    NoOp,
+    /// The push failed AND a session-level failure notice was recorded; the
+    /// caller announces `SessionTurnPersisted` so live clients refetch it.
+    FailureRecorded,
+    /// The push failed AND the notice couldn't be recorded — nothing to announce.
+    FailureUnrecorded,
+}
+
+/// Body of the detached auto-push thread. Classifies the attempt (see
+/// [`AutopushOutcome`]) so the caller broadcasts the right UI invalidation: a
+/// real commit+push, a silent no-op, or a failure (with/without a recorded
+/// notice).
 fn autopush_and_record(
     workspace_dir: &Path,
     acting_member: Option<&str>,
     session_id: &str,
-) -> bool {
-    let Err(error) = autopush(workspace_dir, acting_member) else {
-        return false;
+) -> AutopushOutcome {
+    let error = match autopush(workspace_dir, acting_member) {
+        Ok(true) => return AutopushOutcome::Committed,
+        Ok(false) => return AutopushOutcome::NoOp,
+        Err(error) => error,
     };
     tracing::warn!(
         error = %format!("{error:#}"),
@@ -84,13 +139,13 @@ fn autopush_and_record(
     // so it renders in chat (adapter's existing `type:"error"` arm) and
     // survives in the DB backup.
     match record_autopush_failure(session_id, &error) {
-        Ok(()) => true,
+        Ok(()) => AutopushOutcome::FailureRecorded,
         Err(record_error) => {
             tracing::warn!(
                 error = %format!("{record_error:#}"),
                 "cloud auto-push failure could not be recorded to the session"
             );
-            false
+            AutopushOutcome::FailureUnrecorded
         }
     }
 }
@@ -230,7 +285,10 @@ fn checkpoint_db() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn autopush(workspace_dir: &Path, acting_member: Option<&str>) -> anyhow::Result<()> {
+/// Returns `Ok(true)` when this actually committed + pushed the turn's work,
+/// `Ok(false)` on a no-op (not a repo / clean tree / nothing staged). The
+/// caller keys the post-push git-state announce off the `true` case.
+fn autopush(workspace_dir: &Path, acting_member: Option<&str>) -> anyhow::Result<bool> {
     // REG-R6-1: chat-room sessions run in a plain directory with no git repo —
     // "not a repo" is "nothing to push", not a failure, so skip silently
     // (no warn, no P1-5a notice; before this guard every chat turn recorded a
@@ -238,13 +296,13 @@ fn autopush(workspace_dir: &Path, acting_member: Option<&str>) -> anyhow::Result
     // normal clone and a file in a linked worktree — `exists()` covers both;
     // autopush workspace dirs are always the clone root, never a subdirectory.
     if !workspace_dir.join(".git").exists() {
-        return Ok(());
+        return Ok(false);
     }
 
     // Nothing changed → nothing to do (the common case mid-conversation when a
     // turn only read files / answered a question).
     if git_ops::working_tree_clean(workspace_dir)? {
-        return Ok(());
+        return Ok(false);
     }
 
     let dir = workspace_dir.display().to_string();
@@ -259,7 +317,7 @@ fn autopush(workspace_dir: &Path, acting_member: Option<&str>) -> anyhow::Result
     let nothing_staged =
         git_ops::run_git(["-C", dir.as_str(), "diff", "--cached", "--quiet"], None).is_ok();
     if nothing_staged {
-        return Ok(());
+        return Ok(false);
     }
 
     // Author the commit as the acting member when we know them (team mode), via
@@ -280,7 +338,7 @@ fn autopush(workspace_dir: &Path, acting_member: Option<&str>) -> anyhow::Result
 
     git_ops::push_current_branch(workspace_dir, DEFAULT_REMOTE)?;
     tracing::info!(dir = %dir, "cloud auto-push: committed + pushed turn changes");
-    Ok(())
+    Ok(true)
 }
 
 /// Per-member git author (login + GitHub noreply email) for the auto-commit, or
@@ -364,6 +422,30 @@ mod tests {
         std::fs::write(dir.join("work.txt"), "unpushed work").unwrap();
     }
 
+    /// Init a git repo with one uncommitted file and a REACHABLE `origin` (a
+    /// local `--bare` clone target), so `autopush` runs the full add+commit+push
+    /// path and the push SUCCEEDS — the shape of a real container turn that
+    /// wrote code and reached origin.
+    fn seed_pushable_repo(work_dir: &std::path::Path, remote_dir: &std::path::Path) {
+        let run = |dir: &std::path::Path, args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?} failed: {out:?}");
+        };
+        run(remote_dir, &["init", "--bare", "-q"]);
+        run(work_dir, &["init", "-q"]);
+        run(work_dir, &["config", "user.name", "t"]);
+        run(work_dir, &["config", "user.email", "t@example.com"]);
+        run(
+            work_dir,
+            &["remote", "add", "origin", &remote_dir.display().to_string()],
+        );
+        std::fs::write(work_dir.join("work.txt"), "pushed work").unwrap();
+    }
+
     /// P1-5a: a failing push must leave a session-level system notice (not
     /// just a swallowed tracing::warn), and the notice body must never carry
     /// auth material — git errors are stderr-only (git/ops.rs
@@ -377,9 +459,13 @@ mod tests {
         seed_session_db(data_dir.path(), "s-autopush");
         seed_failing_repo(repo_dir.path());
 
-        let recorded = autopush_and_record(repo_dir.path(), None, "s-autopush");
+        let outcome = autopush_and_record(repo_dir.path(), None, "s-autopush");
 
-        assert!(recorded, "failure must report as recorded");
+        assert_eq!(
+            outcome,
+            AutopushOutcome::FailureRecorded,
+            "failure must report as recorded"
+        );
         let messages = read_system_messages("s-autopush");
         assert_eq!(
             messages.len(),
@@ -423,9 +509,13 @@ mod tests {
         // No `git init`: this mirrors a team chat room's scratch directory.
         std::fs::write(plain_dir.path().join("note.txt"), "chat scratch").unwrap();
 
-        let recorded = autopush_and_record(plain_dir.path(), None, "s-chat");
+        let outcome = autopush_and_record(plain_dir.path(), None, "s-chat");
 
-        assert!(!recorded, "non-repo dir must not report a recorded failure");
+        assert_eq!(
+            outcome,
+            AutopushOutcome::NoOp,
+            "non-repo dir is a silent no-op, not a recorded failure"
+        );
         assert!(
             read_system_messages("s-chat").is_empty(),
             "non-repo dir must leave zero notice rows"
@@ -448,11 +538,57 @@ mod tests {
             .unwrap();
         assert!(out.status.success());
 
-        let recorded = autopush_and_record(repo_dir.path(), None, "s-clean");
+        let outcome = autopush_and_record(repo_dir.path(), None, "s-clean");
 
-        assert!(!recorded);
+        assert_eq!(outcome, AutopushOutcome::NoOp);
         assert!(read_system_messages("s-clean").is_empty());
         env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    /// The autopush "committed" signal is what the detached thread keys the new
+    /// `WorkspaceGitStateChanged` publish off (the announce that deterministically
+    /// fires the D1 git-snapshot mirror without waiting on the container
+    /// fs-watcher). A real commit+push must report `true` / `Committed`; a clean
+    /// repo must report `false` / `NoOp` so nothing is announced.
+    #[test]
+    fn successful_commit_push_reports_committed_signal() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+
+        // Pushable repo → raw autopush reports the committed bool…
+        let work_a = tempfile::tempdir().unwrap();
+        let remote_a = tempfile::tempdir().unwrap();
+        seed_pushable_repo(work_a.path(), remote_a.path());
+        assert!(
+            autopush(work_a.path(), None).unwrap(),
+            "a real commit+push reports committed = true"
+        );
+
+        // …and the signal threads through autopush_and_record as `Committed`,
+        // with no failure notice recorded (fresh repo, no session DB touched).
+        let work_b = tempfile::tempdir().unwrap();
+        let remote_b = tempfile::tempdir().unwrap();
+        seed_pushable_repo(work_b.path(), remote_b.path());
+        assert_eq!(
+            autopush_and_record(work_b.path(), None, "s-committed"),
+            AutopushOutcome::Committed,
+        );
+
+        // Clean repo (nothing to push) → committed = false / NoOp, no announce.
+        let clean = tempfile::tempdir().unwrap();
+        let out = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(clean.path())
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        assert!(
+            !autopush(clean.path(), None).unwrap(),
+            "a clean/no-op repo reports committed = false"
+        );
+        assert_eq!(
+            autopush_and_record(clean.path(), None, "s-noop"),
+            AutopushOutcome::NoOp,
+        );
     }
 
     #[test]
