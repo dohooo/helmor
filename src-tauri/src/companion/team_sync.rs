@@ -418,19 +418,19 @@ pub fn on_ui_mutation<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: &UiMu
         }
     }
 
-    if session_id.is_none() && workspace_id.is_none() {
-        return;
-    }
-
     // R2-E: git snapshot mirror — fed by the container git watcher's events
     // (the same ones the desktop bridge consumes), so team clients read git
     // state from D1 instead of polling the container.
-    let git_workspace_id = match event {
-        UiMutationEvent::WorkspaceGitStateChanged { workspace_id }
-        | UiMutationEvent::WorkspaceFilesChanged { workspace_id } => Some(workspace_id.clone()),
-        _ => None,
-    };
-    if let Some(wid) = git_workspace_id {
+    //
+    // This MUST run before the no-target early-return below.
+    // `WorkspaceGitStateChanged` / `WorkspaceFilesChanged` carry no Stage-B
+    // session/workspace target (see `stage_b_targets` → `(None, None)`), so
+    // when this block sat AFTER the guard it was dead code: the mirror was
+    // never written for any workspace, and every team client's inspector read
+    // the empty default ("No changes on this branch yet" / "Branch not
+    // published to remote") no matter what the agent actually committed +
+    // autopushed. Handle the git target first, THEN fall through to the guard.
+    if let Some(wid) = git_snapshot_target(event) {
         let app_git = app.clone();
         tauri::async_runtime::spawn(async move {
             if let Some(sync) = app_git.try_state::<TeamSync>() {
@@ -439,6 +439,10 @@ pub fn on_ui_mutation<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: &UiMu
                 }
             }
         });
+    }
+
+    if session_id.is_none() && workspace_id.is_none() {
+        return;
     }
 
     // One task: mirror to completion, THEN broadcast (P1-6b). A failed mirror
@@ -494,6 +498,19 @@ fn stage_b_targets(event: &UiMutationEvent) -> (Option<String>, Option<String>) 
         _ => None,
     };
     (session_id, workspace_id)
+}
+
+/// Workspace whose git snapshot must be re-mirrored to D1 for this event, or
+/// `None`. These git-watcher events carry NO Stage-B session/workspace target
+/// (see `stage_b_targets`), so `on_ui_mutation` handles them BEFORE its
+/// no-target early-return — otherwise the mirror is never written and team
+/// clients read the empty git-status default.
+fn git_snapshot_target(event: &UiMutationEvent) -> Option<String> {
+    match event {
+        UiMutationEvent::WorkspaceGitStateChanged { workspace_id }
+        | UiMutationEvent::WorkspaceFilesChanged { workspace_id } => Some(workspace_id.clone()),
+        _ => None,
+    }
 }
 
 /// Read a session row + its messages with `rowid > after_rowid` (append-only),
@@ -804,5 +821,54 @@ mod tests {
                 workspace_id: "w1".into(),
             }
         ));
+    }
+
+    /// Regression: the git-snapshot mirror must run BEFORE `on_ui_mutation`'s
+    /// `session_id.is_none() && workspace_id.is_none()` early-return.
+    /// `WorkspaceGitStateChanged` / `WorkspaceFilesChanged` (the container git
+    /// watcher's events) carry NO Stage-B target, so gating the mirror on those
+    /// alone turned it into dead code — `git_snapshots` was never written and
+    /// every team inspector read the empty default ("No changes on this branch
+    /// yet" / "Branch not published to remote") regardless of what the agent
+    /// committed + autopushed. Pin the two facts that make the ordering
+    /// load-bearing: git events have no Stage-B target, yet ARE mirror targets.
+    #[test]
+    fn git_events_are_mirror_targets_despite_no_stage_b_target() {
+        for wid in ["w1", "w2"] {
+            for event in [
+                UiMutationEvent::WorkspaceGitStateChanged {
+                    workspace_id: wid.into(),
+                },
+                UiMutationEvent::WorkspaceFilesChanged {
+                    workspace_id: wid.into(),
+                },
+            ] {
+                // Would hit on_ui_mutation's no-target early-return…
+                assert_eq!(
+                    stage_b_targets(&event),
+                    (None, None),
+                    "git event has no Stage-B target: {event:?}"
+                );
+                // …but IS a git-snapshot mirror target, handled before that guard.
+                assert_eq!(
+                    git_snapshot_target(&event).as_deref(),
+                    Some(wid),
+                    "git event must be a git-snapshot target: {event:?}"
+                );
+            }
+        }
+        // A pure session/workspace event is NOT a git-snapshot target.
+        assert_eq!(
+            git_snapshot_target(&UiMutationEvent::SessionListChanged {
+                workspace_id: "w1".into(),
+            }),
+            None,
+        );
+        assert_eq!(
+            git_snapshot_target(&UiMutationEvent::SessionTurnPersisted {
+                session_id: "s1".into(),
+            }),
+            None,
+        );
     }
 }
