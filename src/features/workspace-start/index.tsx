@@ -198,7 +198,7 @@ function RepositoryPicker({
 						<CommandEmpty>
 							<I18nText source="noRepositoriesFound" />
 						</CommandEmpty>
-						{repositories.slice(0, 9).map((repository, index) => {
+						{repositories.map((repository, index) => {
 							const repoName = extractRepoName(repository.remoteUrl);
 							return (
 								<CommandItem
@@ -207,10 +207,19 @@ function RepositoryPicker({
 									onSelect={() => handleSelect(repository.id)}
 									className="gap-2"
 								>
-									{/* Number badge for first 9 repos */}
-									<kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground opacity-100">
-										{index + 1}
-									</kbd>
+									{/* Number badge for the first 9 repos — mirrors the 1-9
+									 *  keyboard shortcut. Later repos keep a same-width spacer
+									 *  so the avatars stay aligned. */}
+									{index < 9 ? (
+										<kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground opacity-100">
+											{index + 1}
+										</kbd>
+									) : (
+										<span
+											className="inline-flex h-5 w-5 shrink-0"
+											aria-hidden
+										/>
+									)}
 									<WorkspaceAvatar
 										repoIconSrc={repository.repoIconSrc}
 										repoInitials={repository.repoInitials}
@@ -637,7 +646,7 @@ export function WorkspaceStartPage({
 											<CommandEmpty>
 												<I18nText source="noRepositoriesFound" />
 											</CommandEmpty>
-											{repositories.slice(0, 9).map((repository, index) => {
+											{repositories.map((repository, index) => {
 												const repoName = extractRepoName(repository.remoteUrl);
 												return (
 													<CommandItem
@@ -646,9 +655,16 @@ export function WorkspaceStartPage({
 														onSelect={() => onSelectRepository(repository)}
 														className="gap-2"
 													>
-														<kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground opacity-100">
-															{index + 1}
-														</kbd>
+														{index < 9 ? (
+															<kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground opacity-100">
+																{index + 1}
+															</kbd>
+														) : (
+															<span
+																className="inline-flex h-5 w-5 shrink-0"
+																aria-hidden
+															/>
+														)}
 														<WorkspaceAvatar
 															repoIconSrc={repository.repoIconSrc}
 															repoInitials={repository.repoInitials}
