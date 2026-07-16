@@ -531,7 +531,8 @@ export function WorkspaceStartPage({
 										onOpenChange={setRepoTooltipOpen}
 									>
 										<TooltipTrigger asChild>
-											<div>
+											{/* Avoid avatar-dependent inline baselines shifting the button. */}
+											<div className="flex">
 												<RepositoryPicker
 													repositories={repositories}
 													selectedRepository={selectedRepository}
