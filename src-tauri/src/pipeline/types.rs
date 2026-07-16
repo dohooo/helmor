@@ -152,6 +152,12 @@ pub enum MessagePart {
         /// Streaming execution progress indicator.
         #[serde(skip_serializing_if = "Option::is_none")]
         streaming_status: Option<StreamingStatus>,
+        /// Aggregated Claude SDK background-task lifecycle state for the
+        /// task that belongs to this tool call (`task_*` events keyed by
+        /// `tool_use_id`). Kept off the transcript as prose; later UI can
+        /// consume it from the owning tool line.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        task_state: Option<Box<TaskState>>,
         /// Sub-agent work folded in by `grouping::group_child_messages`.
         /// Only `Task` / `Agent` tool calls populate this; everything else
         /// leaves it empty and `skip_serializing_if = "Vec::is_empty"`
@@ -259,6 +265,78 @@ pub enum MessagePart {
     /// instead of inlining the full paste.
     #[serde(rename = "pasted-text", rename_all = "camelCase")]
     PastedText { id: String, text: String },
+}
+
+/// Aggregated Claude SDK background-task lifecycle state.
+///
+/// Populated from `task_started` / `task_progress` / `task_updated` /
+/// `task_notification` events and attached to the rendered message that owns
+/// the matching `tool_use_id`. The chat transcript does not render these as
+/// prose; later task-panel/streaming-channel work can consume this typed
+/// model directly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskState {
+    /// Claude SDK `task_id`. If an older event omits it, the pipeline falls
+    /// back to `tool_use_id` so the aggregate still has a stable key.
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent_type: Option<String>,
+    pub status: TaskStatus,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_backgrounded: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<TaskUsage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_tool_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    /// SDK `patch.end_time`, in epoch milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_time_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_paused_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_file: Option<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatus {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+    Killed,
+    Paused,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskUsage {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_uses: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
 }
 
 impl MessagePart {

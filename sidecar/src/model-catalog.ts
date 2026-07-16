@@ -1,6 +1,21 @@
 import type { Provider, ProviderModelInfo } from "./session-manager.js";
 
-const CODEX_EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
+const GPT_5_6_SOL_TERRA_EFFORT_LEVELS = [
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+	"ultra",
+] as const;
+const GPT_5_6_LUNA_EFFORT_LEVELS = [
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+] as const;
+const LEGACY_CODEX_EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
 const CURSOR_REASONING_LEVELS = ["low", "medium", "high"] as const;
 
 // NOTE: the Claude/Codex sections here MUST stay in sync with the Rust
@@ -9,18 +24,16 @@ const CURSOR_REASONING_LEVELS = ["low", "medium", "high"] as const;
 // `list_agent_model_sections` command; this one feeds `listModels`.
 const MODEL_CATALOG: Record<Provider, readonly ProviderModelInfo[]> = {
 	claude: [
-		// Fable 5 leads the list as the most capable pick, but it burns limits
-		// ~2x faster than Opus — `useEnsureDefaultModel` pins the app default
-		// to the Opus 4.8 entry below, NOT to the first entry. No fast
-		// mode (Opus 4.6+ only).
+		// Fable 5 leads the Claude list as the most capable pick, but the
+		// cross-provider app default is selected separately by
+		// `useEnsureDefaultModel`. No fast mode (Opus 4.6+ only).
 		{
 			id: "claude-fable-5[1m]",
 			label: "Fable 5 1M",
 			cliModel: "claude-fable-5[1m]",
 			effortLevels: ["low", "medium", "high", "xhigh", "max"],
 		},
-		// App default selection (see `useEnsureDefaultModel`, which pins this
-		// id). Pinned to the explicit `claude-opus-4-8[1m]` wire id — the `[1m]`
+		// Pinned to the explicit `claude-opus-4-8[1m]` wire id — the `[1m]`
 		// suffix selects the 1M-context variant, matching the label. We do NOT
 		// use the CLI's `default` sentinel: it resolves to whatever the bundled
 		// claude-code decides is "default" (non-deterministic across CLI bumps),
@@ -64,24 +77,45 @@ const MODEL_CATALOG: Record<Provider, readonly ProviderModelInfo[]> = {
 	],
 	codex: [
 		{
+			id: "gpt-5.6-sol",
+			label: "GPT-5.6 Sol",
+			cliModel: "gpt-5.6-sol",
+			effortLevels: GPT_5_6_SOL_TERRA_EFFORT_LEVELS,
+			supportsFastMode: true,
+		},
+		{
+			id: "gpt-5.6-terra",
+			label: "GPT-5.6 Terra",
+			cliModel: "gpt-5.6-terra",
+			effortLevels: GPT_5_6_SOL_TERRA_EFFORT_LEVELS,
+			supportsFastMode: true,
+		},
+		{
+			id: "gpt-5.6-luna",
+			label: "GPT-5.6 Luna",
+			cliModel: "gpt-5.6-luna",
+			effortLevels: GPT_5_6_LUNA_EFFORT_LEVELS,
+			supportsFastMode: true,
+		},
+		{
 			id: "gpt-5.5",
 			label: "GPT-5.5",
 			cliModel: "gpt-5.5",
-			effortLevels: CODEX_EFFORT_LEVELS,
+			effortLevels: LEGACY_CODEX_EFFORT_LEVELS,
 			supportsFastMode: true,
 		},
 		{
 			id: "gpt-5.4",
 			label: "GPT-5.4",
 			cliModel: "gpt-5.4",
-			effortLevels: CODEX_EFFORT_LEVELS,
+			effortLevels: LEGACY_CODEX_EFFORT_LEVELS,
 			supportsFastMode: true,
 		},
 		{
 			id: "gpt-5.4-mini",
-			label: "GPT-5.4-Mini",
+			label: "GPT-5.4 Mini",
 			cliModel: "gpt-5.4-mini",
-			effortLevels: CODEX_EFFORT_LEVELS,
+			effortLevels: LEGACY_CODEX_EFFORT_LEVELS,
 			supportsFastMode: true,
 		},
 	],
@@ -169,25 +203,11 @@ export function modelSupportsFastMode(
 	);
 }
 
-// Heuristic for lightweight background tasks (e.g. title generation):
-// pick the lowest version number in the catalog; when versions tie,
-// prefer a `-mini` variant. Older/smaller variants are usually fast and
-// cheap enough for a one-shot title prompt.
+// Lightweight background tasks (e.g. title generation) use the efficient,
+// high-volume member of the current GPT-5.6 family.
 export function pickFastestCodexModel(): string {
-	let best: { cliModel: string; version: number; isMini: boolean } | undefined;
-	for (const m of MODEL_CATALOG.codex) {
-		const match = m.id.match(/(\d+(?:\.\d+)?)/);
-		const version = match?.[1]
-			? Number.parseFloat(match[1])
-			: Number.POSITIVE_INFINITY;
-		const isMini = m.id.includes("mini");
-		if (
-			!best ||
-			version < best.version ||
-			(version === best.version && isMini && !best.isMini)
-		) {
-			best = { cliModel: m.cliModel, version, isMini };
-		}
-	}
-	return best?.cliModel ?? "gpt-5.4-mini";
+	return (
+		MODEL_CATALOG.codex.find((model) => model.id === "gpt-5.6-luna")
+			?.cliModel ?? "gpt-5.6-luna"
+	);
 }

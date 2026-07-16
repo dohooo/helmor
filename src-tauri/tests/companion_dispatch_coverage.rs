@@ -36,6 +36,9 @@ const BROWSER_UNSUPPORTED: &[&str] = &[
     "slack_prepare_thread_context",
     "spawn_agent_login_terminal",
     "spawn_forge_cli_auth_terminal",
+    // Interactive PTY writing into the local macOS Keychain — Channel-bound
+    // and desktop-only by nature.
+    "spawn_keychain_store_terminal",
     "spawn_terminal",
     "subscribe_local_llm_downloads",
 ];

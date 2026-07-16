@@ -4,7 +4,7 @@
 // editor pane state and the workspace fetch on open.
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { triggerWorkspaceFetch } from "@/lib/api";
+import { revealPathInFinder, triggerWorkspaceFetch } from "@/lib/api";
 import {
 	type DiffOpenOptions,
 	type EditorSessionState,
@@ -13,6 +13,7 @@ import {
 } from "@/lib/editor-session";
 import { translateSource, useI18n } from "@/lib/i18n";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
+import { useShellEvent } from "@/shell/event-bus";
 import {
 	useLatestRef,
 	useStableActions,
@@ -311,6 +312,19 @@ export function useEditorSessionController(
 			if (ok) close();
 		});
 	}, [confirmDiscardEditorChanges]);
+
+	// Bus-driven open for callers without direct access to these actions
+	// (e.g. the composer task panel's output-file link). Background-task
+	// output files often live outside the workspace (/tmp, ~/.claude);
+	// the in-app editor only opens workspace files, so fall back to
+	// revealing the file in Finder instead of surfacing an error toast.
+	useShellEvent("open-file-in-editor", (event) => {
+		if (workspaceRootPath && isPathWithinRoot(event.path, workspaceRootPath)) {
+			openFileReference(event.path, event.line);
+			return;
+		}
+		void revealPathInFinder(event.path);
+	});
 
 	const actions = useStableActions<EditorSessionActions>({
 		openFile,

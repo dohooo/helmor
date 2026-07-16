@@ -28,6 +28,23 @@ pub struct NormStatus {
 }
 
 #[derive(Debug, Serialize)]
+pub struct NormTaskState {
+    pub id: String,
+    pub tool_use_id: Option<String>,
+    pub task_type: Option<String>,
+    pub subagent_type: Option<String>,
+    pub status: String,
+    pub is_backgrounded: bool,
+    pub description: Option<String>,
+    pub summary: Option<String>,
+    pub total_tokens: Option<u64>,
+    pub duration_ms: Option<u64>,
+    pub last_tool_name: Option<String>,
+    pub error: Option<String>,
+    pub end_time_ms: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum NormPart {
     Text {
@@ -49,6 +66,8 @@ pub enum NormPart {
         result_kind: Option<String>,
         result_preview: Option<String>,
         streaming_status: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        task_state: Option<Box<NormTaskState>>,
         /// Number of sub-agent child parts attached to this tool call by
         /// the grouping pass. Always 0 for non-Task/Agent tools.
         #[serde(default, skip_serializing_if = "is_zero")]
@@ -175,6 +194,7 @@ fn normalize_basic(part: &MessagePart) -> NormPart {
             args_text,
             result,
             streaming_status,
+            task_state,
             children,
             // is_error kept out of the normalized form on purpose.
             ..
@@ -211,6 +231,9 @@ fn normalize_basic(part: &MessagePart) -> NormPart {
                 result_kind,
                 result_preview,
                 streaming_status: streaming_status.as_ref().map(streaming_status_str),
+                task_state: task_state
+                    .as_deref()
+                    .map(|task| Box::new(normalize_task_state(task))),
                 children_count: children.len(),
                 children: children.iter().map(normalize_part).collect(),
             }
@@ -335,6 +358,24 @@ pub fn normalize_part(part: &ExtendedMessagePart) -> NormPart {
             active: g.active,
             summary: g.summary.clone(),
         },
+    }
+}
+
+fn normalize_task_state(task: &helmor_lib::pipeline::types::TaskState) -> NormTaskState {
+    NormTaskState {
+        id: task.id.clone(),
+        tool_use_id: task.tool_use_id.clone(),
+        task_type: task.task_type.clone(),
+        subagent_type: task.subagent_type.clone(),
+        status: format!("{:?}", task.status).to_lowercase(),
+        is_backgrounded: task.is_backgrounded,
+        description: task.description.as_deref().map(truncate),
+        summary: task.summary.as_deref().map(truncate),
+        total_tokens: task.usage.as_ref().and_then(|usage| usage.total_tokens),
+        duration_ms: task.usage.as_ref().and_then(|usage| usage.duration_ms),
+        last_tool_name: task.last_tool_name.clone(),
+        error: task.error.as_deref().map(truncate),
+        end_time_ms: task.end_time_ms,
     }
 }
 

@@ -10,6 +10,36 @@ use super::CustomProviderBackend;
 const SETTINGS_KEY: &str = "app.claude_custom_providers";
 const MODEL_ID_PREFIX: &str = "claude-custom|";
 
+pub const VERTEX_API_STYLE: &str = "vertex";
+pub const VERTEX_AUTH_KEYCHAIN: &str = "keychain";
+/// Fixed Keychain item names — not user-configurable. Namespaced under
+/// `helmor-` so `security … -U` can never clobber a user's own
+/// `anthropic-auth-token` item; the account is the provider id so multiple
+/// Vertex providers keep separate tokens.
+pub const VERTEX_KEYCHAIN_SERVICE: &str = "helmor-anthropic-auth-token";
+
+/// How Claude Code authenticates to the Vertex gateway once
+/// `CLAUDE_CODE_SKIP_VERTEX_AUTH` disables GCP request signing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClaudeVertexAuth {
+    /// Plaintext gateway token → `ANTHROPIC_AUTH_TOKEN`.
+    Token(String),
+    /// macOS Keychain item, read by the CLI itself via `apiKeyHelper`
+    /// (`security find-generic-password`) — the token never enters Helmor.
+    Keychain { service: String, account: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaudeVertexConfig {
+    /// Gateway endpoint → `ANTHROPIC_VERTEX_BASE_URL`.
+    pub base_url: String,
+    /// `ANTHROPIC_VERTEX_PROJECT_ID`; empty → CLI-side fallbacks apply.
+    pub project_id: String,
+    /// `CLOUD_ML_REGION`; empty → "global".
+    pub region: String,
+    pub auth: ClaudeVertexAuth,
+}
+
 #[derive(Debug, Clone)]
 pub struct ClaudeProviderModel {
     pub id: String,
@@ -18,6 +48,8 @@ pub struct ClaudeProviderModel {
     pub cli_model: String,
     pub base_url: String,
     pub api_key: String,
+    /// Some → Vertex-type provider (`apiStyle == "vertex"`).
+    pub vertex: Option<ClaudeVertexConfig>,
 }
 
 /// Legacy single-slot shape.
@@ -105,32 +137,76 @@ pub fn configured_models() -> Vec<ClaudeProviderModel> {
     expand_models(&list())
 }
 
+/// Some ⟺ the provider is Vertex-type and complete enough to use.
+fn vertex_config(provider: &CustomProvider) -> Option<ClaudeVertexConfig> {
+    if provider.api_style.as_deref() != Some(VERTEX_API_STYLE) {
+        return None;
+    }
+    let trimmed = |v: &Option<String>| v.as_deref().unwrap_or_default().trim().to_string();
+    // Keychain auth is macOS-only (`security` + apiKeyHelper). Elsewhere a
+    // keychain-flagged provider degrades to token mode: usable once a token
+    // is set, skipped otherwise.
+    let keychain = cfg!(target_os = "macos")
+        && provider.vertex_auth_mode.as_deref() == Some(VERTEX_AUTH_KEYCHAIN);
+    let auth = if keychain {
+        ClaudeVertexAuth::Keychain {
+            service: VERTEX_KEYCHAIN_SERVICE.to_string(),
+            account: provider.id().to_string(),
+        }
+    } else {
+        let token = provider.api_key.trim();
+        if token.is_empty() {
+            return None;
+        }
+        ClaudeVertexAuth::Token(token.to_string())
+    };
+    Some(ClaudeVertexConfig {
+        base_url: provider.base_url.trim().to_string(),
+        project_id: trimmed(&provider.vertex_project_id),
+        region: trimmed(&provider.vertex_region),
+        auth,
+    })
+}
+
 fn expand_models(providers: &[CustomProvider]) -> Vec<ClaudeProviderModel> {
     let mut models = Vec::new();
     for provider in providers {
         let base_url = provider.base_url.trim();
         let api_key = provider.api_key.trim();
-        if base_url.is_empty() || api_key.is_empty() {
+        if base_url.is_empty() {
             continue;
         }
+        let vertex = vertex_config(provider);
+        // Keychain-auth Vertex providers legitimately have no stored key.
+        if api_key.is_empty() && vertex.is_none() {
+            continue;
+        }
+        // Custom models are merged into the official Claude section (composer
+        // and Settings alike), so each label is prefixed with its provider
+        // name (`Name · model`) — otherwise a custom `claude-opus-4-8` is
+        // indistinguishable from the official one. Mirrors Codex/OpenCode.
+        let prefix = match provider.name.trim() {
+            "" => provider.id.trim(),
+            name => name,
+        };
         let mut seen = std::collections::HashSet::new();
         for model in &provider.models {
             let slug = model.slug.trim();
             if slug.is_empty() || !seen.insert(slug.to_string()) {
                 continue;
             }
-            let label = model.label.trim();
+            let label = match model.label.trim() {
+                "" => slug,
+                label => label,
+            };
             models.push(ClaudeProviderModel {
                 id: model_id(&provider.id, slug),
                 provider_key: provider.id.clone(),
-                label: if label.is_empty() {
-                    slug.to_string()
-                } else {
-                    label.to_string()
-                },
+                label: format!("{prefix} · {label}"),
                 cli_model: slug.to_string(),
                 base_url: base_url.to_string(),
                 api_key: api_key.to_string(),
+                vertex: vertex.clone(),
             });
         }
     }
@@ -201,9 +277,40 @@ impl CustomProviderBackend for ClaudeBackend {
 
     fn remove(&self, id: &str) -> anyhow::Result<()> {
         let mut providers = list();
+        // Best-effort Keychain cleanup before the row is gone: the token
+        // item is keyed by provider id, so a deleted Vertex provider would
+        // otherwise strand it forever. Missing item / errors are fine.
+        #[cfg(target_os = "macos")]
+        if providers
+            .iter()
+            .any(|p| p.id == id && p.api_style.as_deref() == Some(VERTEX_API_STYLE))
+        {
+            delete_vertex_keychain_item(id);
+        }
         providers.retain(|p| p.id != id);
         crate::settings::upsert_setting_json(SETTINGS_KEY, &providers)?;
         Ok(())
+    }
+}
+
+/// Delete the provider's Keychain token item. Best-effort: the item may
+/// never have been created (token mode, or the user closed the store
+/// dialog), and `security` exits non-zero for "not found" — both ignored.
+#[cfg(target_os = "macos")]
+fn delete_vertex_keychain_item(account: &str) {
+    let result = std::process::Command::new("security")
+        .args([
+            "delete-generic-password",
+            "-s",
+            VERTEX_KEYCHAIN_SERVICE,
+            "-a",
+            account,
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    if let Err(error) = result {
+        tracing::debug!(%error, "vertex keychain cleanup: could not run `security`");
     }
 }
 
@@ -234,7 +341,7 @@ mod tests {
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].id, "claude-custom|acme|m");
         assert_eq!(models[0].provider_key, "acme");
-        assert_eq!(models[0].label, "M");
+        assert_eq!(models[0].label, "Acme · M");
         assert_eq!(models[0].base_url, "https://acme/v1");
     }
 
@@ -250,6 +357,72 @@ mod tests {
         assert_eq!(custom.models.len(), 2);
         let models = expand_models(&list);
         assert_eq!(models[0].id, "claude-custom|custom|m1");
+    }
+
+    fn vertex_provider(auth_mode: Option<&str>, api_key: &str) -> CustomProvider {
+        CustomProvider {
+            id: "gw".to_string(),
+            base_url: "https://gateway.example.ai/api".to_string(),
+            api_key: api_key.to_string(),
+            api_style: Some("vertex".to_string()),
+            vertex_project_id: Some("acme".to_string()),
+            vertex_auth_mode: auth_mode.map(str::to_string),
+            models: vec![CustomProviderModel {
+                slug: "claude-opus-4-8".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn vertex_token_mode_requires_api_key() {
+        // Token mode with no key is unusable — skipped like plain providers.
+        assert!(expand_models(&[vertex_provider(None, "")]).is_empty());
+
+        let models = expand_models(&[vertex_provider(None, "sk-gw")]);
+        assert_eq!(models.len(), 1);
+        let vertex = models[0].vertex.as_ref().expect("vertex config");
+        assert_eq!(vertex.auth, ClaudeVertexAuth::Token("sk-gw".to_string()));
+        assert_eq!(vertex.project_id, "acme");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn vertex_keychain_mode_needs_no_api_key_and_uses_fixed_item_names() {
+        let models = expand_models(&[vertex_provider(Some("keychain"), "")]);
+        assert_eq!(models.len(), 1);
+        let vertex = models[0].vertex.as_ref().expect("vertex config");
+        assert_eq!(
+            vertex.auth,
+            ClaudeVertexAuth::Keychain {
+                service: VERTEX_KEYCHAIN_SERVICE.to_string(),
+                // Account is the provider id — per-provider token isolation.
+                account: "gw".to_string(),
+            }
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn vertex_keychain_mode_degrades_to_token_off_macos() {
+        // No token → unusable; with a token → plain token auth.
+        assert!(expand_models(&[vertex_provider(Some("keychain"), "")]).is_empty());
+        let models = expand_models(&[vertex_provider(Some("keychain"), "sk-gw")]);
+        assert_eq!(models.len(), 1);
+        assert_eq!(
+            models[0].vertex.as_ref().expect("vertex config").auth,
+            ClaudeVertexAuth::Token("sk-gw".to_string())
+        );
+    }
+
+    #[test]
+    fn non_vertex_provider_has_no_vertex_config() {
+        let mut provider = vertex_provider(None, "sk");
+        provider.api_style = None;
+        let models = expand_models(&[provider]);
+        assert_eq!(models.len(), 1);
+        assert!(models[0].vertex.is_none());
     }
 
     #[test]

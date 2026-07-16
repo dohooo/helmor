@@ -1,0 +1,22 @@
+---
+source: tests/agent_stream_event_wire.rs
+expression: "to_value(AgentStreamEvent::TaskStateUpdate\n{\n    session_id: \"helmor-session-1\".into(), tasks:\n    vec![serde_json::from_value(json!({\n        \"id\": \"task-1\", \"toolUseId\": \"toolu-1\", \"description\":\n        \"Review repository state\", \"taskType\": \"local_agent\", \"subagentType\":\n        \"Explore\", \"status\": \"running\", \"isBackgrounded\": true, \"summary\":\n        \"Reading files\", \"usage\":\n        {\"totalTokens\": 120, \"toolUses\": 2, \"durationMs\": 3000},\n        \"lastToolName\": \"Read\", \"startedAt\": \"2026-01-01T00:00:00Z\",\n        \"updatedAt\": \"2026-01-01T00:00:01Z\",\n    })).expect(\"TaskState parses\")],\n})"
+---
+kind: taskStateUpdate
+sessionId: helmor-session-1
+tasks:
+  - description: Review repository state
+    id: task-1
+    isBackgrounded: true
+    lastToolName: Read
+    startedAt: "2026-01-01T00:00:00Z"
+    status: running
+    subagentType: Explore
+    summary: Reading files
+    taskType: local_agent
+    toolUseId: toolu-1
+    updatedAt: "2026-01-01T00:00:01Z"
+    usage:
+      durationMs: 3000
+      toolUses: 2
+      totalTokens: 120

@@ -1,0 +1,21 @@
+---
+source: tests/streaming_send_params.rs
+expression: "&params"
+---
+claudeEnvironment:
+  ANTHROPIC_VERTEX_BASE_URL: "https://gateway.example.ai/api"
+  ANTHROPIC_VERTEX_PROJECT_ID: acme-project
+  CLAUDE_CODE_SKIP_VERTEX_AUTH: "1"
+  CLAUDE_CODE_USE_VERTEX: "1"
+  CLOUD_ML_REGION: us-east5
+claudeSettings:
+  apiKeyHelper: "security find-generic-password -s 'anthropic-auth-token' -a 'it'\\''s me' -w"
+cwd: /abs/workspace
+effortLevel: high
+fastMode: false
+model: claude-opus-4
+permissionMode: bypassPermissions
+prompt: hello
+provider: claude
+resume: ~
+sessionId: sidecar-sess-1

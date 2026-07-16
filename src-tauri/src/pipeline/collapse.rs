@@ -391,6 +391,7 @@ mod tests {
             result,
             is_error: None,
             streaming_status: None,
+            task_state: None,
             children: Vec::new(),
         })
     }
@@ -670,6 +671,7 @@ mod tests {
                 result: Some(json!("content")),
                 is_error: None,
                 streaming_status: None,
+                task_state: None,
                 children: Vec::new(),
             },
             MessagePart::ToolCall {
@@ -680,6 +682,7 @@ mod tests {
                 result: Some(json!("content")),
                 is_error: None,
                 streaming_status: None,
+                task_state: None,
                 children: Vec::new(),
             },
             MessagePart::ToolCall {
@@ -690,6 +693,7 @@ mod tests {
                 result: Some(json!("content")),
                 is_error: None,
                 streaming_status: None,
+                task_state: None,
                 children: Vec::new(),
             },
         ];
@@ -713,6 +717,7 @@ mod tests {
             result,
             is_error: None,
             streaming_status: None,
+            task_state: None,
             children,
         })
     }

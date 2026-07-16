@@ -3,6 +3,7 @@ import {
 	CheckCircle2,
 	ChevronDown,
 	HelpCircle,
+	Info,
 	Settings,
 	Volume2,
 } from "lucide-react";
@@ -40,11 +41,7 @@ import {
 import { getShortcut } from "@/features/shortcuts/registry";
 import { ShortcutsSettingsPanel } from "@/features/shortcuts/settings-panel";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
-import {
-	type AgentModelSection,
-	isConductorAvailable,
-	type RepositoryCreateOption,
-} from "@/lib/api";
+import type { AgentModelSection, RepositoryCreateOption } from "@/lib/api";
 import { I18nText, useI18n } from "@/lib/i18n";
 import {
 	NOTIFICATION_SOUND_LABELS,
@@ -71,7 +68,6 @@ import { AppUpdatesPanel } from "./panels/app-updates";
 import { AppearancePanel } from "./panels/appearance";
 import { ArchiveCleanupPanel } from "./panels/archive-cleanup";
 import { ComponentsPanel } from "./panels/components";
-import { ConductorImportPanel } from "./panels/conductor-import";
 import { DevToolsPanel } from "./panels/dev-tools";
 import { InboxSettingsPanel } from "./panels/inbox";
 import { LocalLlmPanel } from "./panels/local-llm";
@@ -149,7 +145,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 	const queryClient = useQueryClient();
 	const [activeSection, setActiveSection] =
 		useState<SettingsSection>("general");
-	const [conductorEnabled, setConductorEnabled] = useState(false);
 
 	useEffect(() => {
 		if (open && initialSection) {
@@ -178,12 +173,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 	// for the brief window between first-time default-set and next
 	// cold-start, which is what the existing UI bindings already do.
 
-	useEffect(() => {
-		if (open) {
-			void isConductorAvailable().then(setConductorEnabled);
-		}
-	}, [open]);
-
 	const isDev = import.meta.env.DEV;
 
 	const fixedSections: SettingsSection[] = [
@@ -192,7 +181,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 		"model",
 		"providers",
 		"shortcuts",
-		...(conductorEnabled ? (["import"] as const) : []),
 		"account",
 		"inbox",
 		"experimental",
@@ -641,8 +629,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 								</SettingsGroup>
 							)}
 
-							{activeSection === "import" && <ConductorImportPanel />}
-
 							{activeSection === "developer" && <DevToolsPanel />}
 
 							{activeSection === "account" && <AccountPanel />}
@@ -833,8 +819,39 @@ function ModelSettingRow({
 						className="min-w-[8rem]"
 					>
 						{effortLevels.map((l) => (
-							<DropdownMenuItem key={l} onClick={() => onChange({ effort: l })}>
-								{effortLabel(l)}
+							<DropdownMenuItem
+								key={l}
+								onClick={() => onChange({ effort: l })}
+								className="flex items-center gap-2"
+							>
+								<span>{effortLabel(l)}</span>
+								{(l === "max" || l === "ultra") && (
+									<TooltipProvider delayDuration={200}>
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<span
+													aria-label={
+														l === "max"
+															? t("effortMaxHint")
+															: t("effortUltraHint")
+													}
+													className="inline-flex cursor-pointer text-muted-foreground/50 hover:text-muted-foreground"
+												>
+													<Info className="size-3" strokeWidth={2} />
+												</span>
+											</TooltipTrigger>
+											<TooltipContent
+												side="right"
+												sideOffset={6}
+												className="max-w-[13rem]"
+											>
+												{l === "max"
+													? t("effortMaxHint")
+													: t("effortUltraHint")}
+											</TooltipContent>
+										</Tooltip>
+									</TooltipProvider>
+								)}
 							</DropdownMenuItem>
 						))}
 					</DropdownMenuContent>

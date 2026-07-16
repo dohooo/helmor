@@ -25,6 +25,10 @@ export type SubmitQueueListProps = {
 	onRemove: (id: string) => void;
 	onEdit?: (id: string) => void;
 	disabled?: boolean;
+	/** Docked-family contract (see `../composer-top-bars.tsx`): open bottom
+	 *  glued to the composer only when this is the bottom-most visible
+	 *  docked bar; closed rounded card otherwise. */
+	docked?: boolean;
 };
 
 export function SubmitQueueList({
@@ -33,12 +37,16 @@ export function SubmitQueueList({
 	onRemove,
 	onEdit,
 	disabled,
+	docked = true,
 }: SubmitQueueListProps) {
 	if (items.length === 0) return null;
 	return (
 		<div
 			data-testid="submit-queue-list"
-			className="pointer-events-auto relative z-0 mx-auto w-[90%] overflow-hidden rounded-t-2xl border border-b-0 border-secondary/80 bg-background"
+			className={cn(
+				"pointer-events-auto relative z-0 mx-auto w-[90%] overflow-hidden border border-secondary/80 bg-background",
+				docked ? "rounded-t-2xl border-b-0" : "mb-1 rounded-lg",
+			)}
 		>
 			{items.map((item, idx) => (
 				<QueueRow

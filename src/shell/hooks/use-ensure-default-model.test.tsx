@@ -171,9 +171,7 @@ describe("useEnsureDefaultModel", () => {
 		});
 	});
 
-	it("pins the repaired default to the Opus 4.8 1M entry, not the first option", () => {
-		// Fable 5 leads the picker but is too expensive to be the app
-		// default — the repair must skip it and land on Opus 4.8 1M.
+	it("pins the repaired default to GPT-5.6 Sol", () => {
 		const { updateSettings } = renderUseEnsureDefaultModel({
 			defaultModelId: null,
 			sections: [
@@ -196,13 +194,25 @@ describe("useEnsureDefaultModel", () => {
 						},
 					],
 				},
-				{ id: "codex", label: "Codex", status: "unavailable", options: [] },
+				{
+					id: "codex",
+					label: "Codex",
+					status: "ready",
+					options: [
+						{
+							id: "gpt-5.6-sol",
+							provider: "codex",
+							label: "GPT-5.6 Sol",
+							cliModel: "gpt-5.6-sol",
+						},
+					],
+				},
 			],
 		});
 
 		expect(updateSettings).toHaveBeenCalledWith(
 			expect.objectContaining({
-				defaultModel: { provider: "claude", modelId: "claude-opus-4-8[1m]" },
+				defaultModel: { provider: "codex", modelId: "gpt-5.6-sol" },
 			}),
 		);
 	});

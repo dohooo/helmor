@@ -25,7 +25,7 @@ pub mod user_question;
 use serde_json::Value;
 
 use accumulator::PushOutcome;
-use types::{HistoricalRecord, IntermediateMessage, ThreadMessageLike};
+use types::{HistoricalRecord, IntermediateMessage, TaskState, ThreadMessageLike};
 
 // ---------------------------------------------------------------------------
 // Pipeline output
@@ -90,6 +90,11 @@ impl MessagePipeline {
     pub fn materialize_partial(&mut self) {
         self.accumulator
             .materialize_partial(&self.context_key, &self.session_id);
+    }
+
+    /// Current non-workflow task-state projection from collected stream rows.
+    pub(crate) fn task_state_snapshot(&self) -> Vec<TaskState> {
+        adapter::collect_task_states(self.accumulator.collected())
     }
 
     /// Convert historical DB records (static, no accumulator).

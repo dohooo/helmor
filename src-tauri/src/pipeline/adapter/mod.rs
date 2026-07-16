@@ -20,6 +20,7 @@ mod grouping;
 mod kimi_parts;
 mod labels;
 mod opencode_parts;
+mod task_state;
 
 #[cfg(test)]
 mod tests;
@@ -44,10 +45,11 @@ use labels::{
     build_system_label, build_system_notice, extract_fallback, make_system, make_system_notice,
     make_turn_result_system,
 };
+use task_state::{attach_task_states, TaskStateAccumulator};
 
 use super::types::{
     ExtendedMessagePart, HistoricalRecord, IntermediateMessage, MessagePart, MessageRole,
-    MessageStatus, PlanAllowedPrompt, ThreadMessageLike,
+    MessageStatus, PlanAllowedPrompt, TaskState, ThreadMessageLike,
 };
 
 // ---------------------------------------------------------------------------
@@ -56,7 +58,7 @@ use super::types::{
 
 /// Convert intermediate messages into rendered thread messages.
 pub fn convert(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
-    let (flat, workflow_acc) = convert_flat(messages);
+    let (flat, workflow_acc, task_acc) = convert_flat(messages);
     let mut result = if flat.len() <= 1 {
         flat
     } else {
@@ -74,6 +76,10 @@ pub fn convert(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
     // Rewrite each Workflow widget (anchored at the Workflow tool_use) with
     // the final aggregated run state collected from its task_* events.
     finalize_workflow_widgets(&mut result, &workflow_acc);
+    // Attach non-workflow background-task state to the message that owns the
+    // matching tool_use_id. This keeps task lifecycle out of transcript prose
+    // while preserving typed state for later panel/channel work.
+    attach_task_states(&mut result, &task_acc);
     result
 }
 
@@ -188,11 +194,42 @@ pub fn convert_historical(records: &[HistoricalRecord]) -> Vec<ThreadMessageLike
     convert(&intermediate)
 }
 
+/// Collect the session-wide non-workflow task-state projection from an
+/// intermediate stream snapshot without rendering thread messages.
+pub(crate) fn collect_task_states(messages: &[IntermediateMessage]) -> Vec<TaskState> {
+    let mut task_acc = TaskStateAccumulator::default();
+    let mut workflow_acc = WorkflowAccumulator::default();
+    for msg in messages {
+        let Some(value) = msg.parsed.as_ref() else {
+            continue;
+        };
+        match value.get("type").and_then(Value::as_str) {
+            Some("system") => {
+                if workflow_acc.on_task_event(value) {
+                    continue;
+                }
+                task_acc.on_task_event(msg, value);
+            }
+            Some("tool_progress") => {
+                task_acc.on_tool_progress(msg, value);
+            }
+            _ => {}
+        }
+    }
+    task_acc.states()
+}
+
 // ---------------------------------------------------------------------------
 // Flat conversion — per-message dispatch
 // ---------------------------------------------------------------------------
 
-fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, WorkflowAccumulator) {
+fn convert_flat(
+    messages: &[IntermediateMessage],
+) -> (
+    Vec<ThreadMessageLike>,
+    WorkflowAccumulator,
+    TaskStateAccumulator,
+) {
     let mut result: Vec<ThreadMessageLike> = Vec::new();
     let mut i = 0;
     // Shared across every assistant message so the Claude Task family
@@ -203,17 +240,26 @@ fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, Wo
     // message) and its later task_* lifecycle events (separate system
     // messages) fold into the same run.
     let mut workflow_acc = WorkflowAccumulator::default();
+    let mut task_acc = TaskStateAccumulator::default();
 
     while i < messages.len() {
         let msg = &messages[i];
         let parsed = msg.parsed.as_ref();
         let msg_type = parsed.and_then(|p| p.get("type")).and_then(Value::as_str);
 
-        // system — Claude SDK control events. Subagent task_* events
-        // render as SystemNotice banners; the rest fall through to the
-        // generic system label.
+        // system — Claude SDK control events. Workflow task_* events fold
+        // into Workflow widgets; non-workflow task_* events fold into
+        // ToolCall.taskState; the rest use normal system handling.
         if msg_type == Some("system") {
-            convert_system_msg(msg, &mut result, &mut workflow_acc);
+            convert_system_msg(msg, &mut result, &mut workflow_acc, &mut task_acc);
+            i += 1;
+            continue;
+        }
+
+        if msg_type == Some("tool_progress") {
+            if let Some(value) = parsed {
+                task_acc.on_tool_progress(msg, value);
+            }
             i += 1;
             continue;
         }
@@ -440,7 +486,9 @@ fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, Wo
                     .and_then(|p| p.get("type"))
                     .and_then(Value::as_str);
                 match dtype {
-                    Some("system") => convert_system_msg(deferred, &mut result, &mut workflow_acc),
+                    Some("system") => {
+                        convert_system_msg(deferred, &mut result, &mut workflow_acc, &mut task_acc)
+                    }
                     Some("rate_limit_event") => convert_rate_limit_msg(deferred, &mut result),
                     // The lookahead loop above only ever appends these
                     // two types — anything else would be a bug.
@@ -558,7 +606,7 @@ fn convert_flat(messages: &[IntermediateMessage]) -> (Vec<ThreadMessageLike>, Wo
     // any ToolCall still missing a `result`.
     late_merge_unresolved_tool_results(messages, &mut result);
 
-    (result, workflow_acc)
+    (result, workflow_acc, task_acc)
 }
 
 /// Translate Claude's `BetaMessage.stop_reason` into a unified
@@ -666,6 +714,7 @@ fn convert_user_type_msg(
                     result: None,
                     is_error: None,
                     streaming_status: None,
+                    task_state: None,
                     children: Vec::new(),
                 })],
                 status: None,
@@ -689,6 +738,7 @@ fn convert_system_msg(
     msg: &IntermediateMessage,
     out: &mut Vec<ThreadMessageLike>,
     workflow_acc: &mut WorkflowAccumulator,
+    task_acc: &mut TaskStateAccumulator,
 ) {
     let parsed = msg.parsed.as_ref();
     let sub = parsed
@@ -702,17 +752,15 @@ fn convert_system_msg(
             return;
         }
     }
-    if let Some(value) = parsed {
-        if super::event_filter::is_suppressed_local_bash_task(value) {
-            return;
-        }
-    }
     // Dynamic Workflow lifecycle (task_type = "local_workflow"): fold the
     // event into its Workflow widget instead of emitting a standalone
-    // subagent notice. Non-workflow task_* events return false here and fall
-    // through to the existing subagent-notice path unchanged.
+    // task state. Non-workflow task_* events become structured task state
+    // instead of transcript prose.
     if let Some(value) = parsed {
         if workflow_acc.on_task_event(value) {
+            return;
+        }
+        if task_acc.on_task_event(msg, value) {
             return;
         }
     }

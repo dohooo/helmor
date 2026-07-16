@@ -68,11 +68,6 @@ session titles. Downloads can be paused and resumed.
 
 Pair a phone to keep an eye on sessions away from your desk.
 
-## Conductor import
-
-Migrating from Conductor? One click imports your repositories, workspaces,
-and session history.
-
 ## Experimental
 
 - **Command Line Tool** — install the `helmor` CLI to your PATH

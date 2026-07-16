@@ -10,7 +10,7 @@ import {
 import {
 	type CustomProvider,
 	type ProviderFamily,
-	resolveEnabled,
+	resolveOfficialEnabled,
 	toggleEnabled,
 } from "@/lib/provider-config";
 import {
@@ -85,7 +85,7 @@ export function useOfficialSectionModels(
 		family === "claude"
 			? settings.claudeEnabledModelIds
 			: settings.codexEnabledModelIds;
-	const enabledIds = resolveEnabled(stored, available);
+	const enabledIds = resolveOfficialEnabled(family, stored, available);
 	const enabledSet = useMemo(() => new Set(enabledIds), [enabledIds]);
 
 	const persist = useCallback(
@@ -116,7 +116,7 @@ export function useOfficialSectionModels(
 		available,
 		enabledIds,
 		enabledSet,
-		toggle: (id: string) => persist(toggleEnabled(stored, available, id)),
+		toggle: (id: string) => persist(toggleEnabled(enabledIds, available, id)),
 		clear: () => persist([]),
 		loading: sectionsQuery.isLoading,
 		refresh,

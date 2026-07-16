@@ -497,6 +497,20 @@ function stageCodexFromVendorRoot(archRoot: string): void {
 	chmodSync(binDest, 0o755);
 	maybeSignMacBinary(binDest, false);
 
+	// codex >= 0.144 ships a `codex-code-mode-host` companion next to the main
+	// binary in `bin/`. The descriptor does not advertise it (only `entrypoint`),
+	// but codex spawns it as a sibling of itself at runtime for "code mode" tool
+	// execution — omit it and every code-mode tool call fails with ENOENT. Copy
+	// it next to the flattened codex binary when present (guarded for older
+	// layouts / platforms that don't ship it).
+	const hostSrc = join(dirname(binSrc), `codex-code-mode-host${EXE}`);
+	if (existsSync(hostSrc)) {
+		const hostDest = join(DIST_VENDOR, "codex", `codex-code-mode-host${EXE}`);
+		copyFile(hostSrc, hostDest);
+		chmodSync(hostDest, 0o755);
+		maybeSignMacBinary(hostDest, false);
+	}
+
 	const pathSrc = join(archRoot, pathDir);
 	if (existsSync(pathSrc)) {
 		const pathDest = join(DIST_VENDOR, "codex", "path");

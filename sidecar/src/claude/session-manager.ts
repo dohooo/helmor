@@ -68,6 +68,30 @@ const SLASH_COMMANDS_TIMEOUT_MS = 20_000;
 const CONTEXT_USAGE_TIMEOUT_MS = 30_000;
 
 /**
+ * Upper bound after a turn's `completed` result has been deferred for pending
+ * `run_in_background` tasks. Normal background tasks still report back through
+ * `task_notification`; this only prevents a missing/never-settling task event
+ * from leaving the Helmor session busy forever.
+ */
+const BACKGROUND_TASK_DRAIN_TIMEOUT_MS = 20 * 60_000;
+const BACKGROUND_TASK_DRAIN_TIMEOUT_ENV = "HELMOR_CLAUDE_BG_DRAIN_TIMEOUT_MS";
+
+/**
+ * After the last pending background task settles, the CLI re-invokes the main
+ * agent on the SAME query to synthesize the results and then emits a second,
+ * genuinely terminal `completed` (contract recorded against claude 2.1.205:
+ * task_updated(patch.status) + task_notification arrive together, the
+ * continuation starts ~2s later and may use tools). We therefore keep draining
+ * after the pending count hits zero. This grace bounds the wait for the FIRST
+ * sign of that continuation — if nothing but system events arrives (e.g. a
+ * task killed with no notification), we fall back to replaying the deferred
+ * `completed` instead of hanging until the 20-minute drain timeout.
+ */
+const BACKGROUND_TASK_CONTINUATION_GRACE_MS = 60_000;
+const BACKGROUND_TASK_CONTINUATION_GRACE_ENV =
+	"HELMOR_CLAUDE_BG_CONTINUATION_GRACE_MS";
+
+/**
  * Resolve the Claude Code native binary for `pathToClaudeCodeExecutable`.
  * Prefers `HELMOR_CLAUDE_CODE_BIN_PATH` (release), then the platform
  * sub-package (dev/test); falls back to the wrapper bin for `--omit=optional`.
@@ -393,6 +417,7 @@ export class ClaudeSessionManager implements SessionManager {
 			fastMode,
 			claudeThinkingDisplay,
 			claudeEnvironment,
+			claudeSettings,
 			agentProxy,
 			images,
 			sourceRepoPath,
@@ -438,6 +463,14 @@ export class ClaudeSessionManager implements SessionManager {
 			claudeEnvironment && Object.keys(claudeEnvironment).length > 0
 				? claudeEnvironment
 				: undefined;
+		// Per-turn `--settings` overrides: fast mode + host-supplied keys
+		// (e.g. `apiKeyHelper` for Vertex keychain auth). Host keys win.
+		const mergedSettings = {
+			...(effectiveFastMode ? { fastMode: true } : {}),
+			...(claudeSettings ?? {}),
+		};
+		const settingsOverrides =
+			Object.keys(mergedSettings).length > 0 ? mergedSettings : undefined;
 		const additionalDirectoryEnv =
 			additionalDirectories.length > 0
 				? { CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: "1" }
@@ -474,7 +507,7 @@ export class ClaudeSessionManager implements SessionManager {
 					type: "adaptive",
 					display: claudeThinkingDisplay ?? "summarized",
 				},
-				...(effectiveFastMode ? { settings: { fastMode: true } } : {}),
+				...(settingsOverrides ? { settings: settingsOverrides } : {}),
 				...(projectMcpServers ? { mcpServers: projectMcpServers } : {}),
 				onElicitation: async (request, options) => {
 					// MCP elicitation: surface as a unified userInputRequest
@@ -687,6 +720,136 @@ export class ClaudeSessionManager implements SessionManager {
 		};
 		this.sessions.set(sessionId, live);
 
+		// In-flight `run_in_background` tasks (subagents / background Bash),
+		// keyed by task_id. They settle asynchronously via `task_notification`
+		// AFTER the agent ends its turn; closing the query on the turn's
+		// `completed` while any are still pending would `q.close()` the
+		// claude-code subprocess and kill them before they notify, so we keep
+		// draining the SAME query until they all settle (see deferral below).
+		const pendingBgTasks = new Map<string, PendingBgTask>();
+		let bgDrainTimer: ReturnType<typeof setTimeout> | null = null;
+		let bgDrainTimedOut = false;
+		let continuationGraceTimer: ReturnType<typeof setTimeout> | null = null;
+		let bgDrainSettledByGrace = false;
+		let deferredCompletedResult: SDKMessage | null = null;
+		let turnEnded = false;
+		const clearBgDrainTimer = () => {
+			if (bgDrainTimer === null) return;
+			clearTimeout(bgDrainTimer);
+			bgDrainTimer = null;
+		};
+		const clearContinuationGraceTimer = () => {
+			if (continuationGraceTimer === null) return;
+			clearTimeout(continuationGraceTimer);
+			continuationGraceTimer = null;
+		};
+		const endTurnOnce = () => {
+			if (turnEnded) return false;
+			turnEnded = true;
+			emitter.end(requestId);
+			return true;
+		};
+		const passthroughTerminalResult = (terminalResult: SDKMessage) => {
+			if (turnEnded) return false;
+			deferredCompletedResult = null;
+			clearBgDrainTimer();
+			clearContinuationGraceTimer();
+			emitter.passthrough(requestId, terminalResult);
+			const meta = buildClaudeStoredMeta(terminalResult, model ?? "");
+			if (meta) {
+				emitter.contextUsageUpdated(requestId, sessionId, JSON.stringify(meta));
+			}
+			endTurnOnce();
+			return true;
+		};
+		const passthroughDeferredCompletedIfReady = () => {
+			if (!deferredCompletedResult || pendingBgTasks.size > 0) return false;
+			const terminalResult = deferredCompletedResult;
+			return passthroughTerminalResult(terminalResult);
+		};
+		// Armed when the pending count hits zero while a `completed` is deferred.
+		// The expected next step is the CLI re-invoking the main agent (assistant/
+		// user/stream messages, then a second terminal result) — any such message
+		// cancels this timer. If only system events trickle in (a task settled
+		// with no follow-up continuation), fire the fallback: replay the deferred
+		// `completed` and close, instead of hanging until the 20-min drain timeout.
+		const armContinuationGraceTimer = () => {
+			if (continuationGraceTimer !== null || turnEnded) return;
+			if (!deferredCompletedResult || pendingBgTasks.size > 0) return;
+			const graceMs = backgroundTaskContinuationGraceMs();
+			logger.info(
+				`[${requestId}] background tasks drained; awaiting agent continuation`,
+				{ graceMs },
+			);
+			continuationGraceTimer = setTimeout(() => {
+				continuationGraceTimer = null;
+				if (turnEnded || pendingBgTasks.size > 0) return;
+				if (this.turns.isAbortRequested(sessionId)) return;
+				logger.error(
+					`[${requestId}] no agent continuation after background drain; replaying deferred completed`,
+					{ graceMs },
+				);
+				bgDrainSettledByGrace = true;
+				passthroughDeferredCompletedIfReady();
+				try {
+					q.close();
+				} catch (closeErr) {
+					logger.error("Claude continuation grace q.close() failed", {
+						requestId,
+						sessionId,
+						...errorDetails(closeErr),
+					});
+				}
+			}, graceMs);
+			(continuationGraceTimer as { unref?: () => void }).unref?.();
+		};
+		const summarizePendingBgTasks = () =>
+			Array.from(pendingBgTasks.values())
+				.slice(0, 12)
+				.map((task) => ({
+					taskId: task.taskId,
+					taskType: task.taskType,
+					toolUseId: task.toolUseId,
+					description: task.description,
+					terminalStatus: task.terminalStatus,
+					ageMs: Date.now() - task.startedAt,
+				}));
+		const ensureBgDrainTimer = () => {
+			if (bgDrainTimer !== null) return;
+			const timeoutMs = backgroundTaskDrainTimeoutMs();
+			logger.info(
+				`[${requestId}] deferring completed result for pending background tasks`,
+				{
+					timeoutMs,
+					pendingCount: pendingBgTasks.size,
+					pendingTasks: summarizePendingBgTasks(),
+				},
+			);
+			bgDrainTimer = setTimeout(() => {
+				if (pendingBgTasks.size === 0 || this.turns.isAbortRequested(sessionId))
+					return;
+				bgDrainTimedOut = true;
+				logger.error(
+					`[${requestId}] background task drain timed out; closing Claude query`,
+					{
+						timeoutMs,
+						pendingCount: pendingBgTasks.size,
+						pendingTasks: summarizePendingBgTasks(),
+					},
+				);
+				try {
+					q.close();
+				} catch (closeErr) {
+					logger.error("Claude background drain timeout q.close() failed", {
+						requestId,
+						sessionId,
+						...errorDetails(closeErr),
+					});
+				}
+			}, timeoutMs);
+			(bgDrainTimer as { unref?: () => void }).unref?.();
+		};
+
 		try {
 			let lastRateLimitInfo: RateLimitOverageInfo | undefined;
 			let fastModeNoticeEmitted = false;
@@ -697,6 +860,10 @@ export class ClaudeSessionManager implements SessionManager {
 				// `result`. Drop them and return: passing them through or emitting
 				// `end` here would violate the "exactly one terminal event" contract.
 				if (this.turns.isAbortRequested(sessionId)) return;
+				// The continuation-grace fallback can end the turn from its timer
+				// while the iterator still has buffered messages — drop them, the
+				// terminal event has already been emitted.
+				if (turnEnded) return;
 				logger.sdkEvent(requestId, message);
 				if (message.type === "rate_limit_event") {
 					lastRateLimitInfo = (
@@ -744,17 +911,65 @@ export class ClaudeSessionManager implements SessionManager {
 					}
 					continue;
 				}
-				// AskUserQuestion tool_use blocks pass through INTACT — the Rust
-				// adapter renders them as the persistent Q&A card (and merges
-				// the tool_result answers into it), so stripping them here
-				// would lose the card on finalize/persist/reload.
-				emitter.passthrough(requestId, message);
-				if (isTerminalResult(message)) {
-					// Terminal result (success OR error) — both shapes carry
-					// `usage`/`modelUsage`, so both should update the ring.
-					// Bail on the first one we see; any steer() still in its
-					// image-load await will find `promptSource.closed` via
-					// the finally block below and return false.
+				// Track in-flight background tasks (run_in_background subagents /
+				// Bash) by task_id: `task_started` opens one, `task_notification`
+				// settles it. These system events still pass through below.
+				if (message.type === "system") {
+					const subtype = (message as { subtype?: string }).subtype;
+					const taskId = (message as { task_id?: string }).task_id;
+					const toolUseId = (message as { tool_use_id?: string }).tool_use_id;
+					if (taskId) {
+						if (subtype === "task_started") {
+							clearContinuationGraceTimer();
+							pendingBgTasks.set(taskId, {
+								taskId,
+								toolUseId,
+								taskType: (message as { task_type?: string }).task_type,
+								description: (message as { description?: string }).description,
+								startedAt: Date.now(),
+							});
+						} else if (subtype === "task_notification") {
+							pendingBgTasks.delete(taskId);
+						} else if (subtype === "task_updated") {
+							const pending = pendingBgTasks.get(taskId);
+							const status = terminalTaskUpdateStatus(message);
+							if (pending && status) {
+								pending.terminalStatus = status;
+								pendingBgTasks.delete(taskId);
+							}
+						}
+					} else if (subtype === "task_notification" && toolUseId) {
+						for (const [pendingTaskId, pending] of pendingBgTasks) {
+							if (pending.toolUseId === toolUseId) {
+								pendingBgTasks.delete(pendingTaskId);
+								break;
+							}
+						}
+					}
+					// Last pending task settled while a `completed` sits deferred:
+					// keep draining (the CLI re-invokes the agent to synthesize and
+					// then emits the real terminal result), with a bounded grace in
+					// case that continuation never comes.
+					armContinuationGraceTimer();
+				} else if (
+					message.type === "assistant" ||
+					message.type === "user" ||
+					message.type === "stream_event"
+				) {
+					// Continuation underway — the genuinely terminal result will
+					// follow (or the drain timeout / post-loop fallback catches it).
+					clearContinuationGraceTimer();
+				}
+				// A `completed` result while background tasks are still pending is
+				// NOT terminal: ending here closes the query and kills the
+				// in-flight subagents before they emit `task_notification`. Keep it
+				// OUT of the pipeline (one-result-per-turn) and keep draining the
+				// SAME query — mirror of the `background_requested` pause above.
+				// The final `completed` (pending drained) and any error terminal
+				// fall through to the terminal branch below.
+				if (isCompletedResult(message) && pendingBgTasks.size > 0) {
+					deferredCompletedResult = message;
+					ensureBgDrainTimer();
 					const meta = buildClaudeStoredMeta(message, model ?? "");
 					if (meta) {
 						emitter.contextUsageUpdated(
@@ -763,12 +978,30 @@ export class ClaudeSessionManager implements SessionManager {
 							JSON.stringify(meta),
 						);
 					}
-					emitter.end(requestId);
+					continue;
+				}
+				if (isTerminalResult(message)) {
+					passthroughTerminalResult(message);
 					return;
 				}
+				// AskUserQuestion tool_use blocks pass through INTACT — the Rust
+				// adapter renders them as the persistent Q&A card (and merges
+				// the tool_result answers into it), so stripping them here
+				// would lose the card on finalize/persist/reload.
+				emitter.passthrough(requestId, message);
 			}
-			if (!this.turns.isAbortRequested(sessionId)) emitter.end(requestId);
+			// Iterator ended naturally. If a deferred `completed` is still held
+			// with nothing pending (CLI exited without the expected continuation),
+			// deliver it so the pipeline still gets the turn's result.
+			if (!this.turns.isAbortRequested(sessionId)) {
+				passthroughDeferredCompletedIfReady();
+				endTurnOnce();
+			}
 		} catch (err) {
+			if (bgDrainTimedOut || bgDrainSettledByGrace) {
+				if (!this.turns.isAbortRequested(sessionId)) endTurnOnce();
+				return;
+			}
 			if (isAbortError(err)) {
 				// stopSession already emitted `aborted` up front (see below) —
 				// don't double-emit when the iterator finally unwinds.
@@ -778,6 +1011,8 @@ export class ClaudeSessionManager implements SessionManager {
 			}
 			throw err;
 		} finally {
+			clearBgDrainTimer();
+			clearContinuationGraceTimer();
 			// `abortController.abort()` alone leaves Node-level exit listeners,
 			// pending control/MCP promises, and the SDK's internal child handle
 			// dangling. `Query.close()` is the documented hard cleanup —
@@ -1312,6 +1547,66 @@ function isBackgroundPauseResult(message: SDKMessage): boolean {
 		message.type === "result" &&
 		(message as { terminal_reason?: string }).terminal_reason ===
 			"background_requested"
+	);
+}
+
+/** A turn's natural `completed` result. While `run_in_background` tasks are
+ *  still pending it is filtered (like `background_requested`) so the query —
+ *  and the claude-code subprocess hosting the in-flight subagents — stays
+ *  alive until their `task_notification`s arrive. Only `completed` is
+ *  deferred; error / aborted terminals end the turn immediately. */
+function isCompletedResult(message: SDKMessage): boolean {
+	return (
+		message.type === "result" &&
+		(message as { terminal_reason?: string }).terminal_reason === "completed"
+	);
+}
+
+interface PendingBgTask {
+	taskId: string;
+	toolUseId?: string;
+	taskType?: string;
+	description?: string;
+	startedAt: number;
+	terminalStatus?: string;
+}
+
+function backgroundTaskDrainTimeoutMs(): number {
+	const raw = process.env[BACKGROUND_TASK_DRAIN_TIMEOUT_ENV];
+	if (raw) {
+		const parsed = Number(raw);
+		if (Number.isFinite(parsed) && parsed > 0) {
+			return parsed;
+		}
+	}
+	return BACKGROUND_TASK_DRAIN_TIMEOUT_MS;
+}
+
+function backgroundTaskContinuationGraceMs(): number {
+	const raw = process.env[BACKGROUND_TASK_CONTINUATION_GRACE_ENV];
+	if (raw) {
+		const parsed = Number(raw);
+		if (Number.isFinite(parsed) && parsed > 0) {
+			return parsed;
+		}
+	}
+	return BACKGROUND_TASK_CONTINUATION_GRACE_MS;
+}
+
+function terminalTaskUpdateStatus(message: SDKMessage): string | null {
+	const status = (message as { patch?: { status?: unknown } }).patch?.status;
+	if (typeof status !== "string") return null;
+	return isTerminalTaskStatus(status) ? status : null;
+}
+
+function isTerminalTaskStatus(status: string): boolean {
+	return (
+		status === "completed" ||
+		status === "failed" ||
+		status === "cancelled" ||
+		status === "killed" ||
+		status === "canceled" ||
+		status === "errored"
 	);
 }
 

@@ -51,16 +51,17 @@ function formatTokens(n: number): string {
 
 export function CodexGoalBanner({
 	sessionId,
-	hasQueueBelow,
+	docked = true,
 	disabled,
 	onResume,
 }: {
 	sessionId: string;
-	/** When the submit-queue list renders directly below us, the banner
-	 *  becomes a standalone pill so the two stack as visually distinct
-	 *  rows. With no queue below, the banner glues itself to the top of
-	 *  the composer just like SubmitQueueList does on its own. */
-	hasQueueBelow?: boolean;
+	/** Docked-family contract (see `composer-top-bars.tsx`): when this is
+	 *  the bottom-most visible docked bar it keeps its open bottom and
+	 *  glues to the composer; when another docked bar (e.g. the submit
+	 *  queue) renders below it, the host passes `docked={false}` and the
+	 *  banner becomes a standalone closed pill. */
+	docked?: boolean;
 	disabled?: boolean;
 	/** Resume button handler. The host injects `/goal resume` through
 	 *  the normal composer submit flow — see `container.tsx`. When
@@ -108,9 +109,10 @@ export function CodexGoalBanner({
 			data-testid="codex-goal-banner"
 			className={cn(
 				"pointer-events-auto flex items-center gap-2 border border-secondary/80 bg-background px-3 py-1 text-small",
-				hasQueueBelow
-					? "mx-auto w-fit max-w-[90%] rounded-md shadow-sm"
-					: "mx-auto w-[90%] rounded-t-2xl border-b-0 py-1.5",
+				// Detached keeps the same width/border/background (no shadow) but
+				// closes the bottom with uniform corners + a 4px gap below.
+				"mx-auto w-[90%] py-1.5",
+				docked ? "rounded-t-2xl border-b-0" : "mb-1 rounded-lg",
 			)}
 		>
 			<Goal

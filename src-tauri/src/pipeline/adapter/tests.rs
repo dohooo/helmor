@@ -5,7 +5,9 @@
 use super::blocks::parse_assistant_parts;
 use super::labels::{build_result_label, format_count};
 use super::*;
-use crate::pipeline::types::{NoticeSeverity, TodoStatus, WorkflowAgentStatus, WorkflowStatus};
+use crate::pipeline::types::{
+    NoticeSeverity, TaskStatus, TodoStatus, WorkflowAgentStatus, WorkflowStatus,
+};
 use serde_json::json;
 
 fn im(id: &str, role: &str, content: Value) -> IntermediateMessage {
@@ -171,7 +173,7 @@ fn codex_error_event_renders_with_message() {
 }
 
 #[test]
-fn system_init_skipped_subagent_renders_as_notice() {
+fn system_init_and_orphan_task_progress_do_not_render_transcript_rows() {
     let messages = vec![
         im(
             "1",
@@ -197,14 +199,11 @@ fn system_init_skipped_subagent_renders_as_notice() {
         ),
     ];
     let result = convert(&messages);
-    // task_progress renders as a SystemNotice; init stays silent.
-    assert_eq!(result.len(), 2);
-    assert_eq!(result[0].role, MessageRole::System);
-    assert!(matches!(
-        &result[0].content[0],
-        ExtendedMessagePart::Basic(MessagePart::SystemNotice { .. })
-    ));
-    assert_eq!(result[1].role, MessageRole::Assistant);
+    // task_progress is structured task state, not transcript prose. With no
+    // owner tool in this fixture it is consumed and left out of chat output;
+    // init stays silent too.
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].role, MessageRole::Assistant);
 }
 
 #[test]
@@ -1560,29 +1559,50 @@ fn claude_workflow_aggregates_into_single_widget() {
 }
 
 #[test]
-fn non_workflow_subagent_task_still_renders_notice() {
-    // A task_* event WITHOUT task_type=local_workflow (a plain subagent) must
-    // keep rendering through the existing subagent-notice path — the workflow
-    // aggregation must not swallow it.
-    let messages = vec![sys(
-        "s1",
-        json!({
-            "type": "system", "subtype": "task_started",
-            "task_id": "t1", "tool_use_id": "task_abc",
-            "description": "review the code"
-        }),
-    )];
+fn non_workflow_subagent_task_aggregates_task_state() {
+    // A task_* event WITHOUT task_type=local_workflow (a plain subagent)
+    // becomes structured task state, not transcript prose.
+    let messages = vec![
+        im(
+            "a1",
+            "assistant",
+            json!({
+                "type": "assistant",
+                "message": {"role": "assistant", "content": [{
+                    "type": "tool_use", "id": "task_abc", "name": "Task",
+                    "input": {"description": "review the code"}
+                }]}
+            }),
+        ),
+        sys(
+            "s1",
+            json!({
+                "type": "system", "subtype": "task_started",
+                "task_id": "t1", "tool_use_id": "task_abc",
+                "description": "review the code"
+            }),
+        ),
+    ];
     let result = convert(&messages);
-    let has_notice = result.iter().flat_map(|m| m.content.iter()).any(|p| {
-        matches!(
-            p,
-            ExtendedMessagePart::Basic(MessagePart::SystemNotice { label, .. }) if label == "Subagent started"
-        )
-    });
     assert!(
-        has_notice,
-        "plain subagent task_started should still be a notice"
+        result
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .all(|p| !matches!(
+                p,
+                ExtendedMessagePart::Basic(MessagePart::SystemNotice { .. })
+            )),
+        "plain subagent task_started should not render a notice"
     );
+    match &result[0].content[0] {
+        ExtendedMessagePart::Basic(MessagePart::ToolCall { task_state, .. }) => {
+            let task_state = task_state.as_ref().expect("task state");
+            assert_eq!(task_state.id, "t1");
+            assert_eq!(task_state.tool_use_id.as_deref(), Some("task_abc"));
+            assert_eq!(task_state.status, TaskStatus::Running);
+        }
+        other => panic!("expected ToolCall, got {other:?}"),
+    }
 }
 
 fn workflow_tool_use(msg_id: &str, tool_use_id: &str) -> IntermediateMessage {
@@ -1717,59 +1737,92 @@ fn claude_workflow_completes_via_notification_without_task_updated() {
 }
 
 // ---------------------------------------------------------------------------
-// R6: SystemNotice for subagent task_started — verify the child:* id
-// encoding so the grouping pass can attach it to the parent Task tool.
+// Task-state aggregation for non-workflow subagent task_started.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn subagent_task_started_renders_as_notice_with_child_id() {
-    let messages = vec![im(
-        "sn1",
-        "assistant",
-        json!({
-            "type": "system",
-            "subtype": "task_started",
-            "tool_use_id": "task_xyz",
-            "description": "scanning files",
-        }),
-    )];
+fn subagent_task_started_renders_task_state_with_tool_ref() {
+    let messages = vec![
+        im(
+            "a1",
+            "assistant",
+            json!({
+                "type": "assistant",
+                "message": {"role": "assistant", "content": [{
+                    "type": "tool_use", "id": "task_xyz", "name": "Task",
+                    "input": {"description": "scanning files"}
+                }]}
+            }),
+        ),
+        im(
+            "sn1",
+            "assistant",
+            json!({
+                "type": "system",
+                "subtype": "task_started",
+                "tool_use_id": "task_xyz",
+                "description": "scanning files",
+            }),
+        ),
+    ];
     let result = convert(&messages);
     assert_eq!(result.len(), 1);
-    assert_eq!(result[0].role, MessageRole::System);
+    assert_eq!(result[0].role, MessageRole::Assistant);
     match &result[0].content[0] {
-        ExtendedMessagePart::Basic(MessagePart::SystemNotice {
-            severity,
-            label,
-            body,
-            ..
-        }) => {
-            assert_eq!(*severity, NoticeSeverity::Info);
-            assert_eq!(label, "Subagent started");
-            assert_eq!(body.as_deref(), Some("scanning files"));
+        ExtendedMessagePart::Basic(MessagePart::ToolCall { task_state, .. }) => {
+            let task_state = task_state.as_ref().expect("task state");
+            assert_eq!(task_state.id, "task_xyz");
+            assert_eq!(task_state.tool_use_id.as_deref(), Some("task_xyz"));
+            assert_eq!(task_state.description.as_deref(), Some("scanning files"));
         }
-        other => panic!("expected SystemNotice, got {other:?}"),
+        other => panic!("expected ToolCall, got {other:?}"),
     }
-    assert_eq!(result[0].id.as_deref(), Some("child:task_xyz:sn1"));
 }
 
 #[test]
-fn local_bash_task_events_are_dropped() {
+fn local_bash_task_events_are_aggregated() {
     // `task_type: local_bash` wraps a single Bash command — the Bash
-    // tool call already renders the command, so dropping the notice
-    // avoids a mislabeled "Subagent started/completed" sibling row.
-    let messages = vec![im(
-        "sn1",
-        "assistant",
-        json!({
-            "type": "system",
-            "subtype": "task_started",
-            "task_type": "local_bash",
-            "tool_use_id": "toolu_bash_1",
-            "description": "cargo test",
-        }),
-    )];
+    // tool call already renders the command. The task lifecycle survives as
+    // structured state without adding a mislabeled notice sibling.
+    let messages = vec![
+        im(
+            "a1",
+            "assistant",
+            json!({
+                "type": "assistant",
+                "message": {"role": "assistant", "content": [{
+                    "type": "tool_use", "id": "toolu_bash_1", "name": "Bash",
+                    "input": {"command": "cargo test"}
+                }]}
+            }),
+        ),
+        im(
+            "sn1",
+            "assistant",
+            json!({
+                "type": "system",
+                "subtype": "task_started",
+                "task_type": "local_bash",
+                "tool_use_id": "toolu_bash_1",
+                "description": "cargo test",
+            }),
+        ),
+    ];
     let result = convert(&messages);
-    assert!(result.is_empty());
+    assert_eq!(result.len(), 1);
+    match &result[0].content[0] {
+        ExtendedMessagePart::Basic(MessagePart::ToolCall {
+            tool_name,
+            task_state,
+            ..
+        }) => {
+            assert_eq!(tool_name, "Bash");
+            let task_state = task_state.as_ref().expect("task state");
+            assert_eq!(task_state.task_type.as_deref(), Some("local_bash"));
+            assert_eq!(task_state.tool_use_id.as_deref(), Some("toolu_bash_1"));
+        }
+        other => panic!("expected Bash ToolCall, got {other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------------------

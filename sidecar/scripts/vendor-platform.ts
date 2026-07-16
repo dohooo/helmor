@@ -73,6 +73,26 @@ export const CODEX_SHA256: Readonly<
 		arm64: "775a564ea8a15a2959cd2bd5c5540ded68e35af2aa246f7d7e3e87b7a530aaae",
 		x64: "34a6e122ce6ce810f3f4dda43592d8f294f0722aa836809f2ed320b7b19b04a6",
 	},
+	"0.142.4": {
+		arm64: "3c11cfcf3bd46771421ba820a224c856b1167d094715d26f1da55f47c7b8726c",
+		x64: "27c89c8f8c682e8d7db72919186b0fed4bb45c947500b5a77e05d7bed89d0b9c",
+	},
+	"0.142.5": {
+		arm64: "51f8db517b93a086e8bca7a108cac81a313a6eebcfb3336ca105bae49f11776c",
+		x64: "f3ef09ed3e5f3140888210109a725e0502922b34da18a9dd00c5581d5015d4f9",
+	},
+	"0.144.0": {
+		arm64: "cb744fdc070465597c58d058bf11d04b4c8ed35952e4d9ce3beeca9216d8580d",
+		x64: "fdd8158fdd0088fe577f2811b8f09b01be09907a0d63bbd8b3a658e4ee96dda0",
+	},
+	"0.144.3": {
+		arm64: "d9779cc540a5dbe9ee7cf62bd2848962c26b8d5b6fbcbbb1389ccd0ff84fdb24",
+		x64: "8c2733ac55cdc9d0b69f20130fda68aea69373bea3da5f28f8edbf5b2a811e59",
+	},
+	"0.144.4": {
+		arm64: "5263018fad27784e1ee3ebfaa3aae0a3bbf0edd9190068b09db9fbf28cbfa48e",
+		x64: "6cf286232e98fe9dd0b92171442ecc44d533113a4cb998356ae59de9f7dd780c",
+	},
 };
 
 export const CLAUDE_CODE_SHA256: Readonly<
@@ -102,6 +122,26 @@ export const CLAUDE_CODE_SHA256: Readonly<
 		arm64: "4abdd760857cc2f48d79e2c23dbef82b27369ce13840dab977c33e53608b56ee",
 		x64: "d33fc94637a6524dfe986d5d895c76b9d80f4c1554315ca20c1c57d8bc5ea35c",
 	},
+	"2.1.197": {
+		arm64: "f5a7b05f69c3ab84c224be287c1859781f7abf77c08dff48fb100efffa76be6e",
+		x64: "8b70562c29fcc6b0b521106125b08a9e012a6cd05d5c7b87b0314f0ad3dae2b1",
+	},
+	"2.1.202": {
+		arm64: "18faddfb6b9ef208a727bfe5bc5e01f53892d8fa2fb0d473c4ce98532f360372",
+		x64: "81a7fc473545a52e7775bc0c39cd5a2878443266a97850baa6048961c25c31a0",
+	},
+	"2.1.205": {
+		arm64: "2491465de769953037bb8fd315aafecbe3607325b1fb07efbae4ca7bd5540b28",
+		x64: "bb6ae310787ca341ff6cef1e95ba9e610082ef5ce5bc1ed88893207800b0970b",
+	},
+	"2.1.207": {
+		arm64: "49559d5e1debf69b52289ac867faaa64efcfd7c47810fca347fa0697e578153c",
+		x64: "6302286147ea0abfe9ac632b665a76820ea11e54328101c7f4e13767ca0046dc",
+	},
+	"2.1.210": {
+		arm64: "b9236e01dbeaed510aeee243696e80cd7c66ecccd8bc03aa83a03e2696912334",
+		x64: "8c3c628628ef8c25fd401e4b6f25eefadcf2285a09f68d6be02173a4260a781d",
+	},
 };
 
 export const OPENCODE_SHA256: Readonly<
@@ -123,6 +163,26 @@ export const OPENCODE_SHA256: Readonly<
 		arm64: "8837811a5bb35b9a52bfe6e943f7881b95bcfa4a7444a5292181fb651ef9f18e",
 		x64: "48242614bb5b551bc854f8eff2992cd808c11be7454544c4e69e7a2dbd0f637a",
 	},
+	"1.17.11": {
+		arm64: "77e58d109987351dc0283c7c2df561328c8c9a42af99a529dd016be8da9e56f5",
+		x64: "ed5ea40abc3af12d885f6055ddaadd87028c1ad3c1f42faf38de5d69a06c8876",
+	},
+	"1.17.12": {
+		arm64: "76462e5cd3da58f7e239870a56ba1915425edc107a0f816a48774b548a9978e3",
+		x64: "51a7c7022ed9bc9c73136e2b47970e5bfbbe8c398d2a53893b34322884a678c3",
+	},
+	"1.17.14": {
+		arm64: "4082d795390892d9512e5694caba575e15eef97145653d6f999a5152301fa761",
+		x64: "6e38a0b307895554086e6c02a19670a02f849b975b954920225d742a337dc5b6",
+	},
+	"1.17.18": {
+		arm64: "6fb43e2d8728fa0e2a590d49c45c63489ecda33a6ed4e7064c34b06b0df5081d",
+		x64: "2192df6595f2f8441ef1b6bee7a63d81c0211b4889cfe34de868c6741ec5cdb2",
+	},
+	"1.18.2": {
+		arm64: "b4c2e9af82685bbabfe3d138a9d3254a29484079a39d23ad30db4bcc6a933287",
+		x64: "114e3441cb8556f9dc75fb63999c7dcb2e099fc08d97acaff57a3c940d099c1c",
+	},
 };
 
 // Kimi Code CLI ships per-platform native binaries (Node SEA) as zip release
@@ -130,7 +190,7 @@ export const OPENCODE_SHA256: Readonly<
 // release URL rather than from node_modules. Bumping: pull each platform's
 // SHA256 from the release's `*.zip.sha256` sidecar (or the GitHub asset
 // `digest`) and wipe sidecar/.bundle-cache. Keyed `version → platformSlug`.
-export const KIMI_VERSION = "0.19.2";
+export const KIMI_VERSION = "0.21.0";
 export const KIMI_SHA256: Readonly<Record<string, Record<string, string>>> = {
 	"0.19.1": {
 		"darwin-arm64":
@@ -152,6 +212,26 @@ export const KIMI_SHA256: Readonly<Record<string, Record<string, string>>> = {
 		"win32-x64":
 			"6967aca6daa7a61ea1601e1bc0a64cc22512a6f449b4cabd5a08fa1f1ffb4dda",
 	},
+	"0.20.3": {
+		"darwin-arm64":
+			"8d49227050498a23f11ce660c622e4be94d2a07f22950bb277269f951530ed87",
+		"darwin-x64":
+			"8152a43d7a2208b5ee9a1aab7b1344082df6df49ed4ed66156a2fa356b9ea396",
+		"win32-arm64":
+			"270e44215fb89112135dfb8bbbbe54beb1269031ca20311b4cc4d9a5b267b35a",
+		"win32-x64":
+			"fbd2c89b61cfd48474f99aeaee536b3f34c1da3879588dbd1150f80b34064535",
+	},
+	"0.21.0": {
+		"darwin-arm64":
+			"9a20e6680de77cacdeacd768877e0ddf2e04553d305f82fb989719389c243beb",
+		"darwin-x64":
+			"6559c2392f268bc1ad437cbbc20ab02a898f44bb6e8db970b6ff833eca2b64b7",
+		"win32-arm64":
+			"65c410c38e193c4c99da6b64a536440ea5896796995e7963fa7911cdcb2580d2",
+		"win32-x64":
+			"b6e875f1fcd7967713f0b99c040c72b853962d1e7f88377e6125478b79e5999d",
+	},
 };
 
 export const LLAMA_VERSION = "b9763";
@@ -161,7 +241,7 @@ export const LLAMA_SHA256: Readonly<{ arm64: string; x64: string }> = {
 };
 
 // Node runtime that runs the cursor worker. Pinned to the Node 24 line to match
-// Conductor's bundled runtime and to satisfy @cursor/sdk's engines floor
+// the bundled worker runtime and to satisfy @cursor/sdk's engines floor
 // (>=22.13). Since @cursor/sdk 1.0.19 the SDK's SQLite store uses Node's
 // built-in `node:sqlite` (stable + unflagged on Node 24) instead of a native
 // sqlite3 addon, so there is no Node↔native-addon ABI concern. Bumping: pull

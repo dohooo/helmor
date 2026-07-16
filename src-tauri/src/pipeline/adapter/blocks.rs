@@ -711,6 +711,7 @@ fn push_tool_use(
         result: None,
         is_error: None,
         streaming_status: stream_status,
+        task_state: None,
         children: Vec::new(),
     });
 }

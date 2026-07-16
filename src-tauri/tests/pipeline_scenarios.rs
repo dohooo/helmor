@@ -1317,6 +1317,88 @@ fn sys_no_subtype() {
     assert_yaml_snapshot!(run_normalized(msgs));
 }
 
+#[test]
+fn sys_notification_notice() {
+    let msgs = vec![system_json(
+        "s1",
+        json!({
+            "subtype": "notification",
+            "key": "hook-output",
+            "text": "Hook completed",
+            "priority": "high",
+            "timeout_ms": 5000,
+        }),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn sys_informational_notice() {
+    let msgs = vec![system_json(
+        "s1",
+        json!({
+            "subtype": "informational",
+            "content": "Command output was truncated",
+            "level": "warning",
+            "tool_use_id": "toolu_1",
+            "prevent_continuation": true,
+        }),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn sys_permission_denied_notice() {
+    let msgs = vec![system_json(
+        "s1",
+        json!({
+            "subtype": "permission_denied",
+            "tool_name": "Bash",
+            "tool_use_id": "toolu_denied",
+            "decision_reason_type": "classifier",
+            "decision_reason": "Command writes outside the workspace",
+            "message": "Permission denied",
+        }),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn sys_model_refusal_fallback_notice() {
+    let msgs = vec![system_json(
+        "s1",
+        json!({
+            "subtype": "model_refusal_fallback",
+            "trigger": "refusal",
+            "direction": "retry",
+            "original_model": "claude-opus-4-5",
+            "fallback_model": "claude-sonnet-4-5",
+            "request_id": "req_1",
+            "api_refusal_category": "cyber",
+            "api_refusal_explanation": "The request was blocked by safety policy",
+            "content": "Retrying with fallback model",
+        }),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn sys_model_refusal_no_fallback_notice() {
+    let msgs = vec![system_json(
+        "s1",
+        json!({
+            "subtype": "model_refusal_no_fallback",
+            "original_model": "claude-opus-4-5",
+            "request_id": "req_2",
+            "api_refusal_category": "cyber",
+            "api_refusal_explanation": "The request was blocked by safety policy",
+            "refused_user_message_uuid": "user_1",
+            "content": "The model refused this request",
+        }),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
 // ============================================================================
 // 7. Merge boundaries
 // ============================================================================
@@ -2256,6 +2338,204 @@ fn stream_top_level_partial_stays_top_level() {
 }
 
 // ============================================================================
+// Task-state aggregation — Claude SDK task_* lifecycle events
+// ============================================================================
+
+fn task_tool_message(id: &str, tool_use_id: &str, description: &str) -> HistoricalRecord {
+    assistant_json(
+        id,
+        json!([{
+            "type": "tool_use",
+            "id": tool_use_id,
+            "name": "Task",
+            "input": {"description": description},
+        }]),
+        None,
+    )
+}
+
+fn bash_tool_message(id: &str, tool_use_id: &str, command: &str) -> HistoricalRecord {
+    assistant_json(
+        id,
+        json!([{
+            "type": "tool_use",
+            "id": tool_use_id,
+            "name": "Bash",
+            "input": {"command": command},
+        }]),
+        None,
+    )
+}
+
+#[test]
+fn task_state_subagent_full_lifecycle() {
+    let msgs = vec![
+        task_tool_message("a1", "toolu_task_1", "Review repository state"),
+        system_json(
+            "s1",
+            json!({
+                "subtype": "task_started",
+                "task_id": "task_1",
+                "tool_use_id": "toolu_task_1",
+                "task_type": "local_agent",
+                "subagent_type": "Explore",
+                "description": "Review repository state",
+            }),
+        ),
+        system_json(
+            "s2",
+            json!({
+                "subtype": "task_progress",
+                "task_id": "task_1",
+                "tool_use_id": "toolu_task_1",
+                "description": "Review repository state",
+                "subagent_type": "Explore",
+                "summary": "Read package.json",
+                "last_tool_name": "Read",
+                "usage": {"total_tokens": 120, "tool_uses": 2, "duration_ms": 3000},
+            }),
+        ),
+        system_json(
+            "s3",
+            json!({
+                "subtype": "task_updated",
+                "task_id": "task_1",
+                "patch": {"status": "paused", "is_backgrounded": true},
+            }),
+        ),
+        system_json(
+            "s4",
+            json!({
+                "subtype": "task_notification",
+                "task_id": "task_1",
+                "tool_use_id": "toolu_task_1",
+                "status": "completed",
+                "summary": "Repository review complete",
+                "usage": {"total_tokens": 180, "tool_uses": 3, "duration_ms": 4500},
+            }),
+        ),
+    ];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn task_state_local_bash_lifecycle() {
+    let msgs = vec![
+        bash_tool_message("a1", "toolu_bash_1", "cargo test --tests"),
+        system_json(
+            "s1",
+            json!({
+                "subtype": "task_started",
+                "task_id": "bash_task_1",
+                "tool_use_id": "toolu_bash_1",
+                "task_type": "local_bash",
+                "description": "cargo test --tests",
+            }),
+        ),
+        system_json(
+            "s2",
+            json!({
+                "subtype": "task_progress",
+                "task_id": "bash_task_1",
+                "tool_use_id": "toolu_bash_1",
+                "summary": "tests running",
+                "last_tool_name": "Bash",
+                "usage": {"duration_ms": 9000},
+            }),
+        ),
+        system_json(
+            "s3",
+            json!({
+                "subtype": "task_updated",
+                "task_id": "bash_task_1",
+                "patch": {"status": "running", "is_backgrounded": true},
+            }),
+        ),
+        system_json(
+            "s4",
+            json!({
+                "subtype": "task_notification",
+                "task_id": "bash_task_1",
+                "tool_use_id": "toolu_bash_1",
+                "status": "completed",
+                "summary": "tests passed",
+                "usage": {"duration_ms": 12000},
+            }),
+        ),
+    ];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn task_state_killed_status() {
+    let msgs = vec![
+        task_tool_message("a1", "toolu_task_kill", "Long-running audit"),
+        system_json(
+            "s1",
+            json!({
+                "subtype": "task_started",
+                "task_id": "task_kill",
+                "tool_use_id": "toolu_task_kill",
+                "task_type": "local_agent",
+                "description": "Long-running audit",
+            }),
+        ),
+        system_json(
+            "s2",
+            json!({
+                "subtype": "task_updated",
+                "task_id": "task_kill",
+                "patch": {
+                    "status": "killed",
+                    "is_backgrounded": true,
+                    "error": "terminated by user",
+                    "end_time": 1780015779522_i64,
+                },
+            }),
+        ),
+    ];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn task_state_local_bash_dedupes_tool_line() {
+    let msgs = vec![
+        bash_tool_message("a1", "toolu_bash_dedupe", "bun test src/foo.test.ts"),
+        system_json(
+            "s1",
+            json!({
+                "subtype": "task_started",
+                "task_id": "bash_task_dedupe",
+                "tool_use_id": "toolu_bash_dedupe",
+                "task_type": "local_bash",
+                "description": "bun test src/foo.test.ts",
+            }),
+        ),
+        system_json(
+            "s2",
+            json!({
+                "subtype": "task_notification",
+                "task_id": "bash_task_dedupe",
+                "tool_use_id": "toolu_bash_dedupe",
+                "status": "completed",
+                "summary": "bun test src/foo.test.ts",
+            }),
+        ),
+    ];
+    let result = run_normalized(msgs);
+    assert_eq!(
+        result.len(),
+        1,
+        "task state must attach to the Bash message"
+    );
+    assert_eq!(
+        result[0].content_length, 1,
+        "task state must not create a second rendered row"
+    );
+    assert_yaml_snapshot!(result);
+}
+
+// ============================================================================
 // AskUserQuestion / user_question — unified Q&A card (#796)
 // ============================================================================
 
@@ -2464,6 +2744,40 @@ fn auq_claude_split_rows_still_merge_answers() {
         thinking_row,
         tool_use_row,
         make_record("u1", "user", &serde_json::to_string(&result_msg).unwrap()),
+    ];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+/// Freezes the persisted `task_snapshot` storage shape: the exact system row
+/// `task_state_persist::upsert_task_state_snapshot` writes must keep
+/// rebuilding the task's terminal state through `convert_historical`. If this
+/// snapshot drifts, historical sessions persisted with the old shape may stop
+/// rebuilding TaskState on reload — treat any diff here as a storage-format
+/// change, not a cosmetic one.
+#[test]
+fn task_state_persisted_snapshot_row_round_trips() {
+    let msgs = vec![
+        task_tool_message("a1", "toolu_task_persisted", "Count repository files"),
+        // Byte-shape mirror of task_state_persist::upsert_task_state_snapshot.
+        system_json(
+            "task-state:session-1:task_persisted",
+            json!({
+                "subtype": "task_snapshot",
+                "task_id": "task_persisted",
+                "tool_use_id": "toolu_task_persisted",
+                "task_state": {
+                    "id": "task_persisted",
+                    "toolUseId": "toolu_task_persisted",
+                    "description": "Count repository files",
+                    "taskType": "local_agent",
+                    "subagentType": "general-purpose",
+                    "status": "killed",
+                    "isBackgrounded": true,
+                    "summary": "Stopped by user",
+                    "usage": {"totalTokens": 2048, "toolUses": 4, "durationMs": 15_000},
+                },
+            }),
+        ),
     ];
     assert_yaml_snapshot!(run_normalized(msgs));
 }

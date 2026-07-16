@@ -362,6 +362,10 @@ describe("App create workspace flow", () => {
 		await user.click(screen.getByRole("button", { name: "New workspace" }));
 
 		expect(await screen.findByLabelText("Workspace input")).toBeInTheDocument();
+		const repositoryPicker = await screen.findByRole("button", {
+			name: "dosu-cli",
+		});
+		expect(repositoryPicker.parentElement).toHaveClass("flex");
 		await waitFor(() => {
 			expect(
 				screen.getByRole("button", { name: "New Workspace" }),

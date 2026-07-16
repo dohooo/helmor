@@ -104,6 +104,35 @@ describe("useStreamingStore", () => {
 		).toHaveLength(2);
 	});
 
+	it("setActiveTasks stores by session and dedupes equivalent snapshots", () => {
+		const listener = vi.fn();
+		const unsubscribe = useStreamingStore.subscribe(listener);
+		const tasks = [
+			{
+				id: "task-1",
+				toolUseId: "toolu-1",
+				status: "running" as const,
+			},
+		];
+
+		useStreamingStore.getState().setActiveTasks("session-1", tasks);
+		expect(listener).toHaveBeenCalledTimes(1);
+		expect(
+			useStreamingStore.getState().activeTasksBySession["session-1"],
+		).toEqual(tasks);
+
+		useStreamingStore.getState().setActiveTasks("session-1", [...tasks]);
+		expect(listener).toHaveBeenCalledTimes(1);
+
+		useStreamingStore.getState().clearActiveTasks("session-1");
+		expect(listener).toHaveBeenCalledTimes(2);
+		expect(
+			useStreamingStore.getState().activeTasksBySession["session-1"],
+		).toBeUndefined();
+
+		unsubscribe();
+	});
+
 	it("removePendingPermission drops one entry; clears the bucket when last", () => {
 		const store = useStreamingStore.getState();
 		store.appendPendingPermission(KEY, {

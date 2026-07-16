@@ -102,6 +102,7 @@ fn render_command_execution(
             result: Some(Value::String(result_text)),
             is_error: if failed { Some(true) } else { None },
             streaming_status: None,
+            task_state: None,
             children: Vec::new(),
         })],
         status: Some(MessageStatus {
@@ -214,6 +215,7 @@ fn render_file_change(
             result: Some(Value::String(result_text)),
             is_error: if failed { Some(true) } else { None },
             streaming_status: None,
+            task_state: None,
             children: Vec::new(),
         })],
         status: Some(MessageStatus {
@@ -263,6 +265,7 @@ fn render_web_search(msg: &IntermediateMessage, item: &Value, result: &mut Vec<T
             result: tool_result,
             is_error: None,
             streaming_status: None,
+            task_state: None,
             children: Vec::new(),
         })],
         status: Some(MessageStatus {
@@ -311,6 +314,7 @@ fn render_mcp_tool_call(
             result: Some(Value::String(result_text)),
             is_error: if failed { Some(true) } else { None },
             streaming_status: None,
+            task_state: None,
             children: Vec::new(),
         })],
         status: Some(MessageStatus {
@@ -381,6 +385,7 @@ fn render_collab_agent_tool_call(
             result: Some(Value::String(result_text)),
             is_error: if failed { Some(true) } else { None },
             streaming_status: None,
+            task_state: None,
             children: Vec::new(),
         })],
         status: Some(MessageStatus {

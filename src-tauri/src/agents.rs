@@ -95,6 +95,12 @@ pub enum AgentStreamEvent {
     StreamingPartial {
         message: crate::pipeline::types::ThreadMessageLike,
     },
+    /// Session-level background-task state snapshot. Emitted when the
+    /// non-workflow task collection changes; consumers replace the full list.
+    TaskStateUpdate {
+        session_id: String,
+        tasks: Vec<crate::pipeline::types::TaskState>,
+    },
     Done {
         provider: String,
         model_id: String,

@@ -106,12 +106,11 @@ fn accumulate_tool_use_blocks() {
 }
 
 #[test]
-fn claude_local_bash_task_events_are_dropped() {
+fn claude_local_bash_task_events_are_collected_for_task_state() {
     // `task_type: "local_bash"` is Claude wrapping a single Bash command
-    // with its own task_started / task_notification. The `tool_use_id`
-    // points at the Bash tool, which doesn't serve as a subagent parent,
-    // so these notices would render as mislabeled "Subagent started /
-    // completed" siblings next to the real Bash tool call. Drop them.
+    // with its own task_started / task_notification. They now flow through
+    // the adapter so it can aggregate structured task state and suppress
+    // transcript prose there.
     let mut acc = StreamAccumulator::new("claude", "opus");
     for subtype in ["task_started", "task_progress", "task_notification"] {
         let event = json!({
@@ -124,11 +123,11 @@ fn claude_local_bash_task_events_are_dropped() {
         });
         acc.push_event(&event, &event.to_string());
     }
-    assert!(acc.collected().is_empty());
+    assert_eq!(acc.collected().len(), 3);
 }
 
 #[test]
-fn claude_local_bash_notification_without_task_type_is_dropped() {
+fn claude_local_bash_notification_without_task_type_is_collected() {
     let mut acc = StreamAccumulator::new("claude", "opus");
     let started = json!({
         "type": "system",
@@ -151,7 +150,7 @@ fn claude_local_bash_notification_without_task_type_is_dropped() {
     });
     acc.push_event(&notification, &notification.to_string());
 
-    assert!(acc.collected().is_empty());
+    assert_eq!(acc.collected().len(), 2);
 }
 
 #[test]

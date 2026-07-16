@@ -1,6 +1,6 @@
 // Focus-time backstop for the event-fresh thread cache. With
 // `staleTime: Infinity` a missed `sessionTurnPersisted` (bridge re-subscribe
-// gap, conductor re-import, rolled-back send) would stay stale forever —
+// gap or rolled-back send) would stay stale forever —
 // refetch the DISPLAYED session's thread on window focus. One IPC per focus;
 // background sessions still rely on events + mount refetch.
 import { focusManager, type QueryClient } from "@tanstack/react-query";

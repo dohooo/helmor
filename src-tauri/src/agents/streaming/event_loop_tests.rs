@@ -58,6 +58,10 @@ enum EmittedEvent {
     StreamingPartial {
         message: MessageFingerprint,
     },
+    TaskStateUpdate {
+        session_id: String,
+        task_count: usize,
+    },
     PermissionRequest {
         permission_id: String,
         tool_name: String,
@@ -134,6 +138,12 @@ fn convert_action(action: Action) -> Result<EmittedEvent, String> {
             AgentStreamEvent::StreamingPartial { message } => EmittedEvent::StreamingPartial {
                 message: fingerprint_message(&message),
             },
+            AgentStreamEvent::TaskStateUpdate { session_id, tasks } => {
+                EmittedEvent::TaskStateUpdate {
+                    session_id,
+                    task_count: tasks.len(),
+                }
+            }
             AgentStreamEvent::PermissionRequest {
                 permission_id,
                 tool_name,

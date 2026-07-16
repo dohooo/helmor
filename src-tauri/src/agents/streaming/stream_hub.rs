@@ -32,6 +32,9 @@ struct SessionEntry {
     /// a watcher that attaches mid-turn so it catches up immediately instead of
     /// waiting for the next delta. Cleared on terminal events.
     last_render: Option<AgentStreamEvent>,
+    /// Last task-state snapshot, replayed alongside the render snapshot for
+    /// watchers that attach after background work has already started.
+    last_task_state: Option<AgentStreamEvent>,
 }
 
 /// Tauri-managed registry of session watchers. Shared by the native
@@ -63,6 +66,9 @@ impl SessionStreamHub {
         let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let entry = map.entry(session_id).or_default();
         if let Some(event) = &entry.last_render {
+            let _ = channel.send(event.clone());
+        }
+        if let Some(event) = &entry.last_task_state {
             let _ = channel.send(event.clone());
         }
         entry.subscribers.push(Subscriber {
@@ -109,10 +115,14 @@ impl SessionStreamHub {
             AgentStreamEvent::Update { .. } | AgentStreamEvent::StreamingPartial { .. } => {
                 entry.last_render = Some(event.clone());
             }
+            AgentStreamEvent::TaskStateUpdate { .. } => {
+                entry.last_task_state = Some(event.clone());
+            }
             AgentStreamEvent::Done { .. }
             | AgentStreamEvent::Aborted { .. }
             | AgentStreamEvent::Error { .. } => {
                 entry.last_render = None;
+                entry.last_task_state = None;
             }
             _ => {}
         }
@@ -136,6 +146,7 @@ impl SessionStreamHub {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn update_event(text: &str) -> AgentStreamEvent {
         use crate::pipeline::types::{
@@ -153,6 +164,18 @@ mod tests {
                 status: None,
                 streaming: None,
             }],
+        }
+    }
+
+    fn task_state_event() -> AgentStreamEvent {
+        AgentStreamEvent::TaskStateUpdate {
+            session_id: "s1".into(),
+            tasks: vec![serde_json::from_value(json!({
+                "id": "task-1",
+                "toolUseId": "toolu-1",
+                "status": "running",
+            }))
+            .unwrap()],
         }
     }
 
@@ -187,6 +210,23 @@ mod tests {
         hub.publish("s1", &update_event("hello"));
 
         // A late joiner should receive the cached event immediately.
+        let received = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = received.clone();
+        let late = Channel::new(move |_| {
+            seen.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        });
+        hub.subscribe("s1".into(), "late".into(), late);
+        assert_eq!(received.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn replays_last_task_state_on_subscribe() {
+        let hub = SessionStreamHub::new();
+        let primer = Channel::new(|_| Ok(()));
+        hub.subscribe("s1".into(), "primer".into(), primer);
+        hub.publish("s1", &task_state_event());
+
         let received = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let seen = received.clone();
         let late = Channel::new(move |_| {

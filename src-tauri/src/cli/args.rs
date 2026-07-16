@@ -187,11 +187,6 @@ pub enum Commands {
         #[command(subcommand)]
         action: ScriptsAction,
     },
-    /// Migrate from Helmor v1 (Conductor).
-    Conductor {
-        #[command(subcommand)]
-        action: ConductorAction,
-    },
     /// Shell completion scripts.
     Completions {
         #[arg(value_enum)]
@@ -852,20 +847,6 @@ pub enum ScriptsAction {
         #[arg(long)]
         workspace: Option<String>,
     },
-}
-
-// ---------------------------------------------------------------------------
-// conductor
-// ---------------------------------------------------------------------------
-
-#[derive(Subcommand)]
-pub enum ConductorAction {
-    /// Report whether a Conductor data source is available locally.
-    Status,
-    /// List repositories discovered in the Conductor data source.
-    Repos,
-    /// List workspaces discovered in the Conductor data source.
-    Workspaces,
 }
 
 // ---------------------------------------------------------------------------

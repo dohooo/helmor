@@ -1047,6 +1047,54 @@ export async function resizeAgentLoginTerminal(
 	});
 }
 
+// ── Keychain store terminal (Vertex provider keychain auth) ────────────────
+// In-app terminal that runs `security add-generic-password … -U -w`; the
+// user types the token straight into macOS Keychain.
+
+export async function spawnKeychainStoreTerminal(
+	service: string,
+	account: string,
+	instanceId: string,
+	onEvent: (event: ScriptEvent) => void,
+): Promise<void> {
+	const channel = new Channel<ScriptEvent>();
+	channel.onmessage = onEvent;
+	await invoke("spawn_keychain_store_terminal", {
+		service,
+		account,
+		instanceId,
+		channel,
+	});
+}
+
+export async function stopKeychainStoreTerminal(
+	instanceId: string,
+): Promise<boolean> {
+	return invoke<boolean>("stop_keychain_store_terminal", { instanceId });
+}
+
+export async function writeKeychainStoreTerminalStdin(
+	instanceId: string,
+	data: string,
+): Promise<boolean> {
+	return invoke<boolean>("write_keychain_store_terminal_stdin", {
+		instanceId,
+		data,
+	});
+}
+
+export async function resizeKeychainStoreTerminal(
+	instanceId: string,
+	cols: number,
+	rows: number,
+): Promise<boolean> {
+	return invoke<boolean>("resize_keychain_store_terminal", {
+		instanceId,
+		cols,
+		rows,
+	});
+}
+
 export type DevResetResult = {
 	reposDeleted: number;
 	workspacesDeleted: number;
@@ -3280,6 +3328,7 @@ export type ToolCallPart = {
 	result?: unknown;
 	isError?: boolean;
 	streamingStatus?: StreamingStatus;
+	taskState?: TaskState;
 	/**
 	 * Sub-agent work folded in by the Rust pipeline's grouping pass for
 	 * `Task` / `Agent` tool calls. Empty / absent for normal tool calls
@@ -3327,6 +3376,40 @@ export type WorkflowPart = {
 	agents?: WorkflowAgentRow[];
 	totalTokens?: number;
 	durationMs?: number;
+};
+export type TaskStatus =
+	| "pending"
+	| "running"
+	| "completed"
+	| "failed"
+	| "cancelled"
+	| "killed"
+	| "paused";
+export type TaskUsage = {
+	totalTokens?: number;
+	toolUses?: number;
+	durationMs?: number;
+};
+/** Aggregated Claude SDK background-task lifecycle state from `task_*`
+ *  events. It is attached to the owning tool via `taskState` so chat
+ *  rendering does not duplicate the underlying tool call line. */
+export type TaskState = {
+	id: string;
+	toolUseId?: string;
+	description?: string;
+	taskType?: string;
+	subagentType?: string;
+	status: TaskStatus;
+	isBackgrounded?: boolean;
+	summary?: string;
+	usage?: TaskUsage;
+	lastToolName?: string;
+	error?: string;
+	startedAt?: string;
+	updatedAt?: string;
+	endTimeMs?: number;
+	totalPausedMs?: number;
+	outputFile?: string;
 };
 export type ImageSource =
 	| { kind: "base64"; data: string }
@@ -3464,6 +3547,11 @@ export type AgentStreamEvent =
 	| {
 			kind: "streamingPartial";
 			message: ThreadMessageLike;
+	  }
+	| {
+			kind: "taskStateUpdate";
+			sessionId: string;
+			tasks: TaskState[];
 	  }
 	| {
 			kind: "done";
@@ -3913,64 +4001,6 @@ export async function respondToUserInput(
 			content: content ?? null,
 			meta: meta ?? null,
 		},
-	});
-}
-
-// ---------------------------------------------------------------------------
-// Conductor import
-// ---------------------------------------------------------------------------
-
-export type ConductorRepo = {
-	id: string;
-	name: string;
-	remoteUrl: string | null;
-	workspaceCount: number;
-	alreadyImportedCount: number;
-};
-
-export type ConductorWorkspace = {
-	id: string;
-	directoryName: string;
-	state: string;
-	branch: string | null;
-	status: string | null;
-	prTitle: string | null;
-	sessionCount: number;
-	messageCount: number;
-	alreadyImported: boolean;
-	iconSrc: string | null;
-};
-
-export type ImportWorkspacesResult = {
-	success: boolean;
-	importedCount: number;
-	skippedCount: number;
-	errors: string[];
-};
-
-export async function isConductorAvailable(): Promise<boolean> {
-	try {
-		return await invoke<boolean>("conductor_source_available");
-	} catch {
-		return false;
-	}
-}
-
-export async function listConductorRepos(): Promise<ConductorRepo[]> {
-	return invoke<ConductorRepo[]>("list_conductor_repos");
-}
-
-export async function listConductorWorkspaces(
-	repoId: string,
-): Promise<ConductorWorkspace[]> {
-	return invoke<ConductorWorkspace[]>("list_conductor_workspaces", { repoId });
-}
-
-export async function importConductorWorkspaces(
-	workspaceIds: string[],
-): Promise<ImportWorkspacesResult> {
-	return invoke<ImportWorkspacesResult>("import_conductor_workspaces", {
-		workspaceIds,
 	});
 }
 

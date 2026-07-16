@@ -44,7 +44,7 @@ export function ComposerQuickActions({
 	const { t } = useI18n();
 	if (actions.length === 0) return null;
 	return (
-		<div className="pointer-events-auto mb-1.5 flex w-full flex-wrap items-center justify-start gap-1.5 self-stretch pl-1">
+		<div className="pointer-events-auto flex w-full flex-wrap items-center justify-start gap-1.5 self-stretch pl-1">
 			{actions.map((action) => {
 				const Icon = action.icon;
 				return (

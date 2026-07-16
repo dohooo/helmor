@@ -65,6 +65,7 @@ import {
 	type ComposerQuickAction,
 	ComposerQuickActions,
 } from "./composer-quick-actions";
+import { DockedBarStack } from "./composer-top-bars";
 import type { AddDirPickerEntry } from "./editor/add-dir/typeahead-plugin";
 import { WorkspaceComposer } from "./index";
 import {
@@ -73,8 +74,10 @@ import {
 } from "./input-history";
 import type { PermissionPanelProps } from "./permission-panel";
 import { SessionContextInjector } from "./session-context-injector";
+import { includePinnedHiddenModel } from "./session-model-sections";
 import type { StartSubmitMode } from "./start-submit-mode";
 import { SubmitQueueList } from "./submit-queue-list";
+import { TaskProgressPanel } from "./task-progress";
 import type { UserInputResponseHandler } from "./user-input";
 import { WorkflowProgressPanel } from "./workflow-progress-panel";
 
@@ -535,12 +538,13 @@ export const WorkspaceComposerContainer = memo(
 			],
 		);
 
-		const modelSections = modelSectionsQuery.data ?? EMPTY_MODEL_SECTIONS;
+		const availableModelSections =
+			modelSectionsQuery.data ?? EMPTY_MODEL_SECTIONS;
 		const modelsLoading =
 			modelSectionsQuery.isLoading &&
-			modelSections.every((s) => s.options.length === 0);
+			availableModelSections.every((s) => s.options.length === 0);
 		// Drives the OpenCode "Add custom model…" jump; only fetched when an OpenCode section exists.
-		const opencodeSectionPresent = modelSections.some(
+		const opencodeSectionPresent = availableModelSections.some(
 			(s) => s.id === "opencode",
 		);
 		const opencodeCustomProvidersQuery = useQuery({
@@ -554,6 +558,10 @@ export const WorkspaceComposerContainer = memo(
 			(sessionsQuery.data ?? []).find(
 				(session) => session.id === displayedSessionId,
 			) ?? null;
+		const modelSections = useMemo(
+			() => includePinnedHiddenModel(availableModelSections, currentSession),
+			[availableModelSections, currentSession],
+		);
 		const composerContextKey =
 			contextKeyOverride ??
 			getComposerContextKey(displayedWorkspaceId, displayedSessionId);
@@ -1192,6 +1200,14 @@ export const WorkspaceComposerContainer = memo(
 		const autoCloseHelpText = t("composerAutoCloseHelp");
 
 		const [workflowsPanelOpen, setWorkflowsPanelOpen] = useState(false);
+
+		// Docked-bar visibility must be lifted to the host (see
+		// composer-top-bars.tsx): the goal banner's own query decides whether it
+		// renders, so mirror that query here to drive the docking rule.
+		const { data: sessionGoal } = useQuery({
+			...sessionCodexGoalQueryOptions(displayedSessionId ?? ""),
+			enabled: !!displayedSessionId,
+		});
 		return (
 			// `z-20` lifts the entire composer stacking context above the thread
 			// viewport's `z-10` root (`thread-viewport.tsx:99`). Without this the
@@ -1267,7 +1283,11 @@ export const WorkspaceComposerContainer = memo(
 				) : null}
 
 				<div className="relative z-10">
-					<div className="pointer-events-none absolute inset-x-0 bottom-[calc(100%-1px)] z-20 flex flex-col items-center gap-1.5">
+					{/* gap-1/pb-1: uniform 4px between stacked bars and 4px between the
+					    lowest overlay bar and whatever sits below (task panel /
+					    composer). Docked bars are NOT here — they live in flow below
+					    and glue to the composer (see composer-top-bars.tsx). */}
+					<div className="pointer-events-none absolute inset-x-0 bottom-[calc(100%-1px)] z-20 flex flex-col items-center gap-1 pb-1.5">
 						{onToggleContextSession ? (
 							<SessionContextInjector
 								candidates={contextSessionCandidates}
@@ -1286,22 +1306,46 @@ export const WorkspaceComposerContainer = memo(
 							open={workflowsPanelOpen}
 							onClose={() => setWorkflowsPanelOpen(false)}
 						/>
-						{displayedSessionId ? (
-							<CodexGoalBanner
-								sessionId={displayedSessionId}
-								hasQueueBelow={queueItems.length > 0}
-								disabled={composerUnavailable}
-								onResume={handleResumeGoal}
-							/>
-						) : null}
-						<SubmitQueueList
-							items={queueItems}
-							onSteer={(id) => onSteerQueued?.(id)}
-							onRemove={(id) => onRemoveQueued?.(id)}
-							onEdit={(id) => onEditQueued?.(id)}
-							disabled={composerUnavailable}
-						/>
 					</div>
+					<TaskProgressPanel
+						sessionId={displayedSessionId}
+						workspaceId={displayedWorkspaceId}
+						repoId={effectiveRepoId}
+					/>
+					{/* Docked (open-bottom) bars live in normal flow DIRECTLY above
+					    the composer — nothing may render between them and it. Order
+					    is top-to-bottom; only the bottom-most visible one keeps its
+					    open bottom. See composer-top-bars.tsx for the contract. */}
+					<DockedBarStack
+						bars={[
+							{
+								key: "codex-goal",
+								visible: Boolean(displayedSessionId && sessionGoal),
+								render: (docked) => (
+									<CodexGoalBanner
+										sessionId={displayedSessionId!}
+										docked={docked}
+										disabled={composerUnavailable}
+										onResume={handleResumeGoal}
+									/>
+								),
+							},
+							{
+								key: "submit-queue",
+								visible: queueItems.length > 0,
+								render: (docked) => (
+									<SubmitQueueList
+										items={queueItems}
+										docked={docked}
+										onSteer={(id) => onSteerQueued?.(id)}
+										onRemove={(id) => onRemoveQueued?.(id)}
+										onEdit={(id) => onEditQueued?.(id)}
+										disabled={composerUnavailable}
+									/>
+								),
+							},
+						]}
+					/>
 					<WorkspaceComposer
 						contextKey={composerContextKey}
 						sessionId={displayedSessionId}

@@ -1,0 +1,11 @@
+{
+	"items": [
+		{
+			"text": "GPT-5.6 Sol, Terra, and Luna are now available, with Sol recommended by default and older Codex and Opus models still available under Models.",
+			"action": {
+				"label": "Open Models",
+				"value": { "type": "openSettings", "section": "model" }
+			}
+		}
+	]
+}
