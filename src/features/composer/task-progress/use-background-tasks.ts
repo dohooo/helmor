@@ -99,19 +99,9 @@ function runningScriptFallbacks(
 ): BackgroundFallbackItem[] {
 	if (!workspaceId || !repoScripts) return [];
 	const items: BackgroundFallbackItem[] = [];
-	if (repoScripts.setupScript?.trim()) {
-		const setup = getScriptState(workspaceId, "setup");
-		if (setup?.status === "running") {
-			items.push({
-				id: `${workspaceId}:setup`,
-				kind: "script",
-				title: "setup",
-				typeKey: "taskPanelTypeScript",
-				command: repoScripts.setupScript,
-				status: "running",
-			});
-		}
-	}
+	// Setup is workspace initialization with its own inspector status/output,
+	// not background work owned by the active chat session. Keep this fallback
+	// focused on long-lived Run actions and terminals.
 	for (const action of repoScripts.runActions) {
 		if (!action.command.trim()) continue;
 		const run = getScriptState(workspaceId, "run", action.id);
@@ -139,7 +129,6 @@ function useScriptFallbacks(
 	);
 	const runActions = repoScripts?.runActions ?? EMPTY_RUN_ACTIONS;
 	const runActionKey = runActions.map((action) => action.id).join("|");
-	const setupEnabled = Boolean(repoScripts?.setupScript?.trim());
 
 	useEffect(() => {
 		if (!enabled || !workspaceId || !repoScripts) {
@@ -151,9 +140,6 @@ function useScriptFallbacks(
 		};
 		refresh();
 		const unsubscribers: Array<() => void> = [];
-		if (setupEnabled) {
-			unsubscribers.push(subscribeStatus(workspaceId, "setup", refresh));
-		}
 		for (const action of runActions) {
 			unsubscribers.push(
 				subscribeStatus(workspaceId, "run", refresh, action.id),
@@ -162,14 +148,7 @@ function useScriptFallbacks(
 		return () => {
 			for (const unsubscribe of unsubscribers) unsubscribe();
 		};
-	}, [
-		enabled,
-		repoScripts,
-		runActions,
-		runActionKey,
-		setupEnabled,
-		workspaceId,
-	]);
+	}, [enabled, repoScripts, runActions, runActionKey, workspaceId]);
 
 	return items;
 }

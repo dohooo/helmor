@@ -3,12 +3,21 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useStreamingStore } from "@/features/conversation/state/streaming-store";
-import type { TaskState } from "@/lib/api";
+import type { RepoScripts, TaskState } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { shellEventName } from "@/shell/event-bus";
 import { TaskProgressPanel } from "./index";
 
 const SESSION_ID = "session-1";
+const WORKSPACE_ID = "workspace-1";
+const REPO_ID = "repo-1";
+
+const scriptStoreMocks = vi.hoisted(() => ({
+	getScriptState: vi.fn(),
+	subscribeStatus: vi.fn(() => () => {}),
+}));
+
+vi.mock("@/features/inspector/script-store", () => scriptStoreMocks);
 
 function makeTask(overrides: Partial<TaskState> = {}): TaskState {
 	return {
@@ -41,9 +50,52 @@ function renderPanel(tasks: TaskState[]) {
 	return render(<TaskProgressPanel sessionId={SESSION_ID} />, { wrapper });
 }
 
+function renderPanelWithScripts(repoScripts: RepoScripts) {
+	const queryClient = new QueryClient({
+		defaultOptions: { queries: { retry: false, enabled: false } },
+	});
+	queryClient.setQueryData(
+		[...helmorQueryKeys.sessionMessages(SESSION_ID), "thread"],
+		[],
+	);
+	queryClient.setQueryData(
+		helmorQueryKeys.repoScripts(REPO_ID, WORKSPACE_ID),
+		repoScripts,
+	);
+	return render(
+		<TaskProgressPanel
+			sessionId={SESSION_ID}
+			workspaceId={WORKSPACE_ID}
+			repoId={REPO_ID}
+		/>,
+		{
+			wrapper: ({ children }) => (
+				<QueryClientProvider client={queryClient}>
+					{children}
+				</QueryClientProvider>
+			),
+		},
+	);
+}
+
+function makeRepoScripts(overrides: Partial<RepoScripts> = {}): RepoScripts {
+	return {
+		setupScript: null,
+		archiveScript: null,
+		setupFromProject: false,
+		runFromProject: false,
+		archiveFromProject: false,
+		autoRunSetup: true,
+		runActions: [],
+		...overrides,
+	};
+}
+
 beforeEach(() => {
 	cleanup();
 	useStreamingStore.setState({ activeTasksBySession: {} });
+	scriptStoreMocks.getScriptState.mockReset().mockReturnValue(null);
+	scriptStoreMocks.subscribeStatus.mockClear();
 });
 
 describe("TaskProgressPanel", () => {
@@ -91,6 +143,47 @@ describe("TaskProgressPanel", () => {
 	it("renders nothing without tasks or fallbacks", () => {
 		const { container } = renderPanel([]);
 		expect(container).toBeEmptyDOMElement();
+	});
+
+	it("does not surface a running setup script as a background task", () => {
+		scriptStoreMocks.getScriptState.mockImplementation(
+			(_workspaceId, scriptType) =>
+				scriptType === "setup" ? { status: "running" } : null,
+		);
+
+		const { container } = renderPanelWithScripts(
+			makeRepoScripts({ setupScript: "bun install" }),
+		);
+
+		expect(container).toBeEmptyDOMElement();
+	});
+
+	it("continues surfacing running run actions as background tasks", () => {
+		scriptStoreMocks.getScriptState.mockImplementation(
+			(_workspaceId, scriptType, actionId) =>
+				scriptType === "run" && actionId === "dev"
+					? { status: "running" }
+					: null,
+		);
+
+		renderPanelWithScripts(
+			makeRepoScripts({
+				runFromProject: true,
+				runActions: [
+					{
+						id: "dev",
+						name: "Dev server",
+						command: "bun run dev",
+						mode: "non-concurrent",
+						fromProject: true,
+					},
+				],
+			}),
+		);
+
+		const strip = screen.getByRole("button", { name: "Background tasks" });
+		expect(strip).toHaveTextContent("Dev server");
+		expect(strip).toHaveTextContent("0/1");
 	});
 
 	it("collapses by default showing current task, progress, and status", () => {
