@@ -508,7 +508,9 @@ function stageCodexFromVendorRoot(archRoot: string): void {
 		const hostDest = join(DIST_VENDOR, "codex", `codex-code-mode-host${EXE}`);
 		copyFile(hostSrc, hostDest);
 		chmodSync(hostDest, 0o755);
-		maybeSignMacBinary(hostDest, false);
+		// The host embeds V8, which needs executable-memory entitlements under
+		// the hardened runtime or it traps during isolate initialization.
+		maybeSignMacBinary(hostDest, true);
 	}
 
 	const pathSrc = join(archRoot, pathDir);
