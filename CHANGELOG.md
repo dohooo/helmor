@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.45.1
+
+### Patch Changes
+
+- [#901](https://github.com/dohooo/helmor/pull/901) [`2c75929`](https://github.com/dohooo/helmor/commit/2c75929b378f330e97ae5e719581b32285b03c47) Thanks [@dohooo](https://github.com/dohooo)! - Update the bundled Claude Code and Codex coding agents to their latest versions.
+
+- [#932](https://github.com/dohooo/helmor/pull/932) [`21f9c77`](https://github.com/dohooo/helmor/commit/21f9c77022edd329ba22ea4bb16b37c8d6ad23eb) Thanks [@dohooo](https://github.com/dohooo)! - Keep workspace setup and Run Action scripts out of the background task bar above the composer.
+
+- [#930](https://github.com/dohooo/helmor/pull/930) [`364c411`](https://github.com/dohooo/helmor/commit/364c4118fd54c66698f2c7cad4d60a81ebb54884) Thanks [@natllian](https://github.com/natllian)! - Fix the start page repository picker capping its list at 9, so the 10th and later repositories now show up and can be searched.
+
+- [#933](https://github.com/dohooo/helmor/pull/933) [`b45da7b`](https://github.com/dohooo/helmor/commit/b45da7bf8ec1e0185bb2fd464f10fe0f75b048e6) Thanks [@dohooo](https://github.com/dohooo)! - Fix repository names shifting vertically on the new workspace screen when switching between generated initials and image icons.
+
 ## 0.45.0
 
 ### Minor Changes
