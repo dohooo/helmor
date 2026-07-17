@@ -63,11 +63,7 @@ function renderPanelWithScripts(repoScripts: RepoScripts) {
 		repoScripts,
 	);
 	return render(
-		<TaskProgressPanel
-			sessionId={SESSION_ID}
-			workspaceId={WORKSPACE_ID}
-			repoId={REPO_ID}
-		/>,
+		<TaskProgressPanel sessionId={SESSION_ID} workspaceId={WORKSPACE_ID} />,
 		{
 			wrapper: ({ children }) => (
 				<QueryClientProvider client={queryClient}>
@@ -158,7 +154,7 @@ describe("TaskProgressPanel", () => {
 		expect(container).toBeEmptyDOMElement();
 	});
 
-	it("continues surfacing running run actions as background tasks", () => {
+	it("does not surface running run actions as background tasks", () => {
 		scriptStoreMocks.getScriptState.mockImplementation(
 			(_workspaceId, scriptType, actionId) =>
 				scriptType === "run" && actionId === "dev"
@@ -166,7 +162,7 @@ describe("TaskProgressPanel", () => {
 					: null,
 		);
 
-		renderPanelWithScripts(
+		const { container } = renderPanelWithScripts(
 			makeRepoScripts({
 				runFromProject: true,
 				runActions: [
@@ -181,9 +177,7 @@ describe("TaskProgressPanel", () => {
 			}),
 		);
 
-		const strip = screen.getByRole("button", { name: "Background tasks" });
-		expect(strip).toHaveTextContent("Dev server");
-		expect(strip).toHaveTextContent("0/1");
+		expect(container).toBeEmptyDOMElement();
 	});
 
 	it("collapses by default showing current task, progress, and status", () => {
