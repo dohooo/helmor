@@ -150,6 +150,10 @@ export const CLAUDE_CODE_SHA256: Readonly<
 		arm64: "df2dae92225ee07170e466ce4aa8a14d9eadd9db84d1cfd7adc9f3f2a9106e3b",
 		x64: "acc8c9452f27748f4a0c9aaf4543834bdf026801d848ee0566e19ee3e2ec3267",
 	},
+	"2.1.212": {
+		arm64: "f4f9c250374bb79b3569e4912a7aea4476372ddad5c1e2491f0fcb25c68080cc",
+		x64: "259fda74f0cf24aa4ea0b6746c6740bd9803c2822309179d5b02572b95e4848e",
+	},
 };
 
 export const OPENCODE_SHA256: Readonly<
@@ -190,6 +194,10 @@ export const OPENCODE_SHA256: Readonly<
 	"1.18.2": {
 		arm64: "b4c2e9af82685bbabfe3d138a9d3254a29484079a39d23ad30db4bcc6a933287",
 		x64: "114e3441cb8556f9dc75fb63999c7dcb2e099fc08d97acaff57a3c940d099c1c",
+	},
+	"1.18.3": {
+		arm64: "598f404a27676f35b9bf82e93a31b2ac04e3ad9a69e7a7d585c520835b3e119e",
+		x64: "7075e02bdaa3fad0f1953c5841b68cd46628897437de476eacaa4d5e34c96a19",
 	},
 };
 
