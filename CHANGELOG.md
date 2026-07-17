@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.45.2
+
+### Patch Changes
+
+- [#936](https://github.com/dohooo/helmor/pull/936) [`5e95c3b`](https://github.com/dohooo/helmor/commit/5e95c3b3c0ad6c74201fd3e363c8121ff192e7ad) Thanks [@dohooo](https://github.com/dohooo)! - Update the bundled Claude Code and OpenCode coding agents to their latest versions.
+
+- [#937](https://github.com/dohooo/helmor/pull/937) [`bda8c15`](https://github.com/dohooo/helmor/commit/bda8c15c4684d879c7fee000b82b0e17f78a03ac) Thanks [@dohooo](https://github.com/dohooo)! - Fix Codex code-mode tool calls failing in signed macOS builds.
+
 ## 0.45.1
 
 ### Patch Changes
