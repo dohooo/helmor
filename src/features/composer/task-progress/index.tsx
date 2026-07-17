@@ -140,21 +140,19 @@ function toolArgString(tool: ToolCallPart | null, key: string): string | null {
 /**
  * Composer-anchored background-task pill + drill-down card, the sibling of
  * `WorkflowProgressPanel`. The pill appears whenever the session has tasks
- * (or, with none, running workspace processes); clicking it opens a card with
+ * (or, with none, running terminal processes); clicking it opens a card with
  * Level 0 = the task list and Level 1 = one task's detail (metrics, command,
  * summary, error, and a clickable output file that opens in the editor).
  */
 export function TaskProgressPanel({
 	sessionId,
 	workspaceId,
-	repoId,
 }: {
 	sessionId: string | null;
 	workspaceId?: string | null;
-	repoId?: string | null;
 }) {
 	const { f, t } = useI18n();
-	const data = useBackgroundTasks({ sessionId, workspaceId, repoId });
+	const data = useBackgroundTasks({ sessionId, workspaceId });
 	const panelRef = useRef<HTMLDivElement>(null);
 	const scrollContentRef = useRef<HTMLDivElement>(null);
 	const activeRef = useRef<HTMLButtonElement>(null);

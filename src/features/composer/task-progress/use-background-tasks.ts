@@ -2,10 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { useStreamingStore } from "@/features/conversation/state/streaming-store";
 import {
-	getScriptState,
-	subscribeStatus,
-} from "@/features/inspector/script-store";
-import {
 	getTerminalDisplayTitle,
 	getTerminals,
 	subscribeToWorkspaceList,
@@ -16,23 +12,17 @@ import {
 } from "@/features/terminal/terminal-session-store";
 import type {
 	ExtendedMessagePart,
-	RepoScripts,
 	TaskState,
 	ThreadMessageLike,
 	ToolCallPart,
 } from "@/lib/api";
-import { loadRepoScripts } from "@/lib/api";
-import {
-	helmorQueryKeys,
-	sessionThreadMessagesQueryOptions,
-} from "@/lib/query-client";
+import { sessionThreadMessagesQueryOptions } from "@/lib/query-client";
 
 const EMPTY_TASKS: readonly TaskState[] = Object.freeze([]);
-const EMPTY_RUN_ACTIONS = Object.freeze([]);
 
 export type BackgroundFallbackItem = {
 	id: string;
-	kind: "script" | "inspector-terminal" | "terminal-session";
+	kind: "inspector-terminal" | "terminal-session";
 	title: string;
 	typeKey: string;
 	command?: string | null;
@@ -91,66 +81,6 @@ export function extractTaskStatesFromMessages(
 		}
 	}
 	return Array.from(tasksById.values());
-}
-
-function runningScriptFallbacks(
-	workspaceId: string | null | undefined,
-	repoScripts: RepoScripts | null | undefined,
-): BackgroundFallbackItem[] {
-	if (!workspaceId || !repoScripts) return [];
-	const items: BackgroundFallbackItem[] = [];
-	// Setup is workspace initialization with its own inspector status/output,
-	// not background work owned by the active chat session. Keep this fallback
-	// focused on long-lived Run actions and terminals.
-	for (const action of repoScripts.runActions) {
-		if (!action.command.trim()) continue;
-		const run = getScriptState(workspaceId, "run", action.id);
-		if (run?.status === "running") {
-			items.push({
-				id: `${workspaceId}:run:${action.id}`,
-				kind: "script",
-				title: action.name.trim() || "run",
-				typeKey: "taskPanelTypeScript",
-				command: action.command,
-				status: "running",
-			});
-		}
-	}
-	return items;
-}
-
-function useScriptFallbacks(
-	workspaceId: string | null | undefined,
-	repoScripts: RepoScripts | null | undefined,
-	enabled: boolean,
-): BackgroundFallbackItem[] {
-	const [items, setItems] = useState<BackgroundFallbackItem[]>(() =>
-		enabled ? runningScriptFallbacks(workspaceId, repoScripts) : [],
-	);
-	const runActions = repoScripts?.runActions ?? EMPTY_RUN_ACTIONS;
-	const runActionKey = runActions.map((action) => action.id).join("|");
-
-	useEffect(() => {
-		if (!enabled || !workspaceId || !repoScripts) {
-			setItems([]);
-			return;
-		}
-		const refresh = () => {
-			setItems(runningScriptFallbacks(workspaceId, repoScripts));
-		};
-		refresh();
-		const unsubscribers: Array<() => void> = [];
-		for (const action of runActions) {
-			unsubscribers.push(
-				subscribeStatus(workspaceId, "run", refresh, action.id),
-			);
-		}
-		return () => {
-			for (const unsubscribe of unsubscribers) unsubscribe();
-		};
-	}, [enabled, repoScripts, runActions, runActionKey, workspaceId]);
-
-	return items;
 }
 
 function useInspectorTerminalFallbacks(
@@ -231,16 +161,14 @@ function useTerminalSessionFallbacks(
  * from the streaming store during a turn; historical terminal states are
  * re-derived from the rendered thread cache (same source the conversation
  * reads). When the session has no tasks at all, running workspace processes
- * (scripts / terminals) surface as fallback items.
+ * (terminals) surface as fallback items.
  */
 export function useBackgroundTasks({
 	sessionId,
 	workspaceId,
-	repoId,
 }: {
 	sessionId: string | null;
 	workspaceId?: string | null;
-	repoId?: string | null;
 }): BackgroundTasksData {
 	const activeTasks = useStreamingStore((state) =>
 		sessionId
@@ -269,22 +197,6 @@ export function useBackgroundTasks({
 		return Array.from(byId.values());
 	}, [activeTasks, historicalTasks]);
 	const fallbackEnabled = tasks.length === 0;
-	// Scripts are only needed for fallback mode — don't fetch (or refetch on
-	// window focus) while real tasks own the panel.
-	const { data: repoScripts } = useQuery({
-		queryKey: helmorQueryKeys.repoScripts(
-			repoId ?? "__none__",
-			workspaceId ?? null,
-		),
-		queryFn: () => loadRepoScripts(repoId!, workspaceId ?? null),
-		enabled: fallbackEnabled && Boolean(repoId && workspaceId),
-		staleTime: 30_000,
-	});
-	const scriptFallbacks = useScriptFallbacks(
-		workspaceId,
-		repoScripts,
-		fallbackEnabled,
-	);
 	const inspectorTerminalFallbacks = useInspectorTerminalFallbacks(
 		workspaceId,
 		fallbackEnabled,
@@ -299,7 +211,6 @@ export function useBackgroundTasks({
 			return { mode: "tasks", tasks, fallbacks: [] };
 		}
 		const fallbacks = [
-			...scriptFallbacks,
 			...inspectorTerminalFallbacks,
 			...terminalSessionFallbacks,
 		];
@@ -307,10 +218,5 @@ export function useBackgroundTasks({
 			return { mode: "fallbacks", tasks: [], fallbacks };
 		}
 		return { mode: "hidden", tasks: [], fallbacks: [] };
-	}, [
-		inspectorTerminalFallbacks,
-		scriptFallbacks,
-		tasks,
-		terminalSessionFallbacks,
-	]);
+	}, [inspectorTerminalFallbacks, tasks, terminalSessionFallbacks]);
 }

@@ -1310,7 +1310,6 @@ export const WorkspaceComposerContainer = memo(
 					<TaskProgressPanel
 						sessionId={displayedSessionId}
 						workspaceId={displayedWorkspaceId}
-						repoId={effectiveRepoId}
 					/>
 					{/* Docked (open-bottom) bars live in normal flow DIRECTLY above
 					    the composer — nothing may render between them and it. Order
