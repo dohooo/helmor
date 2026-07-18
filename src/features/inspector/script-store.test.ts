@@ -217,6 +217,19 @@ describe("script-store URL detection", () => {
 		]);
 	});
 
+	it("still sees an uppercase-scheme declaration after a URL was detected", () => {
+		// Regression: the fast-path probe guarding detection must be case-
+		// insensitive like the parsers it guards. With a case-sensitive
+		// `includes("http")` this chunk was skipped outright, so the
+		// declaration never landed and the Open menu kept the stale port.
+		const emit = startAndCapture();
+		emit({ type: "stdout", data: "web ready http://localhost:4761\n" });
+		emit({ type: "stdout", data: "helmor:url=HTTPS://achernar.localhost\n" });
+
+		const entry = getScriptState("ws1", "run");
+		expect(effectiveScriptUrls(entry!)).toEqual(["HTTPS://achernar.localhost"]);
+	});
+
 	it("notifies listeners when a declaration supersedes sniffed URLs", () => {
 		const seen: string[][] = [];
 		const emit = startAndCapture();

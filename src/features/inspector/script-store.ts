@@ -54,6 +54,12 @@ type StatusListener = (
  */
 const MAX_CHUNK_BYTES = 2 * 1024 * 1024;
 
+/**
+ * Cheap case-insensitive probe for "could this chunk contain a URL?". No `g`
+ * flag, so it carries no `lastIndex` state between calls.
+ */
+const HTTP_HINT_RE = /http/i;
+
 /** Inserted once at the head of replay when earlier output was dropped. */
 export const TRUNCATION_NOTICE =
 	"\r\n\x1b[2m… earlier output truncated (buffer limit reached) …\x1b[0m\r\n";
@@ -259,17 +265,22 @@ function runScriptInternal(
 
 				// Cheap short-circuit: once a dev server has settled into
 				// steady-state, ~every chunk is HMR / request-log noise with
-				// no URL. Skip the regex work when the chunk can't possibly
-				// contain one. `event.data.includes("http")` is a plain
-				// substring scan — ~100x faster than the ANSI+URL regex
-				// combo and totally safe (any real URL, sniffed or declared,
-				// has "http" verbatim in bytes, even when wrapped in ANSI).
+				// no URL. Skip the heavy work when the chunk can't possibly
+				// contain one — any real URL, sniffed or declared, has "http"
+				// in its bytes even when wrapped in ANSI.
+				//
+				// The probe must be case-INsensitive to match the parsers it
+				// guards: both URL regexes carry the `i` flag, so a bare
+				// `includes("http")` would silently drop a script printing
+				// `helmor:url=HTTPS://…`. A no-flag regex `test` stays cheap
+				// (no allocation, unlike `toLowerCase()`) while keeping the
+				// fast path and the parsers in agreement.
 				//
 				// We still run detection on every chunk until we've seen at
 				// least one URL, so the initial banner is never missed.
 				if (
 					entry.urls.length + entry.declaredUrls.length > 0 &&
-					!event.data.includes("http")
+					!HTTP_HINT_RE.test(event.data)
 				) {
 					entry.tail = trailingPartialLine(entry.tail + event.data);
 					break;
