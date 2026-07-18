@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
 	dedupUrlKey,
+	extractDeclaredUrls,
 	extractLocalUrls,
 	extractPort,
 	stripAnsi,
+	trailingPartialLine,
 } from "./detect-urls";
 
 describe("stripAnsi", () => {
@@ -167,5 +169,75 @@ describe("extractPort", () => {
 	it("returns null when port is omitted", () => {
 		expect(extractPort("http://localhost/")).toBeNull();
 		expect(extractPort("https://localhost")).toBeNull();
+	});
+});
+
+describe("extractDeclaredUrls", () => {
+	it("extracts a marker URL with a named host and no port", () => {
+		expect(
+			extractDeclaredUrls("helmor:url=https://achernar.localhost"),
+		).toEqual(["https://achernar.localhost"]);
+	});
+
+	it("survives ANSI wrapping and CRLF line endings", () => {
+		expect(
+			extractDeclaredUrls(
+				"\x1b[32mhelmor:url=https://achernar.localhost\x1b[0m\r\nbooting…\r\n",
+			),
+		).toEqual(["https://achernar.localhost"]);
+	});
+
+	it("tolerates leading indentation", () => {
+		expect(extractDeclaredUrls("  \thelmor:url=http://app.test\n")).toEqual([
+			"http://app.test",
+		]);
+	});
+
+	it("collects multiple declarations in order", () => {
+		expect(
+			extractDeclaredUrls(
+				"helmor:url=https://web.localhost\nnoise\nhelmor:url=https://api.localhost\n",
+			),
+		).toEqual(["https://web.localhost", "https://api.localhost"]);
+	});
+
+	it("ignores markers that are not at the start of a line", () => {
+		expect(
+			extractDeclaredUrls("see helmor:url=https://evil.test for details"),
+		).toEqual([]);
+	});
+
+	it("ignores non-http schemes", () => {
+		expect(extractDeclaredUrls("helmor:url=ftp://nope.test\n")).toEqual([]);
+		expect(extractDeclaredUrls("helmor:url=nonsense\n")).toEqual([]);
+	});
+
+	it("strips trailing sentence punctuation", () => {
+		expect(extractDeclaredUrls("helmor:url=https://app.test.\n")).toEqual([
+			"https://app.test",
+		]);
+	});
+
+	it("is stateless across calls despite the shared global regex", () => {
+		const input = "helmor:url=https://app.test\n";
+		expect(extractDeclaredUrls(input)).toEqual(extractDeclaredUrls(input));
+	});
+});
+
+describe("trailingPartialLine", () => {
+	it("returns text after the last newline", () => {
+		expect(trailingPartialLine("a\nb\nhelmor:url=htt")).toBe("helmor:url=htt");
+	});
+
+	it("returns the whole input when there is no newline", () => {
+		expect(trailingPartialLine("partial")).toBe("partial");
+	});
+
+	it("returns empty when the chunk ends on a newline", () => {
+		expect(trailingPartialLine("done\n")).toBe("");
+	});
+
+	it("caps runaway single-line output", () => {
+		expect(trailingPartialLine("x".repeat(5000), 2048)).toHaveLength(2048);
 	});
 });

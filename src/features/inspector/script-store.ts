@@ -6,7 +6,12 @@ import {
 	stopRepoScript,
 	writeRepoScriptStdin,
 } from "@/lib/api";
-import { dedupUrlKey, extractLocalUrls } from "./detect-urls";
+import {
+	dedupUrlKey,
+	extractDeclaredUrls,
+	extractLocalUrls,
+	trailingPartialLine,
+} from "./detect-urls";
 
 export type ScriptStatus = "idle" | "running" | "exited";
 
@@ -80,7 +85,28 @@ export type ScriptEntry = {
 	 * to its pre-run glyph. Cleared on the next `startScript`.
 	 */
 	userStopped: boolean;
+	/**
+	 * URLs the script explicitly declared via `helmor:url=<URL>` lines. When
+	 * non-empty these fully replace {@link urls} in the Open menu — a script
+	 * that declares its address is telling us the sniffed localhost ports are
+	 * wrong (typically ephemeral ports behind a reverse proxy), not that they
+	 * are extra options worth offering.
+	 */
+	declaredUrls: string[];
+	/**
+	 * Trailing partial line carried over from the previous chunk, so marker
+	 * lines split across PTY chunk boundaries are still detected.
+	 */
+	tail: string;
 };
+
+/**
+ * URLs to surface in the Open menu: explicitly declared ones win over sniffed
+ * localhost banners.
+ */
+export function effectiveScriptUrls(entry: ScriptEntry): string[] {
+	return entry.declaredUrls.length > 0 ? entry.declaredUrls : entry.urls;
+}
 
 /** Append a chunk and evict from the head until under the byte cap. */
 function appendChunk(entry: ScriptEntry, data: string) {
@@ -192,6 +218,8 @@ function runScriptInternal(
 		urls: [],
 		stopping: false,
 		userStopped: false,
+		declaredUrls: [],
+		tail: "",
 	};
 	entries.set(k, entry);
 
@@ -234,14 +262,50 @@ function runScriptInternal(
 				// no URL. Skip the regex work when the chunk can't possibly
 				// contain one. `event.data.includes("http")` is a plain
 				// substring scan — ~100x faster than the ANSI+URL regex
-				// combo and totally safe (any real localhost URL has "http"
-				// verbatim in bytes, even when wrapped in ANSI).
+				// combo and totally safe (any real URL, sniffed or declared,
+				// has "http" verbatim in bytes, even when wrapped in ANSI).
 				//
 				// We still run detection on every chunk until we've seen at
 				// least one URL, so the initial banner is never missed.
-				if (entry.urls.length > 0 && !event.data.includes("http")) {
+				if (
+					entry.urls.length + entry.declaredUrls.length > 0 &&
+					!event.data.includes("http")
+				) {
+					entry.tail = trailingPartialLine(entry.tail + event.data);
 					break;
 				}
+
+				// Rejoin the previous chunk's trailing partial line with the new
+				// data, then consider only the newline-terminated portion. A
+				// marker split across a PTY chunk boundary would otherwise be
+				// committed truncated — `helmor:url=https://ach` is a perfectly
+				// well-formed URL as far as the regex is concerned, so waiting
+				// for the terminating newline is the only safe signal that we
+				// have the whole thing.
+				const scan = entry.tail + event.data;
+				const lastNewline = scan.lastIndexOf("\n");
+				const completeLines =
+					lastNewline === -1 ? "" : scan.slice(0, lastNewline + 1);
+				entry.tail = trailingPartialLine(scan);
+
+				// Explicit `helmor:url=` declarations win outright: once a script
+				// has told us its address, sniffed localhost banners are noise
+				// (ephemeral ports behind a reverse proxy) and we stop collecting
+				// them entirely.
+				const declared = extractDeclaredUrls(completeLines);
+				if (declared.length > 0) {
+					let changed = false;
+					for (const url of declared) {
+						if (!entry.declaredUrls.includes(url)) {
+							entry.declaredUrls.push(url);
+							changed = true;
+						}
+					}
+					if (changed) {
+						listeners.get(k)?.onUrlsChange?.([...entry.declaredUrls]);
+					}
+				}
+				if (entry.declaredUrls.length > 0) break;
 
 				// Scan the fresh chunk for dev-server URLs. We keep a deduped,
 				// first-seen-ordered list on the entry and only fire the listener

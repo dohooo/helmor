@@ -29,6 +29,7 @@ import {
 	attach,
 	cleanupScript,
 	detach,
+	effectiveScriptUrls,
 	resizeScript,
 	type ScriptStatus,
 	startScript,
@@ -234,7 +235,7 @@ export function RunTab({
 			setStopping(existing.stopping);
 			// Replay URLs already detected on this entry so the parent's state
 			// mirrors the store the moment the component mounts.
-			onUrlsChange?.([...existing.urls]);
+			onUrlsChange?.(effectiveScriptUrls(existing));
 			const replay = () => {
 				const t = termRef.current;
 				if (!t) return;

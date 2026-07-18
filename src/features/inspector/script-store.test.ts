@@ -30,6 +30,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
 // Dynamic import so vi.mock is applied before module evaluation.
 const {
 	_resetForTesting,
+	attach,
+	effectiveScriptUrls,
 	getScriptState,
 	startScript,
 	stopScript,
@@ -157,5 +159,75 @@ describe("script-store userStopped tracking", () => {
 
 		startAndCapture();
 		expect(getScriptState("ws1", "run")?.userStopped).toBe(false);
+	});
+});
+
+describe("script-store URL detection", () => {
+	it("sniffs localhost banners when nothing is declared", () => {
+		const emit = startAndCapture();
+		emit({ type: "stdout", data: "  Local: http://localhost:5173/\n" });
+
+		const entry = getScriptState("ws1", "run");
+		expect(effectiveScriptUrls(entry!)).toEqual(["http://localhost:5173/"]);
+	});
+
+	it("lets a declared URL replace already-sniffed ephemeral ports", () => {
+		const emit = startAndCapture();
+		// A portless-style boot: proxied services announce raw ephemeral ports
+		// that are not reachable through the proxy…
+		emit({ type: "stdout", data: "web ready http://localhost:4761\n" });
+		emit({ type: "stdout", data: "api ready http://localhost:4786\n" });
+		const entry = getScriptState("ws1", "run");
+		expect(effectiveScriptUrls(entry!)).toHaveLength(2);
+
+		// …then the run script declares the address that actually works.
+		emit({ type: "stdout", data: "helmor:url=https://achernar.localhost\n" });
+
+		expect(effectiveScriptUrls(entry!)).toEqual(["https://achernar.localhost"]);
+	});
+
+	it("stops collecting sniffed URLs once one is declared", () => {
+		const emit = startAndCapture();
+		emit({ type: "stdout", data: "helmor:url=https://achernar.localhost\n" });
+		emit({ type: "stdout", data: "listening on http://localhost:4761\n" });
+
+		const entry = getScriptState("ws1", "run");
+		expect(effectiveScriptUrls(entry!)).toEqual(["https://achernar.localhost"]);
+	});
+
+	it("detects a marker split across PTY chunk boundaries", () => {
+		const emit = startAndCapture();
+		emit({ type: "stdout", data: "booting\nhelmor:url=https://ach" });
+		emit({ type: "stdout", data: "ernar.localhost\nready\n" });
+
+		const entry = getScriptState("ws1", "run");
+		expect(effectiveScriptUrls(entry!)).toEqual(["https://achernar.localhost"]);
+	});
+
+	it("keeps multiple declared URLs in first-seen order without duplicates", () => {
+		const emit = startAndCapture();
+		emit({ type: "stdout", data: "helmor:url=https://web.localhost\n" });
+		emit({ type: "stdout", data: "helmor:url=https://api.localhost\n" });
+		emit({ type: "stdout", data: "helmor:url=https://web.localhost\n" });
+
+		const entry = getScriptState("ws1", "run");
+		expect(effectiveScriptUrls(entry!)).toEqual([
+			"https://web.localhost",
+			"https://api.localhost",
+		]);
+	});
+
+	it("notifies listeners when a declaration supersedes sniffed URLs", () => {
+		const seen: string[][] = [];
+		const emit = startAndCapture();
+		attach("ws1", "run", {
+			onChunk: () => {},
+			onStatusChange: () => {},
+			onUrlsChange: (urls) => seen.push(urls),
+		});
+		emit({ type: "stdout", data: "http://localhost:4761\n" });
+		emit({ type: "stdout", data: "helmor:url=https://achernar.localhost\n" });
+
+		expect(seen.at(-1)).toEqual(["https://achernar.localhost"]);
 	});
 });

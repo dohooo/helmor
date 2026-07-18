@@ -31,8 +31,60 @@ const ANSI_RE = new RegExp(
 const LOCAL_URL_RE =
 	/\bhttps?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?(?:\/[^\s"'`<>)\]]*)?/gi;
 
+// Marker a run script prints to declare the URL Helmor should offer in the
+// Open menu. Anchored to the start of a line (leading whitespace allowed) so
+// it can't be triggered by a URL appearing mid-prose. The host part is
+// deliberately unrestricted — unlike LOCAL_URL_RE this must accept named
+// domains, which is the entire point of the feature.
+const DECLARED_URL_RE = /^[ \t]*helmor:url=(https?:\/\/[^\s"'`<>]+)/gim;
+
 export function stripAnsi(input: string): string {
 	return input.replace(ANSI_RE, "");
+}
+
+/**
+ * Extract URLs a run script has explicitly declared via `helmor:url=<URL>`
+ * lines in its output.
+ *
+ * Sniffing `http://localhost:PORT` out of stdout works for plain dev servers
+ * but breaks under a reverse proxy: with portless, Caddy, ngrok, or Tailscale
+ * Funnel the services behind the proxy print ephemeral ports that are neither
+ * reachable nor stable, while the address users actually need is a named
+ * domain nobody prints in a recognizable banner. Declaring it explicitly is
+ * the escape hatch:
+ *
+ *     echo "helmor:url=https://${HELMOR_WORKSPACE_NAME}.localhost"
+ *
+ * Repeating the marker declares multiple URLs (e.g. web + api in a monorepo),
+ * which surface in the Open menu's picker. Declared URLs take precedence over
+ * sniffed ones — see the script store.
+ */
+export function extractDeclaredUrls(input: string): string[] {
+	const clean = stripAnsi(input);
+	const out: string[] = [];
+	// Shared regex object with the `g` flag carries `lastIndex` between calls.
+	DECLARED_URL_RE.lastIndex = 0;
+	let match = DECLARED_URL_RE.exec(clean);
+	while (match !== null) {
+		out.push(match[1].replace(/[.,;:!?]+$/, ""));
+		match = DECLARED_URL_RE.exec(clean);
+	}
+	return out;
+}
+
+/**
+ * Return the trailing partial line of a chunk — everything after the last
+ * newline — capped so a pathological single-line stream (a progress bar
+ * redrawing with `\r`) can't grow the carry buffer without bound.
+ *
+ * PTY output is split on arbitrary 4096-byte boundaries, so a marker line can
+ * straddle two chunks. Carrying the partial line forward and re-scanning it
+ * with the next chunk makes detection boundary-proof.
+ */
+export function trailingPartialLine(input: string, cap = 2048): string {
+	const idx = input.lastIndexOf("\n");
+	const tail = idx === -1 ? input : input.slice(idx + 1);
+	return tail.length > cap ? tail.slice(-cap) : tail;
 }
 
 /**
