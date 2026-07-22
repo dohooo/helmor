@@ -2,4 +2,4 @@
 "helmor": patch
 ---
 
-Update bundled Claude Code and Codex agents to their latest stable releases.
+Update bundled Claude Code, Codex, Cursor, and OpenCode agents to their latest stable releases.
