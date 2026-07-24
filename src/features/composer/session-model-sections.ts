@@ -5,6 +5,15 @@ import type {
 } from "@/lib/api";
 
 const HIDDEN_MODELS: Record<string, AgentModelOption> = {
+	"claude-opus-4-8[1m]": {
+		id: "claude-opus-4-8[1m]",
+		provider: "claude",
+		label: "Opus 4.8 1M",
+		cliModel: "claude-opus-4-8[1m]",
+		effortLevels: ["low", "medium", "high", "xhigh", "max"],
+		supportsFastMode: true,
+		supportsContextUsage: true,
+	},
 	"claude-opus-4-7[1m]": {
 		id: "claude-opus-4-7[1m]",
 		provider: "claude",
