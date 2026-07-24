@@ -278,22 +278,28 @@ function runScriptInternal(
 				//
 				// We still run detection on every chunk until we've seen at
 				// least one URL, so the initial banner is never missed.
+				//
+				// The probe must also look at the rejoined tail + chunk, not
+				// the fresh chunk alone: a marker split across a PTY boundary
+				// can leave its "http" bytes in the carried tail while the
+				// completing fragment has none — probing only `event.data`
+				// would send that chunk down the fast path and discard the
+				// very line the tail was carried to protect.
+				const scan = entry.tail + event.data;
 				if (
 					entry.urls.length + entry.declaredUrls.length > 0 &&
-					!HTTP_HINT_RE.test(event.data)
+					!HTTP_HINT_RE.test(scan)
 				) {
-					entry.tail = trailingPartialLine(entry.tail + event.data);
+					entry.tail = trailingPartialLine(scan);
 					break;
 				}
 
-				// Rejoin the previous chunk's trailing partial line with the new
-				// data, then consider only the newline-terminated portion. A
-				// marker split across a PTY chunk boundary would otherwise be
-				// committed truncated — `helmor:url=https://ach` is a perfectly
-				// well-formed URL as far as the regex is concerned, so waiting
-				// for the terminating newline is the only safe signal that we
-				// have the whole thing.
-				const scan = entry.tail + event.data;
+				// Consider only the newline-terminated portion of the rejoined
+				// text. A marker split across a PTY chunk boundary would
+				// otherwise be committed truncated — `helmor:url=https://ach`
+				// is a perfectly well-formed URL as far as the regex is
+				// concerned, so waiting for the terminating newline is the
+				// only safe signal that we have the whole thing.
 				const lastNewline = scan.lastIndexOf("\n");
 				const completeLines =
 					lastNewline === -1 ? "" : scan.slice(0, lastNewline + 1);

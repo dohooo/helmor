@@ -204,6 +204,33 @@ describe("script-store URL detection", () => {
 		expect(effectiveScriptUrls(entry!)).toEqual(["https://achernar.localhost"]);
 	});
 
+	it("detects a split marker even after a URL was already sniffed", () => {
+		// Regression: the fast-path probe must consider the carried tail, not
+		// just the fresh chunk. Here the marker's "http" bytes sit in the tail
+		// while the completing fragment has none — probing only `event.data`
+		// sent this chunk down the fast path, which discarded the completed
+		// marker line unscanned and kept the stale port for the whole run.
+		const emit = startAndCapture();
+		emit({ type: "stdout", data: "web ready http://localhost:4761\n" });
+		emit({ type: "stdout", data: "helmor:url=https://ach" });
+		emit({ type: "stdout", data: "ernar.localhost\nready\n" });
+
+		const entry = getScriptState("ws1", "run");
+		expect(effectiveScriptUrls(entry!)).toEqual(["https://achernar.localhost"]);
+	});
+
+	it("detects a split marker whose scheme itself straddles the boundary", () => {
+		// Same regression, harder variant: neither fragment contains "http"
+		// on its own — only the rejoined text does.
+		const emit = startAndCapture();
+		emit({ type: "stdout", data: "web ready http://localhost:4761\n" });
+		emit({ type: "stdout", data: "helmor:url=ht" });
+		emit({ type: "stdout", data: "tps://achernar.localhost\nready\n" });
+
+		const entry = getScriptState("ws1", "run");
+		expect(effectiveScriptUrls(entry!)).toEqual(["https://achernar.localhost"]);
+	});
+
 	it("keeps multiple declared URLs in first-seen order without duplicates", () => {
 		const emit = startAndCapture();
 		emit({ type: "stdout", data: "helmor:url=https://web.localhost\n" });
