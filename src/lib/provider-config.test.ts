@@ -13,6 +13,7 @@ const CODEX_AVAILABLE = [
 
 const CLAUDE_AVAILABLE = [
 	{ slug: "claude-fable-5[1m]" },
+	{ slug: "claude-opus-5[1m]" },
 	{ slug: "claude-opus-4-8[1m]" },
 	{ slug: "claude-opus-4-7[1m]" },
 	{ slug: "claude-opus-4-6[1m]" },
@@ -40,7 +41,7 @@ describe("resolveOfficialEnabled", () => {
 	it("defaults Claude to current models and user-configured custom models", () => {
 		expect(resolveOfficialEnabled("claude", null, CLAUDE_AVAILABLE)).toEqual([
 			"claude-fable-5[1m]",
-			"claude-opus-4-8[1m]",
+			"claude-opus-5[1m]",
 			"sonnet",
 			"haiku",
 			"claude-custom|gateway|model",

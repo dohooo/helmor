@@ -59,13 +59,13 @@ export function useEnsureDefaultModel() {
 		// Repair the default when it's never been set, or was set but is now
 		// definitively gone (wait for every provider to settle first).
 		if (!defaultOption && (settled || !settings.defaultModel)) {
-			// GPT-5.6 Sol is the recommended cross-provider default. Opus 4.8
+			// GPT-5.6 Sol is the recommended cross-provider default. Opus 5
 			// remains the fallback when Codex is unavailable or fully disabled.
 			const claudeOptions =
 				sections.find((s) => s.id === "claude")?.options ?? [];
 			const pickOption =
 				allOptions.find((o) => o.id === "gpt-5.6-sol") ??
-				claudeOptions.find((o) => o.id === "claude-opus-4-8[1m]") ??
+				claudeOptions.find((o) => o.id === "claude-opus-5[1m]") ??
 				claudeOptions[0] ??
 				allOptions[0] ??
 				null;
