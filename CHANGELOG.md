@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.46.0
+
+### Minor Changes
+
+- [#944](https://github.com/dohooo/helmor/pull/944) [`76b21ad`](https://github.com/dohooo/helmor/commit/76b21ad74ffafc5263fb70704705ab5e68937460) Thanks [@dohooo](https://github.com/dohooo)! - Add Claude Opus 5 to the Claude Code model picker and make it the default:
+
+  - Opus 5 replaces Opus 4.8 in the default model set, with all five effort levels and fast mode support.
+  - Opus 4.8 stays in the catalog and can be re-enabled from Settings, without disrupting existing sessions that use it.
+
+### Patch Changes
+
+- [#940](https://github.com/dohooo/helmor/pull/940) [`c76cba7`](https://github.com/dohooo/helmor/commit/c76cba76db6c693713f03d605685c5db89fd0c92) Thanks [@dohooo](https://github.com/dohooo)! - Update bundled Claude Code, Codex, Cursor, OpenCode, and Kimi agents to their latest stable releases.
+
+- [#939](https://github.com/dohooo/helmor/pull/939) [`deda300`](https://github.com/dohooo/helmor/commit/deda300926acadf8a00688875d01872f006be94c) Thanks [@dalkommatt](https://github.com/dalkommatt)! - Let run scripts declare their own URL for the Open menu by printing `helmor:url=<URL>` on a line of their own — useful for reverse-proxy dev setups (portless, Caddy, ngrok, Tailscale Funnel) where Helmor's sniffed `localhost:PORT` banners are ephemeral ports that aren't reachable through the proxy. Declared URLs accept any host and fully replace the sniffed ones.
+
 ## 0.45.2
 
 ### Patch Changes
