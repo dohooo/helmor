@@ -2,6 +2,21 @@
 	"_readme": "AUTO-GENERATED from .announcements during `bun run release:version`. Each item is one released version's in-app announcement. Do not edit released entries by hand.",
 	"items": [
 		{
+			"releaseVersion": "0.46.0",
+			"items": [
+				{
+					"text": "Claude Opus 5 is now the default Claude model. If you've customized which models appear in the picker, enable it in Settings — Opus 4.8 stays available there too.",
+					"action": {
+						"label": "Open Models",
+						"value": {
+							"type": "openSettings",
+							"section": "model"
+						}
+					}
+				}
+			]
+		},
+		{
 			"releaseVersion": "0.45.0",
 			"items": [
 				{
