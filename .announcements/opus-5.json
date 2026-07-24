@@ -1,0 +1,11 @@
+{
+	"items": [
+		{
+			"text": "Claude Opus 5 is now the default Claude model. If you've customized which models appear in the picker, enable it in Settings — Opus 4.8 stays available there too.",
+			"action": {
+				"label": "Open Models",
+				"value": { "type": "openSettings", "section": "model" }
+			}
+		}
+	]
+}

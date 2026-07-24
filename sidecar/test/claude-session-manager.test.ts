@@ -1776,6 +1776,13 @@ describe("ClaudeSessionManager.listModels", () => {
 				effortLevels: ["low", "medium", "high", "xhigh", "max"],
 			},
 			{
+				id: "claude-opus-5[1m]",
+				label: "Opus 5 1M",
+				cliModel: "claude-opus-5[1m]",
+				effortLevels: ["low", "medium", "high", "xhigh", "max"],
+				supportsFastMode: true,
+			},
+			{
 				id: "claude-opus-4-8[1m]",
 				label: "Opus 4.8 1M",
 				cliModel: "claude-opus-4-8[1m]",

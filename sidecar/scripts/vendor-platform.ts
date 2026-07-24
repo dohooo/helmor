@@ -174,6 +174,10 @@ export const CLAUDE_CODE_SHA256: Readonly<
 		arm64: "748221efe210b823b85cbf4225206519c014408a2f80174aa7156fc2a873c7b5",
 		x64: "b35a5c2b892ce774a6c71c156fbc50db1629908929b1332f9d881eb5965502ef",
 	},
+	"2.1.219": {
+		arm64: "36a0a1e56ac982f3122c88fc836f69a9d139975ceb9b5ddf44e2b01f75998bda",
+		x64: "970f8f3c79063f0dae7e42fe7876c14e2c704764409cf814bb21b48a068c4dc8",
+	},
 };
 
 export const OPENCODE_SHA256: Readonly<
@@ -230,7 +234,7 @@ export const OPENCODE_SHA256: Readonly<
 // release URL rather than from node_modules. Bumping: pull each platform's
 // SHA256 from the release's `*.zip.sha256` sidecar (or the GitHub asset
 // `digest`) and wipe sidecar/.bundle-cache. Keyed `version → platformSlug`.
-export const KIMI_VERSION = "0.21.0";
+export const KIMI_VERSION = "0.29.1";
 export const KIMI_SHA256: Readonly<Record<string, Record<string, string>>> = {
 	"0.19.1": {
 		"darwin-arm64":
@@ -271,6 +275,16 @@ export const KIMI_SHA256: Readonly<Record<string, Record<string, string>>> = {
 			"65c410c38e193c4c99da6b64a536440ea5896796995e7963fa7911cdcb2580d2",
 		"win32-x64":
 			"b6e875f1fcd7967713f0b99c040c72b853962d1e7f88377e6125478b79e5999d",
+	},
+	"0.29.1": {
+		"darwin-arm64":
+			"0f2ff623a88eab6edfef131c2663ca312de5af81c7e30a8830bd6d566bbe78cb",
+		"darwin-x64":
+			"f83e86d32c27370e5dedbb0a75fc4340d8da5cb8fbe5e4e06a51de66615284a0",
+		"win32-arm64":
+			"269559f980a0d64a14e58df00187ea5f6711312fb395335eaa01de2b9da11a22",
+		"win32-x64":
+			"f1447930a2d5422ae15bb0c73a7a5fba5fdb679beecf162cc460439785014310",
 	},
 };
 
