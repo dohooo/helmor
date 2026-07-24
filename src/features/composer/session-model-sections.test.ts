@@ -45,6 +45,30 @@ describe("includePinnedHiddenModel", () => {
 		);
 	});
 
+	// Opus 5 took 4.8's place in the default set, so 4.8 became hidden-by-
+	// default. Without an entry here, a session pinned to it would have its
+	// persisted pick dropped as a dangling id and get silently switched to the
+	// default model (see `resolveSessionSelectedModelId`).
+	it("keeps Opus 4.8 available to a session still pinned to it", () => {
+		const result = includePinnedHiddenModel([], {
+			agentType: "claude",
+			model: "claude-opus-4-8[1m]",
+		});
+
+		expect(result[0]).toEqual(
+			expect.objectContaining({
+				id: "claude",
+				options: [
+					expect.objectContaining({
+						id: "claude-opus-4-8[1m]",
+						label: "Opus 4.8 1M",
+						supportsFastMode: true,
+					}),
+				],
+			}),
+		);
+	});
+
 	it("does not add a legacy model to unrelated sessions", () => {
 		expect(
 			includePinnedHiddenModel(SECTIONS, {

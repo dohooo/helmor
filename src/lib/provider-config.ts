@@ -10,7 +10,7 @@ export const DEFAULT_CODEX_MODEL_IDS = [
 
 export const DEFAULT_CLAUDE_MODEL_IDS = [
 	"claude-fable-5[1m]",
-	"claude-opus-4-8[1m]",
+	"claude-opus-5[1m]",
 	"sonnet",
 	"haiku",
 ] as const;

@@ -33,12 +33,22 @@ const MODEL_CATALOG: Record<Provider, readonly ProviderModelInfo[]> = {
 			cliModel: "claude-fable-5[1m]",
 			effortLevels: ["low", "medium", "high", "xhigh", "max"],
 		},
-		// Pinned to the explicit `claude-opus-4-8[1m]` wire id — the `[1m]`
+		// Pinned to the explicit `claude-opus-5[1m]` wire id — the `[1m]`
 		// suffix selects the 1M-context variant, matching the label. We do NOT
 		// use the CLI's `default` sentinel: it resolves to whatever the bundled
 		// claude-code decides is "default" (non-deterministic across CLI bumps),
 		// whereas a pinned id is stable. Bump when a newer Opus ships. MUST stay
 		// in sync with the Rust catalog (`official_claude_section`).
+		{
+			id: "claude-opus-5[1m]",
+			label: "Opus 5 1M",
+			cliModel: "claude-opus-5[1m]",
+			effortLevels: ["low", "medium", "high", "xhigh", "max"],
+			supportsFastMode: true,
+		},
+		// Explicit 4.8 pin — previously this slot was the pinned newest Opus;
+		// now that Opus 5 has it, 4.8 stays in the catalog (off by default) so
+		// users can re-enable it from settings.
 		{
 			id: "claude-opus-4-8[1m]",
 			label: "Opus 4.8 1M",
