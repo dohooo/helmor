@@ -12,6 +12,7 @@ import {
 	repoIdFromGroupId,
 	shouldReconcilePendingArchive,
 	shouldReconcilePendingCreation,
+	shouldReconcilePendingDelete,
 } from "./sidebar-projection";
 
 const liveGroups: WorkspaceGroup[] = [
@@ -167,6 +168,62 @@ describe("projectSidebarLists", () => {
 		expect(
 			projected.groups[0]?.rows.filter((row) => row.id === "ws-created"),
 		).toHaveLength(1);
+	});
+
+	it("hides a tombstoned delete from BOTH live groups and archived rows (R2-B)", () => {
+		const projected = projectSidebarLists({
+			baseGroups: liveGroups,
+			baseArchivedSummaries: [makeArchivedSummary("ws-1")],
+			pendingArchives: new Map(),
+			pendingCreations: new Map(),
+			pendingDeletes: new Map([["ws-1", { stage: "deleting" as const }]]),
+		});
+
+		expect(projected.groups[0]?.rows.map((row) => row.id)).toEqual(["ws-2"]);
+		expect(projected.archivedRows).toEqual([]);
+	});
+
+	it("tombstone coexists with pendingArchives/pendingCreations and empty map is identity", () => {
+		const withOtherPending = projectSidebarLists({
+			baseGroups: liveGroups,
+			baseArchivedSummaries: [],
+			pendingArchives: new Map([["ws-2", makePendingArchive("ws-2", 100)]]),
+			pendingCreations: new Map(),
+			pendingDeletes: new Map([["ws-1", { stage: "confirmed" as const }]]),
+		});
+		expect(withOtherPending.groups[0]?.rows).toEqual([]);
+		expect(withOtherPending.archivedRows.map((row) => row.id)).toEqual([
+			"ws-2",
+		]);
+
+		const identity = projectSidebarLists({
+			baseGroups: liveGroups,
+			baseArchivedSummaries: [],
+			pendingArchives: new Map(),
+			pendingCreations: new Map(),
+			pendingDeletes: new Map(),
+		});
+		expect(identity.groups[0]?.rows.map((row) => row.id)).toEqual([
+			"ws-1",
+			"ws-2",
+		]);
+	});
+});
+
+describe("shouldReconcilePendingDelete", () => {
+	it("only clears once the id is absent from BOTH lists", () => {
+		expect(shouldReconcilePendingDelete("ws-1", liveGroups, [])).toBe(false);
+		expect(
+			shouldReconcilePendingDelete("ws-1", [], [makeArchivedSummary("ws-1")]),
+		).toBe(false);
+		expect(shouldReconcilePendingDelete("ws-1", [], [])).toBe(true);
+		expect(
+			shouldReconcilePendingDelete(
+				"ws-1",
+				[{ ...liveGroups[0], rows: [liveGroups[0].rows[1]] }],
+				[makeArchivedSummary("other")],
+			),
+		).toBe(true);
 	});
 });
 

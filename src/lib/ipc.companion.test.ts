@@ -104,3 +104,207 @@ describe("companion auth state", () => {
 		unsub();
 	});
 });
+
+// Reconnect resilience for the shared `/v1/stream` SSE channel. A sleeping team
+// sandbox cold-starts on the next request (the Worker blocks the fetch ~120s
+// while it restores from R2 + serves), so the channel must keep retrying with a
+// jittered exponential backoff and surface a "reconnecting" *loading* state —
+// never an error, never giving up.
+describe("companion connection state + reconnect backoff", () => {
+	const TOKEN_KEY = "helmor.companion.pat";
+	type CompanionWindow = { __HELMOR_COMPANION__?: unknown };
+
+	// A ReadableStream that stays open until `close()` is called — lets a test
+	// model "stream opened, then dropped" precisely.
+	function openStream(): {
+		body: ReadableStream<Uint8Array>;
+		close: () => void;
+	} {
+		let controller!: ReadableStreamDefaultController<Uint8Array>;
+		const body = new ReadableStream<Uint8Array>({
+			start(c) {
+				controller = c;
+			},
+		});
+		return { body, close: () => controller.close() };
+	}
+
+	beforeEach(() => {
+		vi.resetModules();
+		vi.useFakeTimers();
+		localStorage.clear();
+		sessionStorage.clear();
+		window.history.replaceState(null, "", "/");
+		localStorage.setItem(TOKEN_KEY, "hlm_valid");
+		(window as unknown as CompanionWindow).__HELMOR_COMPANION__ = {
+			base: "https://companion.test",
+		};
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		(window as unknown as CompanionWindow).__HELMOR_COMPANION__ = undefined;
+		vi.unstubAllGlobals();
+		vi.restoreAllMocks();
+		localStorage.clear();
+		sessionStorage.clear();
+		window.history.replaceState(null, "", "/");
+	});
+
+	it("backs off 1s→2s→4s…→30s (full jitter, capped, never gives up) and resets on re-open", async () => {
+		// Pin jitter so each scheduled gap is exactly `r * window`, making the
+		// doubling + 30s cap deterministically assertable. With full jitter the
+		// real gap is random in [0, window]; r=0.5 lands mid-window.
+		const r = 0.5;
+		vi.spyOn(Math, "random").mockReturnValue(r);
+
+		// Every connect attempt fails immediately → pure backoff loop, no body.
+		const fetchMock = vi
+			.fn()
+			.mockRejectedValue(new Error("sandbox asleep / cold start"));
+		vi.stubGlobal("fetch", fetchMock);
+
+		const ipc = await import("./ipc");
+		// Starts healthy — no banner flash before the first real drop.
+		expect(ipc.getCompanionConnectionState()).toBe("online");
+
+		// Subscribing to a backend event opens the shared SSE stream.
+		await ipc.listen("activeStreamsChanged", () => {});
+		await vi.advanceTimersByTimeAsync(0);
+
+		// First fetch already rejected → first drop → reconnecting.
+		expect(ipc.getCompanionConnectionState()).toBe("reconnecting");
+
+		// Windows double from base 1s and cap at 30s; gap = r * window.
+		const windows = [1000, 2000, 4000, 8000, 16000, 30000, 30000];
+		let connectsSoFar = 1; // the initial failed connect
+		for (const window of windows) {
+			const expectedGap = r * window;
+			// Not yet: just before the gap elapses, no new connect fired.
+			await vi.advanceTimersByTimeAsync(expectedGap - 1);
+			expect(fetchMock).toHaveBeenCalledTimes(connectsSoFar);
+			// Cross the gap → exactly one more connect attempt.
+			await vi.advanceTimersByTimeAsync(1);
+			connectsSoFar += 1;
+			expect(fetchMock).toHaveBeenCalledTimes(connectsSoFar);
+			// Each gap stayed within the full-jitter envelope [0, window].
+			expect(expectedGap).toBeGreaterThanOrEqual(0);
+			expect(expectedGap).toBeLessThanOrEqual(window);
+		}
+
+		// Now a connect succeeds: stream opens, state clears, counter resets.
+		const stream = openStream();
+		fetchMock.mockResolvedValueOnce({
+			ok: true,
+			status: 200,
+			body: stream.body,
+		});
+		await vi.advanceTimersByTimeAsync(r * 30000);
+		expect(ipc.getCompanionConnectionState()).toBe("online");
+
+		// Drop again: because the counter reset, the FIRST gap is the 1s base
+		// window again (not the 30s cap it had climbed to).
+		fetchMock.mockRejectedValue(new Error("dropped again"));
+		stream.close();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(ipc.getCompanionConnectionState()).toBe("reconnecting");
+		const callsBefore = fetchMock.mock.calls.length;
+		await vi.advanceTimersByTimeAsync(r * 1000 - 1);
+		expect(fetchMock).toHaveBeenCalledTimes(callsBefore);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(fetchMock).toHaveBeenCalledTimes(callsBefore + 1);
+	});
+
+	it("flips online → reconnecting → online and notifies subscribers", async () => {
+		vi.spyOn(Math, "random").mockReturnValue(0.5);
+		const first = openStream();
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce({ ok: true, status: 200, body: first.body });
+		vi.stubGlobal("fetch", fetchMock);
+
+		const ipc = await import("./ipc");
+		const listener = vi.fn();
+		const unsub = ipc.subscribeCompanionConnection(listener);
+
+		// Open the stream — healthy connect must NOT flip state (no flash) and
+		// must NOT notify (still "online").
+		await ipc.listen("activeStreamsChanged", () => {});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(ipc.getCompanionConnectionState()).toBe("online");
+		expect(listener).not.toHaveBeenCalled();
+
+		// Drop → reconnecting, subscribers notified once.
+		const second = openStream();
+		fetchMock.mockResolvedValueOnce({
+			ok: true,
+			status: 200,
+			body: second.body,
+		});
+		first.close();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(ipc.getCompanionConnectionState()).toBe("reconnecting");
+		expect(listener).toHaveBeenCalledTimes(1);
+
+		// Re-open after the backoff gap → back online, notified again.
+		await vi.advanceTimersByTimeAsync(0.5 * 1000);
+		expect(ipc.getCompanionConnectionState()).toBe("online");
+		expect(listener).toHaveBeenCalledTimes(2);
+		unsub();
+	});
+
+	it("routes subscribe_ui_mutations onto the shared /v1/stream and delivers ui-mutation events", async () => {
+		let controller!: ReadableStreamDefaultController<Uint8Array>;
+		const body = new ReadableStream<Uint8Array>({
+			start(c) {
+				controller = c;
+			},
+		});
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValue({ ok: true, status: 200, body });
+		vi.stubGlobal("fetch", fetchMock);
+
+		const ipc = await import("./ipc");
+		const received: unknown[] = [];
+		const channel = new ipc.Channel<unknown>();
+		channel.onmessage = (message) => received.push(message);
+
+		// Subscribing must NOT open a dedicated /rpc-stream subscription (which the
+		// proxy idle-closes and never reconnects) — it must ride the shared SSE.
+		await ipc.invoke("subscribe_ui_mutations", {
+			subscriptionId: "s1",
+			onEvent: channel,
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(String(fetchMock.mock.calls[0][0])).toContain("/v1/stream");
+		expect(String(fetchMock.mock.calls[0][0])).not.toContain("/rpc-stream");
+
+		// A ui-mutation SSE frame from the backend reaches the channel, parsed.
+		controller.enqueue(
+			new TextEncoder().encode(
+				'event: ui-mutation\ndata: {"type":"workspaceChanged","workspaceId":"w1"}\n\n',
+			),
+		);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(received).toEqual([{ type: "workspaceChanged", workspaceId: "w1" }]);
+	});
+
+	it("native (non-remote) transport stays online and never opens the stream", async () => {
+		// No companion marker → native (mocked-Tauri) transport.
+		(window as unknown as CompanionWindow).__HELMOR_COMPANION__ = undefined;
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+
+		const ipc = await import("./ipc");
+		expect(ipc.isRemoteTransport()).toBe(false);
+		expect(ipc.getCompanionConnectionState()).toBe("online");
+
+		// listen() routes to mocked Tauri, NOT the SSE loop — no fetch.
+		await ipc.listen("activeStreamsChanged", () => {});
+		await vi.advanceTimersByTimeAsync(60000);
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(ipc.getCompanionConnectionState()).toBe("online");
+	});
+});

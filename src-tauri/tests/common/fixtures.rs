@@ -40,6 +40,8 @@ impl HistoricalRecordFixture {
             content: self.content,
             parsed_content,
             created_at: self.created_at,
+            // Real-data fixtures predate the author seam; none carry an author.
+            author_id: None,
         }
     }
 }

@@ -11,6 +11,7 @@ export type SettingsSection =
 	| "experimental"
 	| "developer"
 	| "account"
+	| "team"
 	| "inbox"
 	| `repo:${string}`;
 

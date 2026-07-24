@@ -74,6 +74,7 @@ import { LocalLlmPanel } from "./panels/local-llm";
 import { MobileCompanionPanel } from "./panels/mobile-companion";
 import { ProvidersPanel } from "./panels/providers";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
+import { TeamPanel } from "./panels/team";
 
 const FALLBACK_EFFORT_LEVELS = ["low", "medium", "high"];
 
@@ -182,6 +183,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 		"providers",
 		"shortcuts",
 		"account",
+		"team",
 		"inbox",
 		"experimental",
 		// Developer is intentionally last in the fixed group — it sits
@@ -632,6 +634,8 @@ export const SettingsDialog = memo(function SettingsDialog({
 							{activeSection === "developer" && <DevToolsPanel />}
 
 							{activeSection === "account" && <AccountPanel />}
+
+							{activeSection === "team" && <TeamPanel />}
 
 							{activeSection === "inbox" && (
 								<InboxSettingsPanel

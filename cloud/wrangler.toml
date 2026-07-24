@@ -1,0 +1,119 @@
+# Helmor Team Cloud Sandbox — Worker control plane (Phase 0, stateless thin
+# proxy). Deploy:  cd cloud && bun install && bunx wrangler deploy
+#
+# Secrets (set before first deploy; the in-app provisioner sets all of these):
+#   bunx wrangler secret put HELMOR_COMPANION_TOKEN   # capability token the
+#                                                     # container's serve accepts
+#   bunx wrangler secret put GITHUB_TOKEN             # PAT for PR6 clone/push
+#   bunx wrangler secret put BROKER_ENC_KEY           # AES-256-GCM key (32 raw
+#                                                     # bytes, base64) the Codex/
+#                                                     # Claude/Forge identity DOs
+#                                                     # encrypt credentials with.
+#                                                     # ⚠️ NEVER rotate on an
+#                                                     # account with stored
+#                                                     # identities — it bricks
+#                                                     # them all (provision only
+#                                                     # writes it when absent).
+#
+# Preview URLs (proxyToSandbox) need a custom domain with wildcard DNS in
+# production — add a [[routes]] block on your zone. For local dev, `wrangler dev`
+# fronts everything on localhost.
+name = "helmor-team"
+main = "src/index.ts"
+compatibility_date = "2026-06-09"
+compatibility_flags = ["nodejs_compat"]
+
+# Single sandbox for Phase 0 (one team → one sandbox). References our PUBLIC
+# prebuilt image (built + pushed by .github/workflows/publish-team-image.yml), so
+# `wrangler deploy` needs NO local Docker build — Cloudflare pulls it from the
+# public registry. Rebuild the image (Dockerfile) only when the serve runtime
+# changes; this tag just has to point at a published build.
+[[containers]]
+class_name = "Sandbox"
+image = "docker.io/caspianzhao/helmor-team-sandbox:0.1.17"
+instance_type = "standard-3"
+max_instances = 1
+
+[[durable_objects.bindings]]
+class_name = "Sandbox"
+name = "Sandbox"
+
+# Per-member Codex token broker (Phase 1). Holds the user's ChatGPT
+# subscription OAuth refresh_token encrypted at rest and mints short-lived,
+# empty-RT ChatgptAuthTokens auth.json for container cold start. Keyed by the
+# member's GitHub numeric id (idFromName(memberId)).
+[[durable_objects.bindings]]
+class_name = "CodexIdentity"
+name = "CODEX_IDENTITY"
+
+# Per-member Claude subscription token broker. Holds the user's Claude
+# `setup-token` OAuth token (`sk-ant-oat01…`) encrypted at rest and hands it back
+# at container cold start to inject as CLAUDE_CODE_OAUTH_TOKEN. Keyed by the
+# member's GitHub numeric id (idFromName(memberId)). REUSES BROKER_ENC_KEY.
+[[durable_objects.bindings]]
+class_name = "ClaudeIdentity"
+name = "CLAUDE_IDENTITY"
+
+# Per-member forge (gh/glab) credential broker. Holds each member's gh token /
+# glab config encrypted at rest (REUSES BROKER_ENC_KEY); injected per-member at
+# cold start so git/gh/glab authenticate AS the acting member. Keyed by the
+# member's GitHub numeric id (idFromName(memberId)).
+[[durable_objects.bindings]]
+class_name = "ForgeIdentity"
+name = "FORGE_IDENTITY"
+
+# Team event plane (Stage C): one hibernating WebSocket hub that relays realtime
+# events (ui-mutations, room chat) to all members WITHOUT pinning the container.
+# Pure relay — no secrets, no D1. Keyed idFromName(HELMOR_SANDBOX_ID).
+[[durable_objects.bindings]]
+class_name = "TeamHub"
+name = "TEAM_HUB"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Sandbox"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["CodexIdentity"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["ClaudeIdentity"]
+
+[[migrations]]
+tag = "v4"
+new_sqlite_classes = ["ForgeIdentity"]
+
+[[migrations]]
+tag = "v5"
+new_sqlite_classes = ["TeamHub"]
+
+# D1 control-plane registry (Phase 3 / action item ①): members / workspaces /
+# invites / teams. Additive — the Phase 0 stateless proxy is untouched. Schema
+# lives in ./schema.sql (apply: `wrangler d1 execute helmor-team --remote --file
+# ./schema.sql`).
+[[d1_databases]]
+binding = "DB"
+database_name = "helmor-team"
+database_id = "8eb39746-fda1-47e3-8006-2dab22175b53"
+
+# R2 bucket for Sandbox backups (Phase 2b sleep persistence). The Sandbox DO
+# resolves BACKUP_BUCKET as a native R2 binding for localBucket-mode backup/
+# restore (R2 binding + squashfs, no presigned creds / FUSE).
+[[r2_buckets]]
+binding = "BACKUP_BUCKET"
+bucket_name = "helmor-team-backups"
+
+[vars]
+# Fixed sandbox id for Phase 0 (B2 single-backend model). Phase 1 derives it
+# from the team / token.
+HELMOR_SANDBOX_ID = "helmor-team-0"
+# Port the in-container companion server binds (matches HELMOR_SERVE_PORT).
+HELMOR_COMPANION_PORT = "8080"
+# Idle auto-sleep: stop the container after this much inactivity (no open
+# companion connection). The next request cold-starts it and restores the last
+# backup. Accepts "30s", "15m", "1h", or a number of seconds. Shortened from 15m
+# so the sandbox stops promptly once the desktop drops its SSE on idle (see
+# use-companion-idle-suspend.ts) — the main lever against always-on cost.
+SANDBOX_IDLE_TIMEOUT = "5m"

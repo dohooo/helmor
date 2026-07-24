@@ -1,9 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PendingUserInput } from "@/features/conversation/pending-user-input";
-import { __resetStreamingStoreForTests } from "@/features/conversation/state/streaming-store";
+import {
+	__resetStreamingStoreForTests,
+	useStreamingStore,
+} from "@/features/conversation/state/streaming-store";
 import type {
 	ActiveStreamSummary,
 	AgentModelOption,
@@ -49,6 +52,7 @@ const apiMocks = vi.hoisted(() => ({
 	startAgentMessageStream: vi.fn(),
 	steerAgentStream: vi.fn(),
 	stopAgentStream: vi.fn(),
+	postRoomChatMessage: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -65,6 +69,28 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		startAgentMessageStream: apiMocks.startAgentMessageStream,
 		steerAgentStream: apiMocks.steerAgentStream,
 		stopAgentStream: apiMocks.stopAgentStream,
+		postRoomChatMessage: apiMocks.postRoomChatMessage,
+	};
+});
+
+const teamModeMocks = vi.hoisted(() => ({
+	isTeamModeActive: vi.fn().mockReturnValue(false),
+}));
+
+vi.mock("@/lib/team-mode", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@/lib/team-mode")>();
+	return {
+		...actual,
+		isTeamModeActive: teamModeMocks.isTeamModeActive,
+	};
+});
+
+vi.mock("@/features/team/use-team-identity", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("@/features/team/use-team-identity")>();
+	return {
+		...actual,
+		useTeamIdentity: () => ({ identity: null, isLoading: false }),
 	};
 });
 
@@ -185,6 +211,7 @@ describe("useConversationStreaming", () => {
 		apiMocks.startAgentMessageStream.mockReset();
 		apiMocks.steerAgentStream.mockReset();
 		apiMocks.stopAgentStream.mockReset();
+		apiMocks.postRoomChatMessage.mockReset();
 		apiMocks.loadRepoPreferences.mockResolvedValue({});
 
 		apiMocks.generateSessionTitle.mockResolvedValue(null);
@@ -197,6 +224,9 @@ describe("useConversationStreaming", () => {
 		// tests override this when they want to exercise the steer branch.
 		apiMocks.steerAgentStream.mockResolvedValue({ accepted: false });
 		apiMocks.stopAgentStream.mockResolvedValue(undefined);
+		apiMocks.postRoomChatMessage.mockResolvedValue(undefined);
+		// Default: single-user mode (no team). Team tests override this.
+		teamModeMocks.isTeamModeActive.mockReturnValue(false);
 	});
 
 	afterEach(() => {
@@ -1753,6 +1783,7 @@ describe("useConversationStreaming", () => {
 						context: e.context,
 						payload: e.payload,
 						enqueuedAt: 0,
+						generation: 0,
 					})) ?? [],
 				findById: (id) => {
 					for (const list of store.values()) {
@@ -1763,6 +1794,7 @@ describe("useConversationStreaming", () => {
 								context: match.context,
 								payload: match.payload,
 								enqueuedAt: 0,
+								generation: 0,
 							};
 						}
 					}
@@ -1794,6 +1826,7 @@ describe("useConversationStreaming", () => {
 						context: head.context,
 						payload: head.payload,
 						enqueuedAt: 0,
+						generation: 0,
 					};
 				},
 				clear: (sessionId) => {
@@ -1888,6 +1921,449 @@ describe("useConversationStreaming", () => {
 					contextKey: "session:session-1",
 				},
 			});
+		});
+
+		// F-3 regression (silent message loss): the mirrored live-session marker
+		// can go STALE — with no local stream and no backend-confirmed stream it
+		// must NOT route the send to the queue (a black hole: invisible, in
+		// memory, drain never fires). A stale mirror sends directly instead.
+		it("sends directly (never queues) when only a stale mirrored stream is known", async () => {
+			teamModeMocks.isTeamModeActive.mockReturnValue(true);
+			useStreamingStore
+				.getState()
+				.setMirroredActiveSession("session:session-1", "session-1");
+			apiMocks.startAgentMessageStream.mockResolvedValue(undefined);
+			const queue = createFakeQueue();
+
+			const { Wrapper } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: queue,
+						activeStreams: NO_ACTIVE_STREAMS,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "@agent follow up",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
+			expect(queue.snapshot().has("session-1")).toBe(false);
+			expect(apiMocks.steerAgentStream).not.toHaveBeenCalled();
+			expect(
+				apiMocks.startAgentMessageStream.mock.calls.some(
+					([request]) =>
+						(request as { prompt?: string } | undefined)?.prompt ===
+						"@agent follow up",
+				),
+			).toBe(true);
+		});
+
+		// F-3 regression: when the stale-mirror direct send FAILS, the failure
+		// must be visible (send error set) and the draft restorable — never
+		// silent loss.
+		it("surfaces the error and restores the draft when a stale-mirror direct send fails", async () => {
+			teamModeMocks.isTeamModeActive.mockReturnValue(true);
+			useStreamingStore
+				.getState()
+				.setMirroredActiveSession("session:f3-fail", "f3-fail");
+			apiMocks.startAgentMessageStream.mockRejectedValue(
+				new Error("backend unreachable"),
+			);
+			const queue = createFakeQueue();
+
+			const { Wrapper } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:f3-fail",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "f3-fail",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: queue,
+						activeStreams: NO_ACTIVE_STREAMS,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "@agent doomed send",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
+			expect(queue.snapshot().has("f3-fail")).toBe(false);
+			expect(apiMocks.startAgentMessageStream).toHaveBeenCalled();
+			await waitFor(() => {
+				const state = useStreamingStore.getState();
+				expect(state.sendErrorsByContext["session:f3-fail"]).toBeTruthy();
+				expect(state.composerRestore).toMatchObject({
+					contextKey: "session:f3-fail",
+					draft: "@agent doomed send",
+				});
+			});
+		});
+
+		// F-3 regression: a BACKEND-confirmed live stream still queues @agent
+		// follow-ups, and enqueueing must not wipe the composer-restore stash.
+		// F-3 regression (live root cause): `loadRepoPreferences` runs BEFORE
+		// the send's try/catch. Its rejection used to kill the whole submit
+		// silently (composer already cleared, no optimistic row, no error).
+		// It is best-effort now: the send proceeds without the preamble, and a
+		// stream failure surfaces via the existing catch.
+		it("still sends (and surfaces stream errors) when loadRepoPreferences rejects", async () => {
+			teamModeMocks.isTeamModeActive.mockReturnValue(true);
+			apiMocks.loadRepoPreferences.mockRejectedValue(new Error("Load failed"));
+			apiMocks.startAgentMessageStream.mockRejectedValue(
+				new Error("backend unreachable"),
+			);
+			const queue = createFakeQueue();
+
+			const { Wrapper } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:f3-prefs",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "f3-prefs",
+						displayedWorkspaceId: "workspace-1",
+						repoId: "repo-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: queue,
+						activeStreams: NO_ACTIVE_STREAMS,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "@agent prefs-reject send",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
+			// The pre-send preference failure must NOT kill the submit.
+			expect(apiMocks.startAgentMessageStream).toHaveBeenCalled();
+			await waitFor(() => {
+				const state = useStreamingStore.getState();
+				expect(state.sendErrorsByContext["session:f3-prefs"]).toBeTruthy();
+				expect(state.composerRestore).toMatchObject({
+					draft: "@agent prefs-reject send",
+				});
+			});
+		});
+
+		it("queues @agent follow-ups on a backend-confirmed stream and keeps composerRestore", async () => {
+			teamModeMocks.isTeamModeActive.mockReturnValue(true);
+			const queue = createFakeQueue();
+			const activeStreams: ActiveStreamSummary[] = [
+				{
+					sessionId: "session-1",
+					workspaceId: "workspace-1",
+					provider: "claude",
+				},
+			];
+			const sentinelRestore = {
+				contextKey: "session:other",
+				draft: "unrelated stash",
+				images: [],
+				files: [],
+				customTags: [],
+				editorState: null,
+				nonce: 1,
+			};
+			useStreamingStore.getState().setComposerRestore(sentinelRestore);
+
+			const { Wrapper } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: queue,
+						activeStreams,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "@agent queued follow up",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
+			expect(queue.snapshot().get("session-1")?.[0]).toMatchObject({
+				prompt: "@agent queued follow up",
+				context: {
+					sessionId: "session-1",
+					workspaceId: "workspace-1",
+					contextKey: "session:session-1",
+				},
+			});
+			expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
+			// F-3: enqueue no longer clears the restore stash.
+			expect(useStreamingStore.getState().composerRestore).toMatchObject({
+				draft: "unrelated stash",
+			});
+		});
+
+		it("keeps plain team chat as room chat while an agent stream is active", async () => {
+			teamModeMocks.isTeamModeActive.mockReturnValue(true);
+			apiMocks.postRoomChatMessage.mockImplementation(async () => {});
+			const queue = createFakeQueue();
+			const activeStreams: ActiveStreamSummary[] = [
+				{
+					sessionId: "session-1",
+					workspaceId: "workspace-1",
+					provider: "codex",
+				},
+			];
+
+			const { Wrapper, queryClient } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: queue,
+						activeStreams,
+					}),
+				{ wrapper: Wrapper },
+			);
+			apiMocks.postRoomChatMessage.mockClear();
+			apiMocks.startAgentMessageStream.mockClear();
+			apiMocks.steerAgentStream.mockClear();
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "plain room update",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
+			const roomChatCalls = apiMocks.postRoomChatMessage.mock.calls.filter(
+				([request]) =>
+					(request as { prompt?: string } | undefined)?.prompt ===
+					"plain room update",
+			);
+			expect(roomChatCalls).toHaveLength(1);
+			expect(
+				apiMocks.startAgentMessageStream.mock.calls.some(
+					([request]) =>
+						(request as { prompt?: string } | undefined)?.prompt ===
+						"plain room update",
+				),
+			).toBe(false);
+			expect(
+				apiMocks.steerAgentStream.mock.calls.some(
+					([request]) =>
+						(request as { prompt?: string } | undefined)?.prompt ===
+						"plain room update",
+				),
+			).toBe(false);
+			expect(queue.snapshot().has("session-1")).toBe(false);
+			const cachedThread = queryClient.getQueryData<ThreadMessageLike[]>(
+				sessionThreadCacheKey("session-1"),
+			);
+			expect(cachedThread?.[0]).toMatchObject({
+				role: "user",
+				isRoomChat: true,
+			});
+		});
+
+		it("queues @agent team messages while an agent stream is active even when steer is configured", async () => {
+			teamModeMocks.isTeamModeActive.mockReturnValue(true);
+			apiMocks.steerAgentStream.mockResolvedValue({ accepted: true });
+			const queue = createFakeQueue();
+			const activeStreams: ActiveStreamSummary[] = [
+				{
+					sessionId: "session-1",
+					workspaceId: "workspace-1",
+					provider: "codex",
+				},
+			];
+
+			const { Wrapper } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: queue,
+						activeStreams,
+					}),
+				{ wrapper: Wrapper },
+			);
+			apiMocks.postRoomChatMessage.mockClear();
+			apiMocks.startAgentMessageStream.mockClear();
+			apiMocks.steerAgentStream.mockClear();
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "@agent please pick this up",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+					followUpBehaviorOverride: "steer",
+				});
+			});
+
+			expect(
+				apiMocks.postRoomChatMessage.mock.calls.some(
+					([request]) =>
+						(request as { prompt?: string } | undefined)?.prompt ===
+						"@agent please pick this up",
+				),
+			).toBe(false);
+			expect(
+				apiMocks.startAgentMessageStream.mock.calls.some(
+					([request]) =>
+						(request as { prompt?: string } | undefined)?.prompt ===
+						"@agent please pick this up",
+				),
+			).toBe(false);
+			expect(
+				apiMocks.steerAgentStream.mock.calls.some(
+					([request]) =>
+						(request as { prompt?: string } | undefined)?.prompt ===
+						"@agent please pick this up",
+				),
+			).toBe(false);
+			expect(queue.snapshot().get("session-1")?.[0]).toMatchObject({
+				prompt: "@agent please pick this up",
+				context: {
+					sessionId: "session-1",
+					workspaceId: "workspace-1",
+					contextKey: "session:session-1",
+				},
+			});
+		});
+
+		it("drains queued team follow-ups when a mirrored remote stream ends", async () => {
+			apiMocks.startAgentMessageStream.mockImplementation(async () => {});
+			const queue = createFakeQueue();
+			queue.enqueue(
+				{
+					sessionId: "session-1",
+					workspaceId: "workspace-1",
+					contextKey: "session:session-1",
+				},
+				{
+					prompt: "@agent queued after remote",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				},
+			);
+			useStreamingStore
+				.getState()
+				.setMirroredActiveSession("session:session-1", "session-1");
+
+			const { Wrapper } = createWrapper();
+			renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "queue",
+						submitQueue: queue,
+						activeStreams: NO_ACTIVE_STREAMS,
+					}),
+				{ wrapper: Wrapper },
+			);
+			await flushDrainTimer();
+			apiMocks.startAgentMessageStream.mockClear();
+
+			act(() => {
+				useStreamingStore
+					.getState()
+					.clearMirroredActiveSession("session:session-1");
+			});
+			await flushDrainTimer();
+
+			expect(queue.snapshot().has("session-1")).toBe(false);
+			expect(apiMocks.startAgentMessageStream).toHaveBeenCalledOnce();
+			expect(apiMocks.startAgentMessageStream.mock.calls[0]?.[0]).toMatchObject(
+				{
+					prompt: "@agent queued after remote",
+					helmorSessionId: "session-1",
+				},
+			);
 		});
 
 		it("drains the queue when the active turn finishes", async () => {
@@ -2906,6 +3382,502 @@ describe("useConversationStreaming", () => {
 			expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
 			expect(apiMocks.steerAgentStream).not.toHaveBeenCalled();
 			expect(queue.snapshot().get("session-1")).toHaveLength(1);
+		});
+	});
+
+	// ─── Team-mode @agent gating ─────────────────────────────────────────────
+	describe("team-mode @agent gating", () => {
+		it("single-user: dispatches via startAgentMessageStream regardless of @agent", async () => {
+			// isTeamModeActive() returns false (default) — byte-identical to existing path.
+			apiMocks.startAgentMessageStream.mockImplementation(async () => {});
+
+			const { Wrapper } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: noopSubmitQueue,
+						activeStreams: NO_ACTIVE_STREAMS,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "hello team, no agent mention",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
+			expect(apiMocks.startAgentMessageStream).toHaveBeenCalledOnce();
+			expect(apiMocks.postRoomChatMessage).not.toHaveBeenCalled();
+		});
+
+		it("team mode + @agent mention: dispatches via startAgentMessageStream", async () => {
+			teamModeMocks.isTeamModeActive.mockReturnValue(true);
+			apiMocks.startAgentMessageStream.mockImplementation(async () => {});
+
+			const { Wrapper } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: noopSubmitQueue,
+						activeStreams: NO_ACTIVE_STREAMS,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "hey @agent summarize the diff",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
+			expect(apiMocks.startAgentMessageStream).toHaveBeenCalledOnce();
+			expect(apiMocks.postRoomChatMessage).not.toHaveBeenCalled();
+		});
+
+		it("team mode + no @agent: routes to postRoomChatMessage, not startAgentMessageStream", async () => {
+			teamModeMocks.isTeamModeActive.mockReturnValue(true);
+			apiMocks.postRoomChatMessage.mockImplementation(async () => {});
+
+			const { Wrapper, queryClient } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: noopSubmitQueue,
+						activeStreams: NO_ACTIVE_STREAMS,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "hello team, what do you think?",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
+			// Room chat path: postRoomChatMessage called, startAgentMessageStream not.
+			expect(apiMocks.postRoomChatMessage).toHaveBeenCalledOnce();
+			expect(apiMocks.postRoomChatMessage).toHaveBeenCalledWith(
+				expect.objectContaining({
+					helmorSessionId: "session-1",
+					clientMessageId: expect.any(String),
+					prompt: "hello team, what do you think?",
+				}),
+				expect.any(Function),
+			);
+			expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
+
+			// Optimistic user message inserted into thread cache.
+			const cachedThread = queryClient.getQueryData<unknown[]>(
+				sessionThreadCacheKey("session-1"),
+			);
+			expect(cachedThread).toBeDefined();
+			expect(cachedThread?.length).toBeGreaterThan(0);
+			expect((cachedThread?.[0] as ThreadMessageLike | undefined)?.id).toBe(
+				apiMocks.postRoomChatMessage.mock.calls[0]?.[0].clientMessageId,
+			);
+			expect(
+				(cachedThread?.[0] as ThreadMessageLike | undefined)?.author,
+			).toEqual({
+				id: "pending-self",
+				displayName: "You",
+			});
+		});
+
+		it("team mode + no @agent + postRoomChatMessage error: rolls back optimistic message", async () => {
+			teamModeMocks.isTeamModeActive.mockReturnValue(true);
+			apiMocks.postRoomChatMessage.mockRejectedValue(
+				new Error("network error"),
+			);
+
+			const { Wrapper, queryClient } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: noopSubmitQueue,
+						activeStreams: NO_ACTIVE_STREAMS,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "hello team",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
+			expect(apiMocks.postRoomChatMessage).toHaveBeenCalledOnce();
+			expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
+
+			// After rollback the thread cache should not have the optimistic message.
+			const cachedThread = queryClient.getQueryData<unknown[]>(
+				sessionThreadCacheKey("session-1"),
+			);
+			// The snapshot before insertion was undefined → restoreSnapshot removes
+			// the cache entry on rollback. Either undefined or empty is correct.
+			expect(!cachedThread || cachedThread.length === 0).toBe(true);
+
+			// Send error set so the composer can show a failure state.
+			expect(result.current.activeSendError).toBe("network error");
+		});
+
+		// Round6 P1-7b: a submit that awaits across an in-place transport switch
+		// (team↔local) must NOT fire the old backend's session ids into the new
+		// transport — it bails before any side effect (no optimistic row, no
+		// send). The pre-send await here is loadRepoPreferences (repoId set).
+		it("drops a submit whose await spanned a transport switch", async () => {
+			const { bumpTransportGeneration } = await import(
+				"@/lib/transport-generation"
+			);
+			apiMocks.loadRepoPreferences.mockImplementation(async () => {
+				// The in-place switch lands while this submit is awaiting.
+				bumpTransportGeneration();
+				return null;
+			});
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+			const { Wrapper, queryClient } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						repoId: "repo-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: noopSubmitQueue,
+						activeStreams: NO_ACTIVE_STREAMS,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "hello from the old backend",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
+			// No send, no optimistic side effects — the submit was dropped whole.
+			expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
+			const cachedThread = queryClient.getQueryData<unknown[]>(
+				sessionThreadCacheKey("session-1"),
+			);
+			expect(!cachedThread || cachedThread.length === 0).toBe(true);
+			expect(warn).toHaveBeenCalledWith(
+				"[conversation] dropped a submit that spanned a transport switch",
+			);
+		});
+
+		// Round6 P1-6a: on the companion transport a room-chat failure arrives
+		// IN-BAND — the 200 x-ndjson headers already left, so the Rust side
+		// (stream.rs run_and_surface, R3-B) delivers the terminal error as a
+		// `{kind:"error"}` event on the callback while the invoke RESOLVES.
+		// The old no-op callback swallowed it: the optimistic bubble stayed up
+		// over a message that never persisted.
+		it("team mode + no @agent + IN-BAND error event: rolls back + surfaces the error", async () => {
+			teamModeMocks.isTeamModeActive.mockReturnValue(true);
+			apiMocks.postRoomChatMessage.mockImplementation(
+				async (
+					_request: unknown,
+					onEvent: (event: {
+						kind: string;
+						message: string;
+						persisted: boolean;
+						internal: boolean;
+					}) => void,
+				) => {
+					// The stream carries the terminal error, then the invoke
+					// resolves normally — NO rejection on this transport.
+					onEvent({
+						kind: "error",
+						message: "Failed to persist room chat message: DB write failed",
+						persisted: false,
+						internal: false,
+					});
+				},
+			);
+
+			const { Wrapper, queryClient } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: noopSubmitQueue,
+						activeStreams: NO_ACTIVE_STREAMS,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "hello team",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
+			expect(apiMocks.postRoomChatMessage).toHaveBeenCalledOnce();
+
+			// The optimistic bubble must NOT survive — the message never persisted.
+			const cachedThread = queryClient.getQueryData<unknown[]>(
+				sessionThreadCacheKey("session-1"),
+			);
+			expect(!cachedThread || cachedThread.length === 0).toBe(true);
+
+			// And the failure is user-visible, not swallowed.
+			expect(result.current.activeSendError).toBe(
+				"Failed to persist room chat message: DB write failed",
+			);
+		});
+
+		it("team mode + @agent: promptPrefix contains room-context block, prompt stays trimmedPrompt", async () => {
+			// Verifies the context-carry assembler fold: when there are
+			// isRoomChat messages since the last agent turn, the
+			// <helmor-room-context> block is included in promptPrefix (wire-only).
+			// The persisted user_prompt body (prompt field) must stay byte-identical
+			// to what the user typed — not include the carry block.
+			teamModeMocks.isTeamModeActive.mockReturnValue(true);
+			apiMocks.startAgentMessageStream.mockImplementation(async () => {});
+
+			const { Wrapper, queryClient } = createWrapper();
+
+			// Seed the thread with two isRoomChat user messages (no assistant turn
+			// between them and the tail — so both are within the carry window).
+			const roomMessages: ThreadMessageLike[] = [
+				{
+					id: "room-1",
+					role: "user",
+					content: [
+						{ type: "text", text: "Alice: looks good to me", id: "room-1-t" },
+					],
+					isRoomChat: true,
+				},
+				{
+					id: "room-2",
+					role: "user",
+					content: [
+						{ type: "text", text: "Bob: agreed, ship it", id: "room-2-t" },
+					],
+					isRoomChat: true,
+				},
+			];
+			queryClient.setQueryData(
+				sessionThreadCacheKey("session-1"),
+				roomMessages,
+			);
+
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: noopSubmitQueue,
+						activeStreams: NO_ACTIVE_STREAMS,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			const userPrompt = "summarize the discussion @agent";
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: userPrompt,
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
+			expect(apiMocks.startAgentMessageStream).toHaveBeenCalledOnce();
+			expect(apiMocks.postRoomChatMessage).not.toHaveBeenCalled();
+
+			const callArg = apiMocks.startAgentMessageStream.mock.calls[0][0] as {
+				prompt: string;
+				promptPrefix?: string | null;
+			};
+
+			// The persisted prompt body must be byte-identical to what the user typed.
+			expect(callArg.prompt).toBe(userPrompt);
+
+			// The promptPrefix must contain the <helmor-room-context> carry block.
+			expect(callArg.promptPrefix).toEqual(
+				expect.stringContaining("<helmor-room-context>"),
+			);
+			expect(callArg.promptPrefix).toEqual(
+				expect.stringContaining("</helmor-room-context>"),
+			);
+
+			// The prompt field itself must NOT contain the carry block.
+			expect(callArg.prompt).not.toContain("<helmor-room-context>");
+		});
+
+		it("REPRO (room chat → @agent): the just-sent room chat is carried into the @agent prompt", async () => {
+			// User flow: in team mode, send a plain message (room chat, no @agent),
+			// then send an @agent message. The room chat the user JUST typed must be
+			// folded into the @agent prompt's carry block. Regression: the optimistic
+			// room-chat bubble was inserted WITHOUT the `isRoomChat` marker, so the
+			// carry assembler (which scans for isRoomChat===true) skipped it — the
+			// agent never saw what the user had just said in the room.
+			teamModeMocks.isTeamModeActive.mockReturnValue(true);
+			apiMocks.postRoomChatMessage.mockImplementation(async () => {});
+			apiMocks.startAgentMessageStream.mockImplementation(async () => {});
+
+			const { Wrapper, queryClient } = createWrapper();
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: noopSubmitQueue,
+						activeStreams: NO_ACTIVE_STREAMS,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			// msg 1 — room chat (no @agent)
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "the CI build is failing on main",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
+			expect(apiMocks.postRoomChatMessage).toHaveBeenCalledOnce();
+			expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
+
+			// The optimistic room-chat bubble must be marked isRoomChat so the
+			// carry assembler can find it on the next @agent turn.
+			const afterRoomChat = queryClient.getQueryData<ThreadMessageLike[]>(
+				sessionThreadCacheKey("session-1"),
+			);
+			expect(afterRoomChat).toHaveLength(1);
+			expect(afterRoomChat?.[0]?.isRoomChat).toBe(true);
+
+			// msg 2 — @agent
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "@agent why is the build failing?",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
+			expect(apiMocks.startAgentMessageStream).toHaveBeenCalledOnce();
+			const callArg = apiMocks.startAgentMessageStream.mock.calls[0][0] as {
+				prompt: string;
+				promptPrefix?: string | null;
+			};
+
+			// The agent prompt body stays byte-identical to what the user typed.
+			expect(callArg.prompt).toBe("@agent why is the build failing?");
+
+			// The room chat the user JUST sent must be carried into promptPrefix.
+			expect(callArg.promptPrefix ?? "").toContain("<helmor-room-context>");
+			expect(callArg.promptPrefix ?? "").toContain(
+				"the CI build is failing on main",
+			);
 		});
 	});
 });

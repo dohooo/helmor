@@ -23,6 +23,31 @@ use tower_http::cors::{Any, CorsLayer};
 use super::{auth, Verifier};
 use crate::error::CommandError;
 
+/// Trusted transport header carrying the authenticated team member id. Set by
+/// the edge (CF Worker / reverse proxy) after it authenticates the caller — the
+/// browser cannot forge it across origins, and we OVERWRITE any body-supplied
+/// `authorId` with this value so identity is never client-asserted.
+///
+/// SECURITY (enforced at the edge in P3.3): the edge MUST delete any
+/// client-supplied copy of this header on the inbound request before setting
+/// its own derived value — this handler trusts whatever arrives here. The
+/// container has no public ingress except through the edge (which holds the
+/// shared companion token), so a client cannot reach this handler directly to
+/// inject the header.
+const MEMBER_ID_HEADER: &str = "x-helmor-member-id";
+
+/// Pull the server-derived member id out of the trusted header. Returns `None`
+/// when absent or non-ASCII, so a malformed header degrades to "no author"
+/// rather than poisoning persistence.
+fn trusted_member_id(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(MEMBER_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+}
+
 /// Resolves a request path to embedded SPA bytes + MIME type. Type-erased so
 /// the HTTP layer stays runtime-agnostic (the Tauri `AssetResolver` is captured
 /// behind this closure in [`super::CompanionState::start`]); this also lets the
@@ -33,16 +58,28 @@ pub type AssetLoader = Arc<dyn Fn(&str) -> Option<(Vec<u8>, String)> + Send + Sy
 /// `subscribe_ui_mutations`): given the command name + args, feeds each event as
 /// an NDJSON line into the sender. Type-erased so the server stays
 /// runtime-agnostic; built from a concrete `AppHandle` in [`super::stream`].
-pub type StreamStarter =
-    Arc<dyn Fn(&str, Value, UnboundedSender<String>) -> Result<(), CommandError> + Send + Sync>;
+///
+/// `author_id` is the server-derived team member id (from the trusted
+/// `X-Helmor-Member-Id` header). It is passed separately — never read from the
+/// request body — so a client cannot assert another member's identity.
+pub type StreamStarter = Arc<
+    dyn Fn(&str, Value, Option<String>, UnboundedSender<String>) -> Result<(), CommandError>
+        + Send
+        + Sync,
+>;
 
 /// Dispatches a non-streaming `/rpc/{cmd}` call to the real Tauri command behind
 /// the concrete `AppHandle` (so commands needing `State`/`AppHandle` work).
 /// Type-erased so the server stays runtime-agnostic; built in
-/// [`super::rpc::build_dispatcher`]. Takes owned `(cmd, args)` so the returned
-/// future is `'static`.
+/// [`super::rpc::build_dispatcher`]. Takes owned `(cmd, args, author_id)` so the
+/// returned future is `'static`; `author_id` is the server-derived member id
+/// from the trusted `X-Helmor-Member-Id` header (never client-asserted).
 pub type Dispatcher = Arc<
-    dyn Fn(String, Value) -> futures::future::BoxFuture<'static, Result<Value, CommandError>>
+    dyn Fn(
+            String,
+            Value,
+            Option<String>,
+        ) -> futures::future::BoxFuture<'static, Result<Value, CommandError>>
         + Send
         + Sync,
 >;
@@ -123,7 +160,8 @@ async fn rpc_handler(
         }
     };
 
-    match (state.dispatcher)(cmd, args).await {
+    let author_id = trusted_member_id(&headers);
+    match (state.dispatcher)(cmd, args, author_id).await {
         Ok(value) => Json(value).into_response(),
         Err(command_error) => {
             // `CommandError` serialises as { code, message } — the same shape
@@ -167,24 +205,109 @@ async fn rpc_stream_handler(
         }
     };
 
+    let author_id = trusted_member_id(&headers);
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    match (state.streamer)(&cmd, args, tx) {
-        Ok(()) => {
-            let stream = UnboundedReceiverStream::new(rx).map(|line| {
-                Ok::<Bytes, std::convert::Infallible>(Bytes::from(format!("{line}\n")))
-            });
-            (
-                [(CONTENT_TYPE, "application/x-ndjson")],
-                axum::body::Body::from_stream(stream),
-            )
-                .into_response()
-        }
+    match (state.streamer)(&cmd, args, author_id, tx) {
+        Ok(()) => (
+            [(CONTENT_TYPE, "application/x-ndjson")],
+            axum::body::Body::from_stream(ndjson_body_with_keepalive(
+                rx,
+                RPC_STREAM_KEEPALIVE,
+                // R2-A.1: rotate SUBSCRIPTION bodies only; turn/post streams
+                // must never be force-closed (legit turns exceed 5 minutes).
+                is_subscription_stream(&cmd).then(subscription_stream_deadline),
+            )),
+        )
+            .into_response(),
         Err(command_error) => {
             let payload = serde_json::to_value(&command_error)
                 .unwrap_or_else(|_| json!({ "code": "Unknown", "message": "Internal error" }));
             (StatusCode::BAD_REQUEST, Json(payload)).into_response()
         }
     }
+}
+
+/// Keepalive cadence for `/rpc-stream/*` NDJSON bodies. A quiet-but-healthy
+/// stream (e.g. a `subscribe_session_stream` watcher on an idle session, or a
+/// long provider "thinking" gap) otherwise moves ZERO bytes, and the edge
+/// (CF Worker F-4 no-progress watchdog, 120s) force-settles it as a corpse —
+/// silently killing live watch streams. With this, "a healthy stream always
+/// carries bytes" holds for every companion stream (SSE `/v1/stream` already
+/// pings every 15s), so the watchdog's leak-protection semantics stay intact.
+const RPC_STREAM_KEEPALIVE: Duration = Duration::from_secs(30);
+
+/// R2-A.1: maximum lifetime for SUBSCRIPTION stream bodies (idempotent,
+/// client-resubscribable: `subscribe_session_stream`, `subscribe_ui_mutations`
+/// and the `/v1/stream` SSE). Rotation is the zombie-pipe reaper: a client
+/// that died WITHOUT propagating cancel leaves a pipe the edge can't tell
+/// apart from a healthy one once keepalives flow (bytes = progress = activity
+/// renewal → the container never sleeps, observed live as R2-F1). Closing the
+/// body server-side settles the edge pipe (`pipeTo` finally → inflight
+/// release, the F-4-tested path); healthy clients reattach instantly via the
+/// R2-A auto-resubscribe / SSE reconnect loops. If an extreme zombie writable
+/// even swallows the close, the upstream has STOPPED sending bytes, so the
+/// edge's 120s no-progress watchdog reaps it — two independent layers.
+///
+/// NEVER applied to turn/post streams (`send_agent_message_stream`,
+/// `post_room_chat_message`): a legitimate turn can far exceed 5 minutes and
+/// force-closing one would manufacture a WP2-class incident.
+const SUBSCRIPTION_STREAM_MAX_LIFETIME: Duration = Duration::from_secs(5 * 60);
+/// ± jitter so a fleet of subscriptions opened together doesn't rotate (and
+/// re-knock) in lockstep.
+const SUBSCRIPTION_STREAM_LIFETIME_JITTER: Duration = Duration::from_secs(30);
+
+/// Streaming commands whose NDJSON body gets the max-lifetime rotation.
+fn is_subscription_stream(cmd: &str) -> bool {
+    matches!(cmd, "subscribe_session_stream" | "subscribe_ui_mutations")
+}
+
+/// Randomized rotation deadline: `MAX_LIFETIME ± JITTER`.
+fn subscription_stream_deadline() -> Duration {
+    let jitter = SUBSCRIPTION_STREAM_LIFETIME_JITTER.as_millis() as i64;
+    // Cheap uniform jitter without a rand dependency: subsecond clock noise.
+    let noise = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_millis() as i64)
+        .unwrap_or(0)
+        % (2 * jitter + 1))
+        - jitter;
+    let base = SUBSCRIPTION_STREAM_MAX_LIFETIME.as_millis() as i64;
+    Duration::from_millis((base + noise).max(0) as u64)
+}
+
+/// NDJSON body stream: each event as `{line}\n`, plus a bare `"\n"` whenever
+/// the stream has been quiet for `keepalive` (the browser shim's `pumpNdjson`
+/// skips empty lines, so keepalives are invisible to consumers). When
+/// `max_lifetime` is set (subscription streams only — see
+/// [`SUBSCRIPTION_STREAM_MAX_LIFETIME`]) the body force-closes at the
+/// deadline and the client resubscribes.
+///
+/// CORRECTNESS BOUNDARY: the stream MUST terminate when `rx` closes (returns
+/// `None`). A naive `select` with an endless interval would keep the body open
+/// forever after the subscription ends — leaking watcher subscriptions and
+/// pinning the edge's inflight counter (the exact inverse of the F-4 bug).
+fn ndjson_body_with_keepalive(
+    rx: tokio::sync::mpsc::UnboundedReceiver<String>,
+    keepalive: Duration,
+    max_lifetime: Option<Duration>,
+) -> impl Stream<Item = Result<Bytes, std::convert::Infallible>> {
+    // Absolute deadline fixed at body creation.
+    let deadline = max_lifetime.map(|d| tokio::time::Instant::now() + d);
+    stream::unfold((rx, deadline), move |(mut rx, deadline)| async move {
+        let expired = async {
+            match deadline {
+                Some(at) => tokio::time::sleep_until(at).await,
+                None => std::future::pending().await,
+            }
+        };
+        tokio::select! {
+            line = rx.recv() => {
+                line.map(|line| (Ok(Bytes::from(format!("{line}\n"))), (rx, deadline)))
+            }
+            () = tokio::time::sleep(keepalive) => Some((Ok(Bytes::from("\n")), (rx, deadline))),
+            () = expired => None,
+        }
+    })
 }
 
 /// Serve a static asset from the app's embedded frontend bundle (the same
@@ -235,19 +358,53 @@ async fn stream_handler(State(state): State<AppState>, headers: HeaderMap) -> Re
     if !auth::authorize(&headers, state.token.as_str(), &state.verifier) {
         return unauthorized();
     }
-    Sse::new(keepalive_stream())
+    // Carry UI mutations over the SHARED /v1/stream rather than a separate
+    // one-shot rpc-stream subscription. This stream already keepalive-pings (a
+    // proxy can't idle-close it) and the desktop reconnects it on drop — the
+    // rpc-stream path had neither, so finalize/workspace-state events were
+    // silently lost in team mode and the composer stayed gated. Reuse the
+    // desktop streaming path: it subscribes to the UiSyncManager and
+    // auto-unsubscribes when `tx` drops (the SSE body closing on disconnect).
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let subscription_id = uuid::Uuid::new_v4().to_string();
+    if let Err(error) = (state.streamer)(
+        "subscribe_ui_mutations",
+        json!({ "subscriptionId": subscription_id }),
+        None,
+        tx,
+    ) {
+        // Degrade to keepalive-only (rx stays empty) instead of failing the
+        // stream — the client still gets a live, reconnecting connection.
+        tracing::warn!(error = %format!("{error:?}"), "/v1/stream ui-mutation subscribe failed");
+    }
+    Sse::new(ui_mutation_stream(rx))
         .keep_alive(KeepAlive::default())
         .into_response()
 }
 
-fn keepalive_stream() -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
+/// SSE body: an initial `hello`, every UI-mutation line as a `ui-mutation`
+/// event, and a 15s `ping` keepalive so an idle stream (no mutations) still
+/// sends bytes and a proxy idle-timeout can't close it.
+fn ui_mutation_stream(
+    rx: tokio::sync::mpsc::UnboundedReceiver<String>,
+) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
     let hello = stream::once(async {
         Ok::<_, std::convert::Infallible>(Event::default().event("hello").data("{}"))
+    });
+    let mutations = UnboundedReceiverStream::new(rx).map(|line| {
+        Ok::<_, std::convert::Infallible>(Event::default().event("ui-mutation").data(line))
     });
     let interval = tokio::time::interval(Duration::from_secs(15));
     let pings = tokio_stream::wrappers::IntervalStream::new(interval)
         .map(|_| Ok::<_, std::convert::Infallible>(Event::default().event("ping").data("{}")));
-    hello.chain(pings)
+    // R2-A.1: this SSE is a subscription stream too (idempotent — the desktop
+    // reconnect loop reattaches on drop), and its 15s pings would feed a
+    // zombie edge pipe forever just like rpc-stream keepalives. Rotate it on
+    // the same max-lifetime so cancel-lost pipes get reaped.
+    let deadline = subscription_stream_deadline();
+    hello
+        .chain(stream::select(mutations, pings))
+        .take_until(Box::pin(tokio::time::sleep(deadline)))
 }
 
 fn unauthorized() -> Response {
@@ -355,10 +512,131 @@ fn image_mime(path: &std::path::Path) -> &'static str {
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
+    use std::time::Duration;
 
     use axum::http::{header::COOKIE, HeaderMap, HeaderValue};
+    use futures::StreamExt;
 
-    use super::{cookie_token, path_is_within, resolve_allowed_image_file};
+    use super::{
+        cookie_token, ndjson_body_with_keepalive, path_is_within, resolve_allowed_image_file,
+    };
+
+    #[tokio::test]
+    async fn ndjson_keepalive_emits_blank_lines_between_events() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let mut body = std::pin::pin!(ndjson_body_with_keepalive(
+            rx,
+            Duration::from_millis(20),
+            None
+        ));
+
+        // Quiet stream → keepalive blank line arrives (a healthy stream always
+        // carries bytes, so the edge no-progress watchdog never false-trips).
+        let first = tokio::time::timeout(Duration::from_secs(2), body.next())
+            .await
+            .expect("keepalive within timeout")
+            .expect("stream still open")
+            .unwrap();
+        assert_eq!(&first[..], b"\n");
+
+        // A real event still flows through as its own `{line}\n`.
+        tx.send("{\"kind\":\"x\"}".to_string()).unwrap();
+        let second = tokio::time::timeout(Duration::from_secs(2), body.next())
+            .await
+            .expect("event within timeout")
+            .expect("stream still open")
+            .unwrap();
+        assert_eq!(&second[..], b"{\"kind\":\"x\"}\n");
+    }
+
+    #[tokio::test]
+    async fn subscription_body_rotates_at_max_lifetime_even_with_live_sender() {
+        // R2-A.1 zombie reaper: the body must close at the TTL even though the
+        // subscription (tx) is alive and keepalives are flowing — server-side
+        // rotation is what settles a cancel-lost edge pipe.
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let mut body = std::pin::pin!(super::ndjson_body_with_keepalive(
+            rx,
+            Duration::from_millis(10),
+            Some(Duration::from_millis(60)),
+        ));
+        let mut saw_end = false;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(Duration::from_secs(2), body.next()).await {
+                Ok(Some(_chunk)) => {}
+                Ok(None) => {
+                    saw_end = true;
+                    break;
+                }
+                Err(_) => break,
+            }
+        }
+        assert!(saw_end, "subscription body must close at max lifetime");
+        drop(tx);
+    }
+
+    #[tokio::test]
+    async fn turn_stream_body_is_never_lifetime_rotated() {
+        // Turn/post streams get NO max lifetime — a legit turn can far exceed
+        // it, and a force-close would be a WP2-class incident. With
+        // `max_lifetime: None` the body must still be alive (keepaliving)
+        // well past where a subscription TTL would have closed it.
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let mut body = std::pin::pin!(super::ndjson_body_with_keepalive(
+            rx,
+            Duration::from_millis(10),
+            None,
+        ));
+        // Drain events for longer than the (test-scale) subscription TTL.
+        for _ in 0..12 {
+            let item = tokio::time::timeout(Duration::from_secs(2), body.next())
+                .await
+                .expect("body should keep producing keepalives")
+                .expect("body must stay open without a TTL");
+            let _ = item.unwrap();
+        }
+        // A real event still flows after all that.
+        tx.send("{\"kind\":\"still-alive\"}".to_string()).unwrap();
+        let found = loop {
+            let chunk = tokio::time::timeout(Duration::from_secs(2), body.next())
+                .await
+                .expect("event within timeout")
+                .expect("stream still open")
+                .unwrap();
+            if chunk.as_ref() != b"\n" {
+                break chunk;
+            }
+        };
+        assert_eq!(&found[..], b"{\"kind\":\"still-alive\"}\n");
+    }
+
+    #[test]
+    fn subscription_stream_classification_is_exact() {
+        assert!(super::is_subscription_stream("subscribe_session_stream"));
+        assert!(super::is_subscription_stream("subscribe_ui_mutations"));
+        // Turn/post streams must NEVER be classified for rotation.
+        assert!(!super::is_subscription_stream("send_agent_message_stream"));
+        assert!(!super::is_subscription_stream("post_room_chat_message"));
+    }
+
+    #[tokio::test]
+    async fn ndjson_body_terminates_when_sender_drops() {
+        // CORRECTNESS BOUNDARY (inverse F-4): when the subscription ends (tx
+        // dropped) the body MUST end too — keepalives must not keep it alive,
+        // or watcher subscriptions leak and the edge inflight counter pins.
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let mut body = std::pin::pin!(ndjson_body_with_keepalive(
+            rx,
+            Duration::from_millis(20),
+            None
+        ));
+        drop(tx);
+        let end = tokio::time::timeout(Duration::from_secs(2), body.next())
+            .await
+            .expect("stream should settle promptly after sender drop");
+        assert!(end.is_none(), "body must terminate, not keep keepaliving");
+    }
 
     #[test]
     fn cookie_token_extracts_pat() {

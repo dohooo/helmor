@@ -151,8 +151,9 @@ pub fn prepare_workspace_from_repo_impl(
 ) -> Result<PrepareWorkspaceResponse> {
     let repository = repos::load_repository_by_id(repo_id)?
         .with_context(|| format!("Repository not found: {repo_id}"))?;
-    let repo_root = PathBuf::from(repository.root_path.trim());
-    git_ops::ensure_git_repository(&repo_root)?;
+    // R4-A: re-clone the repo source if it evaporated (container
+    // generation change / manual deletion). Includes the git check.
+    let repo_root = crate::workspace::rematerialize::ensure_repo_source(repo_id)?;
 
     // Worktrees branch from a local branch (and, when present, the remote
     // branch). A repo with no remote is fine — it just forks locally. When a
@@ -571,7 +572,9 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
 
     let repository = repos::load_repository_by_id(&record.repo_id)?
         .with_context(|| format!("Repository not found: {}", record.repo_id))?;
-    let repo_root = PathBuf::from(repository.root_path.trim());
+    // R4-A: re-clone the repo source if it evaporated between prepare and
+    // finalize (also covers retries after a container generation change).
+    let repo_root = crate::workspace::rematerialize::ensure_repo_source(&record.repo_id)?;
     // `None` for local-only repos — FromBranch then forks from the local base.
     let remote = git_ops::remote_name(&repository.remote).map(str::to_owned);
     // start_ref source: init_parent (Phase 1's stored pick), with

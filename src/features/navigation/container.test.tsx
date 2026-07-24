@@ -1,8 +1,13 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { WorkspaceGroup, WorkspaceRow } from "@/lib/api";
 import { WorkspacesSidebarContainer } from "./container";
+
+// The sidebar reads the team roster via `useQuery` (presence lookup), so the
+// render tree needs a QueryClient even though this test mocks the controller.
+const queryClient = new QueryClient();
 
 const useControllerMock = vi.hoisted(() => vi.fn());
 
@@ -84,13 +89,15 @@ describe("WorkspacesSidebarContainer", () => {
 		const onSelectWorkspace = vi.fn();
 
 		render(
-			<TooltipProvider delayDuration={0}>
-				<WorkspacesSidebarContainer
-					selectedWorkspaceId="workspace-1"
-					onSelectWorkspace={onSelectWorkspace}
-					pushWorkspaceToast={vi.fn()}
-				/>
-			</TooltipProvider>,
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider delayDuration={0}>
+					<WorkspacesSidebarContainer
+						selectedWorkspaceId="workspace-1"
+						onSelectWorkspace={onSelectWorkspace}
+						pushWorkspaceToast={vi.fn()}
+					/>
+				</TooltipProvider>
+			</QueryClientProvider>,
 		);
 
 		fireEvent.click(screen.getByRole("button", { name: "Workspace 2" }));

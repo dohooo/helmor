@@ -1,5 +1,6 @@
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CompanionAsleepError } from "@/lib/companion-asleep";
 import type { ShortcutOverrides } from "@/lib/settings";
 
 const apiMocks = vi.hoisted(() => ({
@@ -90,6 +91,23 @@ describe("useGlobalHotkeySync", () => {
 				"quickPanel.hotkey": null,
 			});
 		});
-		expect(toastMocks.error).toHaveBeenCalledWith("Hotkey unavailable");
+		// A REAL registration failure still surfaces — now via toastCaughtError,
+		// so it carries a message-stable id (identical failures replace, not stack).
+		expect(toastMocks.error).toHaveBeenCalledWith("Hotkey unavailable", {
+			id: "caught-error:Hotkey unavailable",
+		});
+	});
+
+	it("stays silent for the typed sandbox-asleep error (debug-loop: no red toast spam on switch)", async () => {
+		// sync_global_hotkey is LOCAL_ONLY now, but harden the catch site anyway:
+		// a typed CompanionAsleepError must never surface as a red toast.
+		apiMocks.syncGlobalHotkey.mockRejectedValue(new CompanionAsleepError());
+
+		render(<Harness shortcuts={{}} updateShortcuts={vi.fn()} />);
+
+		await waitFor(() => {
+			expect(apiMocks.syncGlobalHotkey).toHaveBeenCalled();
+		});
+		expect(toastMocks.error).not.toHaveBeenCalled();
 	});
 });

@@ -1,0 +1,62 @@
+# Team Cloud Sandbox — build the headless `helmor serve` image natively on
+# amd64 and deploy the CF Worker. Runs on a native linux/amd64 runner so the
+# Rust toolchain compiles without QEMU (rustc segfaults under x86_64 emulation
+# on Apple Silicon, so local `docker build` / `wrangler deploy` can't produce
+# this image — CI is the supported path). Manual-dispatch only.
+#
+# Required repo secrets:
+#   CLOUDFLARE_API_TOKEN   — token with Workers + Cloudflare Containers edit perms
+#   CLOUDFLARE_ACCOUNT_ID  — the target account id
+#   HELMOR_COMPANION_TOKEN — capability token the in-container companion accepts
+name: cloud-sandbox-image
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The full image (Rust release + apt GTK/WebKit stack + vendored codex)
+      # needs more scratch space than the runner's ~14 GB root disk. Reclaim the
+      # large preinstalled toolchains we don't use.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          sudo docker image prune -af || true
+          df -h /
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.2
+
+      - name: Install cloud worker deps
+        working-directory: cloud
+        run: bun install --frozen-lockfile
+
+      # `wrangler deploy` builds the image from ../Dockerfile via the runner's
+      # Docker daemon (native amd64 — no emulation), pushes it to Cloudflare's
+      # managed registry, and deploys the Worker + Sandbox binding.
+      - name: Deploy (build amd64 image + push + deploy)
+        working-directory: cloud
+        run: bunx wrangler deploy
+
+      # Capability token the container's companion server requires. Set after
+      # the Worker exists; picked up on the next (cold-start) request.
+      - name: Set companion token secret
+        working-directory: cloud
+        env:
+          COMPANION_TOKEN: ${{ secrets.HELMOR_COMPANION_TOKEN }}
+        run: |
+          if [ -n "$COMPANION_TOKEN" ]; then
+            printf '%s' "$COMPANION_TOKEN" | bunx wrangler secret put HELMOR_COMPANION_TOKEN
+          else
+            echo "HELMOR_COMPANION_TOKEN repo secret not set — skipping (Stage 3 auth checks will 401)."
+          fi

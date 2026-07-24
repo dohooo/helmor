@@ -204,6 +204,50 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
     LEFT JOIN primary_session ps ON ps.workspace_id = w.id
 "#;
 
+/// Team mode: per-workspace count of sessions that are unread FOR `member_id`.
+/// A session is unread when it holds a message newer than that member's
+/// `last_read_at` (absent row ⇒ never read ⇒ unread if it has any messages)
+/// that `member_id` did NOT author. Rows with `author_id IS NULL`
+/// (agent/assistant/system output) are always "not mine" and still count; only
+/// the member's own rows (`author_id = member_id`, e.g. their room-chat or
+/// @agent prompt) are excluded, so self-sent messages never light one's own
+/// unread dot (S5). Only workspaces with ≥1 such session appear in the map.
+/// Used to override the global `has_unread` / `unread_session_count` for one
+/// member; local mode never calls this.
+pub fn load_member_unread_counts(member_id: &str) -> Result<HashMap<String, i64>> {
+    let connection = db::read_conn()?;
+    let mut statement = connection.prepare(
+        r#"
+        SELECT s.workspace_id, COUNT(*) AS cnt
+        FROM sessions s
+        WHERE s.workspace_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM session_messages m
+            WHERE m.session_id = s.id
+              AND m.sent_at > COALESCE(
+                  (SELECT last_read_at FROM session_read_state
+                   WHERE member_id = ?1 AND session_id = s.id),
+                  '')
+              -- S5: a member's own rows never count as unread for themselves.
+              -- `author_id IS NULL` (agent/assistant/system) is "not mine" and
+              -- still counts; `NULL <> ?1` is NULL(false) in SQL, so it must be
+              -- spelled `IS NULL OR <>` or agent replies would be excluded too.
+              AND (m.author_id IS NULL OR m.author_id <> ?1)
+          )
+        GROUP BY s.workspace_id
+        "#,
+    )?;
+    let rows = statement.query_map([member_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+    })?;
+    let mut counts = HashMap::new();
+    for row in rows {
+        let (workspace_id, count) = row?;
+        counts.insert(workspace_id, count);
+    }
+    Ok(counts)
+}
+
 pub fn load_workspace_records() -> Result<Vec<WorkspaceRecord>> {
     let connection = db::read_conn()?;
     let sql = format!(
@@ -1039,4 +1083,173 @@ pub fn update_workspace_active_run_action(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// R2-C acceptance invariant: the migration backfill freezes an existing
+    /// chat workspace at EXACTLY the name the UI is displaying at migration
+    /// time — `display_title()` before the backfill must equal, byte for
+    /// byte, `display_title()` after it (which then reads `custom_name`).
+    #[test]
+    fn frozen_name_backfill_is_byte_identical_to_pre_migration_display_title() {
+        let env = crate::testkit::TestEnv::new("freeze-backfill-identical");
+        {
+            let conn = env.db_connection();
+            conn.execute("INSERT INTO repos (id, name) VALUES ('r1', 'repo')", [])
+                .unwrap();
+            conn.execute(
+                "INSERT INTO workspaces (id, repository_id, directory_name, state, status, mode, display_order) \
+                 VALUES ('wc', 'r1', '2026-07-03/new-chat-1', 'ready', 'in-progress', 'chat', 1000)",
+                [],
+            )
+            .unwrap();
+            // Two sessions: 's-big' has more messages (the primary pick),
+            // 's-active' is the active session — pre-migration display uses
+            // the PRIMARY title, so the frozen value must be 'Big topic'.
+            conn.execute(
+                "INSERT INTO sessions (id, workspace_id, status, title, updated_at) \
+                 VALUES ('s-big', 'wc', 'idle', 'Big topic', '2026-07-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sessions (id, workspace_id, status, title, updated_at) \
+                 VALUES ('s-active', 'wc', 'idle', 'Active topic', '2026-07-02T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+            for i in 0..3 {
+                conn.execute(
+                    "INSERT INTO session_messages (id, session_id, role, content) \
+                     VALUES (?1, 's-big', 'user', '\"x\"')",
+                    [format!("m{i}")],
+                )
+                .unwrap();
+            }
+            conn.execute(
+                "UPDATE workspaces SET active_session_id = 's-active' WHERE id = 'wc'",
+                [],
+            )
+            .unwrap();
+        }
+
+        // Pre-migration state: custom_name untouched, name derives live.
+        let before = load_workspace_record_by_id("wc").unwrap().unwrap();
+        assert_eq!(before.custom_name, None);
+        let displayed_before = crate::workspace::helpers::display_title(&before);
+        assert_eq!(displayed_before, "Big topic");
+
+        // Run the migration (ensure_schema is idempotent; the backfill fires
+        // against the seeded rows exactly as it would on app upgrade).
+        {
+            let conn = env.db_connection();
+            crate::schema::ensure_schema(&conn).unwrap();
+        }
+
+        let after = load_workspace_record_by_id("wc").unwrap().unwrap();
+        assert_eq!(
+            after.custom_name.as_deref(),
+            Some("Big topic"),
+            "backfill must freeze the primary-derived title"
+        );
+        let displayed_after = crate::workspace::helpers::display_title(&after);
+        assert_eq!(
+            displayed_after, displayed_before,
+            "display_title must be byte-identical across the migration"
+        );
+
+        // Frozen: flipping the active session / message counts no longer
+        // changes the displayed name (the R5 repro).
+        {
+            let conn = env.db_connection();
+            for i in 0..10 {
+                conn.execute(
+                    "INSERT INTO session_messages (id, session_id, role, content) \
+                     VALUES (?1, 's-active', 'user', '\"y\"')",
+                    [format!("n{i}")],
+                )
+                .unwrap();
+            }
+        }
+        let flipped = load_workspace_record_by_id("wc").unwrap().unwrap();
+        assert_eq!(
+            crate::workspace::helpers::display_title(&flipped),
+            "Big topic",
+            "post-freeze the name must not follow primary-session flips"
+        );
+    }
+
+    #[test]
+    fn frozen_name_backfill_skips_named_prtitled_and_untitled_workspaces() {
+        let env = crate::testkit::TestEnv::new("freeze-backfill-skips");
+        {
+            let conn = env.db_connection();
+            conn.execute("INSERT INTO repos (id, name) VALUES ('r1', 'repo')", [])
+                .unwrap();
+            // Already named: must not be overwritten.
+            conn.execute(
+                "INSERT INTO workspaces (id, repository_id, directory_name, state, status, mode, custom_name, display_order) \
+                 VALUES ('w-named', 'r1', 'd1', 'ready', 'in-progress', 'chat', 'User name', 1000)",
+                [],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO sessions (id, workspace_id, status, title) VALUES ('s1', 'w-named', 'idle', 'Session title')",
+                [],
+            ).unwrap();
+            // pr_title outranks session titles: freezing would CHANGE display.
+            conn.execute(
+                "INSERT INTO workspaces (id, repository_id, directory_name, state, status, mode, pr_title, display_order) \
+                 VALUES ('w-pr', 'r1', 'd2', 'ready', 'in-progress', 'chat', 'PR title', 2000)",
+                [],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO sessions (id, workspace_id, status, title) VALUES ('s2', 'w-pr', 'idle', 'Session title')",
+                [],
+            ).unwrap();
+            // Placeholder-only chat: nothing real to freeze.
+            conn.execute(
+                "INSERT INTO workspaces (id, repository_id, directory_name, state, status, mode, display_order) \
+                 VALUES ('w-untitled', 'r1', 'd3', 'ready', 'in-progress', 'chat', 3000)",
+                [],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO sessions (id, workspace_id, status, title) VALUES ('s3', 'w-untitled', 'idle', 'Untitled')",
+                [],
+            ).unwrap();
+            // Non-chat workspace: never backfilled.
+            conn.execute(
+                "INSERT INTO workspaces (id, repository_id, directory_name, state, status, mode, display_order) \
+                 VALUES ('w-tree', 'r1', 'feature-x', 'ready', 'in-progress', 'worktree', 4000)",
+                [],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO sessions (id, workspace_id, status, title) VALUES ('s4', 'w-tree', 'idle', 'Tree title')",
+                [],
+            ).unwrap();
+        }
+
+        {
+            let conn = env.db_connection();
+            crate::schema::ensure_schema(&conn).unwrap();
+            // Idempotence: a second run must not change anything either.
+            crate::schema::ensure_schema(&conn).unwrap();
+        }
+
+        let name = |id: &str| -> Option<String> {
+            env.db_connection()
+                .query_row(
+                    "SELECT custom_name FROM workspaces WHERE id = ?1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(name("w-named").as_deref(), Some("User name"));
+        assert_eq!(name("w-pr"), None);
+        assert_eq!(name("w-untitled"), None);
+        assert_eq!(name("w-tree"), None);
+    }
 }

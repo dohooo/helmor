@@ -5,6 +5,7 @@ import type { ComposerCreatePrepareOutcome } from "@/features/conversation";
 import {
 	type FinalizeWorkspaceResponse,
 	finalizeWorkspaceFromRepo,
+	type PrepareWorkspaceResponse,
 	prepareChatWorkspace,
 	prepareWorkspaceFromRepo,
 	setWorkspaceLinkedDirectories,
@@ -24,6 +25,10 @@ export type WorkspaceStartCreateResult = {
 	 *  caller pins this onto the pending-submit payload so the very first
 	 *  agent turn never races the workspaceDetail React Query. */
 	preparedWorkingDirectory: string | null;
+	/** Full Phase-1 response — the caller seeds the new workspace's React
+	 *  Query caches from it so the view switch hits the cached fast path
+	 *  (DF-1: no cold-target HOLD on a workspace we just created). */
+	prepared: PrepareWorkspaceResponse;
 };
 
 export async function createWorkspaceFromStartComposer({
@@ -127,6 +132,7 @@ export async function createWorkspaceFromStartComposer({
 			workspaceId: prepared.workspaceId,
 			sessionId: prepared.initialSessionId,
 			preparedWorkingDirectory: prepared.workingDirectory,
+			prepared,
 		};
 	}
 
@@ -140,6 +146,7 @@ export async function createWorkspaceFromStartComposer({
 			workspaceId: prepared.workspaceId,
 			sessionId: prepared.initialSessionId,
 			preparedWorkingDirectory: prepared.workingDirectory,
+			prepared,
 		};
 	}
 
@@ -153,6 +160,7 @@ export async function createWorkspaceFromStartComposer({
 		workspaceId: prepared.workspaceId,
 		sessionId: prepared.initialSessionId,
 		preparedWorkingDirectory: prepared.workingDirectory,
+		prepared,
 		outcome: {
 			shouldStream: true,
 			workspaceId: prepared.workspaceId,

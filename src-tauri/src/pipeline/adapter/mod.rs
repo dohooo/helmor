@@ -48,8 +48,8 @@ use labels::{
 use task_state::{attach_task_states, TaskStateAccumulator};
 
 use super::types::{
-    ExtendedMessagePart, HistoricalRecord, IntermediateMessage, MessagePart, MessageRole,
-    MessageStatus, PlanAllowedPrompt, TaskState, ThreadMessageLike,
+    ExtendedMessagePart, HistoricalRecord, IntermediateMessage, MessageAuthor, MessagePart,
+    MessageRole, MessageStatus, PlanAllowedPrompt, TaskState, ThreadMessageLike,
 };
 
 // ---------------------------------------------------------------------------
@@ -189,6 +189,7 @@ pub fn convert_historical(records: &[HistoricalRecord]) -> Vec<ThreadMessageLike
             parsed: r.parsed_content.clone(),
             created_at: r.created_at.clone(),
             is_streaming: false,
+            author_id: r.author_id.clone(),
         })
         .collect();
     convert(&intermediate)
@@ -323,6 +324,8 @@ fn convert_flat(
                     })],
                     status: None,
                     streaming: None,
+                    author: None,
+                    is_room_chat: false,
                 });
             }
             i += 1;
@@ -366,6 +369,8 @@ fn convert_flat(
                     content,
                     status: None,
                     streaming: if msg.is_streaming { Some(true) } else { None },
+                    author: None,
+                    is_room_chat: false,
                 });
             }
             i += 1;
@@ -387,6 +392,8 @@ fn convert_flat(
                     content,
                     status: None,
                     streaming: if msg.is_streaming { Some(true) } else { None },
+                    author: None,
+                    is_room_chat: false,
                 });
             }
             i += 1;
@@ -470,6 +477,8 @@ fn convert_flat(
                 content: parts.into_iter().map(ExtendedMessagePart::Basic).collect(),
                 status: Some(map_stop_reason(parsed)),
                 streaming: if is_streaming { Some(true) } else { None },
+                author: None,
+                is_room_chat: false,
             });
 
             // Re-emit any system messages we skipped over so they still
@@ -539,6 +548,61 @@ fn convert_flat(
                 content: parts.into_iter().map(ExtendedMessagePart::Basic).collect(),
                 status: None,
                 streaming: None,
+                // Display fields stay None — the frontend hydrates them from
+                // the team member list. Only the human-typed prompt carries an
+                // author; agent output and local messages leave `author_id`
+                // None, so this stays None and the wire shape is unchanged.
+                author: author_from_id(msg.author_id.as_deref()),
+                is_room_chat: false,
+            });
+            i += 1;
+            continue;
+        }
+
+        // room_chat — a human teammate message NOT dispatched to the agent
+        // (persisted by `persist_room_chat_message`). Rendered as a User
+        // bubble with the programmatic `is_room_chat = true` marker so PR3's
+        // context-carry assembler can scope "since last agent turn". Does NOT
+        // flow through accumulator/collapse/classify.
+        if msg_type == Some("room_chat") {
+            let text = parsed
+                .and_then(|p| p.get("text"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let extract_strs = |key: &str| -> Vec<String> {
+                parsed
+                    .and_then(|p| p.get(key))
+                    .and_then(Value::as_array)
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            let files = extract_strs("files");
+            let images = extract_strs("images");
+            let pasted_texts: Vec<crate::pipeline::types::PastedTextRange> = parsed
+                .and_then(|p| p.get("pastedTexts"))
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            let parts = grouping::split_user_text_with_files(
+                &text,
+                &files,
+                &images,
+                &msg.id,
+                &pasted_texts,
+            );
+            result.push(ThreadMessageLike {
+                role: MessageRole::User,
+                id: Some(msg.id.clone()),
+                created_at: Some(msg.created_at.clone()),
+                content: parts.into_iter().map(ExtendedMessagePart::Basic).collect(),
+                status: None,
+                streaming: None,
+                author: author_from_id(msg.author_id.as_deref()),
+                is_room_chat: true,
             });
             i += 1;
             continue;
@@ -607,6 +671,20 @@ fn convert_flat(
     late_merge_unresolved_tool_results(messages, &mut result);
 
     (result, workflow_acc, task_acc)
+}
+
+/// Build a `MessageAuthor` from a persisted member id. Display fields stay
+/// `None` — the sandbox SQLite stores only the member id (the D1 registry is
+/// the read-only mirror; the frontend hydrates display name / avatar from the
+/// team member list). Returns `None` when there's no author so the wire shape
+/// (and pipeline snapshots) for agent / local single-user messages is
+/// byte-identical to the pre-author pipeline.
+fn author_from_id(author_id: Option<&str>) -> Option<MessageAuthor> {
+    author_id.map(|id| MessageAuthor {
+        id: id.to_string(),
+        display_name: None,
+        avatar_url: None,
+    })
 }
 
 /// Translate Claude's `BetaMessage.stop_reason` into a unified
@@ -719,6 +797,8 @@ fn convert_user_type_msg(
                 })],
                 status: None,
                 streaming: None,
+                author: None,
+                is_room_chat: false,
             });
         }
         return;
@@ -877,6 +957,8 @@ fn convert_user_question_msg(
         })],
         status: None,
         streaming: None,
+        author: None,
+        is_room_chat: false,
     })
 }
 
@@ -933,5 +1015,7 @@ fn convert_exit_plan_mode_msg(
         })],
         status: None,
         streaming: None,
+        author: None,
+        is_room_chat: false,
     }
 }

@@ -9,6 +9,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ThreadMessageLike } from "@/lib/api";
 import { createHelmorQueryClient } from "@/lib/query-client";
+import { resolveStreamingFooterMessageIndex } from "@/lib/thread-message-order";
 import {
 	ActiveThreadViewport,
 	type PresentedSessionPane,
@@ -49,6 +50,46 @@ function message(id: string, streaming = false): ThreadMessageLike {
 describe("ActiveThreadViewport", () => {
 	afterEach(() => cleanup());
 
+	it("places the streaming footer after the active assistant row, before trailing room chat", () => {
+		const prompt = userMessage("prompt", "prompt");
+		const streamingAssistant = message("streaming-tail", true);
+		const trailingRoomChat = userMessage("room-1", "team aside", {
+			room: true,
+		});
+		const pane: PresentedSessionPane = {
+			sessionId: "session-1",
+			messages: [prompt, trailingRoomChat, streamingAssistant],
+			sending: true,
+			hasLoaded: true,
+			presentationState: "presented",
+		};
+
+		render(
+			<QueryClientProvider client={createHelmorQueryClient()}>
+				<ActiveThreadViewport hasSession pane={pane} />
+			</QueryClientProvider>,
+		);
+
+		const assistantRow = screen
+			.getByText("message streaming-tail")
+			.closest('[data-message-role="assistant"]');
+		const footer = screen.getByTestId("streaming-footer");
+		const roomChatRow = screen
+			.getByText("team aside")
+			.closest('[data-message-role="user"]');
+
+		expect(assistantRow).not.toBeNull();
+		expect(roomChatRow).not.toBeNull();
+		expect(
+			assistantRow!.compareDocumentPosition(footer) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		expect(
+			footer.compareDocumentPosition(roomChatRow!) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+	});
+
 	it("keeps content-visibility disabled for conversation rows", async () => {
 		const messages = Array.from({ length: 13 }, (_, index) =>
 			message(`history-${index}`),
@@ -81,6 +122,26 @@ describe("ActiveThreadViewport", () => {
 	});
 });
 
+describe("resolveStreamingFooterMessageIndex", () => {
+	it("targets the streaming assistant row instead of trailing user messages", () => {
+		expect(
+			resolveStreamingFooterMessageIndex(
+				[
+					message("assistant-streaming", true),
+					userMessage("room-1", "team aside"),
+				],
+				true,
+			),
+		).toBe(0);
+	});
+
+	it("returns null before the first assistant streaming row exists", () => {
+		expect(
+			resolveStreamingFooterMessageIndex([userMessage("u1", "prompt")], true),
+		).toBeNull();
+	});
+});
+
 // ---------------------------------------------------------------------------
 // First-frame tail window
 //
@@ -109,10 +170,15 @@ function range(first: number, last: number): number[] {
 	return Array.from({ length: last - first + 1 }, (_, i) => first + i);
 }
 
-function userMessage(id: string, text: string): ThreadMessageLike {
+function userMessage(
+	id: string,
+	text: string,
+	options?: { room?: boolean },
+): ThreadMessageLike {
 	return {
 		id,
 		role: "user",
+		isRoomChat: options?.room,
 		createdAt: new Date(0).toISOString(),
 		content: [{ type: "text", text }],
 	} as ThreadMessageLike;

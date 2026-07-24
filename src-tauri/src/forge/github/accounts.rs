@@ -53,6 +53,7 @@ impl ForgeAccountBackend for GithubAccountBackend {
             avatar_url: profile.avatar_url,
             email: profile.email,
             active: false,
+            id: profile.id.map(|id| id.to_string()),
         })
     }
 
@@ -99,7 +100,13 @@ pub(crate) fn token_for_user_on_host(host: &str, login: &str) -> Result<String> 
 /// is still responsible for adding `--hostname <host>` to `args` when the
 /// command consults gh's host config (most `gh api ...` calls do).
 pub(crate) fn run_cli_with_login(host: &str, login: &str, args: &[&str]) -> Result<CommandOutput> {
-    let token = token_for_user_on_host(host, login)?;
+    // Team mode (true per-member): when an acting member is bound, run gh as
+    // THEM (their injected github.com token) instead of the repo-bound `login`.
+    // No acting member (desktop) → repo-bound token, unchanged.
+    let token = match crate::forge::member_creds::acting_github_token(host) {
+        Some(member_token) => member_token,
+        None => token_for_user_on_host(host, login)?,
+    };
     run_command_with_env("gh", args.iter().copied(), &[("GH_TOKEN", token.as_str())])
         .with_context(|| format!("Failed to spawn `gh {}`", args.join(" ")))
 }
@@ -110,6 +117,19 @@ fn list_github_logins(host: &str) -> Result<Vec<String>> {
     if let Some(cached) = logins_cache::get(host) {
         return Ok(cached);
     }
+    // Fold the injected team-member login(s) into the gh-CLI logins, then cache
+    // the merged set. Doing the merge here (rather than inside `cli_github_logins`)
+    // keeps BOTH the real-login and the unauthenticated-empty paths team-aware.
+    let logins = merge_injected_logins(host, cli_github_logins(host)?);
+    logins_cache::put(host, logins.clone());
+    Ok(logins)
+}
+
+/// The gh-CLI half of [`list_github_logins`]: the logins `gh auth status`
+/// reports for `host`. `Ok(empty)` when the host has no gh CLI login (cached by
+/// the caller as a real "no logins" answer); `Err` only on a hard failure
+/// (gh missing / network), which bypasses the cache.
+fn cli_github_logins(host: &str) -> Result<Vec<String>> {
     let output = run_command(
         "gh",
         ["auth", "status", "--hostname", host, "--json", "hosts"],
@@ -118,10 +138,6 @@ fn list_github_logins(host: &str) -> Result<Vec<String>> {
 
     if !output.success {
         if looks_like_unauthenticated(&command_detail(&output)) {
-            // Cache the empty result too — "no logins on this host"
-            // is a real answer worth dedupe'ing for 30s. Hard errors
-            // (network, gh missing, etc.) bypass the cache below.
-            logins_cache::put(host, Vec::new());
             return Ok(Vec::new());
         }
         return Err(anyhow!(
@@ -129,10 +145,29 @@ fn list_github_logins(host: &str) -> Result<Vec<String>> {
             command_detail(&output)
         ));
     }
+    parse_logins_for_host(&output.stdout, host)
+}
 
-    let logins = parse_logins_for_host(&output.stdout, host)?;
-    logins_cache::put(host, logins.clone());
-    Ok(logins)
+/// Team mode injects ONE member's github.com token (the creator; P1-2a) that the
+/// shared container uses for ALL git/gh network ops — but it is never written to
+/// gh's `hosts.yml`, so `gh auth status` can't see it. Surface the injected
+/// login(s) so forge detection (`list_forge_logins` → `auto_bind_repo_account`
+/// → the "Connect GitHub" badge) reflects the identity the container CAN push
+/// with, instead of reporting "not connected" for a reachable repo. Desktop has
+/// no injected store → no-op (byte-identical to the pre-change behaviour).
+fn merge_injected_logins(host: &str, logins: Vec<String>) -> Vec<String> {
+    dedup_append(logins, crate::forge::member_creds::github_logins(host))
+}
+
+/// Append `extra` onto `base`, skipping logins already present. Order-stable:
+/// gh-CLI logins keep their position, injected logins follow.
+fn dedup_append(mut base: Vec<String>, extra: Vec<String>) -> Vec<String> {
+    for login in extra {
+        if !base.iter().any(|existing| existing == &login) {
+            base.push(login);
+        }
+    }
+    base
 }
 
 /// All non-empty logins for `host`. State filtering is intentionally
@@ -351,6 +386,7 @@ fn list_github_accounts_full() -> Result<Vec<ForgeAccount>> {
                         login: slot.login.clone(),
                         name: profile.as_ref().and_then(|p| p.name.clone()),
                         avatar_url: profile.as_ref().and_then(|p| p.avatar_url.clone()),
+                        id: profile.as_ref().and_then(|p| p.id.map(|id| id.to_string())),
                         email: profile.and_then(|p| p.email),
                         active: slot.active,
                     }
@@ -594,6 +630,10 @@ struct GhHostStatusFullEntry {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
 struct GithubUserResponse {
+    /// GitHub's stable numeric account id. Surfaced as `ForgeAccount.id`
+    /// (string form) for team-mode member identity — a login can rename,
+    /// the id can't.
+    id: Option<u64>,
     name: Option<String>,
     avatar_url: Option<String>,
     email: Option<String>,
@@ -622,6 +662,32 @@ fn looks_like_not_found(message: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn github_user_response_captures_numeric_id() {
+        // `gh api /user` returns a numeric `id` that survives a login
+        // rename — the durable identity team-mode member registration
+        // keys on. Lock the parse so the field can't silently drop.
+        let stdout = r#"{
+            "id": 583231,
+            "login": "octocat",
+            "name": "The Octocat",
+            "avatar_url": "https://avatars.example/u/583231",
+            "email": "octo@example.com"
+        }"#;
+        let parsed: GithubUserResponse = serde_json::from_str(stdout).unwrap();
+        assert_eq!(parsed.id, Some(583231));
+        assert_eq!(parsed.name.as_deref(), Some("The Octocat"));
+    }
+
+    #[test]
+    fn github_user_response_id_optional_when_absent() {
+        // Defensive: a payload missing `id` must parse (id → None)
+        // rather than erroring the whole profile fetch.
+        let stdout = r#"{ "login": "octocat" }"#;
+        let parsed: GithubUserResponse = serde_json::from_str(stdout).unwrap();
+        assert_eq!(parsed.id, None);
+    }
 
     #[test]
     fn looks_like_not_found_matches_canonical_phrases() {
@@ -874,5 +940,34 @@ mod tests {
     #[test]
     fn parse_repo_push_permission_errors_on_malformed_json() {
         assert!(parse_repo_push_permission("not json").is_err());
+    }
+
+    // ---------------- dedup_append (injected-login merge) ----------------
+
+    #[test]
+    fn dedup_append_adds_new_and_skips_present_preserving_order() {
+        // gh-CLI logins keep their order; injected logins not already present
+        // are appended; duplicates are dropped.
+        assert_eq!(
+            dedup_append(
+                vec!["cli-a".to_string(), "shared".to_string()],
+                vec!["shared".to_string(), "injected".to_string()],
+            ),
+            vec![
+                "cli-a".to_string(),
+                "shared".to_string(),
+                "injected".to_string()
+            ],
+        );
+        // The team-mode shape: no gh CLI login, one injected creator login.
+        assert_eq!(
+            dedup_append(Vec::new(), vec!["dohooo".to_string()]),
+            vec!["dohooo".to_string()],
+        );
+        // Desktop shape: injected empty → base unchanged.
+        assert_eq!(
+            dedup_append(vec!["desktop-user".to_string()], Vec::new()),
+            vec!["desktop-user".to_string()],
+        );
     }
 }

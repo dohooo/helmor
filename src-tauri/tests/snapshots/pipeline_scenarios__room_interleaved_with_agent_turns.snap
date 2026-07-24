@@ -1,0 +1,38 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs.clone())
+---
+- role: user
+  id: msg-1
+  content_length: 1
+  content:
+    - type: text
+      text: start the task @agent
+  status: ~
+  streaming: ~
+- role: assistant
+  id: msg-2
+  content_length: 1
+  content:
+    - type: text
+      text: Working on it.
+  status:
+    type: complete
+    reason: stop
+  streaming: ~
+- role: user
+  id: msg-3
+  content_length: 1
+  content:
+    - type: text
+      text: looks good so far
+  status: ~
+  streaming: ~
+- role: user
+  id: msg-4
+  content_length: 1
+  content:
+    - type: text
+      text: continue @agent
+  status: ~
+  streaming: ~

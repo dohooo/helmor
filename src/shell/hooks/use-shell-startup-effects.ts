@@ -23,6 +23,9 @@ export function useShellStartupEffects({
 	selectedWorkspaceId,
 	displayedWorkspaceId,
 	startRepositoryId,
+	lastWorkspaceId,
+	workspaceGroupsSettled,
+	hasAnyWorkspace,
 	openWorkspaceStart,
 	closeStartContextPreview,
 }: {
@@ -32,6 +35,11 @@ export function useShellStartupEffects({
 	selectedWorkspaceId: string | null;
 	displayedWorkspaceId: string | null;
 	startRepositoryId: string | undefined;
+	/** Persisted last-selected workspace (boot-restore target), if any. */
+	lastWorkspaceId: string | null;
+	/** True once the workspace-groups query has SUCCEEDED (not loading/error). */
+	workspaceGroupsSettled: boolean;
+	hasAnyWorkspace: boolean;
 	openWorkspaceStart: (opts?: { persist?: boolean }) => void;
 	closeStartContextPreview: () => void;
 }) {
@@ -68,6 +76,42 @@ export function useShellStartupEffects({
 		openWorkspaceStart,
 		selectedWorkspaceId,
 		workspaceViewMode,
+	]);
+	// WP7 Gate 4: brand-new user (no persisted selection, no workspaces) must
+	// land on the Start surface ("new chat"), not the empty `/` boot index with
+	// a dead composer. Decided EXACTLY ONCE, and only after BOTH settings and
+	// the workspace-groups query have settled — deciding while groups are still
+	// loading would hijack a returning user to Start before their data arrives
+	// (`workspaceGroupsSettled` is `isSuccess`, so loading AND error both wait).
+	const bootEmptyStartAppliedRef = useRef(false);
+	useEffect(() => {
+		if (
+			bootEmptyStartAppliedRef.current ||
+			!areSettingsLoaded ||
+			!workspaceGroupsSettled
+		) {
+			return;
+		}
+		// Both inputs settled — this boot decision is now final either way.
+		bootEmptyStartAppliedRef.current = true;
+		if (lastWorkspaceId !== null || hasAnyWorkspace) return;
+		if (
+			workspaceViewMode === "start" &&
+			selectedWorkspaceId === null &&
+			displayedWorkspaceId === null
+		) {
+			return;
+		}
+		openWorkspaceStart({ persist: false });
+	}, [
+		areSettingsLoaded,
+		workspaceGroupsSettled,
+		lastWorkspaceId,
+		hasAnyWorkspace,
+		workspaceViewMode,
+		selectedWorkspaceId,
+		displayedWorkspaceId,
+		openWorkspaceStart,
 	]);
 	useEffect(() => {
 		closeStartContextPreview();

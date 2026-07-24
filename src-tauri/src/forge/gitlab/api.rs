@@ -23,11 +23,22 @@ pub(super) fn glab_api<'a>(
     ];
     full_args.extend(args.into_iter().map(str::to_string));
     tracing::debug!(host, args = ?full_args, "Running glab api");
-    let output = match resolved_glab_config_dir() {
-        Some(dir) => {
-            run_command_with_env("glab", full_args, &[("GLAB_CONFIG_DIR", dir.as_os_str())])
-        }
-        None => run_command("glab", full_args),
+    // Build the per-spawn env: pin the config dir (suppress glab's multi-config
+    // warning) and, in team mode, inject the acting member's GITLAB_TOKEN so the
+    // call runs as THEM (true per-member). glab honors GITLAB_TOKEN over config —
+    // the ONLY way to be per-member on a host whose config.yml holds one token.
+    // No acting member (desktop) → config token, unchanged.
+    let mut env: Vec<(&str, std::ffi::OsString)> = Vec::new();
+    if let Some(dir) = resolved_glab_config_dir() {
+        env.push(("GLAB_CONFIG_DIR", dir.as_os_str().to_os_string()));
+    }
+    if let Some(token) = crate::forge::member_creds::acting_glab_token(host) {
+        env.push(("GITLAB_TOKEN", token.into()));
+    }
+    let output = if env.is_empty() {
+        run_command("glab", full_args)
+    } else {
+        run_command_with_env("glab", full_args, &env)
     };
     match &output {
         Ok(output) if output.success => {
@@ -130,7 +141,7 @@ fn encode_percent(value: &str) -> String {
 ///
 /// Cached after first resolution since the answer is stable for the
 /// process lifetime.
-fn resolved_glab_config_dir() -> Option<&'static PathBuf> {
+pub(crate) fn resolved_glab_config_dir() -> Option<&'static PathBuf> {
     static CACHED: OnceLock<Option<PathBuf>> = OnceLock::new();
     CACHED.get_or_init(compute_glab_config_dir).as_ref()
 }

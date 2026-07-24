@@ -1,5 +1,9 @@
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+	isCloudAuthInvalidated,
+	resetCloudAuthInvalidatedForTests,
+} from "@/features/team/cloud-auth-invalidated";
 import type { ThreadMessageLike } from "@/lib/api";
 import { sessionThreadCacheKey } from "@/lib/session-thread-cache";
 import {
@@ -207,5 +211,60 @@ describe("createStreamEventDispatcher", () => {
 		);
 		expect(accumulator.pendingPartial).toBeNull();
 		expect(clearActiveTasks).toHaveBeenCalledWith("session-1");
+	});
+
+	// DF-R6-C: a turn that dies on a cloud auth error (401 token_invalidated)
+	// must flip the provider's "authorization invalid" flag, refresh the
+	// identity status query, and notify the user ONCE — instead of the status
+	// card keeping "Valid for 9d" while every turn silently 401s.
+	it("flags a cloud auth turn-error in team mode (once) and invalidates the identity query", () => {
+		localStorage.setItem("helmor.team.mode", "1");
+		localStorage.setItem("helmor.team.url", "https://team.example.workers.dev");
+		localStorage.setItem("helmor.team.token", "member");
+		const queryClient = new QueryClient();
+		const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+		const pushToast = vi.fn();
+		const noop = () => {};
+		const dispatch = createStreamEventDispatcher({
+			contextKey: "ctx",
+			targetSessionId: "session-1",
+			targetWorkspaceId: null,
+			cacheSessionId: "session-1",
+			model: { id: "m", label: "m", provider: "codex" },
+			cleanup: noop,
+			clearPendingPermissions: noop,
+			clearPendingUserInput: noop,
+			clearFastPrelude: noop,
+			clearSendingState: noop,
+			invalidateConversationQueries: noop,
+			pushToast,
+			storeActions: {
+				setSendError: noop,
+				setLiveSession: noop,
+				setActiveTasks: noop,
+				clearActiveTasks: noop,
+				setComposerRestore: noop,
+			},
+			queryClient,
+		} as unknown as StreamDispatchDeps);
+
+		const errorEvent = {
+			kind: "error",
+			message: "stream error: 401 token_invalidated",
+			persisted: true,
+			internal: false,
+		} as const;
+		dispatch(errorEvent);
+		dispatch(errorEvent);
+
+		expect(isCloudAuthInvalidated("codex")).toBe(true);
+		expect(pushToast).toHaveBeenCalledTimes(1);
+		expect(pushToast.mock.calls[0][0]).toMatch(/codex.*re-authorize/i);
+		expect(invalidateSpy).toHaveBeenCalledWith({
+			queryKey: ["cloudCodexIdentity"],
+		});
+
+		resetCloudAuthInvalidatedForTests();
+		localStorage.clear();
 	});
 });

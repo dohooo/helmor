@@ -78,6 +78,8 @@ pub(super) fn convert_user_message(
         content: parts.into_iter().map(ExtendedMessagePart::Basic).collect(),
         status: None,
         streaming: None,
+        author: None,
+        is_room_chat: false,
     }
 }
 

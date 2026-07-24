@@ -74,6 +74,20 @@ const WORKSPACE_SWITCH_SIDE_EFFECT_DELAY_MS = 140;
 // update and merges the heavy flip back into the input task's frame.
 const DISPLAY_FLIP_FALLBACK_MS = SCHEDULE_AFTER_PAINT_FALLBACK_MS;
 
+// DF-3 (R3-C): upper bound for HOLDing the previous pane while a cold
+// target's prime is in flight. When the prime doesn't settle inside this
+// window (asleep backend with retry off, boot-window transport stalls —
+// the dogfood "stuck on the old workspace's thread >30s" bug), land the
+// TARGET workspace with a null session so the panel shows the target's
+// placeholder instead of the WRONG (previous) workspace's content.
+//
+// DESIGN INTENT — do not "optimize" this bound away: team-cloud cold
+// primes take >=2.3s, so team cold targets are EXPECTED to pass through
+// the placeholder path. Showing the target's skeleton beats showing
+// another workspace's messages under the target's sidebar highlight;
+// the prime's resolve still refines to the real session afterwards.
+const COLD_DISPLAY_HOLD_MAX_MS = 2_000;
+
 type PendingDisplayFlip = {
 	rafId: number | null;
 	innerTimerId: number | null;
@@ -226,7 +240,19 @@ export function useSelectionController(
 			pending.fallbackTimerId = null;
 		}
 	}, []);
-	useEffect(() => cancelScheduledDisplayFlip, [cancelScheduledDisplayFlip]);
+	// Unmount latch: async selection continuations (`.then()` after the hold)
+	// can reach `scheduleDisplayFlip` AFTER the cleanup below already ran —
+	// the flip they schedule would then leak its 80ms fallback timer past
+	// teardown (observed as a flaky "window is not defined" uncaught in the
+	// full vitest run, #795 leftover). Latch + early-return closes that hole.
+	const displayFlipDisposedRef = useRef(false);
+	useEffect(() => {
+		displayFlipDisposedRef.current = false;
+		return () => {
+			displayFlipDisposedRef.current = true;
+			cancelScheduledDisplayFlip();
+		};
+	}, [cancelScheduledDisplayFlip]);
 	const startupPrefetchedWorkspaceRef = useRef<string | null>(null);
 	const warmedWorkspaceIdsRef = useRef<Set<string>>(new Set());
 	const sessionSelectionHistoryByWorkspaceRef = useRef<
@@ -258,8 +284,18 @@ export function useSelectionController(
 
 	const primeWorkspaceDisplay = useCallback(
 		async (workspaceId: string) => {
+			// Workspace detail is best-effort: in team-cloud mode it is the only
+			// prime input answered by the live container (PASSIVE /rpc), and a
+			// sleeping container fast-fails it with ContainerAsleep. Rejecting the
+			// whole prime on that would collapse the cold-display hold into the
+			// blank placeholder long before the D1-served session list arrives —
+			// the exact old→blank→new flicker the hold exists to prevent. The
+			// session list is the load-bearing input; the panel's own detail
+			// observer still surfaces detail errors/refetches independently.
 			const [workspaceDetail, workspaceSessions] = await Promise.all([
-				queryClient.ensureQueryData(workspaceDetailQueryOptions(workspaceId)),
+				queryClient
+					.ensureQueryData(workspaceDetailQueryOptions(workspaceId))
+					.catch(() => null),
 				queryClient.ensureQueryData(workspaceSessionsQueryOptions(workspaceId)),
 			]);
 
@@ -539,8 +575,32 @@ export function useSelectionController(
 			if (store.getState().displayedWorkspaceId === null) {
 				setDisplayed(workspaceId, targetSessionId);
 			}
+			// Bound the hold (see COLD_DISPLAY_HOLD_MAX_MS): if the prime is
+			// still unsettled when this fires, land the target placeholder.
+			// The prime's resolve/reject below still runs afterwards and
+			// refines the session (requestId-guarded), so a late prime can
+			// only improve on the placeholder — never regress it.
+			const holdTimerId = window.setTimeout(() => {
+				if (workspaceSelectionRequestRef.current !== requestId) return;
+				// Boot-pipeline triage breadcrumb (DF-3 step 0): record what
+				// state the unsettled queries were in when the hold expired.
+				console.debug(
+					"[selection] cold display hold expired; landing target placeholder",
+					{
+						workspaceId,
+						detail: queryClient.getQueryState(
+							helmorQueryKeys.workspaceDetail(workspaceId),
+						)?.fetchStatus,
+						sessions: queryClient.getQueryState(
+							helmorQueryKeys.workspaceSessions(workspaceId),
+						)?.fetchStatus,
+					},
+				);
+				setDisplayed(workspaceId, targetSessionId);
+			}, COLD_DISPLAY_HOLD_MAX_MS);
 			void primeWorkspaceDisplay(workspaceId)
 				.then(async ({ sessionId, sessions }) => {
+					window.clearTimeout(holdTimerId);
 					if (workspaceSelectionRequestRef.current !== requestId) return;
 					// Resolve-time live-read: an explicit session picked while the
 					// prime was in flight (`selectSession` only updates the router
@@ -602,6 +662,7 @@ export function useSelectionController(
 					setDisplayed(workspaceId, resolvedSessionId);
 				})
 				.catch(() => {
+					window.clearTimeout(holdTimerId);
 					if (workspaceSelectionRequestRef.current !== requestId) return;
 					// Bounded fallback for the hold: land (target, null) so the
 					// panel shows today's placeholder instead of holding forever.
@@ -630,6 +691,7 @@ export function useSelectionController(
 			requestId: number,
 			nextViewMode: ShellViewMode,
 		) => {
+			if (displayFlipDisposedRef.current) return;
 			cancelScheduledDisplayFlip();
 			const handles: PendingDisplayFlip = {
 				rafId: null,
@@ -643,6 +705,9 @@ export function useSelectionController(
 			};
 			pendingDisplayFlipRef.current = handles;
 			const run = () => {
+				// Environment guard: if the timer outlived the DOM (test env
+				// teardown), touching `window` below would throw as an uncaught.
+				if (typeof window === "undefined") return;
 				if (handles.consumed) return;
 				handles.consumed = true;
 				if (handles.rafId !== null) {
@@ -858,13 +923,25 @@ export function useSelectionController(
 				return;
 			}
 
+			// Bound the await-before-commit (same contract as the workspace
+			// flip's COLD_DISPLAY_HOLD_MAX_MS): a cold thread fetch that
+			// outlives the cap lands the target session anyway — the panel
+			// shows its loading pane and the settled fetch fills it in.
+			// Without this a slow first D1 round-trip in team mode reads as a
+			// dead click (old thread pinned, no feedback, no upper bound).
+			const holdTimerId = window.setTimeout(() => {
+				if (sessionSelectionRequestRef.current !== requestId) return;
+				store.setState({ displayedSessionId: sessionId });
+			}, COLD_DISPLAY_HOLD_MAX_MS);
 			void queryClient
 				.ensureQueryData(sessionThreadMessagesQueryOptions(sessionId))
 				.then(() => {
+					window.clearTimeout(holdTimerId);
 					if (sessionSelectionRequestRef.current !== requestId) return;
 					store.setState({ displayedSessionId: sessionId });
 				})
 				.catch(() => {
+					window.clearTimeout(holdTimerId);
 					if (sessionSelectionRequestRef.current !== requestId) return;
 					store.setState({ displayedSessionId: sessionId });
 				});

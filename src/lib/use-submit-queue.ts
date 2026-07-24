@@ -20,6 +20,7 @@ import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import type { AgentModelOption } from "./api";
 import type { ComposerCustomTag } from "./composer-insert";
+import { getTransportGeneration } from "./transport-generation";
 
 /** Minimal serialisable copy of `SubmitPayload` — enough to replay
  *  through `handleComposerSubmit` when the drain fires after the
@@ -57,6 +58,12 @@ export type QueuedSubmit = {
 	context: QueuedSubmitContext;
 	payload: QueuedSubmitPayload;
 	enqueuedAt: number;
+	/** Transport generation at enqueue time (round6 P1-7b). The transport-
+	 *  switch effect resets the whole queue, but an in-flight drain can still
+	 *  race that reset — `popNext` drops entries stamped under a previous
+	 *  generation so an old backend's session ids never fire into the new
+	 *  transport. */
+	generation: number;
 };
 
 export type SubmitQueueApi = {
@@ -116,6 +123,7 @@ export const useSubmitQueueStore = create<SubmitQueueState>((set, get) => ({
 			context,
 			payload,
 			enqueuedAt: Date.now(),
+			generation: getTransportGeneration(),
 		};
 		set((state) => {
 			const existing = state.queuesBySessionId[context.sessionId] ?? EMPTY;
@@ -148,11 +156,26 @@ export const useSubmitQueueStore = create<SubmitQueueState>((set, get) => ({
 	popNext: (sessionId) => {
 		const existing = get().queuesBySessionId[sessionId];
 		if (!existing || existing.length === 0) return undefined;
-		const head = existing[0];
+		// Round6 P1-7b: drop entries enqueued under a PREVIOUS transport
+		// generation — their session/workspace ids belong to the old backend.
+		// (The switch effect resets the queue; this covers a drain racing it.)
+		const currentGeneration = getTransportGeneration();
+		const stale = existing.filter(
+			(entry) => entry.generation !== currentGeneration,
+		);
+		if (stale.length > 0) {
+			console.warn(
+				`[submit-queue] dropped ${stale.length} queued submit(s) from a previous transport generation`,
+			);
+		}
+		const fresh = existing.filter(
+			(entry) => entry.generation === currentGeneration,
+		);
+		const head: QueuedSubmit | undefined = fresh[0];
 		set((state) => {
 			const cur = state.queuesBySessionId[sessionId];
 			if (!cur || cur.length === 0) return state;
-			const rest = cur.slice(1);
+			const rest = fresh.slice(1);
 			const next = { ...state.queuesBySessionId };
 			if (rest.length === 0) {
 				delete next[sessionId];
@@ -206,9 +229,19 @@ export function useSubmitQueueForSession(
 }
 
 /**
- * Test-only — wipe the queue. Production code never resets imperatively
- * (use `clear(sessionId)` for legitimate session-deletion paths).
+ * Wipe the entire queue. This is a MODULE-LEVEL singleton (it intentionally
+ * survives session/workspace navigation), so it also survives the app-subtree
+ * remount on a team↔local transport switch — where its `sessionId`-keyed
+ * entries reference the OLD backend's sessions. A queued follow-up for the old
+ * backend must not linger (let alone drain) against the new transport, so the
+ * transport-switch effect in `app-providers.tsx` clears it. Outside that, normal
+ * session-deletion uses `clear(sessionId)`.
  */
-export function __resetSubmitQueueForTests(): void {
+export function resetSubmitQueue(): void {
 	useSubmitQueueStore.setState({ queuesBySessionId: INITIAL_QUEUES });
+}
+
+/** Test-only alias for {@link resetSubmitQueue}. */
+export function __resetSubmitQueueForTests(): void {
+	resetSubmitQueue();
 }

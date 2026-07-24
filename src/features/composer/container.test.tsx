@@ -1147,6 +1147,7 @@ describe("WorkspaceComposerContainer", () => {
 									fastMode: false,
 								},
 								enqueuedAt: Date.now(),
+								generation: 0,
 							},
 						]}
 						onSteerQueued={vi.fn()}

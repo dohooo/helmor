@@ -1,9 +1,12 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { InspectorFileItem } from "./editor-session";
-import { type ErrorCode, extractError } from "./errors";
 // `invoke` / `Channel` / `listen` route through the transport shim so the same
 // frontend works in the desktop Tauri webview AND when served to a phone
 // browser by the companion server. See `src/lib/ipc.ts`.
+import { trackAgentRetryStatus } from "./agent-retry-status";
+import { isCompanionAsleepError } from "./companion-asleep";
+import { isCompanionIdleSuspended } from "./companion-suspend";
+import type { InspectorFileItem } from "./editor-session";
+import { type ErrorCode, extractError } from "./errors";
 import { Channel, closeChannel, invoke, listen, type UnlistenFn } from "./ipc";
 import type {
 	CustomProvider,
@@ -11,6 +14,15 @@ import type {
 	ProviderFamily,
 } from "./provider-config";
 import { setSessionThreadPaginationState } from "./session-thread-pagination";
+import {
+	getTeamGitSnapshot,
+	getTeamWorkspaceDetail,
+	listTeamSessionMessages,
+	listTeamSessions,
+	publishPresenceEvent,
+} from "./team-api";
+import { getTeamConfig, isTeamModeActive } from "./team-mode";
+import { getTeamReadiness } from "./team-readiness";
 
 export type { CustomProvider, CustomProviderModel, ProviderFamily };
 
@@ -338,6 +350,11 @@ export type ForgeAccount = {
 	/** True for the gh account currently marked active by `gh auth
 	 * switch`. Always true for GitLab (one account per host). */
 	active: boolean;
+	/** Stable numeric account id (string form) — GitHub's `gh api /user`
+	 * `.id`. The durable identity team-mode member registration keys on
+	 * (a login can rename). `null` for GitLab or when the profile fetch
+	 * failed. */
+	id?: string | null;
 };
 
 export type ForgeProvider = "github" | "gitlab" | "unknown";
@@ -395,6 +412,10 @@ export type WorkspaceDetail = {
 	remoteUrl?: string | null;
 	defaultBranch?: string | null;
 	rootPath?: string | null;
+	/** Whether `rootPath` currently exists on disk. `rootPath` is the
+	 * expected (DB-derived) path even when the directory is missing —
+	 * WAKE-level operations lazily rematerialize it (R4-A). */
+	materialized?: boolean;
 	directoryName: string;
 	state: WorkspaceState;
 	hasUnread: boolean;
@@ -976,6 +997,198 @@ export type AgentLoginStatusResult = {
 
 export async function getAgentLoginStatus(): Promise<AgentLoginStatusResult> {
 	return await invoke<AgentLoginStatusResult>("get_agent_login_status");
+}
+
+/** Result of authorizing a cloud Codex subscription identity. Carries NO token
+ *  material — only the non-sensitive identity facts the panel renders. */
+export interface CloudCodexAuthResult {
+	accountId: string | null;
+	changed: boolean;
+	/** R5-A: account email parsed locally from the id_token (display-only) —
+	 *  the Agent status card shows it instead of the account UUID. */
+	email: string | null;
+}
+
+/**
+ * Authorize a Codex **subscription** identity for the team's cloud sandbox.
+ * Runs an interactive `codex login` locally against a throwaway 0700
+ * `CODEX_HOME`, reads the OAuth `refresh_token` + `id_token`, and PUTs them to
+ * the team Worker authenticated with the team bearer. The `refresh_token`
+ * NEVER enters the webview — only `{accountId, changed}` is returned.
+ *
+ * `workerUrl` + `teamToken` come from the frontend's saved team config
+ * (`getTeamConfig()` in `src/lib/team-mode.ts`) — the Rust backend can't read
+ * the webview's `localStorage`, so the caller forwards them. Maps to Rust
+ * `authorize_cloud_codex_identity(worker_url, team_token)` (serde camelCase).
+ */
+export async function authorizeCloudCodexIdentity(
+	workerUrl: string,
+	teamToken: string,
+): Promise<CloudCodexAuthResult> {
+	return await invoke<CloudCodexAuthResult>("authorize_cloud_codex_identity", {
+		workerUrl,
+		teamToken,
+	});
+}
+
+// Cloud Codex identity STATUS is read directly from the Worker by the frontend
+// (`team-api.getCloudCodexIdentityStatus`, a plain fetch) — there is no Rust
+// status command / invoke wrapper.
+
+/**
+ * Authorize a Claude **subscription** identity for the team's cloud sandbox.
+ * Runs a local Claude OAuth (PKCE) flow: the Rust command opens the
+ * browser for consent, awaits the loopback callback + token exchange, captures
+ * the long-lived `CLAUDE_CODE_OAUTH_TOKEN` (an `sk-ant-…` inference-only token),
+ * and PUTs it to the team Worker authenticated with the team bearer. The token
+ * NEVER enters the webview — the command resolves to void on success.
+ *
+ * `workerUrl` + `teamToken` come from the frontend's saved team config
+ * (`getTeamConfig()` in `src/lib/team-mode.ts`) — the Rust backend can't read
+ * the webview's `localStorage`, so the caller forwards them. Maps to Rust
+ * `authorize_cloud_claude_identity(worker_url, team_token)` (serde camelCase).
+ */
+export async function authorizeCloudClaudeIdentity(
+	workerUrl: string,
+	teamToken: string,
+): Promise<void> {
+	return await invoke<void>("authorize_cloud_claude_identity", {
+		workerUrl,
+		teamToken,
+	});
+}
+
+// Cloud Claude identity STATUS is read directly from the Worker by the frontend
+// (`team-api.getCloudClaudeIdentityStatus`, a plain fetch) — there is no Rust
+// status command / invoke wrapper.
+
+/** Metadata echoed after a forge-identity sync — what got uploaded, no tokens. */
+export type CloudForgeAuthResult = {
+	hasGithub: boolean;
+	glabHosts: string[];
+};
+
+/**
+ * Capture THIS Mac's forge credentials (gh token from the keychain + glab
+ * config.yml) and upload them to the member's `ForgeIdentity` broker on the team
+ * Worker, so the remote sandbox can authenticate git/gh/glab AS this member.
+ * LOCAL_ONLY — always runs on the desktop host (see `LOCAL_ONLY_INVOKES`).
+ */
+export async function authorizeCloudForgeIdentity(
+	workerUrl: string,
+	teamToken: string,
+): Promise<CloudForgeAuthResult> {
+	return await invoke<CloudForgeAuthResult>("authorize_cloud_forge_identity", {
+		workerUrl,
+		teamToken,
+	});
+}
+
+/**
+ * One step of the team-cloud auto-deploy, streamed live so the setup card can
+ * show real progress instead of a dead spinner. `status` advances
+ * `start` → `done`, or `error` if that step fails.
+ */
+export type TeamDeployStep =
+	| "login" // Cloudflare OAuth (drive `wrangler login`, loopback callback)
+	| "plan" // confirm the account has Workers Paid (Containers require it)
+	| "provision" // create D1 / R2 / secrets for this account
+	| "deploy" // `wrangler deploy` — Worker + Container referencing our public image
+	| "verify"; // wait for the freshly-deployed Worker to answer
+
+export interface TeamDeployProgress {
+	step: TeamDeployStep;
+	status: "start" | "done" | "error";
+	/** Human-readable line for the progress list (already safe to render). */
+	message: string;
+}
+
+/**
+ * Terminal outcome of {@link deployTeamCloud}. `needs-upgrade` is NOT a failure:
+ * the account simply lacks Workers Paid (Containers need it), so the card shows
+ * the one-click upgrade deep-link + a retry rather than an error.
+ */
+export type TeamDeployResult =
+	| { kind: "deployed"; workerUrl: string; adminToken: string }
+	| { kind: "needs-upgrade"; upgradeUrl: string };
+
+/**
+ * Stand up a brand-new team-cloud backend on the user's OWN Cloudflare account:
+ * drive `wrangler login` (OAuth via loopback — the same pattern the
+ * cloud-identity brokers use), provision D1/R2/secrets, then `wrangler deploy` a
+ * Worker that references our PUBLIC prebuilt sandbox image (no per-user
+ * `docker build`). On success returns the Worker URL + the admin/companion token
+ * to persist with `saveTeamConfig`.
+ *
+ * The Cloudflare OAuth token and the admin token are control-plane secrets:
+ * held by the Rust backend / wrangler only — never logged, returned in progress
+ * lines, or written to D1 / the container. LOCAL_ONLY — always runs on the
+ * desktop host (wrangler + the browser sign-in live here, not in the sandbox).
+ */
+export async function deployTeamCloud(args?: {
+	onProgress?: (event: TeamDeployProgress) => void;
+	/** Round6 P1-4b: the desktop's currently-held companion token, present on
+	 *  a RE-provision. Provision reuses it instead of rotating, so a mid-run
+	 *  failure can't leave the desktop and the Worker on different tokens.
+	 *  Absent/null (fresh team, or after Leave team cleared it) → provision
+	 *  generates a fresh token (rotation preserved). Never logged. */
+	existingAdminToken?: string | null;
+}): Promise<TeamDeployResult> {
+	const channel = new Channel<TeamDeployProgress>();
+	if (args?.onProgress) {
+		channel.onmessage = args.onProgress;
+	}
+	return await invoke<TeamDeployResult>("deploy_team_cloud", {
+		channel,
+		existingAdminToken: args?.existingAdminToken ?? null,
+	});
+}
+
+/**
+ * A remote Cloudflare Container, as surfaced by `wrangler containers list`. The
+ * exact JSON shape varies by wrangler version, so this stays intentionally
+ * loose — the dev-tools list renders whatever id / name it finds.
+ */
+export interface TeamContainer {
+	id?: string;
+	name?: string;
+	[key: string]: unknown;
+}
+
+/** Dev-tools: list the operator's remote Cloudflare Containers. LOCAL_ONLY. */
+export async function listTeamContainers(): Promise<TeamContainer[]> {
+	const raw = await invoke<string>("list_team_containers");
+	// An empty payload is a legitimate "no containers" (the helper prints "[]").
+	const trimmed = raw.trim();
+	if (!trimmed || trimmed === "[]") return [];
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(trimmed);
+	} catch {
+		// Unparseable output is a REAL failure — wrangler error text on stdout, or
+		// a CLI whose `--json` shape changed. Surface it instead of returning `[]`,
+		// which the panel renders as a reassuring "No containers found" even when
+		// the listing actually failed (team-cloud-stabilize WP6).
+		throw new Error(
+			`Couldn't read the container list from wrangler: ${trimmed.slice(0, 200)}`,
+		);
+	}
+	const arr = Array.isArray(parsed)
+		? parsed
+		: ((parsed as { containers?: unknown[] })?.containers ??
+			(parsed as { apps?: unknown[] })?.apps ??
+			null);
+	if (!Array.isArray(arr)) {
+		throw new Error("Unexpected container-list shape from wrangler.");
+	}
+	return arr.filter(
+		(c): c is TeamContainer => typeof c === "object" && c !== null,
+	);
+}
+
+/** Dev-tools: delete a remote Cloudflare Container by id. LOCAL_ONLY. */
+export async function deleteTeamContainer(id: string): Promise<void> {
+	await invoke("delete_team_container", { id });
 }
 
 // Cursor is an SDK (no versioned CLI), so it has no entry.
@@ -1807,6 +2020,19 @@ export async function prewarmSlashCommandsForRepo(
 export async function loadWorkspaceDetail(
 	workspaceId: string,
 ): Promise<WorkspaceDetail | null> {
+	// Team mode: read the D1 workspace-detail mirror (Lever A) so switching
+	// never depends on the live container — `get_workspace` was the ONLY
+	// switch-time input still proxied over /rpc, and a sleeping container
+	// fast-fails it. A null mirror (never synced yet) falls through to the
+	// live call; with the container asleep that rejects like before, which
+	// the selection prime treats as best-effort.
+	if (isTeamModeActive()) {
+		const cfg = getTeamConfig();
+		if (cfg) {
+			const detail = await getTeamWorkspaceDetail(cfg, workspaceId);
+			if (detail !== null) return detail as WorkspaceDetail;
+		}
+	}
 	try {
 		return await invoke<WorkspaceDetail>("get_workspace", { workspaceId });
 	} catch (error) {
@@ -2348,6 +2574,11 @@ export type UiMutationEvent =
 	| { type: "sessionPlanChanged"; sessionId: string }
 	| { type: "sessionMessagesAppended"; sessionId: string }
 	| { type: "sessionTurnPersisted"; sessionId: string }
+	| {
+			type: "roomChatMessageAppended";
+			sessionId: string;
+			authorId: string | null;
+	  }
 	| { type: "workspaceFilesChanged"; workspaceId: string }
 	| { type: "workspaceGitStateChanged"; workspaceId: string }
 	| { type: "workspaceForgeChanged"; workspaceId: string }
@@ -2380,6 +2611,14 @@ export type UiMutationEvent =
 			type: "workspaceRevealRequested";
 			workspaceId: string;
 			sessionId: string | null;
+	  }
+	| {
+			type: "roomPresenceChanged";
+			memberId: string;
+			workspaceId: string;
+			sessionId: string | null;
+			activity: "typing" | "working" | "idle";
+			ts: number;
 	  };
 
 export async function listenGitBranchChanged(
@@ -2412,6 +2651,31 @@ export async function subscribeUiMutations(
 	};
 }
 
+export type PresenceActivity = "typing" | "working" | "idle";
+
+/** Report this member's transient presence (typing / working) in a shared team
+ *  workspace. The server stamps the trusted member id + timestamp and broadcasts
+ *  it to peers over the shared UI-sync stream; non-team / local invokes no-op. */
+export async function reportPresence(
+	workspaceId: string,
+	sessionId: string | null,
+	activity: PresenceActivity,
+): Promise<void> {
+	// R2-E: team mode publishes presence DIRECTLY to the TeamHub DO
+	// (`POST /team/event`) — typing indicators must not wake the container.
+	// The Worker whitelists the event kind and STAMPS memberId + ts from the
+	// token identity (ruling, correction C), so peers consume the exact same
+	// `roomPresenceChanged` ui-mutation frame as before.
+	if (isTeamModeActive()) {
+		const cfg = getTeamConfig();
+		if (cfg) {
+			await publishPresenceEvent(cfg, { workspaceId, sessionId, activity });
+			return;
+		}
+	}
+	await invoke("report_presence", { workspaceId, sessionId, activity });
+}
+
 export type PrefetchRemoteRefsResponse = {
 	/** True if a fetch was performed; false if the call was rate-limited. */
 	fetched: boolean;
@@ -2427,6 +2691,12 @@ export async function prefetchRemoteRefs(opts: {
 export async function loadWorkspaceSessions(
 	workspaceId: string,
 ): Promise<WorkspaceSessionSummary[]> {
+	// Team mode: read the D1 session mirror so the sidebar lists sessions even
+	// with the sandbox asleep (no /rpc → no container wake).
+	if (isTeamModeActive()) {
+		const cfg = getTeamConfig();
+		if (cfg) return listTeamSessions(cfg, workspaceId);
+	}
 	try {
 		return await invoke<WorkspaceSessionSummary[]>("list_workspace_sessions", {
 			workspaceId,
@@ -2456,10 +2726,44 @@ export const DEFAULT_SESSION_THREAD_TAIL_LIMIT = 200;
  * queryFn (which then updates the pagination store) and by the
  * "Load earlier" expand path (which needs `hasMore` after each fetch).
  */
+/** Render raw D1 mirror message rows into the thread via the LOCAL pipeline
+ *  (`convert_historical_records`). Team mode reads history from D1 and converts
+ *  on the desktop, identically to the container path. */
+export async function convertHistoricalRecords(
+	records: {
+		id: string;
+		role: string;
+		content: string;
+		createdAt: string;
+		authorId: string | null;
+	}[],
+): Promise<ThreadMessageLike[]> {
+	return invoke<ThreadMessageLike[]>("convert_historical_records", { records });
+}
+
 export async function fetchSessionThreadMessagesPage(
 	sessionId: string,
 	options?: { tailLimit?: number | null },
 ): Promise<SessionThreadMessagesPage> {
+	// Team mode: read the D1 message mirror + render via the LOCAL pipeline, so
+	// history shows with the sandbox asleep. The mirror returns the whole session
+	// (no windowing), so hasMore is always false here.
+	if (isTeamModeActive()) {
+		const cfg = getTeamConfig();
+		if (cfg) {
+			const rows = await listTeamSessionMessages(cfg, sessionId);
+			const messages = await convertHistoricalRecords(
+				rows.map((row) => ({
+					id: row.id,
+					role: row.role ?? "system",
+					content: row.content ?? "",
+					createdAt: row.created_at ?? "",
+					authorId: row.author_id ?? null,
+				})),
+			);
+			return { messages, hasMore: false };
+		}
+	}
 	const tailLimit =
 		options?.tailLimit === undefined
 			? DEFAULT_SESSION_THREAD_TAIL_LIMIT
@@ -2625,7 +2929,10 @@ export async function readEditorFile(
 }
 
 export function triggerWorkspaceFetch(workspaceId: string): void {
-	void invoke("trigger_workspace_fetch", { workspaceId });
+	// Best-effort freshness fetch. Classified PASSIVE (R2-F6): while the
+	// container sleeps this rejects with a typed asleep error — swallow it,
+	// browsing must never surface a toast or wake anything.
+	invoke("trigger_workspace_fetch", { workspaceId }).catch(() => {});
 }
 
 export async function readFileAtRef(
@@ -2704,6 +3011,15 @@ export async function listWorkspaceChanges(
 	workspaceRootPath: string,
 	workspaceId?: string | null,
 ): Promise<InspectorFileItem[]> {
+	// R2-E: team mode reads the D1 git-snapshot mirror (see
+	// loadWorkspaceGitActionStatus) — no container wake for the changes list.
+	if (isTeamModeActive() && workspaceId) {
+		const cfg = getTeamConfig();
+		if (cfg) {
+			const snapshot = await getTeamGitSnapshot(cfg, workspaceId);
+			return (snapshot?.changes as InspectorFileItem[] | undefined) ?? [];
+		}
+	}
 	try {
 		return await invoke<InspectorFileItem[]>("list_workspace_changes", {
 			workspaceRootPath,
@@ -2856,9 +3172,36 @@ export async function refreshWorkspaceChangeRequest(
 	}
 }
 
+/** Quiet zero-status used in team mode before the container has pushed a
+ *  snapshot (fresh repo workspace / chat workspace, which has no git). */
+const QUIET_GIT_ACTION_STATUS: WorkspaceGitActionStatus = {
+	uncommittedCount: 0,
+	conflictCount: 0,
+	syncTargetBranch: null,
+	syncStatus: "upToDate",
+	behindTargetCount: 0,
+	remoteTrackingRef: null,
+	aheadOfRemoteCount: 0,
+	aheadOfTargetCount: 0,
+	pushStatus: "unpublished",
+};
+
 export async function loadWorkspaceGitActionStatus(
 	workspaceId: string,
 ): Promise<WorkspaceGitActionStatus> {
+	// R2-E: team mode reads the D1 git-snapshot mirror (pushed by the container
+	// on its git-watcher events) instead of waking the sandbox. Invalidation
+	// rides the existing `workspaceGitStateChanged` broadcast.
+	if (isTeamModeActive()) {
+		const cfg = getTeamConfig();
+		if (cfg) {
+			const snapshot = await getTeamGitSnapshot(cfg, workspaceId);
+			return (
+				(snapshot?.gitStatus as WorkspaceGitActionStatus | undefined) ??
+				QUIET_GIT_ACTION_STATUS
+			);
+		}
+	}
 	try {
 		return await invoke<WorkspaceGitActionStatus>(
 			"get_workspace_git_action_status",
@@ -3515,6 +3858,18 @@ export type ExtendedMessagePart = MessagePart | CollapsedGroupPart;
  */
 export type MessageRole = "assistant" | "system" | "user" | "error";
 
+/**
+ * Mirror of the Rust `MessageAuthor` struct. Identifies the human author of
+ * a message in a multi-member cloud team. Absent on agent output and on
+ * local single-user messages (the only cases until the team registry,
+ * Phase ①, populates it).
+ */
+export type MessageAuthor = {
+	id: string;
+	displayName?: string;
+	avatarUrl?: string;
+};
+
 export type ThreadMessageLike = {
 	role: MessageRole;
 	id?: string;
@@ -3522,6 +3877,8 @@ export type ThreadMessageLike = {
 	content: ExtendedMessagePart[];
 	status?: { type: string; reason?: string };
 	streaming?: boolean;
+	author?: MessageAuthor;
+	isRoomChat?: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -3590,6 +3947,15 @@ export type AgentStreamEvent =
 			payload: Record<string, unknown>;
 	  }
 	| { kind: "planCaptured" }
+	/** Transient provider-retry progress (Codex CLI ↔ backend SSE self-heal).
+	 *  Footer-only: never persisted, never a thread message — show a transient
+	 *  "Reconnecting…" status and clear it on the next stream event. */
+	| {
+			kind: "retryStatus";
+			attempt: number;
+			maxRetries: number;
+			message: string;
+	  }
 	| { kind: "error"; message: string; persisted: boolean; internal: boolean };
 
 /**
@@ -3847,13 +4213,84 @@ export async function getLocalLlmEndpoint(): Promise<LocalLlmEndpoint | null> {
  * The returned promise resolves when the stream has been successfully handed
  * off. The callback continues to fire until a `done` or `error` event arrives.
  */
+/** A cold team sandbox can take up to the backend cold-start ceiling (~180s) to
+ *  serve the first token; this is the client-side backstop so a stalled stream
+ *  (or a stream POST that failed and was swallowed in the IPC layer) can never
+ *  spin forever. Must exceed the backend ceiling + margin. */
+const FIRST_AGENT_EVENT_TIMEOUT_MS = 210_000;
+
 export async function startAgentMessageStream(
 	request: AgentSendRequest,
 	callback: (event: AgentStreamEvent) => void,
 ): Promise<void> {
 	const onEvent = new Channel<AgentStreamEvent>();
+	// Watchdog: if NOTHING streams back within the cold-start ceiling + margin
+	// (a wedged cold start, or a stream POST that failed and got swallowed in the
+	// IPC layer), synthesize a terminal `error` so the dispatcher clears the
+	// sending state and the user can retry, instead of an infinite spinner.
+	// Cleared on the first real event; late events after a timeout are ignored.
+	let firstSeen = false;
+	let timedOut = false;
+	const watchdog = setTimeout(() => {
+		if (firstSeen) return;
+		timedOut = true;
+		closeChannel(onEvent);
+		callback({
+			kind: "error",
+			message:
+				"The cloud sandbox didn't respond in time — it may still be waking up. Please try again.",
+			persisted: false,
+			internal: false,
+		});
+	}, FIRST_AGENT_EVENT_TIMEOUT_MS);
+	onEvent.onmessage = (event) => {
+		if (timedOut) return;
+		if (!firstSeen) {
+			firstSeen = true;
+			clearTimeout(watchdog);
+		}
+		// R2-A: transient "Reconnecting… (n/m)" footer status — set by
+		// `retryStatus`, cleared by any other stream event.
+		if (typeof request.helmorSessionId === "string") {
+			trackAgentRetryStatus(request.helmorSessionId, event);
+		}
+		callback(event);
+	};
+	try {
+		await invoke("send_agent_message_stream", { request, onEvent });
+	} catch (error) {
+		clearTimeout(watchdog);
+		throw error;
+	}
+}
+
+/** Wire shape for `post_room_chat_message`. `author_id` is intentionally
+ *  absent from the desktop IPC call: the companion overwrites it from the
+ *  trusted `X-Helmor-Member-Id` header (see `companion/stream.rs`). */
+export type RoomChatSendRequest = {
+	helmorSessionId: string;
+	clientMessageId?: string;
+	prompt: string;
+	files?: string[] | null;
+	images?: string[] | null;
+	pastedTexts?: PastedTextRange[] | null;
+};
+
+/**
+ * Persist a room-chat message (team-mode only, no-@agent path).
+ *
+ * Routed on the STREAMING companion surface so `author_id` is injected
+ * server-side from the trusted `X-Helmor-Member-Id` header — the client
+ * never asserts its own identity. Uses `ipc::Channel<T>` for streaming
+ * parity with `startAgentMessageStream` (same transport shim logic).
+ */
+export async function postRoomChatMessage(
+	request: RoomChatSendRequest,
+	callback: (event: AgentStreamEvent) => void,
+): Promise<void> {
+	const onEvent = new Channel<AgentStreamEvent>();
 	onEvent.onmessage = (event) => callback(event);
-	await invoke("send_agent_message_stream", { request, onEvent });
+	await invoke("post_room_chat_message", { request, onEvent });
 }
 
 export async function stopAgentStream(
@@ -3875,23 +4312,124 @@ export async function stopAgentStream(
  * through the same render pipeline. Works identically over native Tauri and the
  * companion HTTP/NDJSON transport. Returns an unlisten to detach.
  */
+/** Resubscribe backoff for a silently-dead watch stream (R2-A). */
+const WATCH_RESUBSCRIBE_BASE_MS = 1_000;
+const WATCH_RESUBSCRIBE_CEIL_MS = 30_000;
+/** R3-A: retry cadence while the sandbox is typed-asleep — slow enough to be
+ *  free noise on the Worker, never a wake (the watch pipe carries no wake
+ *  intent). */
+const WATCH_ASLEEP_RESUBSCRIBE_MS = 60_000;
+
 export async function subscribeSessionStream(
 	sessionId: string,
 	callback: (event: AgentStreamEvent) => void,
 ): Promise<UnlistenFn> {
-	const subscriptionId = crypto.randomUUID();
-	const onEvent = new Channel<AgentStreamEvent>();
-	onEvent.onmessage = (event) => callback(event);
-	await invoke("subscribe_session_stream", {
-		sessionId,
-		subscriptionId,
-		onEvent,
-	});
+	let disposed = false;
+	let attached = false;
+	let retryTimer: number | null = null;
+	let backoffMs = WATCH_RESUBSCRIBE_BASE_MS;
+	let currentChannel: Channel<AgentStreamEvent> | null = null;
+	let currentSubscriptionId = "";
+
+	const detach = () => {
+		attached = false;
+		if (retryTimer !== null) {
+			window.clearTimeout(retryTimer);
+			retryTimer = null;
+		}
+		if (currentChannel) {
+			currentChannel.onmessage = () => {};
+			// Abort the companion fetch — the server auto-unsubscribes on body
+			// drop, so no network unsubscribe is needed here (important on
+			// idle-suspend: an RPC would re-wake the sleeping sandbox).
+			closeChannel(currentChannel);
+			currentChannel = null;
+		}
+	};
+
+	const attach = async () => {
+		const subscriptionId = crypto.randomUUID();
+		const onEvent = new Channel<AgentStreamEvent>();
+		currentChannel = onEvent;
+		currentSubscriptionId = subscriptionId;
+		attached = true;
+		onEvent.onmessage = (event) => {
+			// R2-A: internal marker from ipc.ts — the watch stream died silently
+			// (edge drop / container sleep / F-4 settle). Resubscribe with
+			// backoff instead of dropping teammates' turns with zero signal.
+			if ((event as { kind?: string }).kind === "watchClosed") {
+				detach();
+				scheduleResubscribe();
+				return;
+			}
+			// Healthy traffic → reset the backoff ladder.
+			backoffMs = WATCH_RESUBSCRIBE_BASE_MS;
+			trackAgentRetryStatus(sessionId, event);
+			callback(event);
+		};
+		await invoke("subscribe_session_stream", {
+			sessionId,
+			subscriptionId,
+			onEvent,
+		});
+	};
+
+	const scheduleResubscribe = () => {
+		if (disposed || retryTimer !== null) return;
+		const delay = backoffMs;
+		backoffMs = Math.min(backoffMs * 2, WATCH_RESUBSCRIBE_CEIL_MS);
+		retryTimer = window.setTimeout(() => {
+			retryTimer = null;
+			if (disposed || attached) return;
+			// Gates: while idle-suspended, the detach is intentional (let the
+			// sandbox sleep); while team readiness is degraded, don't knock on a
+			// known-bad backend every few seconds. Both re-check on the next tick
+			// without any network traffic.
+			if (
+				isCompanionIdleSuspended() ||
+				getTeamReadiness().state === "degraded"
+			) {
+				scheduleResubscribe();
+				return;
+			}
+			void attach().catch((error) => {
+				detach();
+				// R3-A: a typed asleep means the sandbox is sleeping ON PURPOSE
+				// and a watch must never wake it — jump straight to the slow
+				// cadence instead of laddering 1s→2s→4s against the Worker.
+				// TeamHub's turn-started signal re-attaches promptly regardless
+				// (use-watch-session-stream is turn-driven).
+				if (isCompanionAsleepError(error)) {
+					backoffMs = WATCH_ASLEEP_RESUBSCRIBE_MS;
+				}
+				scheduleResubscribe();
+			});
+		}, delay);
+	};
+
+	// R2-E (correction B): the immediate detach-on-suspend from R2-A is GONE.
+	// The watch is TURN-DRIVEN now — its owner (use-watch-session-stream) only
+	// holds a subscription while a remote turn is live, and the ruling says a
+	// live remote turn OVERRIDES idle-suspend for the watch face (a teammate's
+	// turn must mirror even on a suspended app). When the turn ends the owner
+	// unsubscribes, so nothing is left to pin the sandbox. The suspend gate
+	// SURVIVES in the resubscribe loop below: a silently-closed watch must not
+	// re-knock on a sleeping backend while suspended.
+
+	try {
+		await attach();
+	} catch (error) {
+		detach();
+		throw error;
+	}
+
 	return () => {
-		onEvent.onmessage = () => {};
-		// Abort the companion fetch so the server frees the watcher and the
-		// browser releases the connection slot (no-op on native Tauri).
-		closeChannel(onEvent);
+		disposed = true;
+		const subscriptionId = currentSubscriptionId;
+		detach();
+		// Explicit unsubscribe for the native transport (no fetch to abort
+		// there); on the companion transport the body drop already freed the
+		// watcher, so this is belt-and-suspenders.
 		void invoke("unsubscribe_session_stream", { sessionId, subscriptionId });
 	};
 }
@@ -4352,6 +4890,26 @@ export type ScriptEvent =
 	| { type: "exited"; code: number | null }
 	| { type: "error"; message: string };
 
+export type DebugTerminalBufferSummary = {
+	repoId: string;
+	workspaceId?: string | null;
+	scriptType: string;
+	kind: string;
+	targetId?: string | null;
+	command?: string | null;
+	status: "running" | "exited";
+	exitCode?: number | null;
+	bufferedBytes: number;
+	chunkCount: number;
+	truncated: boolean;
+};
+
+export type DebugTerminalBufferSnapshot = DebugTerminalBufferSummary & {
+	returnedBytes: number;
+	omittedHeadBytes: number;
+	data: string;
+};
+
 /**
  * Resolve repo scripts using a fixed priority (enforced in Rust):
  *   1. Workspace worktree `helmor.json` (when `workspaceId` is given AND
@@ -4522,6 +5080,29 @@ export async function resizeRepoScript(
 		cols,
 		rows,
 	});
+}
+
+export async function debugListTerminalBuffers(): Promise<
+	DebugTerminalBufferSummary[]
+> {
+	return invoke<DebugTerminalBufferSummary[]>("debug_list_terminal_buffers");
+}
+
+export async function debugReadTerminalBuffer(
+	repoId: string,
+	scriptType: string,
+	workspaceId?: string | null,
+	maxBytes?: number | null,
+): Promise<DebugTerminalBufferSnapshot | null> {
+	return invoke<DebugTerminalBufferSnapshot | null>(
+		"debug_read_terminal_buffer",
+		{
+			repoId,
+			scriptType,
+			workspaceId: workspaceId ?? null,
+			maxBytes: maxBytes ?? null,
+		},
+	);
 }
 
 // ---- Run actions CRUD ----

@@ -5,6 +5,7 @@ import {
 	codexArchivePlan,
 	ghArchivePlan,
 	glabArchivePlan,
+	linuxTargetInfoForArch,
 	llamaArchivePlan,
 	opencodeArchivePlan,
 	resolveVendorTarget,
@@ -60,9 +61,13 @@ describe("vendor platform boundary", () => {
 		).toEqual(targetInfoForArch("arm64"));
 	});
 
-	test("keeps non-macOS and unsupported targets out of vendor staging", () => {
+	test("keeps unsupported targets out of vendor staging", () => {
 		expect(() =>
-			resolveVendorTarget({ hostPlatform: "linux", hostArch: "x64", env: {} }),
+			resolveVendorTarget({
+				hostPlatform: "freebsd",
+				hostArch: "x64",
+				env: {},
+			}),
 		).toThrow("Helmor only builds on macOS");
 		expect(() =>
 			resolveVendorTarget({
@@ -71,6 +76,66 @@ describe("vendor platform boundary", () => {
 				env: { TAURI_TARGET_TRIPLE: "x86_64-pc-windows-msvc" },
 			}),
 		).toThrow("unsupported TAURI_TARGET_TRIPLE for macOS");
+		expect(() =>
+			resolveVendorTarget({
+				hostPlatform: "linux",
+				hostArch: "ppc64",
+				env: {},
+			}),
+		).toThrow("unsupported Linux host arch");
+	});
+
+	test("resolves Linux hosts to the native serve-image target", () => {
+		expect(
+			resolveVendorTarget({ hostPlatform: "linux", hostArch: "x64", env: {} }),
+		).toEqual(linuxTargetInfoForArch("x64"));
+		expect(
+			resolveVendorTarget({
+				hostPlatform: "linux",
+				hostArch: "arm64",
+				env: {},
+			}),
+		).toEqual(linuxTargetInfoForArch("arm64"));
+
+		expect(linuxTargetInfoForArch("x64")).toEqual({
+			os: "linux",
+			arch: "x64",
+			claudeCodePkg: "@anthropic-ai/claude-code-linux-x64",
+			claudeCodeNpmSuffix: "linux-x64",
+			codexPkg: "@openai/codex-linux-x64",
+			codexTriple: "x86_64-unknown-linux-musl",
+			codexNpmSuffix: "linux-x64",
+			opencodePkg: "opencode-linux-x64",
+			opencodeNpmSuffix: "linux-x64",
+			ghArch: "amd64",
+			glabArch: "amd64",
+			cloudflaredArch: "amd64",
+		});
+
+		// Both forge CLIs stage on Linux: `.tar.gz` archives nesting `bin/<cli>`.
+		expect(ghArchivePlan(linuxTargetInfoForArch("x64"))).toEqual({
+			slug: "gh_2.95.0_linux_amd64",
+			archiveName: "gh_2.95.0_linux_amd64.tar.gz",
+			url: "https://github.com/cli/cli/releases/download/v2.95.0/gh_2.95.0_linux_amd64.tar.gz",
+			sha256: "",
+		});
+		// P1-8b: glab must stage into the Linux team image too — GitLab MR
+		// actions in team mode deterministically failed without it. SHAs pinned
+		// from upstream checksums.txt (URL in stage-vendor.ts's header comment).
+		expect(glabArchivePlan(linuxTargetInfoForArch("x64"))).toEqual({
+			slug: "glab_1.103.0_linux_amd64",
+			archiveName: "glab_1.103.0_linux_amd64.tar.gz",
+			url: "https://gitlab.com/gitlab-org/cli/-/releases/v1.103.0/downloads/glab_1.103.0_linux_amd64.tar.gz",
+			sha256:
+				"6264d0de9e3b8f8bcafd368dfeaa19948ae680372a206b0b21038b1daabfaf58",
+		});
+		expect(glabArchivePlan(linuxTargetInfoForArch("arm64"))).toEqual({
+			slug: "glab_1.103.0_linux_arm64",
+			archiveName: "glab_1.103.0_linux_arm64.tar.gz",
+			url: "https://gitlab.com/gitlab-org/cli/-/releases/v1.103.0/downloads/glab_1.103.0_linux_arm64.tar.gz",
+			sha256:
+				"100811e68f405531254f35b074d42afee3c9e4350855a9a528207170066a65cb",
+		});
 	});
 
 	test("resolves Windows x64 to the win32 vendor target", () => {

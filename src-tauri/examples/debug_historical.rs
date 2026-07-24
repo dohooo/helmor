@@ -71,6 +71,10 @@ fn main() {
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string(),
+            author_id: r
+                .get("author_id")
+                .and_then(Value::as_str)
+                .map(str::to_string),
         })
         .collect();
     let msgs = MessagePipeline::convert_historical(&records);

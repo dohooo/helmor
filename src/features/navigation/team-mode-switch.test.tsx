@@ -1,0 +1,103 @@
+import { cleanup, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as teamSwitch from "@/lib/team-switch";
+import { renderWithProviders } from "@/test/render-with-providers";
+import { useTeamSetupStore } from "./state/team-setup-store";
+import { TeamModeSwitch } from "./team-mode-switch";
+
+// The switch is desktop-only; pretend we're inside the Tauri webview.
+vi.mock("@/lib/platform", () => ({
+	isMac: () => true,
+	isTauriRuntime: () => true,
+}));
+
+function stubReload(): ReturnType<typeof vi.fn> {
+	const reload = vi.fn();
+	Object.defineProperty(window, "location", {
+		configurable: true,
+		value: { ...window.location, reload },
+	});
+	return reload;
+}
+
+describe("TeamModeSwitch", () => {
+	beforeEach(() => {
+		localStorage.clear();
+	});
+
+	afterEach(() => {
+		cleanup();
+		vi.restoreAllMocks();
+		useTeamSetupStore.getState().close();
+	});
+
+	it("shows the local label by default", () => {
+		renderWithProviders(<TeamModeSwitch />);
+		expect(
+			screen.getByRole("button", { name: /workspace location/i }),
+		).toBeInTheDocument();
+	});
+
+	it("opens the Join / Create setup card when Team is picked unconfigured", async () => {
+		const user = userEvent.setup();
+		const reload = stubReload();
+		const switchSpy = vi.spyOn(teamSwitch, "switchTeamMode");
+		useTeamSetupStore.getState().close();
+
+		renderWithProviders(<TeamModeSwitch />);
+		await user.click(
+			screen.getByRole("button", { name: /workspace location/i }),
+		);
+		await user.click(screen.getByRole("menuitem", { name: /^team$/i }));
+
+		// Unconfigured Team opens the setup card (not raw settings); it must NOT
+		// switch into a broken mode, and never reload.
+		expect(useTeamSetupStore.getState().open).toBe(true);
+		expect(switchSpy).not.toHaveBeenCalled();
+		expect(reload).not.toHaveBeenCalled();
+	});
+
+	it("activates team mode in place (no reload) when a backend is configured", async () => {
+		const user = userEvent.setup();
+		localStorage.setItem("helmor.team.url", "https://team.example.com");
+		localStorage.setItem("helmor.team.token", "hlm_secret");
+		const reload = stubReload();
+		const switchSpy = vi.spyOn(teamSwitch, "switchTeamMode");
+
+		renderWithProviders(<TeamModeSwitch />);
+		await user.click(
+			screen.getByRole("button", { name: /workspace location/i }),
+		);
+		await user.click(screen.getByRole("menuitem", { name: /^team$/i }));
+
+		await waitFor(() =>
+			expect(switchSpy).toHaveBeenCalledWith({
+				url: "https://team.example.com",
+				token: "hlm_secret",
+			}),
+		);
+		// Instant switch — never a page reload.
+		expect(reload).not.toHaveBeenCalled();
+		expect(localStorage.getItem("helmor.team.mode")).toBe("1");
+	});
+
+	it("switches back to local in place (no reload) when currently in team mode", async () => {
+		const user = userEvent.setup();
+		localStorage.setItem("helmor.team.url", "https://team.example.com");
+		localStorage.setItem("helmor.team.token", "hlm_secret");
+		localStorage.setItem("helmor.team.mode", "1");
+		const reload = stubReload();
+		const switchSpy = vi.spyOn(teamSwitch, "switchTeamMode");
+
+		renderWithProviders(<TeamModeSwitch />);
+		await user.click(
+			screen.getByRole("button", { name: /workspace location/i }),
+		);
+		await user.click(screen.getByRole("menuitem", { name: /^local$/i }));
+
+		await waitFor(() => expect(switchSpy).toHaveBeenCalledWith(null));
+		expect(reload).not.toHaveBeenCalled();
+		expect(localStorage.getItem("helmor.team.mode")).toBeNull();
+	});
+});

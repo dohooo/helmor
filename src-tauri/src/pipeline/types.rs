@@ -596,6 +596,20 @@ pub struct MessageStatus {
     pub reason: Option<String>,
 }
 
+/// Human author of a message in a multi-member cloud team. Resolved from
+/// the team registry (Phase ①): `id` is the team member id; the display
+/// fields are cached for rendering. Absent on agent output and on local
+/// single-user messages (the only cases until the registry populates it).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageAuthor {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
+}
+
 /// A fully rendered message ready for the frontend to display.
 ///
 /// This is the final output of the pipeline — the frontend performs
@@ -614,6 +628,19 @@ pub struct ThreadMessageLike {
     /// True when this message is still being streamed from an agent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub streaming: Option<bool>,
+    /// Human author for team/room messages. `None` = agent output or a
+    /// local single-user message — the only cases until the team registry
+    /// (Phase ①) populates it. Skipped when absent so the existing
+    /// single-user wire shape (and its pipeline snapshots) is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<MessageAuthor>,
+    /// Programmatic marker set only on room-chat messages (content type
+    /// `"room_chat"`). PR3 uses this to scope "messages since last agent
+    /// turn" for the context-carry assembler. Serialized as `isRoomChat`
+    /// only when `true`; absent on all non-room messages so existing
+    /// pipeline snapshots are byte-identical (no drift).
+    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+    pub is_room_chat: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -630,6 +657,11 @@ pub struct IntermediateMessage {
     pub parsed: Option<Value>,
     pub created_at: String,
     pub is_streaming: bool,
+    /// Team member id for a human-authored message in a multi-member cloud
+    /// room. `None` for agent output and local single-user messages. Carried
+    /// from `HistoricalRecord` so the adapter can stamp the rendered user
+    /// bubble's `author`.
+    pub author_id: Option<String>,
 }
 
 /// A single turn collected from the CLI stream output, used for DB persistence.
@@ -662,6 +694,10 @@ pub struct HistoricalRecord {
     pub content: String,
     pub parsed_content: Option<Value>,
     pub created_at: String,
+    /// Team member id persisted on a human-authored message (the
+    /// `session_messages.author_id` column). `None` for agent output and
+    /// local single-user messages.
+    pub author_id: Option<String>,
 }
 
 /// Token usage counters from an agent invocation.
@@ -681,4 +717,68 @@ pub struct ParsedAgentOutput {
     pub resolved_model: String,
     pub usage: AgentUsage,
     pub result_json: Option<String>,
+}
+
+#[cfg(test)]
+mod author_seam_tests {
+    use super::*;
+
+    fn base_message() -> ThreadMessageLike {
+        ThreadMessageLike {
+            role: MessageRole::User,
+            id: Some("m1".to_string()),
+            created_at: None,
+            content: vec![],
+            status: None,
+            streaming: None,
+            author: None,
+            is_room_chat: false,
+        }
+    }
+
+    #[test]
+    fn author_is_omitted_from_wire_when_absent() {
+        // Local single-user / agent messages carry no author; the wire shape
+        // must stay byte-identical to the pre-author pipeline so the existing
+        // pipeline snapshots see zero drift (AGENTS.md schema-snapshot red line).
+        let json = serde_json::to_value(base_message()).unwrap();
+        assert!(
+            json.get("author").is_none(),
+            "author key must be omitted when None"
+        );
+    }
+
+    #[test]
+    fn author_serializes_as_camelcase_when_present() {
+        let mut msg = base_message();
+        msg.author = Some(MessageAuthor {
+            id: "member-1".to_string(),
+            display_name: Some("Ada".to_string()),
+            avatar_url: None,
+        });
+        let json = serde_json::to_value(&msg).unwrap();
+        let author = json.get("author").expect("author present");
+        assert_eq!(author.get("id").unwrap(), "member-1");
+        assert_eq!(author.get("displayName").unwrap(), "Ada");
+        assert!(
+            author.get("avatarUrl").is_none(),
+            "avatarUrl omitted when None"
+        );
+    }
+
+    #[test]
+    fn author_round_trips_through_deserialization() {
+        let mut msg = base_message();
+        msg.author = Some(MessageAuthor {
+            id: "member-2".to_string(),
+            display_name: None,
+            avatar_url: Some("https://example/a.png".to_string()),
+        });
+        let back: ThreadMessageLike =
+            serde_json::from_value(serde_json::to_value(&msg).unwrap()).unwrap();
+        let author = back.author.expect("author survives round-trip");
+        assert_eq!(author.id, "member-2");
+        assert_eq!(author.display_name, None);
+        assert_eq!(author.avatar_url.as_deref(), Some("https://example/a.png"));
+    }
 }

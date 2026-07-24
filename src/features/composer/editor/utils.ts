@@ -11,6 +11,7 @@ import {
 	$isTextNode,
 } from "lexical";
 import type { ComposerCustomTag } from "@/lib/composer-insert";
+import { $isAgentMentionNode } from "./agent-mention-node";
 import { $isCustomTagBadgeNode } from "./custom-tag-badge-node";
 import { $isFileBadgeNode } from "./file-badge-node";
 import { $isImageBadgeNode } from "./image-badge-node";
@@ -63,6 +64,12 @@ export function $extractComposerContent(): {
 						textParts.push(" ");
 					}
 					textParts.push(customTag.submitText);
+				} else if ($isAgentMentionNode(child)) {
+					const last = textParts[textParts.length - 1];
+					if (last && !last.endsWith(" ") && !last.endsWith("\n")) {
+						textParts.push(" ");
+					}
+					textParts.push("@agent");
 				} else if ($isTerminalDirectiveNode(child)) {
 					// UI-only shortcut marker; do not include it in submitted text.
 				} else if ($isLineBreakNode(child)) {

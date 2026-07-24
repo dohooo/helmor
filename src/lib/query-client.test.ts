@@ -6,6 +6,7 @@ import type {
 	ForgeActionStatus,
 	ForgeDetection,
 } from "./api";
+import { CompanionAsleepError } from "./companion-asleep";
 import {
 	changeRequestRefetchInterval,
 	createHelmorQueryClient,
@@ -322,6 +323,62 @@ describe("createHelmorQueryClient dehydrate filter", () => {
 		expect(dumped.queries).toHaveLength(0);
 	});
 
+	it("keeps asleep-errored queries WITH data in the bucket (R3-A)", () => {
+		// Live-verified failure: while the sandbox sleeps, persisted lists sit
+		// in `error` (typed asleep, retry off) while still holding last-known
+		// data. The success-only gate let the periodic persister rewrite wash
+		// them out of the disk bucket — the next cold boot against a sleeping
+		// backend showed an EMPTY sidebar with no way to wake anything.
+		const client = createHelmorQueryClient();
+		const query = client.getQueryCache().build(client, {
+			queryKey: ["workspaceGroups"],
+			queryFn: async () => [{ id: "g1" }],
+			meta: PERSIST_META,
+		});
+		query.setData([{ id: "g1" }]);
+		query.setState({
+			status: "error",
+			error: new CompanionAsleepError(),
+			fetchStatus: "idle",
+		});
+
+		const dumped = dehydrate(client);
+		expect(dumped.queries.map((q) => q.queryKey[0])).toEqual([
+			"workspaceGroups",
+		]);
+		// The asleep marker must survive a JSON round-trip (the persister uses
+		// JSON.stringify), or the NEXT periodic rewrite would drop the entry.
+		const roundTripped = JSON.parse(JSON.stringify(dumped.queries[0]));
+		expect(roundTripped.state.error.code).toBe("ContainerAsleep");
+	});
+
+	it("still drops non-asleep errored queries and asleep errors without data", () => {
+		const client = createHelmorQueryClient();
+		const plainError = client.getQueryCache().build(client, {
+			queryKey: ["workspaceGroups"],
+			queryFn: async () => [],
+			meta: PERSIST_META,
+		});
+		plainError.setData([]);
+		plainError.setState({
+			status: "error",
+			error: new Error("boom"),
+			fetchStatus: "idle",
+		});
+		const asleepNoData = client.getQueryCache().build(client, {
+			queryKey: ["repositories"],
+			queryFn: async () => [],
+			meta: PERSIST_META,
+		});
+		asleepNoData.setState({
+			status: "error",
+			error: new CompanionAsleepError(),
+			fetchStatus: "idle",
+		});
+
+		expect(dehydrate(client).queries).toHaveLength(0);
+	});
+
 	it("ignores meta values that are not the literal `{ persist: true }`", () => {
 		const client = createHelmorQueryClient();
 		// `meta: {}` and absent meta both fall through.
@@ -337,5 +394,18 @@ describe("createHelmorQueryClient dehydrate filter", () => {
 
 		const dumped = dehydrate(client);
 		expect(dumped.queries).toHaveLength(0);
+	});
+});
+
+describe("R2-D persist whitelist", () => {
+	it("workspaceSessions persists; session message threads do not", async () => {
+		const { workspaceSessionsQueryOptions, sessionThreadMessagesQueryOptions } =
+			await import("./query-client");
+		expect(workspaceSessionsQueryOptions("w1").meta).toEqual({ persist: true });
+		// Message threads stay memory/DB-only: WP3's convergence protocol owns
+		// that truth, and persisting them would add a merge surface for no gain.
+		expect(
+			sessionThreadMessagesQueryOptions("s1").meta ?? {},
+		).not.toHaveProperty("persist");
 	});
 });

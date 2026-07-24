@@ -493,7 +493,15 @@ export function WorkspaceStartPage({
 								? "min-h-0 flex-1"
 								: previewCard
 									? "pointer-events-none h-0 translate-y-2 opacity-0"
-									: "h-10 translate-y-0 opacity-100",
+									: repositories.length === 0
+										? // R4 Gate2 fix: the no-repo guide wraps to two
+											// lines at normal window widths — a fixed h-10 +
+											// overflow-hidden clipped the second line ("or
+											// just chat."), hiding the legal chat path. Let
+											// ONLY this branch grow; all other branches keep
+											// the original fixed height.
+											"h-auto min-h-10 translate-y-0 opacity-100"
+										: "h-10 translate-y-0 opacity-100",
 						)}
 					>
 						<div
@@ -501,9 +509,48 @@ export function WorkspaceStartPage({
 								"absolute flex items-center gap-x-2 whitespace-nowrap text-center font-semibold leading-tight tracking-normal text-foreground transition-[left,transform,font-size] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
 								"left-1/2 -translate-x-1/2 text-[24px]",
 								composerAtBottom ? "top-1/2 -translate-y-1/2" : "top-0",
+								// R4 Gate2 fix (see container above): flow-position the
+								// guide so its wrapped height actually sizes the parent.
+								repositories.length === 0 &&
+									!composerAtBottom &&
+									!previewCard &&
+									"static w-full translate-x-0 justify-center",
 							)}
 						>
-							{mode === "chat" ? (
+							{repositories.length === 0 ? (
+								// WP7 Gate 2: zero repositories — replace the heading in
+								// place with a guide + Add-repository CTA (the controller
+								// locks `mode` to chat here, so this is THE no-repo start
+								// state). The composer below stays fully usable: chat is a
+								// legal no-repo path and must never be blocked.
+								<span
+									data-testid="start-no-repo-guide"
+									className={cn(
+										"flex items-center gap-3 overflow-hidden text-[20px] transition-[max-width,opacity,transform] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
+										previewCard
+											? "max-w-0 -translate-y-1 opacity-0"
+											: "max-w-[44rem] translate-y-0 opacity-100",
+									)}
+								>
+									{/* R4 Gate2 (user ruling): no separate button — the
+									    "Connect a repository" fragment itself is the CTA,
+									    slightly-bold underline, opening the same add-repo
+									    dropdown as the sidebar's top-left button. */}
+									<span className="whitespace-pre-wrap">
+										<button
+											type="button"
+											data-testid="start-connect-repo-link"
+											className="cursor-pointer underline decoration-[1.5px] underline-offset-4 hover:opacity-80"
+											onClick={() =>
+												publishShellEvent({ type: "open-add-repository" })
+											}
+										>
+											<I18nText source="connectRepoLink" />
+										</button>
+										<I18nText source="connectRepoRest" />
+									</span>
+								</span>
+							) : mode === "chat" ? (
 								<span
 									className={cn(
 										"inline-block overflow-hidden transition-[max-width,opacity,transform] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",

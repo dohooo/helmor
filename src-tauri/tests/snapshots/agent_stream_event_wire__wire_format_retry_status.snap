@@ -1,0 +1,9 @@
+---
+source: tests/agent_stream_event_wire.rs
+assertion_line: 149
+expression: "to_value(AgentStreamEvent::RetryStatus\n{\n    attempt: 2, max_retries: 5, message: \"Reconnecting... Attempt 2/5\".into(),\n})"
+---
+attempt: 2
+kind: retryStatus
+maxRetries: 5
+message: Reconnecting... Attempt 2/5

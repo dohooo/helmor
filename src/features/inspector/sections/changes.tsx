@@ -58,6 +58,7 @@ import {
 	type InspectorFileItem,
 	isActiveEditorTarget,
 } from "@/lib/editor-session";
+import { toastCaughtError } from "@/lib/error-toast";
 import { formatSource, I18nText, translateSource, useI18n } from "@/lib/i18n";
 import { openUrl } from "@/lib/platform-bridge";
 import {
@@ -1417,7 +1418,9 @@ function FileRowContextMenuContent({
 				error instanceof Error
 					? error.message
 					: translateSource("inspectorFailedRevealFinder");
-			toast.error(message);
+			// DF-R6-A: silent for typed asleep (the gray cloud already says
+			// Sleeping); same-text toasts replace instead of stacking.
+			toastCaughtError(error, message);
 		}
 	}, [file.absolutePath]);
 

@@ -19,6 +19,7 @@ fn im(id: &str, role: &str, content: Value) -> IntermediateMessage {
         parsed: Some(content),
         created_at: "2024-01-01T00:00:00Z".to_string(),
         is_streaming: false,
+        author_id: None,
     }
 }
 
@@ -390,10 +391,49 @@ fn plain_user_message() {
         parsed: None,
         created_at: "2024-01-01T00:00:00Z".to_string(),
         is_streaming: false,
+        author_id: None,
     };
     let result = convert(&[msg]);
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].role, MessageRole::User);
+}
+
+#[test]
+fn user_prompt_with_author_id_populates_message_author() {
+    // A human-authored prompt in a cloud room carries `author_id`. The adapter
+    // must stamp `ThreadMessageLike.author` with that id and leave the display
+    // fields None (the frontend hydrates them from the team member list).
+    let mut msg = im(
+        "u1",
+        "user",
+        json!({ "type": "user_prompt", "text": "ship it" }),
+    );
+    msg.author_id = Some("member-42".to_string());
+
+    let result = convert(&[msg]);
+    assert_eq!(result.len(), 1);
+    let author = result[0].author.as_ref().expect("author populated");
+    assert_eq!(author.id, "member-42");
+    assert_eq!(author.display_name, None);
+    assert_eq!(author.avatar_url, None);
+}
+
+#[test]
+fn user_prompt_without_author_id_omits_author() {
+    // The local / desktop single-user path leaves `author_id` None, so the
+    // rendered bubble carries no author — keeping the wire shape (and the
+    // pipeline snapshots) byte-identical to the pre-author pipeline.
+    let msg = im(
+        "u1",
+        "user",
+        json!({ "type": "user_prompt", "text": "ship it" }),
+    );
+    let result = convert(&[msg]);
+    assert_eq!(result.len(), 1);
+    assert!(
+        result[0].author.is_none(),
+        "no author_id ⇒ author must be omitted"
+    );
 }
 
 #[test]

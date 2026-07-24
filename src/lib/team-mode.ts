@@ -1,0 +1,270 @@
+/**
+ * Team mode (Phase 0): point the desktop app's IPC transport at a remote
+ * Helmor companion fronted by a Cloudflare Worker, instead of the local Tauri
+ * backend. "Zero new concepts" — the UI is identical; only the transport
+ * changes.
+ *
+ * Config lives in `localStorage` (not Tauri app-settings) because `ipc.ts` must
+ * decide the transport SYNCHRONOUSLY at module load, before any async settings
+ * read could resolve. {@link switchTeamMode} persists here, flips the mode flag,
+ * then repoints the live transport IN PLACE — no `window.location.reload`. The
+ * cold-boot path is unchanged: `ipc.ts` reads {@link isTeamModeActive} at module
+ * load and routes every `invoke`/`listen`/`Channel` accordingly.
+ *
+ * Only `ipc.ts` (transport) and the Team settings panel / sidebar switch (UI)
+ * import this module.
+ *
+ * The in-place switch action `switchTeamMode` lives in the sibling
+ * `team-switch.ts` module (it imports `ipc.ts`), deliberately NOT here:
+ * `ipc.ts` eagerly reads {@link isTeamModeActive} at module init, so importing
+ * `ipc.ts` from `team-mode.ts` would force `ipc.ts` to evaluate
+ * mid-`team-mode`-init and hit `MODE_KEY` in its temporal dead zone.
+ */
+
+const MODE_KEY = "helmor.team.mode";
+const URL_KEY = "helmor.team.url";
+const TOKEN_KEY = "helmor.team.token";
+/** R5-A: the companion/admin token, present ONLY on the creator's machine
+ *  (saved by the create flow right after deploy). Its presence is the role
+ *  gate — `isTeamAdmin()` — for admin-only UI like the sidebar Invite button.
+ *  Members never receive it (their bearer is the invite token). */
+const ADMIN_TOKEN_KEY = "helmor.team.adminToken";
+/** R5-A: the ChatGPT account email captured locally at authorize time (parsed
+ *  from the id_token on this machine — never sent anywhere). Display-only, so
+ *  the Agent status card can show a human identity instead of a UUID. */
+const CODEX_EMAIL_KEY = "helmor.team.codexEmail";
+
+export interface TeamConfig {
+	/** Worker base URL, trailing slash stripped. */
+	url: string;
+	/** Capability token the container's companion accepts (may be empty). */
+	token: string;
+}
+
+function storage(): Storage | null {
+	try {
+		return typeof localStorage !== "undefined" ? localStorage : null;
+	} catch {
+		// localStorage can throw in locked-down embedded contexts.
+		return null;
+	}
+}
+
+function normalizeUrl(url: string): string {
+	return url.trim().replace(/\/+$/, "");
+}
+
+/** The saved team backend config, or `null` when no Worker URL is stored. */
+export function getTeamConfig(): TeamConfig | null {
+	const store = storage();
+	if (!store) return null;
+	const url = normalizeUrl(store.getItem(URL_KEY) ?? "");
+	if (!url) return null;
+	// Dev: the local proxy seeds a FIXED member token, so a stale stored token
+	// (e.g. left over after the local registry was wiped) 401s the SSE and hangs
+	// on "Reconnecting…". When pointed at the local dev proxy, always use the
+	// known dev token so a reconnect/reload auto-recovers without re-typing.
+	const dev = getDevTeamDefault();
+	if (dev && url === dev.url) return { url, token: dev.token };
+	return { url, token: (store.getItem(TOKEN_KEY) ?? "").trim() };
+}
+
+/** Persist the Worker URL + token (does not toggle the mode on its own). */
+export function saveTeamConfig(config: TeamConfig): void {
+	const store = storage();
+	if (!store) return;
+	store.setItem(URL_KEY, normalizeUrl(config.url));
+	store.setItem(TOKEN_KEY, config.token.trim());
+}
+
+/**
+ * Wipe the saved team backend entirely — URL, token, AND the mode flag — so the
+ * next "Team" pick starts from a clean slate (the setup card, not a stale
+ * config). Reload after calling to repoint the live transport back to local.
+ * Used by the dev-tools "Reset team-cloud config" action.
+ */
+export function clearTeamConfig(): void {
+	const store = storage();
+	if (!store) return;
+	// R2-D: leaving a team deletes its query-cache bucket from disk right
+	// away (privacy: an ex-member's machine must not keep the team's
+	// workspace-list cache). Read the config BEFORE removing it; the delete
+	// is best-effort fire-and-forget (the aggressive prune at the next team
+	// persister init is the retry path). Lazy import keeps this module
+	// dependency-light for ipc's boot order (see file header).
+	const url = store.getItem(URL_KEY);
+	const token = store.getItem(TOKEN_KEY);
+	store.removeItem(URL_KEY);
+	store.removeItem(TOKEN_KEY);
+	store.removeItem(MODE_KEY);
+	// R5-A: leaving a team also drops the creator-side admin token and the
+	// locally-captured agent email — both are meaningless outside this team.
+	store.removeItem(ADMIN_TOKEN_KEY);
+	store.removeItem(CODEX_EMAIL_KEY);
+	if (url) {
+		void import("./team-query-cache").then(({ deleteTeamQueryCacheBucket }) =>
+			deleteTeamQueryCacheBucket(normalizeUrl(url), token ?? ""),
+		);
+	}
+}
+
+/**
+ * Local-dev convenience: the fixed URL + member token the `bun run dev:team`
+ * proxy seeds, so toggling Team mode in a dev build needs no manual entry.
+ * `null` in a production build — the fixed token only works against the
+ * 127.0.0.1 dev proxy. Keep the token in sync with
+ * `cloud/scripts/local-docker-team.ts` (`devMemberToken`).
+ */
+export function getDevTeamDefault(): TeamConfig | null {
+	if (!import.meta.env.DEV) return null;
+	return { url: "http://127.0.0.1:8787", token: "hlm_dev_team_local" };
+}
+
+/**
+ * True when the team-mode flag is set, regardless of whether a config exists.
+ * `isTeamModeActive()` requires BOTH — so a wiped/corrupt config with a
+ * lingering flag ("zombie" state) silently falls back to local. WP7 Gate 1
+ * uses this to detect that state and route the user into setup instead.
+ */
+export function isTeamModeRequested(): boolean {
+	const store = storage();
+	if (!store) return false;
+	return store.getItem(MODE_KEY) === "1";
+}
+
+/** True when team mode is switched on AND a Worker URL is configured. */
+export function isTeamModeActive(): boolean {
+	const store = storage();
+	if (!store) return false;
+	return store.getItem(MODE_KEY) === "1" && getTeamConfig() !== null;
+}
+
+/** Flip the team-mode flag. Persistence only — use {@link switchTeamMode} to
+ *  actually repoint the live transport (it flips this flag, then swaps the
+ *  transport in place). */
+export function setTeamModeActive(active: boolean): void {
+	const store = storage();
+	if (!store) return;
+	if (active) {
+		store.setItem(MODE_KEY, "1");
+	} else {
+		store.removeItem(MODE_KEY);
+	}
+}
+
+/**
+ * R5-A: persist the companion/admin token on the CREATOR's machine only —
+ * called by the create flow right after a successful deploy. Minting invites
+ * needs this token; its presence is what makes this machine "the admin".
+ */
+export function saveTeamAdminToken(token: string): void {
+	const store = storage();
+	if (!store) return;
+	const trimmed = token.trim();
+	if (!trimmed) return;
+	store.setItem(ADMIN_TOKEN_KEY, trimmed);
+}
+
+/** The stored companion/admin token, or `null` on a member machine. */
+export function getTeamAdminToken(): string | null {
+	const store = storage();
+	if (!store) return null;
+	const token = (store.getItem(ADMIN_TOKEN_KEY) ?? "").trim();
+	return token ? token : null;
+}
+
+/**
+ * True on the team creator's machine (an admin token is stored). Members get
+ * `false` — admin-only UI (the sidebar Invite button) simply doesn't render.
+ */
+export function isTeamAdmin(): boolean {
+	return isTeamModeActive() && getTeamAdminToken() !== null;
+}
+
+/** R5-A: remember the ChatGPT account email captured at authorize time so the
+ *  Agent status card shows a human identity instead of an account UUID. */
+export function saveCodexIdentityEmail(email: string): void {
+	const store = storage();
+	if (!store) return;
+	const trimmed = email.trim();
+	if (!trimmed) return;
+	store.setItem(CODEX_EMAIL_KEY, trimmed);
+}
+
+/** The locally-captured Codex identity email, or `null` (pre-R5-A authorize /
+ *  member machines that never authorized). Callers fall back to accountId. */
+export function getCodexIdentityEmail(): string | null {
+	const store = storage();
+	if (!store) return null;
+	const email = (store.getItem(CODEX_EMAIL_KEY) ?? "").trim();
+	return email ? email : null;
+}
+
+/** A parsed team invite: the Worker origin to register against and the
+ * one-time invite token (which doubles as the member's bearer once
+ * accepted — trust-on-first-use). */
+export interface ParsedInvite {
+	/** Worker base URL (origin only, trailing slash stripped). */
+	url: string;
+	/** The invite token from the link's `?invite=` query param. */
+	token: string;
+}
+
+/**
+ * Parse an invite from a pasted link. The control plane mints links shaped
+ * like `https://helmor-team.example.workers.dev/?invite=<token>` — the
+ * Worker origin is where we register, the `invite` query param is the
+ * capability token. Returns `null` when the input isn't a URL carrying a
+ * non-empty `invite` param (so callers can show "not a valid invite link").
+ *
+ * Pure + input-only (no `window`) so it's unit-testable; the location-based
+ * convenience wrapper is {@link getInviteFromLocation}.
+ */
+export function parseInviteLink(input: string): ParsedInvite | null {
+	const trimmed = input.trim();
+	if (!trimmed) return null;
+	let parsed: URL;
+	try {
+		parsed = new URL(trimmed);
+	} catch {
+		return null;
+	}
+	const token = parsed.searchParams.get("invite")?.trim();
+	if (!token) return null;
+	// Origin only — drop the path/query so the saved backend URL is the
+	// bare Worker root the `/team/*` routes hang off.
+	return { url: normalizeUrl(parsed.origin), token };
+}
+
+/**
+ * Read an invite out of the current `window.location` (the app was opened
+ * via an invite deep-link). `null` outside a browser context or when no
+ * valid `?invite=` is present.
+ */
+export function getInviteFromLocation(): ParsedInvite | null {
+	if (typeof window === "undefined") return null;
+	try {
+		return parseInviteLink(window.location.href);
+	} catch {
+		return null;
+	}
+}
+
+/** Strip the `?invite=` param from the address bar after handling it, so a
+ * reload doesn't re-trigger the accept flow and the token isn't left
+ * lingering in the URL. No-op outside a browser / when History is absent. */
+export function clearInviteFromLocation(): void {
+	if (typeof window === "undefined") return;
+	try {
+		const url = new URL(window.location.href);
+		if (!url.searchParams.has("invite")) return;
+		url.searchParams.delete("invite");
+		window.history.replaceState(
+			window.history.state,
+			"",
+			`${url.pathname}${url.search}${url.hash}`,
+		);
+	} catch {
+		// History API unavailable / locked-down context — harmless to skip.
+	}
+}

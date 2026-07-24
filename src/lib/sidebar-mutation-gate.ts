@@ -110,6 +110,24 @@ export function createScopedSidebarGate(queryClient: QueryClient): {
 }
 
 /**
+ * R2-B: first step of EVERY optimistic sidebar-list writer (delete,
+ * archive, restore, pin, mark-unread). Aborts any in-flight
+ * workspaceGroups / archivedWorkspaces refetch so its resolution can't
+ * write a pre-mutation snapshot over the optimistic update — the gate
+ * only blocks NEW invalidates, not fetches already on the wire.
+ * `cancelQueries` dispatches the aborts synchronously; awaiting the
+ * returned promise before writing is unnecessary (void is intentional).
+ */
+export function cancelSidebarListQueries(queryClient: QueryClient): void {
+	void queryClient.cancelQueries({
+		queryKey: helmorQueryKeys.workspaceGroups,
+	});
+	void queryClient.cancelQueries({
+		queryKey: helmorQueryKeys.archivedWorkspaces,
+	});
+}
+
+/**
  * The ONLY way for non-mutation-owner code to invalidate sidebar
  * lists. Skips while a mutation is in flight; reconciles otherwise.
  *

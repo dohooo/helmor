@@ -20,6 +20,7 @@
 //! - [`gitlab`] — GitLab REST client using `glab api`.
 
 pub(crate) mod accounts;
+pub(crate) mod acting_member;
 pub(crate) mod avatar_cache;
 mod branch;
 mod bundled;
@@ -29,6 +30,7 @@ mod detect;
 pub mod github;
 pub mod gitlab;
 pub mod inbox;
+pub(crate) mod member_creds;
 mod provider;
 pub(crate) mod remote;
 mod types;

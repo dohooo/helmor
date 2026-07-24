@@ -92,13 +92,16 @@ export default defineConfig(async () => ({
 		retry: process.env.CI ? 2 : 0,
 		// Sidecar tests are written for `bun:test`, not vitest. Exclude them
 		// so `bun run test:frontend` doesn't trip on `import ... from "bun:test"`.
-		// Same for the Rust + fixtures trees which contain no TS tests.
+		// Same for the Rust + fixtures trees which contain no TS tests, and the
+		// `cloud/` Worker tests which run under @cloudflare/vitest-pool-workers
+		// (a different environment) via `cd cloud && bun run test`.
 		exclude: [
 			"**/node_modules/**",
 			"**/dist/**",
 			"sidecar/**",
 			"apps/**",
 			"src-tauri/**",
+			"cloud/**",
 			"fixtures/**",
 			"e2e/**",
 		],

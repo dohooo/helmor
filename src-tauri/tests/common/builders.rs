@@ -15,7 +15,17 @@ pub fn make_record(id: &str, role: &str, content: &str) -> HistoricalRecord {
         content: content.to_string(),
         parsed_content: serde_json::from_str::<Value>(content).ok(),
         created_at: "2026-04-06T00:00:00.000Z".to_string(),
+        author_id: None,
     }
+}
+
+/// A human-authored `user_prompt` row carrying a team member id — the
+/// multi-member cloud-room shape. Mirrors what `persist_user_message` writes
+/// when `ExchangeContext.author_id` is set.
+pub fn user_prompt_with_author(id: &str, text: &str, author_id: &str) -> HistoricalRecord {
+    let mut record = user_prompt(id, text);
+    record.author_id = Some(author_id.to_string());
+    record
 }
 
 pub fn assistant_json(id: &str, blocks: Value, extra: Option<Value>) -> HistoricalRecord {
@@ -170,6 +180,48 @@ pub fn result_json(id: &str, extra: Value) -> HistoricalRecord {
         }
     }
     make_record(id, "assistant", &serde_json::to_string(&parsed).unwrap())
+}
+
+/// Room-chat message without an author (desktop / local path).
+/// Content shape: `{"type":"room_chat","text":"..."}`
+pub fn room_chat(id: &str, text: &str) -> HistoricalRecord {
+    let parsed = json!({ "type": "room_chat", "text": text });
+    make_record(id, "user", &serde_json::to_string(&parsed).unwrap())
+}
+
+/// Room-chat message with a team member author id.
+/// Mirrors what `persist_room_chat_message` writes when `author_id` is set.
+pub fn room_chat_with_author(id: &str, text: &str, author_id: &str) -> HistoricalRecord {
+    let mut record = room_chat(id, text);
+    record.author_id = Some(author_id.to_string());
+    record
+}
+
+/// Room-chat message with file + image + pasted-text payloads.
+pub fn room_chat_with_attachments(
+    id: &str,
+    text: &str,
+    files: &[&str],
+    images: &[&str],
+    pasted: &[(u64, u64)],
+) -> HistoricalRecord {
+    let mut payload = json!({
+        "type": "room_chat",
+        "text": text,
+    });
+    if !files.is_empty() {
+        payload["files"] = json!(files);
+    }
+    if !images.is_empty() {
+        payload["images"] = json!(images);
+    }
+    if !pasted.is_empty() {
+        payload["pastedTexts"] = json!(pasted
+            .iter()
+            .map(|(s, e)| json!({ "start": s, "end": e }))
+            .collect::<Vec<_>>());
+    }
+    make_record(id, "user", &serde_json::to_string(&payload).unwrap())
 }
 
 /// Run records through the pipeline and return the normalized form. Used by

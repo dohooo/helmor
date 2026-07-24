@@ -1,9 +1,11 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ThreadMessageLike } from "@/lib/api";
 import { consumeAnchoredToggle, resetAnchoredToggle } from "./anchored-toggle";
 import { serializeMessageForClipboard } from "./copy-message";
-import { ChatUserMessage } from "./user-message";
+import { ChatUserMessage, resolveAuthorAvatarUrl } from "./user-message";
 import { UserMessageExpansionProvider } from "./user-message-expansion";
 
 afterEach(() => {
@@ -33,6 +35,33 @@ describe("ChatUserMessage pasted-text tags", () => {
 			/>,
 		);
 		expect(screen.getByText("short prompt")).toBeInTheDocument();
+	});
+
+	it("renders a sent @agent mention as the same inline badge style", () => {
+		render(
+			<ChatUserMessage
+				message={makeMessage([
+					{ type: "text", id: "t0", text: "@agent search the market" },
+				])}
+			/>,
+		);
+
+		expect(screen.getByText("agent")).toBeInTheDocument();
+		expect(screen.queryByText("@agent")).toBeNull();
+		expect(screen.getByText(/search the market/)).toBeInTheDocument();
+	});
+
+	it("does not turn embedded @agent text into a mention badge", () => {
+		render(
+			<ChatUserMessage
+				message={makeMessage([
+					{ type: "text", id: "t0", text: "email me at x@agent.test" },
+				])}
+			/>,
+		);
+
+		expect(screen.getByText("email me at x@agent.test")).toBeInTheDocument();
+		expect(screen.queryByText("agent")).toBeNull();
 	});
 
 	it("renders a pasted-text part as a tag chip, not inline content", () => {
@@ -229,5 +258,83 @@ describe("ChatUserMessage line clamp", () => {
 			delete (HTMLElement.prototype as { getBoundingClientRect?: unknown })
 				.getBoundingClientRect;
 		}
+	});
+});
+
+describe("ChatUserMessage author avatar (team room)", () => {
+	// CachedAvatar pulls through React Query; the author-less single-user
+	// path never mounts it, so only these author cases need a provider.
+	function renderWithQuery(ui: ReactElement) {
+		return render(
+			<QueryClientProvider client={new QueryClient()}>
+				{ui}
+			</QueryClientProvider>,
+		);
+	}
+
+	it("shows the author avatar (initials + name title) when author is present", () => {
+		renderWithQuery(
+			<ChatUserMessage
+				message={{
+					id: "u-author-1",
+					role: "user",
+					content: [{ type: "text", id: "t0", text: "hi team" }],
+					author: { id: "alice-1", displayName: "Ada Lovelace" },
+				}}
+			/>,
+		);
+		expect(screen.getByText("hi team")).toBeInTheDocument();
+		expect(screen.getByTestId("author-avatar")).toBeInTheDocument();
+		expect(screen.getByTitle("Ada Lovelace")).toBeInTheDocument();
+		expect(screen.getByText("AL")).toBeInTheDocument();
+	});
+
+	it("renders no author avatar in single-user mode (author absent)", () => {
+		renderWithQuery(
+			<ChatUserMessage
+				message={{
+					id: "u-author-2",
+					role: "user",
+					content: [{ type: "text", id: "t0", text: "solo prompt" }],
+				}}
+			/>,
+		);
+		expect(screen.getByText("solo prompt")).toBeInTheDocument();
+		expect(screen.queryByTestId("author-avatar")).toBeNull();
+	});
+
+	it("falls back to author-id initials when there is no display name", () => {
+		renderWithQuery(
+			<ChatUserMessage
+				message={{
+					id: "u-author-3",
+					role: "user",
+					content: [{ type: "text", id: "t0", text: "x" }],
+					author: { id: "zoe" },
+				}}
+			/>,
+		);
+		expect(screen.getByTestId("author-avatar")).toBeInTheDocument();
+		expect(screen.getByText("ZO")).toBeInTheDocument();
+	});
+});
+
+describe("resolveAuthorAvatarUrl", () => {
+	it("derives the GitHub avatar from a numeric author id", () => {
+		// Team-room authors arrive id-only (GitHub numeric id, no URL); derive
+		// the real picture from the id instead of showing only initials.
+		expect(resolveAuthorAvatarUrl({ id: "32405058" })).toBe(
+			"https://avatars.githubusercontent.com/u/32405058",
+		);
+	});
+
+	it("prefers an explicit avatarUrl over the derived one", () => {
+		expect(
+			resolveAuthorAvatarUrl({ id: "32405058", avatarUrl: "https://x/a.png" }),
+		).toBe("https://x/a.png");
+	});
+
+	it("returns undefined for a non-numeric id with no avatarUrl", () => {
+		expect(resolveAuthorAvatarUrl({ id: "alice" })).toBeUndefined();
 	});
 });

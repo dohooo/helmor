@@ -9,21 +9,26 @@ import {
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { StartSubmitMode } from "@/features/composer/start-submit-mode";
+import { useSendErrorRecovery } from "@/features/conversation/hooks/use-send-error-recovery";
 import type { PendingUserInput } from "@/features/conversation/pending-user-input";
 import {
 	type PendingPermission as StorePendingPermission,
 	useStreamingStore,
 } from "@/features/conversation/state/streaming-store";
+import { useTeamIdentity } from "@/features/team/use-team-identity";
 import type {
 	ActiveStreamSummary,
 	AgentModelOption,
 	CodexGoalState,
+	MessageAuthor,
+	ThreadMessageLike,
 } from "@/lib/api";
 import {
 	findProviderCapabilities,
 	generateSessionTitle,
 	loadRepoPreferences,
 	mutateCodexGoal,
+	postRoomChatMessage,
 	renameSession,
 	respondToPermissionRequest,
 	respondToUserInput,
@@ -42,6 +47,7 @@ import {
 	helmorQueryKeys,
 	providerCapabilitiesQueryOptions,
 	sessionThreadMessagesQueryOptions,
+	teamMembersQueryOptions,
 } from "@/lib/query-client";
 import { resolveGeneralPreferencePrefix } from "@/lib/repo-preferences-prompts";
 import {
@@ -52,6 +58,9 @@ import {
 } from "@/lib/session-thread-cache";
 import type { FollowUpBehavior } from "@/lib/settings";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
+import type { TeamMember } from "@/lib/team-api";
+import { getTeamConfig, isTeamModeActive } from "@/lib/team-mode";
+import { getTransportGeneration } from "@/lib/transport-generation";
 import type { SubmitQueueApi } from "@/lib/use-submit-queue";
 import { showWorkspaceBrokenToast } from "@/lib/workspace-broken-toast";
 import {
@@ -59,6 +68,8 @@ import {
 	findModelOption,
 } from "@/lib/workspace-helpers";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
+import { hasAgentMention } from "../agent-mention";
+import { buildRoomCarryTranscript } from "../room-context-carry";
 import {
 	buildSessionContextPrompt,
 	type SessionContextReference,
@@ -72,6 +83,10 @@ import { buildTitleSeed, seedSessionTitle } from "./seed-session-title";
 
 const EMPTY_IMAGES: string[] = [];
 const EMPTY_FILES: string[] = [];
+const PENDING_SELF_AUTHOR: MessageAuthor = {
+	id: "pending-self",
+	displayName: "You",
+};
 
 /**
  * Re-export from the streaming store — kept here so existing import
@@ -167,6 +182,12 @@ export function useConversationStreaming({
 }: UseConversationStreamingArgs) {
 	const queryClient = useQueryClient();
 	const pushToast = useWorkspaceToast();
+	// Local team identity (the sender's own GitHub avatar/name). Read via a ref
+	// in the submit handler so optimistic messages render the avatar instantly,
+	// without churning the large submit callback's dependency array.
+	const { identity: teamIdentity } = useTeamIdentity();
+	const teamIdentityRef = useRef(teamIdentity);
+	teamIdentityRef.current = teamIdentity;
 	// All per-context state lives in the module-level Zustand store so the
 	// stream's Tauri Channel callback keeps writing to a target that
 	// outlives every component unmount / remount. The hook subscribes via
@@ -184,6 +205,7 @@ export function useConversationStreaming({
 		interactionWorkspaceByContext,
 		sendingContextKeys,
 		activeFastPreludes,
+		mirroredActiveSessionByContext,
 	} = useStreamingStore(
 		useShallow((state) => ({
 			pendingPermissionsByContext: state.pendingPermissionsByContext,
@@ -192,11 +214,15 @@ export function useConversationStreaming({
 			interactionWorkspaceByContext: state.interactionWorkspaceByContext,
 			sendingContextKeys: state.sendingContextKeys,
 			activeFastPreludes: state.activeFastPreludes,
+			mirroredActiveSessionByContext: state.mirroredActiveSessionByContext,
 		})),
 	);
 	const activeSendError = useStreamingStore(
 		(state) => state.sendErrorsByContext[composerContextKey] ?? null,
 	);
+	// DF-5: auto-clear retryable (transport-level) send errors when the
+	// backend recovers — readiness ready-transition edge.
+	useSendErrorRecovery(composerContextKey);
 	const pendingUserInput = useStreamingStore(
 		(state) => state.pendingUserInputByContext[composerContextKey] ?? null,
 	);
@@ -261,16 +287,23 @@ export function useConversationStreaming({
 		providerCapabilitiesQueryOptions(),
 	);
 	const providerCapabilitiesTable = providerCapabilitiesQuery.data ?? null;
+	// Keep the team roster warm so the room-context carry block (built in the
+	// send path below) can attribute carried messages to real teammates by id.
+	// Since the carry became always-on, the toggle UI that used to subscribe to
+	// this query was removed — this is now the sole subscriber that populates
+	// the cache `getQueryData` reads there. Disabled (no fetch) outside team mode.
+	useQuery(
+		teamMembersQueryOptions(isTeamModeActive() ? getTeamConfig() : null),
+	);
 	// Value-stable fingerprint for effects that only care about the set
 	// of active session ids, not the array's reference.
-	const activeSessionIdsKey = useMemo(
-		() =>
-			activeStreams
-				.map((stream) => stream.sessionId)
-				.sort()
-				.join("\n"),
-		[activeStreams],
-	);
+	const activeSessionIdsKey = useMemo(() => {
+		const ids = new Set(activeStreams.map((stream) => stream.sessionId));
+		for (const sessionId of Object.values(mirroredActiveSessionByContext)) {
+			ids.add(sessionId);
+		}
+		return [...ids].sort().join("\n");
+	}, [activeStreams, mirroredActiveSessionByContext]);
 	const selectedProvider = useMemo(() => {
 		if (!displayedSelectedModelId) return null;
 		const sections = modelSectionsQuery.data ?? [];
@@ -674,6 +707,119 @@ export function useConversationStreaming({
 			}
 
 			const contextKey = targetContextKey;
+			const teamModeActive = isTeamModeActive();
+			// Round6 P1-7b: pin the transport identity this submit started under.
+			// A submit that awaits across an in-place team↔local switch would
+			// otherwise fire OLD-backend session ids into the NEW transport —
+			// re-checked after the awaits below, before any send/side effect.
+			const submitGeneration = getTransportGeneration();
+
+			// Optimistic messages render the sender's OWN avatar/name instantly
+			// (the client knows who it is; the server still stamps the trusted
+			// author_id on persist). Team mode only — single-user carries no
+			// author (no avatar), byte-identical to before.
+			const selfAuthor: MessageAuthor | undefined = (() => {
+				if (!teamModeActive) return undefined;
+				const id = teamIdentityRef.current?.githubId;
+				if (!id) return PENDING_SELF_AUTHOR;
+				return {
+					id,
+					displayName:
+						teamIdentityRef.current?.displayName ??
+						teamIdentityRef.current?.login,
+					avatarUrl: teamIdentityRef.current?.avatarUrl ?? undefined,
+				};
+			})();
+			const hasTeamAgentMention =
+				teamModeActive && hasAgentMention(trimmedPrompt);
+
+			// ── Team-mode @agent gating ──────────────────────────────────────
+			// In a room, an unmentioned message is normal group chat even when
+			// an agent turn is running. Persist/broadcast it as room chat before
+			// the live-stream follow-up branch can classify it as steer/queue.
+			// Only @agent messages are allowed to affect the agent control plane.
+			if (teamModeActive && !hasTeamAgentMention) {
+				const roomMsgId = crypto.randomUUID();
+				const now = new Date().toISOString();
+				const pastedTexts = locatePastedTextRanges(trimmedPrompt, customTags);
+				const optimisticMsg: ThreadMessageLike = {
+					...createLiveThreadMessage({
+						id: roomMsgId,
+						role: "user",
+						text: trimmedPrompt,
+						createdAt: now,
+						files: filePaths,
+						images: imagePaths,
+						pastedTexts,
+					}),
+					// Mark the optimistic bubble as room chat so the context-carry
+					// assembler (buildRoomCarryTranscript) folds it into the NEXT
+					// @agent turn — it collects user rows where isRoomChat===true.
+					// Without this, the room messages the user JUST typed are invisible
+					// to the agent until a reload re-fetches them with the marker
+					// stamped by the pipeline adapter.
+					isRoomChat: true,
+					// The sender's own avatar/name → the bubble shows it instantly,
+					// no wait for the server round-trip / broadcast echo.
+					author: selfAuthor,
+				};
+				const rollback = appendUserMessage(
+					queryClient,
+					targetSessionId,
+					optimisticMsg,
+				);
+				if (!isOverride) {
+					storeActions.setComposerRestore(null);
+				}
+				storeActions.setSendError(contextKey, null);
+				// Shared failure path for BOTH error transports (round6 P1-6a):
+				// roll the optimistic bubble back, restore the draft, surface the
+				// error — the message must never pretend it was sent.
+				const failRoomChat = (message: string) => {
+					restoreSnapshot(queryClient, targetSessionId, rollback);
+					if (!isOverride) {
+						storeActions.setComposerRestore({
+							contextKey,
+							draft: trimmedPrompt,
+							images: imagePaths,
+							files: filePaths,
+							customTags,
+							editorState: editorStateSnapshot ?? null,
+							nonce: Date.now(),
+						});
+					}
+					storeActions.setSendError(contextKey, message);
+				};
+				try {
+					await postRoomChatMessage(
+						{
+							helmorSessionId: targetSessionId,
+							clientMessageId: roomMsgId,
+							prompt: trimmedPrompt,
+							files: filePaths.length > 0 ? filePaths : null,
+							images: imagePaths.length > 0 ? imagePaths : null,
+							pastedTexts: pastedTexts.length > 0 ? pastedTexts : null,
+						},
+						(event) => {
+							// Success delivery rides the session-stream watcher / broadcast
+							// (room chat never streams content over THIS channel) — but a
+							// FAILURE does arrive here on the companion transport: the 200
+							// x-ndjson headers have already left, so the Rust side
+							// (stream.rs run_and_surface, R3-B) sends the terminal error
+							// IN-BAND as `{kind:"error"}`. Swallowing it (the old no-op)
+							// left the optimistic bubble up over a message that never
+							// persisted (round6 P1-6a). On the desktop transport the same
+							// failure rejects the invoke → the catch below.
+							if (event.kind === "error") {
+								failRoomChat(event.message);
+							}
+						},
+					);
+				} catch (err) {
+					failRoomChat(err instanceof Error ? err.message : String(err));
+				}
+				return;
+			}
 
 			// Follow-up branch: stream still alive → steer or queue.
 			// `activeStreams` is the source of truth (survives remount);
@@ -684,6 +830,16 @@ export function useConversationStreaming({
 			const backendLiveStream = activeStreams.find(
 				(stream) => stream.sessionId === targetSessionId,
 			);
+			// F-3 (silent message loss): the mirrored live-session marker
+			// (`mirroredActiveSessionByContext`) is a DISPLAY signal — "another
+			// client is driving" — cleared only by a terminal event / watcher
+			// teardown, so it can go STALE. Routing a send to the queue on the
+			// mirror alone black-holed the message: no optimistic row, no error,
+			// an in-memory queue whose drain trigger never fires. Queueing now
+			// requires a LOCAL stream or a BACKEND-confirmed live stream
+			// (`activeStreams` covers a teammate-driven turn too); a stale
+			// mirror falls through to the normal send path, where a failure
+			// surfaces via the existing catch (visible error + draft restore).
 			const liveStream =
 				localLiveStream ??
 				(backendLiveStream
@@ -700,9 +856,10 @@ export function useConversationStreaming({
 				// prompts (e.g. git-pull) that must never steer.
 				// `followUpBehaviorOverride` is the per-submit "opposite"
 				// flip from the composer shortcut; subordinate to forceQueue.
-				const effectiveBehavior = forceQueue
-					? "queue"
-					: (followUpBehaviorOverride ?? followUpBehavior);
+				const effectiveBehavior =
+					hasTeamAgentMention || forceQueue
+						? "queue"
+						: (followUpBehaviorOverride ?? followUpBehavior);
 				if (effectiveBehavior === "queue" && !isOverride) {
 					// App-level queue: capture the current (session,
 					// workspace, contextKey) so drain can replay faithfully
@@ -728,7 +885,10 @@ export function useConversationStreaming({
 							editorStateSnapshot,
 						},
 					);
-					storeActions.setComposerRestore(null);
+					// F-3: do NOT clear composerRestore on enqueue — if the queue
+					// item is lost (it's in-memory), the draft is still restorable.
+					// The queued item itself renders via useSubmitQueueForSession
+					// (queued rows with Steer now / Remove), so it's never invisible.
 					return;
 				}
 
@@ -747,6 +907,7 @@ export function useConversationStreaming({
 					createdAt: new Date().toISOString(),
 					files: filePaths,
 					images: imagePaths,
+					author: selfAuthor,
 				});
 				const rollback = appendUserMessage(
 					queryClient,
@@ -835,25 +996,61 @@ export function useConversationStreaming({
 			const isFirstUserMessage =
 				(currentThread ?? []).every((message) => message.role !== "user") &&
 				(currentTitle == null || currentTitle === "Untitled");
+			// F-3 (silent message loss, live root cause): this await runs BEFORE
+			// the send's try/catch. When the backend is unreachable it rejected
+			// FIRST — the whole submit died here with the composer already
+			// cleared: no optimistic row, no error, message gone. The preference
+			// preamble is best-effort decoration; on failure proceed without it
+			// and let the actual send surface the outage via the existing catch
+			// (visible error + draft restore).
 			const repoPreferences = targetRepoId
-				? await loadRepoPreferences(targetRepoId)
+				? await loadRepoPreferences(targetRepoId).catch(() => null)
 				: null;
+			// Round6 P1-7b: the await above may have spanned an in-place transport
+			// switch. Bail BEFORE any side effect (title seed, optimistic append,
+			// the send itself) — this submit's session ids belong to the old
+			// backend; the remounted tree owns the new one.
+			if (getTransportGeneration() !== submitGeneration) {
+				console.warn(
+					"[conversation] dropped a submit that spanned a transport switch",
+				);
+				return;
+			}
 			// The general-preference preamble is prepended ONLY on the wire
 			// to the agent (Rust side stitches it onto `prompt_prefix`).
 			// `trimmedPrompt` is what the user typed — that's what we
 			// optimistically render in the chat bubble and what the Rust
 			// side persists to `session_messages` as the user_prompt body.
-			const promptPrefix =
-				isFirstUserMessage && !isCompactCommand
-					? [
-							buildSessionContextPrompt(
-								getSessionContextReferences?.(targetSessionId) ?? [],
-							),
-							resolveGeneralPreferencePrefix(repoPreferences),
-						]
-							.filter((prefix): prefix is string => Boolean(prefix?.trim()))
-							.join("\n\n") || null
-					: null;
+			//
+			// Team mode + @agent: always fold the room-context carry block when
+			// there are room-chat messages since the last agent turn. The carried
+			// block is wire-only (in promptPrefix) — the persisted user_prompt
+			// body stays byte-identical.
+			const roomCarryBlock: string | null = (() => {
+				if (!isTeamModeActive()) return null;
+				if (!currentThread || currentThread.length === 0) return null;
+				const teamCfg = getTeamConfig();
+				const members: TeamMember[] = teamCfg
+					? (queryClient.getQueryData<TeamMember[]>(
+							teamMembersQueryOptions(teamCfg).queryKey,
+						) ?? [])
+					: [];
+				const { block } = buildRoomCarryTranscript(currentThread, members);
+				return block;
+			})();
+			const promptPrefix = (() => {
+				const parts: string[] = [];
+				if (isFirstUserMessage && !isCompactCommand) {
+					const sessionCtx = buildSessionContextPrompt(
+						getSessionContextReferences?.(targetSessionId) ?? [],
+					);
+					if (sessionCtx?.trim()) parts.push(sessionCtx);
+					const generalPref = resolveGeneralPreferencePrefix(repoPreferences);
+					if (generalPref?.trim()) parts.push(generalPref);
+				}
+				if (roomCarryBlock) parts.push(roomCarryBlock);
+				return parts.length > 0 ? parts.join("\n\n") : null;
+			})();
 			// Pasted-tag spans inside the prompt — rendered as tag chips (the
 			// composer badge, post-send) instead of inlining the full paste.
 			// Computed against `trimmedPrompt`, which is byte-identical to what
@@ -869,6 +1066,7 @@ export function useConversationStreaming({
 				files: filePaths,
 				images: imagePaths,
 				pastedTexts,
+				author: selfAuthor,
 			});
 			let titleSeed: string | null = null;
 			if (isFirstUserMessage && !isCompactCommand) {
@@ -1095,6 +1293,7 @@ export function useConversationStreaming({
 			setFastPreludeActive,
 			setPlanReviewActive,
 			activeStreams,
+			mirroredActiveSessionByContext,
 			planReviewByContext,
 			followUpBehavior,
 			storeActions,
@@ -1119,6 +1318,9 @@ export function useConversationStreaming({
 		const current = new Set(
 			activeStreamsRef.current.map((stream) => stream.sessionId),
 		);
+		for (const sessionId of Object.values(mirroredActiveSessionByContext)) {
+			current.add(sessionId);
+		}
 		const justEnded: string[] = [];
 		for (const sid of previous) {
 			if (!current.has(sid)) justEnded.push(sid);
@@ -1132,7 +1334,7 @@ export function useConversationStreaming({
 				handleComposerSubmitRef.current(next.payload, next.context);
 			}, 0);
 		}
-	}, [activeSessionIdsKey, submitQueue]);
+	}, [activeSessionIdsKey, mirroredActiveSessionByContext, submitQueue]);
 
 	// Row actions: Steer now / Remove. Both key off the item's stored
 	// context (NOT the currently displayed session) so row clicks from

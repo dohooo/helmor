@@ -16,9 +16,11 @@ import {
 	buildTitleSeed,
 	seedSessionTitle,
 } from "@/features/conversation/hooks/seed-session-title";
+import { useStreamingStore } from "@/features/conversation/state/streaming-store";
 import { buildTerminalBootCommand } from "@/features/terminal/terminal-presets";
 import { setPendingBoot } from "@/features/terminal/terminal-session-store";
 import { createWorkspaceFromStartComposer } from "@/features/workspace-start/create-workspace";
+import { seedCreatedWorkspaceCaches } from "@/features/workspace-start/seed-created-workspace";
 import {
 	type BranchPickerEntry,
 	convertSessionToTerminal,
@@ -30,15 +32,12 @@ import {
 	prewarmSlashCommandsForRepo,
 	type RepositoryCreateOption,
 	renameSession,
-	type ThreadMessageLike,
 	type WorkspaceBranchIntent,
-	type WorkspaceDetail,
 	type WorkspaceMode,
 } from "@/lib/api";
 import { extractError } from "@/lib/errors";
 import { translateSource } from "@/lib/i18n";
 import { helmorQueryKeys } from "@/lib/query-client";
-import { sessionThreadCacheKey } from "@/lib/session-thread-cache";
 import {
 	type AppSettings,
 	readRepoPreference,
@@ -57,6 +56,30 @@ import {
 	useStableActions,
 } from "@/shell/hooks/use-stable-actions";
 
+/** R3-E: client-side backstop deadline for the workspace-create IPC. The
+ *  Worker's plain-RPC deadline (60s → typed 504) should always fire first;
+ *  this catches transport-level hangs the Worker never sees, so the start
+ *  composer can never lose a submit silently (OBS-R3C-2). */
+const CREATE_WORKSPACE_TIMEOUT_MS = 75_000;
+
+function withCreateTimeout<T>(promise: Promise<T>): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | null = null;
+	const deadline = new Promise<never>((_, reject) => {
+		timer = setTimeout(
+			() =>
+				reject(
+					new Error(
+						"Creating the workspace timed out — the backend didn't answer. Your draft has been restored.",
+					),
+				),
+			CREATE_WORKSPACE_TIMEOUT_MS,
+		);
+	});
+	return Promise.race([promise, deadline]).finally(() => {
+		if (timer) clearTimeout(timer);
+	}) as Promise<T>;
+}
+
 export type StartSurfaceState = {
 	startRepositoryId: string | null;
 	startRepository: RepositoryCreateOption | null;
@@ -65,6 +88,9 @@ export type StartSurfaceState = {
 	/** Worktree mode only; backend ignores in local mode. */
 	startBranchIntent: WorkspaceBranchIntent;
 	startPendingNewBranch: string | null;
+	/** Fatal create failure surfaced inline on the start page (R2-F2);
+	 *  cleared on resubmit or when the user changes repo/mode. */
+	startCreateError: { title: string; message: string } | null;
 	startInboxProviderTab: string;
 	startInboxProviderSourceTab: string;
 	startInboxStateFilterBySource: Record<string, string>;
@@ -154,6 +180,12 @@ export function useStartSurfaceController(
 	const [startPendingNewBranch, setStartPendingNewBranch] = useState<
 		string | null
 	>(null);
+	// R2-F2: fatal create failures render inline in the start surface instead
+	// of a transient toast (a 4s toast is far too easy to miss).
+	const [startCreateError, setStartCreateError] = useState<{
+		title: string;
+		message: string;
+	} | null>(null);
 	// Local-mode branch pick — transient (a pending checkout), kept out of the
 	// persisted worktree `sourceBranchByRepoId` so it can't shadow live HEAD.
 	const [startLocalBranchSelection, setStartLocalBranchSelection] = useState<
@@ -252,6 +284,12 @@ export function useStartSurfaceController(
 		if (!startRepository) return;
 		void prewarmSlashCommandsForRepo(startRepository.id);
 	}, [startRepository]);
+
+	// The inline create error is scoped to the repo/mode it happened in —
+	// switching target invalidates it.
+	useEffect(() => {
+		setStartCreateError(null);
+	}, [startRepositoryId, startMode]);
 
 	// Repo switch only clears transient state; persisted picker selections
 	// are re-read from the new repo's slot automatically.
@@ -504,15 +542,41 @@ export function useStartSurfaceController(
 			payload: ComposerSubmitPayload,
 			options?: { startSubmitMode?: StartSubmitMode },
 		): Promise<ComposerCreatePrepareOutcome> => {
+			// A new submit supersedes any previous inline failure.
+			setStartCreateError(null);
+
 			// Chat mode doesn't require a repo selection — every other
 			// mode does.
 			if (startMode !== "chat" && !startRepository?.id) {
-				pushToastRef.current(
-					translateSource("miscPickRepositoryBeforeSending"),
-					translateSource("miscCantCreateWorkspace"),
-				);
+				setStartCreateError({
+					title: translateSource("miscCantCreateWorkspace"),
+					message: translateSource("miscPickRepositoryBeforeSending"),
+				});
 				return { shouldStream: false };
 			}
+
+			// R3-E: if the create fails OR hangs, the draft the user just
+			// submitted must come back — submitDraft already cleared the
+			// editor, so without this a silent transport loss eats the
+			// message (OBS-R3C-2). Keyed to the start composer's context so
+			// the restore lands in the surface the user is looking at.
+			const restoreStartDraft = () => {
+				const contextKey =
+					startMode === "chat"
+						? "start:chat"
+						: startRepository
+							? `start:repo:${startRepository.id}`
+							: "start:no-repo";
+				useStreamingStore.getState().setComposerRestore({
+					contextKey,
+					draft: payload.prompt,
+					images: payload.imagePaths,
+					files: payload.filePaths,
+					customTags: payload.customTags,
+					editorState: payload.editorStateSnapshot ?? null,
+					nonce: Date.now(),
+				});
+			};
 
 			try {
 				if (
@@ -533,73 +597,54 @@ export function useStartSurfaceController(
 					workspaceId,
 					sessionId,
 					preparedWorkingDirectory,
-				} = await createWorkspaceFromStartComposer({
-					// Chat mode ignores repoId/sourceBranch — pass empty
-					// strings so the function signature stays the same.
-					repoId: startRepository?.id ?? "",
-					sourceBranch:
-						startMode === "chat" || startRepositoryIsPlainDirectory
-							? ""
-							: startSourceBranch,
-					mode: startMode,
-					// Only worktree mode honors branchIntent.
-					branchIntent:
-						startMode === "worktree" ? startBranchIntent : undefined,
-					submitMode: options?.startSubmitMode ?? "startNow",
-					editorStateSnapshot: payload.editorStateSnapshot,
-					composerConfig: {
-						modelId: payload.model.id,
-						effortLevel: payload.effortLevel,
-						permissionMode: payload.permissionMode,
-						fastMode: payload.fastMode,
-					},
-					linkedDirectories: startPendingLinkedDirectories,
-					// Reuse the composer's provisional id so pre-submit
-					// paste-cache files end up owned by this session.
-					seedSessionId: payload.provisionalSessionId,
-				});
+					prepared,
+				} = await withCreateTimeout(
+					createWorkspaceFromStartComposer({
+						// Chat mode ignores repoId/sourceBranch — pass empty
+						// strings so the function signature stays the same.
+						repoId: startRepository?.id ?? "",
+						sourceBranch:
+							startMode === "chat" || startRepositoryIsPlainDirectory
+								? ""
+								: startSourceBranch,
+						mode: startMode,
+						// Only worktree mode honors branchIntent.
+						branchIntent:
+							startMode === "worktree" ? startBranchIntent : undefined,
+						submitMode: options?.startSubmitMode ?? "startNow",
+						editorStateSnapshot: payload.editorStateSnapshot,
+						composerConfig: {
+							modelId: payload.model.id,
+							effortLevel: payload.effortLevel,
+							permissionMode: payload.permissionMode,
+							fastMode: payload.fastMode,
+						},
+						linkedDirectories: startPendingLinkedDirectories,
+						// Reuse the composer's provisional id so pre-submit
+						// paste-cache files end up owned by this session.
+						seedSessionId: payload.provisionalSessionId,
+					}),
+				);
 				// Picks belonged to the in-flight create; clear regardless of
 				// outcome so the next start-page session begins clean.
 				setStartPendingLinkedDirectories(EMPTY_STRING_LIST);
 
-				// Chat workspaces ship as `ready` from a single-phase prep,
-				// so a real WorkspaceDetail isn't materialised until the
-				// follow-up query roundtrips. Without something in the
-				// detail cache, the inspector pane reads `mode === undefined`
-				// → renders one frame → re-renders with `mode === "chat"`
-				// → vanishes. Seed a minimal synthetic detail with the
-				// fields the inspector gate checks; the real fetch
-				// overwrites it shortly after.
-				if (startMode === "chat") {
-					const synthetic: WorkspaceDetail = {
-						id: workspaceId,
-						title: "New chat",
-						repoId: "",
-						repoName: "Chats",
-						directoryName: "",
-						state: "ready",
-						hasUnread: false,
-						workspaceUnread: 0,
-						unreadSessionCount: 0,
-						status: "in-progress",
-						mode: "chat",
-						sessionCount: 1,
-						messageCount: 0,
-						rootPath: preparedWorkingDirectory ?? null,
-						activeSessionId: sessionId,
-					};
-					queryClient.setQueryData<WorkspaceDetail | null>(
-						helmorQueryKeys.workspaceDetail(workspaceId),
-						(existing) => existing ?? synthetic,
-					);
-					// Seed an empty thread so the panel's
-					// `messagesQuery.data === undefined` gate doesn't suppress the
-					// optimistic user bubble before the first DB fetch lands.
-					queryClient.setQueryData<ThreadMessageLike[]>(
-						sessionThreadCacheKey(sessionId),
-						(existing) => existing ?? [],
-					);
-				}
+				// DF-1: seed the new workspace's detail/sessions/thread caches
+				// SYNCHRONOUSLY so the view switch below hits the selection
+				// controller's cached fast path and flips immediately —
+				// instead of the cold-target HOLD keeping the OLD workspace
+				// on screen until a network prime round-trips (the "first
+				// message vanished" start-page bug). The chat-mode synthetic
+				// detail also keeps the inspector's `mode` gate stable on
+				// first mount (it read `mode === undefined` for one frame
+				// otherwise); the real fetches overwrite every seed shortly
+				// after.
+				seedCreatedWorkspaceCaches({
+					queryClient,
+					prepared,
+					mode: startMode,
+					workingDirectory: preparedWorkingDirectory ?? null,
+				});
 
 				requestSidebarReconcile(queryClient);
 
@@ -750,6 +795,10 @@ export function useStartSurfaceController(
 				setViewModeRef.current("conversation");
 				return outcome;
 			} catch (error) {
+				// R3-E: give the consumed draft back on EVERY create failure
+				// (typed errors, the Worker's 504, and the client-side
+				// timeout backstop alike).
+				restoreStartDraft();
 				const { code, message } = extractError(
 					error,
 					translateSource("miscCouldNotCreateWorkspace"),
@@ -760,7 +809,9 @@ export function useStartSurfaceController(
 						: code === "BranchNotFound"
 							? translateSource("miscBranchNotFound")
 							: translateSource("miscCantCreateWorkspace");
-				pushToastRef.current(message, title);
+				// R2-F2: persistent inline error on the start surface — not a
+				// 4s toast the user can miss.
+				setStartCreateError({ title, message });
 				return { shouldStream: false };
 			}
 		},
@@ -890,6 +941,7 @@ export function useStartSurfaceController(
 			startMode,
 			startBranchIntent,
 			startPendingNewBranch,
+			startCreateError,
 			startInboxProviderTab,
 			startInboxProviderSourceTab,
 			startInboxStateFilterBySource,
@@ -907,6 +959,7 @@ export function useStartSurfaceController(
 			startComposerContextKey,
 			startComposerInsertTarget,
 			startComposerSettingsController,
+			startCreateError,
 			startInboxProviderSourceTab,
 			startInboxProviderTab,
 			startInboxStateFilterBySource,

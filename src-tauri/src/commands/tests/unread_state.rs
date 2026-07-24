@@ -320,3 +320,146 @@ fn hide_session_clears_its_unread_and_drops_workspace_flag() {
     // And the workspace flag should drop because nothing is unread any more.
     assert_eq!(workspace_unread, 0);
 }
+
+#[test]
+fn per_member_unread_is_independent_and_timestamp_driven() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = ArchiveTestHarness::new();
+    let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+
+    // A message older than any read cursor exists in the harness session.
+    connection
+        .execute(
+            "INSERT INTO session_messages (id, session_id, role, content, created_at, sent_at) \
+             VALUES ('msg-pm-1', ?1, 'user', '{}', '2020-01-01 00:00:00', '2020-01-01 00:00:00')",
+            [&harness.session_id],
+        )
+        .unwrap();
+
+    let ws = harness.workspace_id.clone();
+    let unread_for = |member: &str| {
+        crate::models::workspaces::load_member_unread_counts(member)
+            .unwrap()
+            .get(&ws)
+            .copied()
+            .unwrap_or(0)
+    };
+
+    // Nobody has read yet → both members see the session as unread.
+    assert!(unread_for("member-1") >= 1);
+    assert!(unread_for("member-2") >= 1);
+
+    // member-1 opens the session → their cursor advances past the message.
+    sessions::mark_session_read_for_member(&harness.session_id, "member-1").unwrap();
+
+    // Per-member: member-1 is caught up, member-2 is still behind.
+    assert_eq!(unread_for("member-1"), 0, "member-1 caught up");
+    assert!(unread_for("member-2") >= 1, "member-2 still behind");
+
+    // A NEW message (after member-1's cursor) flips member-1 back to unread —
+    // the timestamp model needs no explicit unread write.
+    connection
+        .execute(
+            "INSERT INTO session_messages (id, session_id, role, content, created_at, sent_at) \
+             VALUES ('msg-pm-2', ?1, 'user', '{}', '2099-01-01 00:00:00', '2099-01-01 00:00:00')",
+            [&harness.session_id],
+        )
+        .unwrap();
+    assert!(
+        unread_for("member-1") >= 1,
+        "a newer message re-marks member-1 unread"
+    );
+}
+
+/// WP4 / S5: per-member unread must exclude the member's OWN rows, but must NOT
+/// exclude `author_id IS NULL` rows (agent/assistant/system output). The
+/// author dimension is isolated from the timestamp dimension here (that one is
+/// covered by `per_member_unread_is_independent_and_timestamp_driven`): most
+/// assertions run with no read cursor (`COALESCE ''` ⇒ every row counts unless
+/// excluded by author).
+#[test]
+fn per_member_unread_excludes_self_authored() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = ArchiveTestHarness::new();
+    let connection = Connection::open(crate::data_dir::db_path().unwrap()).unwrap();
+
+    let ws = harness.workspace_id.clone();
+    let unread_for = |member: &str| {
+        crate::models::workspaces::load_member_unread_counts(member)
+            .unwrap()
+            .get(&ws)
+            .copied()
+            .unwrap_or(0)
+    };
+
+    // member-1's own room-chat message. It must never count as unread for its
+    // author (S5), but a teammate still sees the session as unread.
+    connection
+        .execute(
+            "INSERT INTO session_messages (id, session_id, role, content, created_at, sent_at, author_id) \
+             VALUES ('msg-self-1', ?1, 'user', '{\"type\":\"room_chat\",\"text\":\"hi\"}', '2020-01-01 00:00:00', '2020-01-01 00:00:00', 'member-1')",
+            [&harness.session_id],
+        )
+        .unwrap();
+    assert_eq!(
+        unread_for("member-1"),
+        0,
+        "a member's own message is excluded from their own unread (S5)"
+    );
+    assert!(
+        unread_for("member-2") >= 1,
+        "…but a teammate still sees that message as unread"
+    );
+
+    // Agent/assistant reply carries `author_id IS NULL`. It is "not mine" for
+    // everyone and MUST still count — the NULL pitfall guard: `NULL <> 'member-1'`
+    // is NULL(false) in SQL, so the predicate is `author_id IS NULL OR <>`.
+    connection
+        .execute(
+            "INSERT INTO session_messages (id, session_id, role, content, created_at, sent_at) \
+             VALUES ('msg-agent-1', ?1, 'assistant', '{}', '2020-01-02 00:00:00', '2020-01-02 00:00:00')",
+            [&harness.session_id],
+        )
+        .unwrap();
+    assert!(
+        unread_for("member-1") >= 1,
+        "an agent reply (NULL author) lights the dot even for the sender"
+    );
+    assert!(
+        unread_for("member-2") >= 1,
+        "the NULL-author reply counts for the teammate too"
+    );
+
+    // member-1 catches up (cursor = now, past the 2020 rows): their own row was
+    // never counted and the agent row is now below the cursor ⇒ back to 0.
+    sessions::mark_session_read_for_member(&harness.session_id, "member-1").unwrap();
+    assert_eq!(
+        unread_for("member-1"),
+        0,
+        "member-1 caught up after reading"
+    );
+
+    // A NEW self message AFTER the cursor must not resurrect member-1's own dot —
+    // author-exclusion is independent of the timestamp (the S5 core: self-send
+    // never re-lights your own green dot, even post-read).
+    connection
+        .execute(
+            "INSERT INTO session_messages (id, session_id, role, content, created_at, sent_at, author_id) \
+             VALUES ('msg-self-2', ?1, 'user', '{\"type\":\"room_chat\",\"text\":\"again\"}', '2099-01-01 00:00:00', '2099-01-01 00:00:00', 'member-1')",
+            [&harness.session_id],
+        )
+        .unwrap();
+    assert_eq!(
+        unread_for("member-1"),
+        0,
+        "a post-cursor self message is still excluded for its author (S5 core)"
+    );
+    assert!(
+        unread_for("member-2") >= 1,
+        "the teammate, who never read, still sees unread content"
+    );
+}

@@ -2129,6 +2129,9 @@ dependencies = [
  "futures",
  "hex",
  "hmac",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "insta",
  "jsonc-parser",
  "libc",
@@ -2175,6 +2178,7 @@ dependencies = [
  "winreg 0.52.0",
  "wreq",
  "wreq-util",
+ "zeroize",
 ]
 
 [[package]]

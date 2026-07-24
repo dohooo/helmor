@@ -21,13 +21,13 @@ async fn health_is_public_and_rpc_requires_bearer() {
     let app = tauri::test::mock_app();
     let state = CompanionState::new();
     // The streamer is never invoked here (no stream request), so a no-op is fine.
-    let streamer: StreamStarter = Arc::new(|_cmd, _args, _tx| Ok(()));
+    let streamer: StreamStarter = Arc::new(|_cmd, _args, _author_id, _tx| Ok(()));
     // In-memory verifier (no DB) so the test stays isolated; only the dev token
     // and this known PAT authenticate.
     let verifier: Verifier = Arc::new(|bearer| bearer == "hlm_paired_test");
     // Stub dispatcher replicating the two dispatch paths this test asserts
     // (unknown command + missing required arg) without needing a real app/DB.
-    let dispatcher: Dispatcher = Arc::new(|cmd: String, args: serde_json::Value| {
+    let dispatcher: Dispatcher = Arc::new(|cmd: String, args: serde_json::Value, _author_id| {
         async move {
             match cmd.as_str() {
                 "get_workspace" => {
@@ -127,6 +127,206 @@ async fn health_is_public_and_rpc_requires_bearer() {
         .contains("Missing required argument: workspaceId"));
 
     // Shutdown is idempotent and clears reported info.
+    state.shutdown().await;
+    assert!(state.info().await.is_none());
+}
+
+/// Trust boundary: the server must hand the streamer the team member id from
+/// the trusted `X-Helmor-Member-Id` header — NEVER a value from the request
+/// body. This proves `author_id` is server-derived; the production streamer
+/// (`companion::stream::start_agent_stream`) then OVERWRITES `request.author_id`
+/// with this argument, so a client-supplied `authorId` in the body can never
+/// assert another member's identity.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rpc_stream_passes_trusted_header_author_id_not_body() {
+    let app = tauri::test::mock_app();
+    let state = CompanionState::new();
+
+    // Capture the author_id the server forwards to the streamer.
+    let (seen_tx, seen_rx) = std::sync::mpsc::channel::<Option<String>>();
+    let seen_tx = Arc::new(std::sync::Mutex::new(seen_tx));
+    let streamer: StreamStarter = Arc::new(move |_cmd, _args, author_id, _tx| {
+        seen_tx.lock().unwrap().send(author_id).unwrap();
+        Ok(())
+    });
+    let verifier: Verifier = Arc::new(|_bearer| false);
+    let dispatcher: Dispatcher = Arc::new(|cmd: String, _args: serde_json::Value, _author_id| {
+        async move { Err(anyhow::anyhow!("Unknown companion command: {cmd}").into()) }.boxed()
+    });
+
+    let token = "hlm_stream_trust".to_string();
+    let info = state
+        .start_serve(
+            app.handle().clone(),
+            "127.0.0.1",
+            0,
+            token.clone(),
+            streamer,
+            dispatcher,
+            verifier,
+        )
+        .await
+        .expect("serve companion should start");
+    let base = format!("http://127.0.0.1:{}", info.addr.port());
+    let client = reqwest::Client::new();
+
+    // Body asserts a forged `authorId`; the trusted header carries the real id.
+    client
+        .post(format!("{base}/rpc-stream/send_agent_message_stream"))
+        .bearer_auth(&token)
+        .header("X-Helmor-Member-Id", "trusted-member-7")
+        .json(&serde_json::json!({
+            "request": {
+                "provider": "claude",
+                "modelId": "opus-1m",
+                "prompt": "hi",
+                "authorId": "evil-client-id",
+            }
+        }))
+        .send()
+        .await
+        .expect("stream request");
+
+    let seen = seen_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("streamer invoked");
+    assert_eq!(
+        seen.as_deref(),
+        Some("trusted-member-7"),
+        "server must forward the trusted-header member id, not the body's authorId"
+    );
+
+    state.shutdown().await;
+}
+
+/// Same trust-boundary proof for `post_room_chat_message`: the companion server
+/// must forward the team member id from the trusted `X-Helmor-Member-Id` header
+/// to `resolve_room_chat_request`, OVERWRITING any `authorId` in the body. A
+/// client that forges `authorId` in the JSON body must never see it persist.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rpc_stream_post_room_chat_trusted_header_overwrites_body() {
+    let app = tauri::test::mock_app();
+    let state = CompanionState::new();
+
+    // Capture what the server passes as author_id to the streamer.
+    let (seen_tx, seen_rx) = std::sync::mpsc::channel::<Option<String>>();
+    let seen_tx = Arc::new(std::sync::Mutex::new(seen_tx));
+    let streamer: StreamStarter = Arc::new(move |_cmd, _args, author_id, _tx| {
+        seen_tx.lock().unwrap().send(author_id).unwrap();
+        Ok(())
+    });
+    let verifier: Verifier = Arc::new(|_bearer| false);
+    let dispatcher: Dispatcher = Arc::new(|cmd: String, _args: serde_json::Value, _author_id| {
+        async move { Err(anyhow::anyhow!("Unknown companion command: {cmd}").into()) }.boxed()
+    });
+
+    let token = "hlm_room_chat_trust".to_string();
+    let info = state
+        .start_serve(
+            app.handle().clone(),
+            "127.0.0.1",
+            0,
+            token.clone(),
+            streamer,
+            dispatcher,
+            verifier,
+        )
+        .await
+        .expect("serve companion should start");
+    let base = format!("http://127.0.0.1:{}", info.addr.port());
+    let client = reqwest::Client::new();
+
+    // Body forges authorId; trusted header carries the real member id.
+    client
+        .post(format!("{base}/rpc-stream/post_room_chat_message"))
+        .bearer_auth(&token)
+        .header("X-Helmor-Member-Id", "trusted-member-9")
+        .json(&serde_json::json!({
+            "request": {
+                "helmorSessionId": "sess-xyz",
+                "prompt": "hello room",
+                "authorId": "evil-forged-id",
+            }
+        }))
+        .send()
+        .await
+        .expect("room-chat stream request");
+
+    let seen = seen_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("streamer invoked");
+    assert_eq!(
+        seen.as_deref(),
+        Some("trusted-member-9"),
+        "server must forward the trusted-header member id, not the body's authorId"
+    );
+
+    state.shutdown().await;
+}
+
+/// `helmor serve` smoke test: `start_serve` binds the requested address with a
+/// caller-supplied capability token (no random dev token, no paired-device
+/// verifier), and the resulting surface gates RPC on exactly that token. This
+/// mirrors the container path (`0.0.0.0:$PORT` + `HELMOR_COMPANION_TOKEN`)
+/// without building a full windowless Wry app.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_binds_with_capability_token_and_gates_rpc() {
+    let app = tauri::test::mock_app();
+    let state = CompanionState::new();
+    let streamer: StreamStarter = Arc::new(|_cmd, _args, _author_id, _tx| Ok(()));
+    // Serve rejects everything beyond the injected capability token.
+    let verifier: Verifier = Arc::new(|_bearer| false);
+    let dispatcher: Dispatcher = Arc::new(|cmd: String, _args: serde_json::Value, _author_id| {
+        async move { Err(anyhow::anyhow!("Unknown companion command: {cmd}").into()) }.boxed()
+    });
+
+    let capability_token = "hlm_serve_capability".to_string();
+    // Bind 0.0.0.0:0 (the real container shape) and reach it over loopback.
+    let info = state
+        .start_serve(
+            app.handle().clone(),
+            "0.0.0.0",
+            0,
+            capability_token.clone(),
+            streamer,
+            dispatcher,
+            verifier,
+        )
+        .await
+        .expect("serve companion should start");
+    // The bound token is exactly what we injected — not a random dev token.
+    assert_eq!(info.token, capability_token);
+
+    let base = format!("http://127.0.0.1:{}", info.addr.port());
+    let client = reqwest::Client::new();
+
+    // Health stays public.
+    let health = client
+        .get(format!("{base}/v1/health"))
+        .send()
+        .await
+        .expect("health request");
+    assert_eq!(health.status(), 200);
+
+    // The injected capability token authenticates (reaches dispatch → 400 on
+    // the unknown command, proving it passed auth rather than 401).
+    let authed = client
+        .post(format!("{base}/rpc/__does_not_exist__"))
+        .bearer_auth(&capability_token)
+        .send()
+        .await
+        .expect("authed request");
+    assert_eq!(authed.status(), 400);
+
+    // Any other bearer is rejected (no dev-token fallback, verifier rejects).
+    let wrong = client
+        .post(format!("{base}/rpc/__does_not_exist__"))
+        .bearer_auth("hlm_not_the_token")
+        .send()
+        .await
+        .expect("wrong-token request");
+    assert_eq!(wrong.status(), 401);
+
     state.shutdown().await;
     assert!(state.info().await.is_none());
 }

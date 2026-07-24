@@ -103,6 +103,9 @@ impl ForgeAccountBackend for GitlabAccountBackend {
             avatar_url: profile.avatar_url,
             email: profile.email,
             active: true,
+            // Team-mode member identity is GitHub-numeric-id keyed; GitLab
+            // uses a separate id space we don't surface here.
+            id: None,
         })
     }
 
@@ -494,6 +497,7 @@ fn fetch_gitlab_account_with_login(host: &str, login: &str) -> ForgeAccount {
         avatar_url: profile.as_ref().and_then(|p| p.avatar_url.clone()),
         email: profile.and_then(|p| p.email),
         active: true,
+        id: None,
     }
 }
 

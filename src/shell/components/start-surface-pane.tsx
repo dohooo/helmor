@@ -33,6 +33,8 @@ type Props = {
 	startComposerInsertTarget: { contextKey: string };
 	startComposerContextKey: string;
 	startCreateContext: ComposerCreateContext | null;
+	/** R2-F2: persistent inline create failure rendered above the composer. */
+	startCreateError: { title: string; message: string } | null;
 	startLinkedDirectoriesController: ConversationProps["composerLinkedDirectoriesController"];
 	startComposerSettingsController: ConversationProps["composerSettingsController"];
 	sidebarCollapsed: boolean;
@@ -69,6 +71,7 @@ export function StartSurfacePane({
 	startComposerInsertTarget,
 	startComposerContextKey,
 	startCreateContext,
+	startCreateError,
 	startLinkedDirectoriesController,
 	startComposerSettingsController,
 	sidebarCollapsed,
@@ -119,6 +122,16 @@ export function StartSurfacePane({
 			onClosePreview={contextPanelActions.closeStartContextPreview}
 			composerAtBottom={composerAtBottom}
 		>
+			{/* R2-F2: persistent inline create failure. The start page's
+			    children-wrapper already applies px-4. */}
+			{startCreateError ? (
+				<div role="alert" className="w-full pb-2">
+					<p className="text-destructive text-small leading-snug">
+						<span className="font-medium">{startCreateError.title}: </span>
+						{startCreateError.message}
+					</p>
+				</div>
+			) : null}
 			<WorkspaceConversationContainer
 				selectedWorkspaceId={null}
 				displayedWorkspaceId={null}

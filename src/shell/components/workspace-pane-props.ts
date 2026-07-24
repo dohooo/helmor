@@ -51,6 +51,7 @@ export function buildWorkspacePaneProps({
 		startPreviewCard: sel.contextPanel.startPreviewCard,
 		startComposerInsertTarget: sel.startSurface.startComposerInsertTarget,
 		startComposerContextKey: sel.startSurface.startComposerContextKey,
+		startCreateError: sel.startSurface.startCreateError,
 		startCreateContext: s.startCreateContext,
 		startLinkedDirectoriesController:
 			sel.startSurface.startLinkedDirectoriesController,

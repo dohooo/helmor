@@ -1,5 +1,6 @@
 ---
 source: src/agents/streaming/event_loop_tests.rs
+assertion_line: 571
 expression: entries
 ---
 - event_type: turn/started
@@ -7,12 +8,11 @@ expression: entries
   side_effects: []
 - event_type: error
   emitted:
+    - kind: RetryStatus
+      attempt: 1
+      max_retries: 100
     - kind: Update
-      messages:
-        - role: system
-          part_types:
-            - system-notice
-          streaming: ~
+      messages: []
   side_effects: []
 - event_type: item/agentMessage/delta
   emitted: []
@@ -23,10 +23,6 @@ expression: entries
       messages:
         - role: system
           part_types:
-            - system-notice
-          streaming: ~
-        - role: system
-          part_types:
             - text
           streaming: ~
   side_effects: []
@@ -34,10 +30,6 @@ expression: entries
   emitted:
     - kind: Update
       messages:
-        - role: system
-          part_types:
-            - system-notice
-          streaming: ~
         - role: system
           part_types:
             - text

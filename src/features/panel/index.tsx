@@ -35,6 +35,12 @@ type WorkspacePanelProps = {
 	sessionPanes: PresentedSessionPane[];
 	loadingWorkspace?: boolean;
 	loadingSession?: boolean;
+	/** Gate for `EmptyState`: false while the session list for the displayed
+	 * workspace has not successfully resolved (pending, or errored with no
+	 * held data — e.g. team-cloud asleep on a never-cached workspace). The
+	 * panel then keeps the cold placeholder instead of flashing "Nothing
+	 * here yet" for a workspace that may well have sessions. */
+	sessionsResolved?: boolean;
 	refreshingWorkspace?: boolean;
 	refreshingSession?: boolean;
 	sending?: boolean;
@@ -67,6 +73,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	sessionPanes,
 	loadingWorkspace = false,
 	loadingSession = false,
+	sessionsResolved = true,
 	refreshingWorkspace: _refreshingWorkspace = false,
 	refreshingSession: _refreshingSession = false,
 	sending = false,
@@ -209,7 +216,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 							missingScriptTypes={missingScriptTypes}
 							onInitializeScript={onInitializeScript}
 						/>
-					) : loadingWorkspace || loadingSession ? (
+					) : loadingWorkspace || loadingSession || !sessionsResolved ? (
 						<ConversationColdPlaceholder />
 					) : (
 						<div className="flex min-h-full flex-1 items-center justify-center px-8">

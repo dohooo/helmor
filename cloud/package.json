@@ -1,0 +1,26 @@
+{
+	"name": "@helmor/cloud",
+	"description": "Helmor Team Cloud Sandbox — Cloudflare Worker control plane (Phase 0).",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "wrangler dev",
+		"dev:docker": "bun run scripts/local-docker-team.ts",
+		"build:docker:local": "docker buildx build --platform ${HELMOR_LOCAL_TEAM_PLATFORM:-linux/arm64} -f Dockerfile.local --target runtime -t ${HELMOR_LOCAL_TEAM_IMAGE:-helmor-team-local:dev} --load ..",
+		"deploy": "wrangler deploy",
+		"typecheck": "tsc --noEmit && tsc -p scripts --noEmit",
+		"test": "vitest run"
+	},
+	"dependencies": {
+		"@cloudflare/sandbox": "0.12.1"
+	},
+	"devDependencies": {
+		"@cloudflare/vitest-pool-workers": "^0.16.15",
+		"@cloudflare/workers-types": "^4.20260609.0",
+		"@types/node": "^24",
+		"typescript": "^5.7.0",
+		"vitest": "^4.1.8",
+		"wrangler": "^4.0.0"
+	}
+}

@@ -373,11 +373,23 @@ impl Drop for SidecarProcess {
 
 type Listeners = Arc<Mutex<HashMap<String, mpsc::Sender<SidecarEvent>>>>;
 
+/// One `hostRequest` envelope routed from the reader thread to the host dispatcher.
+#[derive(Debug)]
+pub struct HostRequestEnvelope {
+    pub callback_id: String,
+    pub method: String,
+    pub params: serde_json::Value,
+}
+
+/// `Mutex<Option<Sender>>` (Sender is !Sync); reader looks up per event so install order doesn't matter.
+type HostRequestSenderSlot = Arc<Mutex<Option<mpsc::Sender<HostRequestEnvelope>>>>;
+
 pub struct ManagedSidecar {
     process: Mutex<Option<SidecarProcess>>,
     listeners: Listeners,
     /// Shared flag so the reader thread can signal its own exit.
     reader_running: Arc<Mutex<bool>>,
+    host_request_tx: HostRequestSenderSlot,
 }
 
 impl Default for ManagedSidecar {
@@ -392,7 +404,36 @@ impl ManagedSidecar {
             process: Mutex::new(None),
             listeners: Arc::new(Mutex::new(HashMap::new())),
             reader_running: Arc::new(Mutex::new(false)),
+            host_request_tx: Arc::new(Mutex::new(None)),
         }
+    }
+
+    // Called once from Tauri setup; later calls replace the sender and return a fresh receiver.
+    pub fn install_host_dispatcher(&self) -> mpsc::Receiver<HostRequestEnvelope> {
+        let (tx, rx) = mpsc::channel();
+        if let Ok(mut slot) = self.host_request_tx.lock() {
+            *slot = Some(tx);
+        }
+        rx
+    }
+
+    // Shares the stdin lock with `send()` so request/response writes can't interleave.
+    pub fn send_host_response(&self, response: &crate::sidecar_host::HostResponse) -> Result<()> {
+        let guard = self
+            .process
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Sidecar lock poisoned"))?;
+        let Some(process) = guard.as_ref() else {
+            anyhow::bail!("Sidecar not running (hostResponse dropped)");
+        };
+        let mut stdin = process
+            .stdin
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Sidecar stdin lock poisoned"))?;
+        let json = serde_json::to_string(response).context("Failed to serialize hostResponse")?;
+        writeln!(stdin, "{json}").context("Failed to write hostResponse")?;
+        stdin.flush().context("Failed to flush hostResponse")?;
+        Ok(())
     }
 
     /// Register a listener for events matching `request_id`.
@@ -438,7 +479,8 @@ impl ManagedSidecar {
             *guard = Some(process);
 
             // Start reader (always fresh).
-            if let Err(error) = self.start_reader_thread(reader) {
+            if let Err(error) = self.start_reader_thread(reader, Arc::clone(&self.host_request_tx))
+            {
                 tracing::error!(error = %error, "Failed to start sidecar reader thread");
                 if let Some(mut process) = guard.take() {
                     process.kill();
@@ -568,7 +610,11 @@ impl ManagedSidecar {
         dispatch_event(&self.listeners, event, raw)
     }
 
-    fn start_reader_thread(&self, reader: BufReader<std::process::ChildStdout>) -> Result<()> {
+    fn start_reader_thread(
+        &self,
+        reader: BufReader<std::process::ChildStdout>,
+        host_tx_slot: HostRequestSenderSlot,
+    ) -> Result<()> {
         // Reset flag — previous reader (if any) already exited or we killed its process.
         if let Ok(mut running) = self.reader_running.lock() {
             *running = false;
@@ -607,6 +653,33 @@ impl ManagedSidecar {
                                 tracing::error!(line = trimmed, "Invalid JSON from sidecar");
                                 continue;
                             };
+                            // Reverse channel: route `hostRequest` ahead of normal event dispatch.
+                            if raw.get("type").and_then(Value::as_str) == Some("hostRequest") {
+                                match parse_host_request(&raw) {
+                                    Ok(env) => {
+                                        let sender = host_tx_slot
+                                            .lock()
+                                            .ok()
+                                            .and_then(|g| g.as_ref().cloned());
+                                        if let Some(tx) = sender {
+                                            if let Err(error) = tx.send(env) {
+                                                tracing::warn!(
+                                                    error = %error,
+                                                    "hostRequest forward failed (receiver dropped)"
+                                                );
+                                            }
+                                        } else {
+                                            tracing::warn!(
+                                                "hostRequest received but dispatcher not installed"
+                                            );
+                                        }
+                                    }
+                                    Err(error) => {
+                                        tracing::warn!(error = %error, "invalid hostRequest");
+                                    }
+                                }
+                                continue;
+                            }
                             let event = SidecarEvent { raw };
                             if dispatch_event(&listeners, event, trimmed) {
                                 event_count += 1;
@@ -660,6 +733,23 @@ impl ManagedSidecar {
                 anyhow::anyhow!("Failed to spawn sidecar reader thread: {error}")
             })
     }
+}
+
+fn parse_host_request(raw: &Value) -> Result<HostRequestEnvelope> {
+    let callback_id = raw
+        .get("callbackId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("hostRequest missing callbackId"))?;
+    let method = raw
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("hostRequest missing method"))?;
+    let params = raw.get("params").cloned().unwrap_or(Value::Null);
+    Ok(HostRequestEnvelope {
+        callback_id: callback_id.to_string(),
+        method: method.to_string(),
+        params,
+    })
 }
 
 /// Dispatch one event. `true` when delivered to a listener; no-id

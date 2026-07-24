@@ -210,6 +210,95 @@ fn backfill_stacked_target_branches(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// R2-C (R5): freeze existing chat-workspace display names.
+///
+/// Before this migration a chat workspace's sidebar name was re-derived on
+/// every read (`display_title()`: primary-session title by message count,
+/// falling back to the active session title), so switching sessions flipped
+/// the name. New titles freeze at write time (`sessions::rename_session`);
+/// this backfill freezes EXISTING chat workspaces at the name the UI is
+/// showing at migration time — the SQL below replicates the exact
+/// `display_title()` derivation (primary_session CTE from
+/// `models/workspaces.rs` + the primary-else-active candidate rule from
+/// `workspace/helpers.rs`), so the frozen value is byte-identical to what
+/// the user currently sees. No visible name changes; the name just stops
+/// drifting.
+///
+/// Skipped (stay floating until `rename_session` freezes them naturally):
+/// - already-named workspaces (`custom_name` set — user override wins),
+/// - workspaces with a `pr_title` (it outranks session titles in
+///   `display_title()`, so freezing a session title would CHANGE the name),
+/// - workspaces whose derived candidate is empty/"Untitled" (display shows
+///   the "New chat" placeholder — nothing real to freeze yet).
+///
+/// Idempotent: the `custom_name IS NULL` guard makes re-runs no-ops.
+fn backfill_chat_workspace_frozen_names(connection: &Connection) -> Result<()> {
+    if !has_table(connection, "workspaces")
+        || !has_table(connection, "sessions")
+        || !has_table(connection, "session_messages")
+        || !has_column(connection, "workspaces", "custom_name")
+        || !has_column(connection, "workspaces", "mode")
+        || !has_column(connection, "workspaces", "pr_title")
+        || !has_column(connection, "workspaces", "active_session_id")
+        || !has_column(connection, "sessions", "is_hidden")
+        || !has_column(connection, "sessions", "action_kind")
+    {
+        return Ok(());
+    }
+    connection
+        .execute(
+            "WITH primary_session AS (
+               SELECT workspace_id, title FROM (
+                 SELECT
+                   s.workspace_id,
+                   s.title,
+                   ROW_NUMBER() OVER (
+                     PARTITION BY s.workspace_id
+                     ORDER BY
+                       COALESCE(smc.message_count, 0) DESC,
+                       s.updated_at DESC,
+                       s.id DESC
+                   ) AS rn
+                 FROM sessions s
+                 LEFT JOIN (
+                   SELECT session_id, COUNT(*) AS message_count
+                   FROM session_messages
+                   GROUP BY session_id
+                 ) smc ON smc.session_id = s.id
+                 WHERE COALESCE(s.is_hidden, 0) = 0
+                   AND s.action_kind IS NULL
+               ) WHERE rn = 1
+             ),
+             candidate AS (
+               SELECT
+                 w.id AS workspace_id,
+                 CASE
+                   WHEN TRIM(COALESCE(ps.title, '')) != '' THEN ps.title
+                   ELSE (SELECT s2.title FROM sessions s2 WHERE s2.id = w.active_session_id)
+                 END AS title
+               FROM workspaces w
+               LEFT JOIN primary_session ps ON ps.workspace_id = w.id
+               WHERE w.mode = 'chat'
+             )
+             UPDATE workspaces
+             SET custom_name = (
+               SELECT c.title FROM candidate c WHERE c.workspace_id = workspaces.id
+             )
+             WHERE mode = 'chat'
+               AND (custom_name IS NULL OR TRIM(custom_name) = '')
+               AND TRIM(COALESCE(pr_title, '')) = ''
+               AND TRIM(COALESCE((
+                 SELECT c.title FROM candidate c WHERE c.workspace_id = workspaces.id
+               ), '')) != ''
+               AND (
+                 SELECT c.title FROM candidate c WHERE c.workspace_id = workspaces.id
+               ) != 'Untitled'",
+            [],
+        )
+        .context("Failed to freeze existing chat workspace names")?;
+    Ok(())
+}
+
 /// Startup reconcile for stacks whose base merged under an older build, before
 /// merge-time splicing existed. Every workspace still stacked on a merged layer
 /// is spliced out via the shared write-layer primitive
@@ -294,6 +383,20 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         connection
             .execute_batch("ALTER TABLE session_messages DROP COLUMN full_message")
             .context("Failed to drop full_message column")?;
+    }
+
+    // Migration: add author_id to session_messages for multi-member cloud
+    // teams (Phase 2 / Block B). NULL = agent output or a local single-user
+    // message; non-NULL = the team member id. Idempotent.
+    let has_author_id: bool = connection
+        .prepare("SELECT 1 FROM pragma_table_info('session_messages') WHERE name = 'author_id'")
+        .and_then(|mut stmt| stmt.exists([]))
+        .unwrap_or(false);
+
+    if !has_author_id {
+        connection
+            .execute_batch("ALTER TABLE session_messages ADD COLUMN author_id TEXT")
+            .context("Failed to add author_id column")?;
     }
 
     // Migration: add action_kind column so we can distinguish one-off "action
@@ -896,6 +999,11 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         add_column_if_missing(connection, "workspaces", "triage_source_ref", "TEXT")?;
         // User-set display name. NULL = fall back to the auto-derived title.
         add_column_if_missing(connection, "workspaces", "custom_name", "TEXT")?;
+        // R2-C: freeze existing chat-workspace names at their currently
+        // displayed value (see the function docs for the exact semantics).
+        // Must run after the custom_name ALTER above.
+        backfill_chat_workspace_frozen_names(connection)
+            .context("Failed to backfill frozen chat workspace names")?;
         connection
             .execute_batch(
                 "CREATE INDEX IF NOT EXISTS idx_workspaces_triage_source
@@ -921,6 +1029,18 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             "session_kind",
             "TEXT NOT NULL DEFAULT 'gui'",
         )?;
+        // Drop the now-removed per-session room-context carry toggle. Guarded on
+        // presence so re-running (and fresh DBs without the column) is a no-op.
+        // Bundled SQLite is 3.45 — DROP COLUMN is supported (>=3.35).
+        let carry_exists: bool = connection
+            .prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = ?1")
+            .and_then(|mut stmt| stmt.exists(["carry_room_context"]))
+            .unwrap_or(false);
+        if carry_exists {
+            connection
+                .execute_batch("ALTER TABLE sessions DROP COLUMN carry_room_context")
+                .context("Failed to drop sessions.carry_room_context column")?;
+        }
     }
     // Per-session "active plan" projection. Provider plan/todo events
     // (Codex `turn/plan/updated`, Claude `ExitPlanMode`) are normalised
@@ -930,6 +1050,61 @@ fn run_migrations(connection: &Connection) -> Result<()> {
     connection
         .execute_batch(SESSION_PLAN_STATE_DDL)
         .context("Failed to create session_plan_state table")?;
+
+    // Per-member read cursors (team-mode per-member unread). Idempotent.
+    connection
+        .execute_batch(SESSION_READ_STATE_DDL)
+        .context("Failed to create session_read_state table")?;
+
+    // DF-2: normalize legacy space-separated `sessions.created_at` values
+    // (schema-default `datetime('now')`, e.g. "2026-07-06 11:01:04") to the
+    // RFC 3339 millis "Z" format every remaining writer produces
+    // ("2026-07-06T11:01:04.000Z"). The D1 team mirror sorts sessions by the
+    // raw string, so mixed formats break ordering (space 0x20 < 'T' 0x54).
+    // `datetime('now')` is UTC, so appending "Z" is timezone-correct.
+    // Idempotent: normalized rows no longer match `LIKE '% %'`. COALESCE keeps
+    // the original value if strftime can't parse it (never expected). The
+    // column guard covers pre-created_at legacy schemas (ensure_schema adds
+    // the column right after this via the CREATE TABLE defaults).
+    if has_table(connection, "sessions") && has_column(connection, "sessions", "created_at") {
+        connection
+            .execute_batch(
+                "UPDATE sessions
+                 SET created_at = COALESCE(strftime('%Y-%m-%dT%H:%M:%f', created_at) || 'Z', created_at)
+                 WHERE created_at LIKE '% %'",
+            )
+            .context("Failed to normalize legacy sessions.created_at format")?;
+    }
+
+    // R2-F7: strip embedded credentials from stored remote URLs. Team-cloud
+    // clones write an origin of the form `https://user:token@host/…`; the
+    // resolver now redacts on ingest, but rows written before that fix still
+    // carry the token (and leak it through get_workspace / backups / the D1
+    // mirror). Idempotent: redacted rows no longer match the `%://%@%` guard.
+    if has_table(connection, "repos") && has_column(connection, "repos", "remote_url") {
+        let mut stmt = connection
+            .prepare("SELECT id, remote_url FROM repos WHERE remote_url LIKE '%://%@%'")
+            .context("Failed to scan repos for credentialed remote URLs")?;
+        let rows: Vec<(String, String)> = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .context("Failed to read credentialed remote URLs")?
+            .collect::<std::result::Result<_, _>>()
+            .context("Failed to collect credentialed remote URLs")?;
+        drop(stmt);
+        for (id, url) in rows {
+            let redacted = crate::repos::redact_url_userinfo(&url);
+            if redacted != url {
+                connection
+                    .execute(
+                        "UPDATE repos SET remote_url = ?1 WHERE id = ?2",
+                        rusqlite::params![redacted, id],
+                    )
+                    .context("Failed to redact credentialed remote URL")?;
+            }
+        }
+    }
 
     Ok(())
 }
@@ -958,6 +1133,20 @@ CREATE TABLE IF NOT EXISTS session_plan_state (
     plan_json TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"#;
+
+// Per-(member, session) read cursor for team mode. Unread in a shared sandbox
+// is per-member: a session is unread for a member when it holds messages newer
+// than that member's `last_read_at`. An absent row = never read (unread if the
+// session has any messages). Local/desktop (no member id) keeps using the
+// global `sessions.unread_count` / `workspaces.unread` columns instead.
+const SESSION_READ_STATE_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS session_read_state (
+    member_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    last_read_at TEXT NOT NULL,
+    PRIMARY KEY (member_id, session_id)
 );
 "#;
 
@@ -1204,7 +1393,10 @@ CREATE TABLE IF NOT EXISTS session_messages (
     content TEXT,
     sent_at TEXT,
     is_ai_priming INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    -- Team member id for multi-member cloud rooms (Phase 2 / Block B).
+    -- NULL = agent output or local single-user message.
+    author_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS session_plan_state (
@@ -2084,6 +2276,23 @@ mod tests {
     }
 
     #[test]
+    fn migration_adds_author_id_to_session_messages() {
+        let (connection, _dir) = open_test_db();
+        create_legacy_schema(&connection);
+        // Legacy session_messages has no author_id column.
+        assert!(!column_exists(&connection, "session_messages", "author_id"));
+
+        run_migrations(&connection).unwrap();
+
+        // Migration adds the nullable column (existing rows keep NULL).
+        assert!(column_exists(&connection, "session_messages", "author_id"));
+
+        // Idempotent on a second run.
+        run_migrations(&connection).unwrap();
+        assert!(column_exists(&connection, "session_messages", "author_id"));
+    }
+
+    #[test]
     fn migration_drops_attachments_and_diff_comments_tables() {
         let (connection, _dir) = open_test_db();
         create_legacy_schema(&connection);
@@ -2119,6 +2328,82 @@ mod tests {
         ensure_schema(&connection).unwrap();
         drop_dead_schema(&connection).unwrap();
         drop_dead_schema(&connection).unwrap();
+    }
+
+    #[test]
+    fn credentialed_remote_urls_redacted_and_idempotent() {
+        // R2-F7: team-cloud clone rows carrying `user:token@` userinfo are
+        // rewritten credential-free; clean https and scp-style ssh rows are
+        // untouched byte-for-byte; a second run is a no-op.
+        let (connection, _dir) = open_test_db();
+        ensure_schema(&connection).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO repos (id, remote_url) VALUES
+                   ('leaky', 'https://x-access-token:gho_abc123@github.com/acme/repo.git'),
+                   ('clean', 'https://github.com/acme/other.git'),
+                   ('ssh',   'git@github.com:acme/ssh-repo.git')",
+            )
+            .unwrap();
+
+        let read = |conn: &Connection, id: &str| -> String {
+            conn.query_row("SELECT remote_url FROM repos WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .unwrap()
+        };
+
+        run_migrations(&connection).unwrap();
+        assert_eq!(
+            read(&connection, "leaky"),
+            "https://github.com/acme/repo.git"
+        );
+        assert_eq!(
+            read(&connection, "clean"),
+            "https://github.com/acme/other.git"
+        );
+        assert_eq!(read(&connection, "ssh"), "git@github.com:acme/ssh-repo.git");
+
+        // Idempotent: redacted rows no longer match the LIKE guard.
+        run_migrations(&connection).unwrap();
+        assert_eq!(
+            read(&connection, "leaky"),
+            "https://github.com/acme/repo.git"
+        );
+    }
+
+    #[test]
+    fn created_at_format_normalized_to_iso_and_idempotent() {
+        // DF-2: legacy space-separated `datetime('now')` rows are rewritten to
+        // the RFC 3339 millis "Z" format; ISO rows are untouched byte-for-byte;
+        // a second run is a no-op.
+        let (connection, _dir) = open_test_db();
+        ensure_schema(&connection).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO sessions (id, created_at) VALUES
+                   ('legacy', '2026-07-06 11:01:04'),
+                   ('iso',    '2026-07-06T10:54:52.822Z')",
+            )
+            .unwrap();
+
+        let read = |conn: &Connection, id: &str| -> String {
+            conn.query_row(
+                "SELECT created_at FROM sessions WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+
+        run_migrations(&connection).unwrap();
+        assert_eq!(read(&connection, "legacy"), "2026-07-06T11:01:04.000Z");
+        assert_eq!(read(&connection, "iso"), "2026-07-06T10:54:52.822Z");
+
+        // Idempotent: normalized rows no longer match the LIKE guard.
+        run_migrations(&connection).unwrap();
+        assert_eq!(read(&connection, "legacy"), "2026-07-06T11:01:04.000Z");
+        assert_eq!(read(&connection, "iso"), "2026-07-06T10:54:52.822Z");
     }
 
     #[test]

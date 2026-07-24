@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
 	Archive,
@@ -41,7 +42,9 @@ import type {
 	WorkspaceStatus,
 } from "@/lib/api";
 import { I18nText, useI18n } from "@/lib/i18n";
+import { teamMembersQueryOptions } from "@/lib/query-client";
 import type { SidebarGrouping, SidebarSort } from "@/lib/settings";
+import { getTeamConfig, isTeamModeActive } from "@/lib/team-mode";
 import { cn } from "@/lib/utils";
 import { workspaceStatusFromGroupId } from "@/lib/workspace-helpers";
 import { useShellEvent } from "@/shell/event-bus";
@@ -67,6 +70,8 @@ import {
 } from "./shared";
 import { repoIdFromGroupId } from "./sidebar-projection";
 import { SidebarViewPopover } from "./sidebar-view-popover";
+import { isPresenceLive, usePresenceStore } from "./state/presence-store";
+import { TeamModeSwitch } from "./team-mode-switch";
 
 // ---------------------------------------------------------------------------
 // Virtual list item types
@@ -828,6 +833,33 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		}));
 	}, []);
 
+	// ── Room presence (who's typing) ──────────────────────────────────
+	// Team mode only. Subscribe to the presence store once here and join the
+	// member id against the cached roster, so each row receives a fully
+	// pre-resolved presence prop (keeps the memoized row pure).
+	const teamModeOn = isTeamModeActive();
+	const teamMembersQuery = useQuery(
+		teamMembersQueryOptions(teamModeOn ? getTeamConfig() : null),
+	);
+	const teamMembers = teamMembersQuery.data;
+	const presenceByWorkspace = usePresenceStore((state) => state.byWorkspace);
+	const resolvePresenceForRow = useCallback(
+		(workspaceId: string) => {
+			if (!teamModeOn) return null;
+			const entry = presenceByWorkspace[workspaceId];
+			if (!entry || !isPresenceLive(entry, Date.now())) return null;
+			const member = teamMembers?.find((m) => m.id === entry.memberId);
+			return {
+				memberId: entry.memberId,
+				login: member?.github_login ?? entry.memberId,
+				avatarUrl: member?.avatar_url ?? null,
+				displayName: member?.display_name ?? null,
+				activity: entry.activity,
+			};
+		},
+		[teamModeOn, presenceByWorkspace, teamMembers],
+	);
+
 	// ── Render a single virtual item ──────────────────────────────────
 	const renderItem = useCallback(
 		(item: VirtualItem) => {
@@ -1082,6 +1114,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						isInteractionRequired={interactionRequiredWorkspaceIds?.has(
 							item.row.id,
 						)}
+						presence={resolvePresenceForRow(item.row.id) ?? null}
 						// Hide per-row avatar inside a real repo bucket — header
 						// already shows it. Pinned/backlog/archived keep theirs.
 						hideRepoAvatar={repoIdFromGroupId(item.groupId) !== null}
@@ -1132,6 +1165,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			visualSelectedWorkspaceId,
 			busyWorkspaceIds,
 			interactionRequiredWorkspaceIds,
+			resolvePresenceForRow,
 			onCreateWorkspaceForRepo,
 			handleSelectWorkspace,
 			handlePreviewSelectWorkspace,
@@ -1183,6 +1217,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				</h2>
 
 				<div className="flex items-center gap-1 text-muted-foreground">
+					<TeamModeSwitch />
+
 					<SidebarViewPopover
 						repositories={availableRepositories}
 						grouping={sidebarGrouping}
@@ -1246,16 +1282,21 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							</TooltipContent>
 						</Tooltip>
 						<DropdownMenuContent align="end" className="min-w-40">
-							<DropdownMenuItem
-								onSelect={() => {
-									onAddRepository?.();
-								}}
-							>
-								<Folder strokeWidth={2} />
-								<span>
-									<I18nText source="openProject" />
-								</span>
-							</DropdownMenuItem>
+							{/* "Open project" adds a LOCAL folder; meaningless in team mode
+							    (the cloud container has no access to your disk). Team mode
+							    uses "Clone from URL" → clones into the container. */}
+							{isTeamModeActive() ? null : (
+								<DropdownMenuItem
+									onSelect={() => {
+										onAddRepository?.();
+									}}
+								>
+									<Folder strokeWidth={2} />
+									<span>
+										<I18nText source="openProject" />
+									</span>
+								</DropdownMenuItem>
+							)}
 							<DropdownMenuItem
 								onSelect={() => {
 									onOpenCloneDialog?.();

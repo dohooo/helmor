@@ -7,6 +7,19 @@ use crate::{
 
 use super::common::{run_blocking, CmdResult};
 
+/// Broadcast a session-list mutation so teammates (and this client's other
+/// windows) re-sync the sidebar / session tabs. No-op when `workspace_id` is
+/// `None` (the session was already gone). In team mode this rides the shared
+/// `/v1/stream` ui-sync channel to every connected member.
+fn notify_session_list_changed(app: &tauri::AppHandle, workspace_id: Option<String>) {
+    if let Some(workspace_id) = workspace_id {
+        crate::ui_sync::publish(
+            app,
+            crate::ui_sync::UiMutationEvent::SessionListChanged { workspace_id },
+        );
+    }
+}
+
 #[tauri::command]
 pub async fn list_workspace_sessions(
     workspace_id: String,
@@ -37,11 +50,59 @@ pub async fn list_session_thread_messages(
     .await
 }
 
+/// One raw message row as stored in the D1 mirror (Stage B). Mirrors the columns
+/// the team Worker's `GET /team/messages` returns, so the desktop can render
+/// history from D1 while the sandbox sleeps.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoricalRecordInput {
+    pub id: String,
+    pub role: String,
+    pub content: String,
+    pub created_at: String,
+    #[serde(default)]
+    pub author_id: Option<String>,
+}
+
+/// Run the SAME historical pipeline as [`list_session_thread_messages`] over raw
+/// rows supplied by the caller (the team D1 mirror) instead of the local DB.
+/// LOCAL command (never proxied) — it's pure CPU, no DB, so team mode can render
+/// sandbox-independent history identically to the container path.
+#[tauri::command]
+pub async fn convert_historical_records(
+    records: Vec<HistoricalRecordInput>,
+) -> CmdResult<Vec<pipeline::types::ThreadMessageLike>> {
+    run_blocking(move || {
+        let records: Vec<pipeline::types::HistoricalRecord> = records
+            .into_iter()
+            .map(|record| pipeline::types::HistoricalRecord {
+                id: record.id,
+                // Mirror roles are always one of user/assistant/system/error;
+                // an unknown value degrades to a System notice rather than failing.
+                role: record
+                    .role
+                    .parse()
+                    .unwrap_or(pipeline::types::MessageRole::System),
+                // Parse the raw mirror content into JSON so the pipeline can
+                // classify + render it — same as the desktop's local read
+                // (models/sessions.rs). Leaving it None rendered raw JSON in the UI.
+                parsed_content: serde_json::from_str(&record.content).ok(),
+                content: record.content,
+                created_at: record.created_at,
+                author_id: record.author_id,
+            })
+            .collect();
+        Ok(pipeline::MessagePipeline::convert_historical(&records))
+    })
+    .await
+}
+
 /// `seed_session_id`: see `sessions::CreateSessionOverrides::seed_session_id` —
 /// frontend-provided UUID used as the new `sessions.id` when present.
 #[allow(clippy::too_many_arguments)] // Tauri IPC command — args mirror the frontend call.
 #[tauri::command]
 pub async fn create_session(
+    app: tauri::AppHandle,
     workspace_id: String,
     action_kind: Option<ActionKind>,
     permission_mode: Option<String>,
@@ -52,7 +113,8 @@ pub async fn create_session(
     session_kind: Option<String>,
     agent_type: Option<String>,
 ) -> CmdResult<sessions::CreateSessionResponse> {
-    run_blocking(move || {
+    let ws = workspace_id.clone();
+    let response = run_blocking(move || {
         sessions::create_session(
             &workspace_id,
             action_kind,
@@ -67,27 +129,60 @@ pub async fn create_session(
             },
         )
     })
-    .await
+    .await?;
+    notify_session_list_changed(&app, Some(ws));
+    Ok(response)
 }
 
 #[tauri::command]
-pub async fn rename_session(session_id: String, title: String) -> CmdResult<()> {
-    run_blocking(move || sessions::rename_session(&session_id, &title)).await
+pub async fn rename_session(
+    app: tauri::AppHandle,
+    session_id: String,
+    title: String,
+) -> CmdResult<()> {
+    let workspace_id = run_blocking(move || {
+        sessions::rename_session(&session_id, &title)?;
+        sessions::workspace_id_for_session(&session_id)
+    })
+    .await?;
+    notify_session_list_changed(&app, workspace_id);
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn hide_session(session_id: String) -> CmdResult<()> {
-    run_blocking(move || sessions::hide_session(&session_id)).await
+pub async fn hide_session(app: tauri::AppHandle, session_id: String) -> CmdResult<()> {
+    let workspace_id = run_blocking(move || {
+        sessions::hide_session(&session_id)?;
+        sessions::workspace_id_for_session(&session_id)
+    })
+    .await?;
+    notify_session_list_changed(&app, workspace_id);
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn unhide_session(session_id: String) -> CmdResult<()> {
-    run_blocking(move || sessions::unhide_session(&session_id)).await
+pub async fn unhide_session(app: tauri::AppHandle, session_id: String) -> CmdResult<()> {
+    let workspace_id = run_blocking(move || {
+        sessions::unhide_session(&session_id)?;
+        sessions::workspace_id_for_session(&session_id)
+    })
+    .await?;
+    notify_session_list_changed(&app, workspace_id);
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn delete_session(session_id: String) -> CmdResult<()> {
-    run_blocking(move || sessions::delete_session(&session_id)).await
+pub async fn delete_session(app: tauri::AppHandle, session_id: String) -> CmdResult<()> {
+    let workspace_id = run_blocking(move || {
+        // Resolve the workspace BEFORE the row is gone; afterwards the lookup
+        // returns None and the teammate broadcast would be lost.
+        let workspace_id = sessions::workspace_id_for_session(&session_id)?;
+        sessions::delete_session(&session_id)?;
+        Ok(workspace_id)
+    })
+    .await?;
+    notify_session_list_changed(&app, workspace_id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -270,6 +365,20 @@ pub async fn mark_session_read(session_id: String) -> CmdResult<()> {
     run_blocking(move || sessions::mark_session_read(&session_id)).await
 }
 
+/// Companion/team variant: with a trusted `member_id`, advance that member's
+/// per-session read cursor; without one (`None`) fall back to the global
+/// local-mode clear so the desktop path is unchanged.
+pub async fn mark_session_read_for_member(
+    session_id: String,
+    member_id: Option<String>,
+) -> CmdResult<()> {
+    run_blocking(move || match member_id {
+        Some(member) => sessions::mark_session_read_for_member(&session_id, &member),
+        None => sessions::mark_session_read(&session_id),
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn mark_session_unread(session_id: String) -> CmdResult<()> {
     run_blocking(move || sessions::mark_session_unread(&session_id)).await
@@ -295,7 +404,7 @@ pub async fn update_session_settings(
                   fast_mode = COALESCE(?5, fast_mode)
                 WHERE id = ?1
                 "#,
-                rusqlite::params![session_id, model, effort_level, permission_mode, fast_mode],
+                rusqlite::params![session_id, model, effort_level, permission_mode, fast_mode,],
             )
             .context("Failed to update session settings")?;
         Ok(())

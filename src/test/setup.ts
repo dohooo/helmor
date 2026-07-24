@@ -317,6 +317,39 @@ if (
 	globalThis.ResizeObserver = ResizeObserverMock as typeof ResizeObserver;
 }
 
+// jsdom ships a real WebSocket that opens an ACTUAL network connection. Team
+// mode connects one (`/v1/ws` → TeamHub); without this, any test that arms the
+// event stream fires a real connection whose async failure can leak across files
+// as an unhandled error. An inert stub never connects (the reconnect loop simply
+// parks until teardown). Tests that exercise the WS transport install their own
+// richer mock via `vi.stubGlobal("WebSocket", …)`, restored to this afterward.
+if (typeof globalThis !== "undefined") {
+	class InertWebSocket {
+		static readonly CONNECTING = 0;
+		static readonly OPEN = 1;
+		static readonly CLOSING = 2;
+		static readonly CLOSED = 3;
+		onopen: (() => void) | null = null;
+		onmessage: (() => void) | null = null;
+		onclose: (() => void) | null = null;
+		onerror: (() => void) | null = null;
+		readyState = 0;
+		url: string;
+		protocols?: string | string[];
+		constructor(url: string, protocols?: string | string[]) {
+			this.url = url;
+			this.protocols = protocols;
+		}
+		send() {}
+		close() {
+			this.readyState = 3;
+		}
+		addEventListener() {}
+		removeEventListener() {}
+	}
+	globalThis.WebSocket = InertWebSocket as unknown as typeof WebSocket;
+}
+
 if (typeof window !== "undefined" && typeof window.matchMedia === "undefined") {
 	window.matchMedia = ((query: string) => ({
 		matches: query.includes("dark"),

@@ -68,6 +68,7 @@ type Props = {
 	startComposerInsertTarget: { contextKey: string };
 	startComposerContextKey: string;
 	startCreateContext: ComposerCreateContext | null;
+	startCreateError: { title: string; message: string } | null;
 	startLinkedDirectoriesController: ConversationProps["composerLinkedDirectoriesController"];
 	/** Quick panel: composer pinned to the bottom of the start surface. */
 	startComposerAtBottom?: boolean;
@@ -119,6 +120,7 @@ export function WorkspacePaneSurface({
 	startComposerInsertTarget,
 	startComposerContextKey,
 	startCreateContext,
+	startCreateError,
 	startLinkedDirectoriesController,
 	startComposerAtBottom,
 	startComposerSettingsController,
@@ -187,6 +189,7 @@ export function WorkspacePaneSurface({
 							startComposerInsertTarget={startComposerInsertTarget}
 							startComposerContextKey={startComposerContextKey}
 							startCreateContext={startCreateContext}
+							startCreateError={startCreateError}
 							startLinkedDirectoriesController={
 								startLinkedDirectoriesController
 							}

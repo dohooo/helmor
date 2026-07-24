@@ -14,6 +14,7 @@ mod actions;
 mod active_streams;
 mod bridges;
 mod cleanup;
+mod cloud_autopush;
 pub(crate) mod codex_goal;
 pub(crate) mod context_usage;
 mod params;
@@ -259,6 +260,7 @@ pub(super) fn stream_via_sidecar(
     let permission_mode_initial = request.permission_mode.clone();
     let fast_mode = request.fast_mode.unwrap_or(false);
     let user_message_id_copy = request.user_message_id.clone();
+    let author_id_copy = request.author_id.clone();
     let files_copy = request.files.clone().unwrap_or_default();
     let images_copy = request.images.clone().unwrap_or_default();
     let pasted_texts_copy = request.pasted_texts.clone().unwrap_or_default();
@@ -267,6 +269,14 @@ pub(super) fn stream_via_sidecar(
 
     tauri::async_runtime::spawn_blocking(move || {
         let stream_started_at = Instant::now();
+        // P1-3b / R2-F4a (Codex half), cloud serve only (env-gated, desktop
+        // no-op): prune `$CODEX_HOME/.tmp` when this worker exits — success,
+        // persist failure, abort, error, or panic (finally semantics; see the
+        // guard's doc for why the exclude-list approach was abandoned). A
+        // LOCAL drops before the closure's captured environment, so the prune
+        // lands before the event Channel's EOF triggers the Worker's
+        // post-stream backup.
+        let _codex_tmp_prune = cloud_autopush::CodexTmpPruneGuard;
         tracing::info!(
             rid = %rid,
             helmor_session_id = ?hsid_copy,
@@ -324,6 +334,8 @@ pub(super) fn stream_via_sidecar(
                 user_message_id: user_message_id_copy
                     .clone()
                     .unwrap_or_else(|| Uuid::new_v4().to_string()),
+                // Server-derived in the companion path; None on desktop IPC.
+                author_id: author_id_copy.clone(),
             };
 
             match crate::models::db::write_conn() {
@@ -515,6 +527,21 @@ pub(super) fn stream_via_sidecar(
 
                 if let Some(pipeline_state) = pipeline.as_mut() {
                     let notice = bridges::retry_notice_event_from_error(&event.raw);
+                    // Same transient surface as the native `codex_reconnecting`
+                    // passthrough below: footer-only RetryStatus, never a
+                    // persisted thread Warning (the synthesized notice is
+                    // ingest-suppressed by the pipeline).
+                    actions::apply_action(
+                        actions::Action::EmitToFrontend(AgentStreamEvent::RetryStatus {
+                            attempt: notice.get("attempt").and_then(Value::as_i64).unwrap_or(0),
+                            max_retries: notice
+                                .get("max_retries")
+                                .and_then(Value::as_i64)
+                                .unwrap_or(0),
+                            message: message.to_string(),
+                        }),
+                        &apply_ctx,
+                    );
                     let line = serde_json::to_string(&notice).unwrap_or_default();
                     let emit = pipeline_state.push_event(&notice, &line);
                     match turn_session.handle_stream_event(emit) {
@@ -794,6 +821,21 @@ pub(super) fn stream_via_sidecar(
                                                 session_id: ctx.helmor_session_id.clone(),
                                             },
                                         );
+                                        // Cloud serve mode only (env-gated):
+                                        // commit + push the turn's work so the
+                                        // ephemeral sandbox never loses code.
+                                        cloud_autopush::maybe_autopush_after_turn(
+                                            &app,
+                                            &turn_session.ctx.working_directory,
+                                            author_id_copy.as_deref(),
+                                            &ctx.helmor_session_id,
+                                        );
+                                        // Cloud serve mode only (env-gated):
+                                        // fold the WAL into helmor.db NOW
+                                        // (synchronously, before `done`) so the
+                                        // Worker's post-stream backup snapshots
+                                        // a consistent, self-contained DB.
+                                        cloud_autopush::maybe_checkpoint_db_after_turn();
                                     }
                                     Err(error) => {
                                         tracing::error!(rid = %rid, "Failed to finalize exchange: {error}");
@@ -1266,6 +1308,39 @@ pub(super) fn stream_via_sidecar(
                     // owns the dispatch by event type; the state machine
                     // takes its `PipelineEmit` and decides what to send.
 
+                    // Codex provider-retry progress → transient footer status
+                    // (R2-A R3 denoise). Emitted to the initiating client AND
+                    // hub watchers; the pipeline drops the raw event on ingest
+                    // (`event_filter::INGEST_ONLY_SUPPRESSED_SYSTEM_SUBTYPES`),
+                    // so it is never persisted and never a thread Warning.
+                    if event.event_type() == "system"
+                        && event.raw.get("subtype").and_then(Value::as_str)
+                            == Some("codex_reconnecting")
+                    {
+                        let retry_status = AgentStreamEvent::RetryStatus {
+                            attempt: event
+                                .raw
+                                .get("attempt")
+                                .and_then(Value::as_i64)
+                                .unwrap_or(0),
+                            max_retries: event
+                                .raw
+                                .get("max_retries")
+                                .and_then(Value::as_i64)
+                                .unwrap_or(0),
+                            message: event
+                                .raw
+                                .get("error")
+                                .and_then(Value::as_str)
+                                .unwrap_or("Reconnecting...")
+                                .to_string(),
+                        };
+                        actions::apply_action(
+                            actions::Action::EmitToFrontend(retry_status),
+                            &apply_ctx,
+                        );
+                    }
+
                     // Fast mode didn't engage — flip the composer toggle off
                     // (the notice itself renders via the pipeline below).
                     if event.event_type() == "system"
@@ -1562,6 +1637,8 @@ fn build_exit_plan_review_message(
         })],
         status: None,
         streaming: None,
+        author: None,
+        is_room_chat: false,
     }
 }
 

@@ -49,15 +49,22 @@ import {
 } from "./api";
 // Routed through the transport shim so query-cache persistence works in the
 // mobile browser companion too (not just the Tauri webview).
+import { isAsleepPayload, isCompanionAsleepError } from "./companion-asleep";
 import { invoke } from "./ipc";
 import { parsePrUrl } from "./pr-url";
 // Lazy-cycle-safe: session-thread-cache imports `helmorQueryKeys` from this
 // module, but both sides only dereference inside function bodies.
-import { shareMessages } from "./session-thread-cache";
+import { shareMessagesWithRoomChatReconciliation } from "./session-thread-cache";
 import {
 	getSessionThreadPaginationState,
 	setSessionThreadPaginationState,
 } from "./session-thread-pagination";
+import { listTeamMembers, listTeamWorkspaces } from "./team-api";
+import { getTeamConfig, isTeamModeActive, type TeamConfig } from "./team-mode";
+import {
+	computeTeamBucketKey,
+	registerAndPruneTeamBuckets,
+} from "./team-query-cache";
 
 const CHANGES_STALE_TIME = 3_000;
 const CHANGES_REFETCH_INTERVAL = 10_000;
@@ -164,6 +171,12 @@ export const helmorQueryKeys = {
 		["slackThread", teamId, channelId, anchorTs] as const,
 	slackEmojiMap: (teamId: string) => ["slackEmojiMap", teamId] as const,
 	pairedDevices: ["pairedDevices"] as const,
+	// Team cloud control-plane reads, keyed by Worker URL so switching
+	// backends doesn't serve a stale roster.
+	teamMembers: (url: string) => ["teamMembers", url] as const,
+	teamWorkspaces: (url: string) => ["teamWorkspaces", url] as const,
+	cloudCodexIdentity: (url: string) => ["cloudCodexIdentity", url] as const,
+	cloudClaudeIdentity: (url: string) => ["cloudClaudeIdentity", url] as const,
 };
 
 /** Persistence is opt-in per `queryOptions` via `meta: { persist: true }`.
@@ -209,14 +222,30 @@ export function createHelmorQueryClient() {
 				gcTime: PERSIST_GC_TIME,
 				refetchOnReconnect: false,
 				refetchOnWindowFocus: true,
-				retry: 1,
+				// R3-A: a typed `ContainerAsleep` is the sandbox sleeping ON
+				// PURPOSE — retrying can't succeed without waking it (which
+				// passive reads must never do). Fail fast; the query keeps its
+				// previous data and the sidebar shows the one staleness dot.
+				retry: (failureCount, error) =>
+					!isCompanionAsleepError(error) && failureCount < 1,
 			},
 			dehydrate: {
 				// Opt-in persistence: keep default's `status === "success"`
 				// gate and require an explicit `meta: { persist: true }` on
 				// the query. Default = in-memory only.
+				// R3-A (live-verified): while the sandbox sleeps, persisted list
+				// queries sit in `error` state (typed asleep, retry off) while
+				// still HOLDING their last-known data. The success-only gate made
+				// the periodic persister rewrite drop them from the disk bucket —
+				// so the next cold boot against a sleeping backend showed an
+				// EMPTY sidebar with no way to wake anything. Keep asleep-errored
+				// queries with data in the bucket (isAsleepPayload also matches
+				// the plain-object error a hydrate round-trip leaves behind).
 				shouldDehydrateQuery: (query) =>
-					query.state.status === "success" && query.meta?.persist === true,
+					query.meta?.persist === true &&
+					(query.state.status === "success" ||
+						(query.state.data !== undefined &&
+							isAsleepPayload(query.state.error))),
 			},
 		},
 	});
@@ -316,6 +345,50 @@ export const helmorQueryPersister = createAsyncStoragePersister({
 	key: QUERY_CACHE_KEY,
 });
 
+/**
+ * R2-D: persister for the TEAM transport — same file-backed storage, but
+ * bucketed per backend (`sha256(url+token)`, see `team-query-cache.ts`) so
+ * Local↔Team switches restore instantly (R1) and different backends /
+ * member identities never share cached lists. The bucket key is resolved
+ * LAZILY (WebCrypto is async, the provider render path is sync); the first
+ * resolution also registers the bucket and prunes every non-current team
+ * bucket (aggressive retention, by ruling — leaving a team must not keep
+ * its cache on disk).
+ *
+ * Returns `null` when no team config exists (the caller falls back to a
+ * bare provider — nothing meaningful to persist against).
+ */
+export function createTeamQueryPersister(): ReturnType<
+	typeof createAsyncStoragePersister
+> | null {
+	const config = getTeamConfig();
+	if (!config) return null;
+	let bucketKeyPromise: Promise<string> | undefined;
+	const bucketKey = (): Promise<string> => {
+		if (!bucketKeyPromise) {
+			bucketKeyPromise = computeTeamBucketKey(config.url, config.token).then(
+				async (key: string) => {
+					await registerAndPruneTeamBuckets(key);
+					return key;
+				},
+			);
+		}
+		return bucketKeyPromise;
+	};
+	return createAsyncStoragePersister({
+		// The storage adapter resolves its own bucket key and ignores the
+		// persister-supplied one (which only namespaces within a storage).
+		storage: {
+			getItem: async () => tauriFsQueryCacheStorage.getItem(await bucketKey()),
+			setItem: async (_key: string, value: string) =>
+				tauriFsQueryCacheStorage.setItem(await bucketKey(), value),
+			removeItem: async () =>
+				tauriFsQueryCacheStorage.removeItem(await bucketKey()),
+		},
+		key: "helmor-query-cache--team",
+	});
+}
+
 export function workspaceGroupsQueryOptions() {
 	return queryOptions({
 		queryKey: helmorQueryKeys.workspaceGroups,
@@ -355,6 +428,25 @@ export function repositoriesQueryOptions() {
  *  persisted — running streams are by definition tied to this app run,
  *  rehydrating stale state across restarts would mislead the UI. */
 export function activeStreamsQueryOptions() {
+	// R2-E: in team mode this query is EVENT-DRIVEN, never poll/boot-fetched.
+	// A sleeping container has zero active turns by definition, so asking it
+	// at boot/focus would only wake it to hear "[]". The bridge invalidates on
+	// `activeStreamsChanged` (delivered over the hibernating TeamHub WS), and
+	// at that moment the container is provably awake (it just emitted the
+	// event) — the /rpc refetch is free. Mid-turn boot is course-corrected
+	// from the D1 session mirror (see use-watch-session-stream).
+	if (isTeamModeActive()) {
+		return queryOptions({
+			queryKey: helmorQueryKeys.activeStreams,
+			queryFn: listActiveStreams,
+			initialData: [],
+			initialDataUpdatedAt: Date.now(),
+			staleTime: Number.POSITIVE_INFINITY,
+			refetchOnMount: false,
+			refetchOnWindowFocus: false,
+			refetchOnReconnect: false,
+		});
+	}
 	return queryOptions({
 		queryKey: helmorQueryKeys.activeStreams,
 		queryFn: listActiveStreams,
@@ -473,6 +565,12 @@ export function workspaceDetailQueryOptions(workspaceId: string) {
 		queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
 		queryFn: () => loadWorkspaceDetail(workspaceId),
 		staleTime: 0,
+		// Header/chrome fields render from the last-known detail immediately
+		// (stale-while-revalidate via staleTime 0 + focus refetch). Matters in
+		// team-cloud mode: a sleeping container fast-fails this query, and
+		// without a persisted value the workspace header stays blank until the
+		// container wakes.
+		meta: PERSIST_META,
 	});
 }
 
@@ -485,7 +583,12 @@ export function workspaceForgeQueryOptions(workspaceId: string) {
 		// with backend-side polling (e.g. CI status changes).
 		staleTime: Number.POSITIVE_INFINITY,
 		refetchOnWindowFocus: "always",
-		refetchInterval: (query) => workspaceForgeRefetchInterval(query.state.data),
+		// R2-E: team mode disables the interval — forge state refreshes on
+		// focus and on the container's turn-driven pushes; external-only
+		// transitions (CI finishing elsewhere) wait for the next attention.
+		refetchInterval: isTeamModeActive()
+			? false
+			: (query) => workspaceForgeRefetchInterval(query.state.data),
 		meta: PERSIST_META,
 	});
 }
@@ -563,6 +666,11 @@ export function workspaceSessionsQueryOptions(
 		queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
 		queryFn: () => loadWorkspaceSessions(workspaceId),
 		staleTime: overrides.staleTime ?? 0,
+		// R2-D: session tabs are list-shaped state worth an instant first paint
+		// after a transport switch. Message THREADS stay memory/DB-only (WP3's
+		// convergence protocol owns that truth; persisting them would add a
+		// merge surface for no gain).
+		meta: PERSIST_META,
 	});
 }
 
@@ -606,7 +714,8 @@ export function codexRateLimitsQueryOptions(enabled: boolean) {
 		queryKey: helmorQueryKeys.codexRateLimits,
 		queryFn: getCodexRateLimits,
 		staleTime: RATE_LIMITS_STALE_TIME,
-		refetchInterval: enabled ? RATE_LIMITS_STALE_TIME : false,
+		refetchInterval:
+			enabled && !isTeamModeActive() ? RATE_LIMITS_STALE_TIME : false,
 		refetchOnWindowFocus: true,
 		enabled,
 	});
@@ -616,7 +725,10 @@ export function claudeRateLimitsQueryOptions(enabled: boolean) {
 		queryKey: helmorQueryKeys.claudeRateLimits,
 		queryFn: getClaudeRateLimits,
 		staleTime: RATE_LIMITS_STALE_TIME,
-		refetchInterval: enabled ? RATE_LIMITS_STALE_TIME : false,
+		// R3-A: same team-mode gate as codex above — this was the E.3 miss
+		// that kept a 2min /rpc poll renewing the sandbox forever.
+		refetchInterval:
+			enabled && !isTeamModeActive() ? RATE_LIMITS_STALE_TIME : false,
 		refetchOnWindowFocus: true,
 		enabled,
 	});
@@ -707,15 +819,15 @@ export function sessionThreadMessagesQueryOptions(sessionId: string) {
 		// Reuse per-message references on refetch via the same helper the
 		// streaming writes use, so per-message memos bail out. First fetch
 		// passes `oldData === undefined` and must flow straight through —
-		// `shareMessages` iterates prev unconditionally. Note: a key whose
-		// first write comes from `setQueryData` before any observer mounts
-		// is built with default options (default structural sharing for
-		// that one write) — known and fine; this fn applies once an
-		// observer mounts with these options.
+		// `shareMessagesWithRoomChatReconciliation` iterates prev
+		// unconditionally. Note: a key whose first write comes from
+		// `setQueryData` before any observer mounts is built with default
+		// options (default structural sharing for that one write) — known and
+		// fine; this fn applies once an observer mounts with these options.
 		structuralSharing: (oldData, newData) =>
 			oldData == null
 				? newData
-				: shareMessages(
+				: shareMessagesWithRoomChatReconciliation(
 						oldData as ThreadMessageLike[],
 						newData as ThreadMessageLike[],
 					),
@@ -946,7 +1058,10 @@ export function workspaceChangeRequestQueryOptions(
 		staleTime: 30_000,
 		gcTime: DEFAULT_GC_TIME,
 		refetchOnWindowFocus: true,
-		refetchInterval: (query) => changeRequestRefetchInterval(query.state.data),
+		// R2-E: team mode is focus/turn-driven (see workspaceForgeQueryOptions).
+		refetchInterval: isTeamModeActive()
+			? false
+			: (query) => changeRequestRefetchInterval(query.state.data),
 		retry: 0,
 		// Identity-stable per (workspaceId, seed signature) so React Query
 		// doesn't re-evaluate placeholderData on unrelated re-renders.
@@ -958,10 +1073,12 @@ export function workspaceGitActionStatusQueryOptions(workspaceId: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.workspaceGitActionStatus(workspaceId),
 		queryFn: () => loadWorkspaceGitActionStatus(workspaceId),
+		// R2-E: team mode is push-driven (container git watcher → D1 +
+		// workspaceGitStateChanged broadcast) — no polling, no container wake.
 		staleTime: CHANGES_STALE_TIME,
 		gcTime: DEFAULT_GC_TIME,
 		refetchOnWindowFocus: true,
-		refetchInterval: 10_000,
+		refetchInterval: isTeamModeActive() ? false : 10_000,
 		retry: 0,
 	});
 }
@@ -982,7 +1099,9 @@ export function workspaceForgeActionStatusQueryOptions(workspaceId: string) {
 		refetchOnWindowFocus: "always",
 		refetchOnMount: "always",
 		refetchInterval: (query) =>
-			forgeActionStatusRefetchInterval(query.state.data),
+			isTeamModeActive()
+				? false
+				: forgeActionStatusRefetchInterval(query.state.data),
 		retry: 0,
 		meta: PERSIST_META,
 	});
@@ -1006,7 +1125,8 @@ export function workspaceChangesQueryOptions(
 		queryFn: () => listWorkspaceChanges(workspaceRootPath, workspaceId),
 		staleTime: CHANGES_STALE_TIME,
 		refetchOnWindowFocus: true,
-		refetchInterval: CHANGES_REFETCH_INTERVAL,
+		// R2-E: push-driven in team mode (see workspaceGitActionStatusQueryOptions).
+		refetchInterval: isTeamModeActive() ? false : CHANGES_REFETCH_INTERVAL,
 	});
 }
 
@@ -1024,5 +1144,46 @@ export function workspaceFilesQueryOptions(workspaceRootPath: string) {
 		staleTime: 60_000,
 		gcTime: DEFAULT_GC_TIME,
 		retry: 0,
+	});
+}
+
+const TEAM_DATA_STALE_TIME = 30_000;
+
+/**
+ * Team roster (`GET /team/members`) for the sidebar team section. Only
+ * meaningful in team mode — pass the resolved {@link TeamConfig} (or `null`
+ * to disable). Keyed by Worker URL so switching backends serves a fresh
+ * list. Not persisted: it's remote, per-session, and re-fetched on focus.
+ */
+export function teamMembersQueryOptions(cfg: TeamConfig | null) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.teamMembers(cfg?.url ?? "__none__"),
+		queryFn: () => {
+			// `enabled` keeps this off when cfg is null; the resolve here is
+			// just to satisfy the type — it never runs disabled.
+			const resolved = cfg ?? getTeamConfig();
+			if (!resolved) return Promise.resolve([]);
+			return listTeamMembers(resolved);
+		},
+		enabled: cfg !== null,
+		staleTime: TEAM_DATA_STALE_TIME,
+		refetchOnWindowFocus: true,
+		retry: 1,
+	});
+}
+
+/** Team workspaces (`GET /team/workspaces`) for the sidebar team section. */
+export function teamWorkspacesQueryOptions(cfg: TeamConfig | null) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.teamWorkspaces(cfg?.url ?? "__none__"),
+		queryFn: () => {
+			const resolved = cfg ?? getTeamConfig();
+			if (!resolved) return Promise.resolve([]);
+			return listTeamWorkspaces(resolved);
+		},
+		enabled: cfg !== null,
+		staleTime: TEAM_DATA_STALE_TIME,
+		refetchOnWindowFocus: true,
+		retry: 1,
 	});
 }

@@ -24,6 +24,7 @@ import {
 	isCodexProvider,
 	listCustomProviders,
 	mutateCodexGoal,
+	reportPresence,
 	type SlashCommandEntry,
 	saveAutoCloseActionKinds,
 	setWorkspaceLinkedDirectories,
@@ -33,6 +34,7 @@ import type {
 	ComposerCustomTag,
 	ResolvedComposerInsertRequest,
 } from "@/lib/composer-insert";
+import { toastCaughtError } from "@/lib/error-toast";
 import { I18nText, useI18n } from "@/lib/i18n";
 import {
 	agentModelSectionsQueryOptions,
@@ -49,6 +51,7 @@ import {
 } from "@/lib/query-client";
 import { readSessionThread } from "@/lib/session-thread-cache";
 import { type ModelRef, useSettings } from "@/lib/settings";
+import { isTeamModeActive } from "@/lib/team-mode";
 import type { QueuedSubmit } from "@/lib/use-submit-queue";
 import { cn } from "@/lib/utils";
 import {
@@ -457,7 +460,9 @@ export const WorkspaceComposerContainer = memo(
 				});
 			},
 			onError: (error) => {
-				toast.error(
+				// DF-R6-A: silent for typed asleep; same-text toasts don't stack.
+				toastCaughtError(
+					error,
 					error instanceof Error
 						? error.message
 						: "Failed to update linked directories",
@@ -540,6 +545,12 @@ export const WorkspaceComposerContainer = memo(
 
 		const availableModelSections =
 			modelSectionsQuery.data ?? EMPTY_MODEL_SECTIONS;
+		// F-2: in-place recovery for a failed/empty catalog (e.g. a transient
+		// team-backend outage settles the query in error and it never refetches
+		// on its own) — the picker's Retry row calls this.
+		const handleRetryModels = useCallback(() => {
+			void modelSectionsQuery.refetch();
+		}, [modelSectionsQuery.refetch]);
 		const modelsLoading =
 			modelSectionsQuery.isLoading &&
 			availableModelSections.every((s) => s.options.length === 0);
@@ -647,6 +658,7 @@ export const WorkspaceComposerContainer = memo(
 			? (cachedFastMode ?? sessionFastMode ?? settings.defaultFastMode ?? false)
 			: false;
 		const showFastModePrelude = activeFastPreludes[composerContextKey] === true;
+
 		const loadingConversationContext =
 			Boolean(displayedWorkspaceId) &&
 			(workspaceDetailQuery.isPending || sessionsQuery.isPending);
@@ -1049,7 +1061,10 @@ export const WorkspaceComposerContainer = memo(
 					if (arg === "pause" || arg === "clear") {
 						if (activeGoal) {
 							void mutateCodexGoal(displayedSessionId, arg).catch((err) => {
-								toast.error(
+								// DF-R6-A: silent for typed asleep; same-text toasts
+								// don't stack.
+								toastCaughtError(
+									err,
 									err instanceof Error ? err.message : `Failed to ${arg} goal`,
 								);
 							});
@@ -1200,6 +1215,28 @@ export const WorkspaceComposerContainer = memo(
 		const autoCloseHelpText = t("composerAutoCloseHelp");
 
 		const [workflowsPanelOpen, setWorkflowsPanelOpen] = useState(false);
+
+		// Typing-presence reporter (team mode only). Debounced so a burst of
+		// keystrokes coalesces into ~one `report_presence` call per 1.5s; the
+		// backend re-broadcasts on its own ~2s throttle, re-stamping `ts` so the
+		// peer's 10s TTL stays alive while editing continues. Local / non-team
+		// sessions no-op the IPC.
+		const editingDebounceRef = useRef<number | null>(null);
+		const handleEditing = useCallback(() => {
+			if (!isTeamModeActive() || !displayedWorkspaceId) return;
+			if (editingDebounceRef.current !== null) return;
+			editingDebounceRef.current = window.setTimeout(() => {
+				editingDebounceRef.current = null;
+				void reportPresence(displayedWorkspaceId, displayedSessionId, "typing");
+			}, 1500);
+		}, [displayedWorkspaceId, displayedSessionId]);
+		useEffect(() => {
+			return () => {
+				if (editingDebounceRef.current !== null) {
+					window.clearTimeout(editingDebounceRef.current);
+				}
+			};
+		}, []);
 
 		// Docked-bar visibility must be lifted to the host (see
 		// composer-top-bars.tsx): the goal banner's own query decides whether it
@@ -1369,6 +1406,8 @@ export const WorkspaceComposerContainer = memo(
 						modelSections={modelSections}
 						hasOpencodeCustomProviders={hasOpencodeCustomProviders}
 						modelsLoading={modelsLoading}
+						modelsError={modelSectionsQuery.isError}
+						onRetryModels={handleRetryModels}
 						onSelectModel={handleSelectModelInner}
 						provider={provider}
 						effortLevel={effortLevel}
@@ -1432,6 +1471,7 @@ export const WorkspaceComposerContainer = memo(
 						onStartSubmitModeChange={handleStartSubmitModeChange}
 						focusScope={focusScope}
 						getInputHistory={getInputHistory}
+						onEditing={handleEditing}
 					/>
 				</div>
 			</div>

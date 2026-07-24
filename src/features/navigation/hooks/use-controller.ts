@@ -43,6 +43,7 @@ import {
 } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import {
+	cancelSidebarListQueries,
 	createScopedSidebarGate,
 	holdSidebarMutation,
 	requestSidebarReconcile,
@@ -63,9 +64,11 @@ import {
 import {
 	type PendingArchiveEntry,
 	type PendingCreationEntry,
+	type PendingDeleteEntry,
 	projectVisualSidebar,
 	shouldReconcilePendingArchive,
 	shouldReconcilePendingCreation,
+	shouldReconcilePendingDelete,
 } from "../sidebar-projection";
 import {
 	createOptimisticWorkspaceSession,
@@ -124,6 +127,10 @@ export function useWorkspacesSidebarController({
 	>(() => new Set());
 	const [pendingArchives, setPendingArchives] = useState<
 		Map<string, PendingArchiveEntry>
+	>(() => new Map());
+	// R2-B tombstones — see `PendingDeleteEntry` for why this exists.
+	const [pendingDeletes, setPendingDeletes] = useState<
+		Map<string, PendingDeleteEntry>
 	>(() => new Map());
 	const [pendingCreations, setPendingCreations] = useState<
 		Map<
@@ -186,6 +193,7 @@ export function useWorkspacesSidebarController({
 							],
 						),
 					),
+					pendingDeletes,
 				},
 				settings.sidebarGrouping,
 				{
@@ -200,6 +208,7 @@ export function useWorkspacesSidebarController({
 			baseGroups,
 			pendingArchives,
 			pendingCreations,
+			pendingDeletes,
 			settings.sidebarGrouping,
 			settings.sidebarRepoFilterIds,
 			settings.sidebarSort,
@@ -436,6 +445,47 @@ export function useWorkspacesSidebarController({
 		});
 	}, [baseArchivedSummaries, baseGroups, pendingArchives]);
 
+	// R2-B: clear delete tombstones once server truth confirms the removal.
+	//
+	// INVARIANT (do not add a timeout here, and do not remove the `.finally
+	// (releaseSidebar)` on the delete IPC): a `confirmed` entry is guaranteed
+	// to converge because (1) IPC success means the DB row is gone, so every
+	// real refetch from here on returns lists without the id, and (2) the
+	// delete flow holds the sidebar-mutation gate and its `finally` release
+	// ALWAYS fires the reconcile invalidate at counter==0 — so that refetch
+	// is guaranteed to happen. A timeout would only re-open the resurrect
+	// window this overlay exists to close. (Same contract as the
+	// pendingArchives effect above, which is the production-proven precedent.)
+	useEffect(() => {
+		if (pendingDeletes.size === 0) {
+			return;
+		}
+		const resolvedIds: string[] = [];
+		for (const [workspaceId, pendingDelete] of pendingDeletes) {
+			if (
+				pendingDelete.stage === "confirmed" &&
+				shouldReconcilePendingDelete(
+					workspaceId,
+					baseGroups,
+					baseArchivedSummaries,
+				)
+			) {
+				resolvedIds.push(workspaceId);
+			}
+		}
+		if (resolvedIds.length === 0) {
+			return;
+		}
+		setPendingDeletes((current) => {
+			let changed = false;
+			const next = new Map(current);
+			for (const workspaceId of resolvedIds) {
+				changed = next.delete(workspaceId) || changed;
+			}
+			return changed ? next : current;
+		});
+	}, [baseArchivedSummaries, baseGroups, pendingDeletes]);
+
 	useEffect(() => {
 		if (pendingCreations.size === 0) {
 			return;
@@ -618,6 +668,8 @@ export function useWorkspacesSidebarController({
 
 	const handleMarkWorkspaceUnread = useCallback(
 		(workspaceId: string) => {
+			// R2-B: abort in-flight list refetches before the optimistic write.
+			cancelSidebarListQueries(queryClient);
 			const previousGroups = queryClient.getQueryData(
 				helmorQueryKeys.workspaceGroups,
 			);
@@ -702,6 +754,8 @@ export function useWorkspacesSidebarController({
 			// pin/unpin move (the row migrates between Pinned and its status
 			// group).
 			const releaseSidebar = holdSidebarMutation(queryClient);
+			// R2-B: abort in-flight list refetches before the optimistic move.
+			cancelSidebarListQueries(queryClient);
 			queryClient.setQueryData(helmorQueryKeys.workspaceGroups, (current) => {
 				if (!Array.isArray(current)) {
 					return current;
@@ -1289,6 +1343,16 @@ export function useWorkspacesSidebarController({
 				next.delete(workspaceId);
 				return next;
 			});
+			// R2-B: kill any in-flight list refetch (its resolution would write
+			// the pre-delete snapshot back), then tombstone the id so snapshots
+			// that slip through anyway (event storms, hydration) can't resurrect
+			// the row while the delete settles.
+			cancelSidebarListQueries(queryClient);
+			setPendingDeletes((current) => {
+				const next = new Map(current);
+				next.set(workspaceId, { stage: "deleting" });
+				return next;
+			});
 			const previousGroups = queryClient.getQueryData(
 				helmorQueryKeys.workspaceGroups,
 			);
@@ -1336,7 +1400,31 @@ export function useWorkspacesSidebarController({
 
 			const releaseSidebar = holdSidebarMutation(queryClient);
 			void permanentlyDeleteWorkspace(workspaceId)
+				.then(() => {
+					// DB row is gone. Flip the tombstone to `confirmed`; the
+					// reconcile effect below clears it once server truth reflects
+					// the removal (mirrors the pendingArchives lifecycle).
+					setPendingDeletes((current) => {
+						const existing = current.get(workspaceId);
+						if (!existing || existing.stage === "confirmed") {
+							return current;
+						}
+						const next = new Map(current);
+						next.set(workspaceId, { stage: "confirmed" });
+						return next;
+					});
+				})
 				.catch((error) => {
+					// Withdraw the tombstone FIRST so the restored snapshots below
+					// are actually visible again.
+					setPendingDeletes((current) => {
+						if (!current.has(workspaceId)) {
+							return current;
+						}
+						const next = new Map(current);
+						next.delete(workspaceId);
+						return next;
+					});
 					queryClient.setQueryData(
 						helmorQueryKeys.workspaceGroups,
 						previousGroups,
@@ -1456,6 +1544,8 @@ export function useWorkspacesSidebarController({
 					return;
 				}
 
+				// R2-B: abort in-flight list refetches before the optimistic move.
+				cancelSidebarListQueries(queryClient);
 				const previousGroups =
 					queryClient.getQueryData(helmorQueryKeys.workspaceGroups) ?? groups;
 
@@ -1619,6 +1709,8 @@ export function useWorkspacesSidebarController({
 			// instead of refetching the still-pre-restore server state and
 			// clobbering the optimistic move from archived → active.
 			const releaseSidebar = holdSidebarMutation(queryClient);
+			// R2-B: abort in-flight list refetches before the optimistic move.
+			cancelSidebarListQueries(queryClient);
 
 			const previousGroups = queryClient.getQueryData(
 				helmorQueryKeys.workspaceGroups,

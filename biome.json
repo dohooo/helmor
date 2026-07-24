@@ -14,6 +14,7 @@
 			"!!**/dist",
 			"!**/node_modules",
 			"!!**/.claude",
+			"!!**/.agent-contexts",
 			"!!**/coverage",
 			"!storybook-static",
 			"!**/.local-data",

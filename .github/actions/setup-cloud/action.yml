@@ -1,0 +1,22 @@
+name: Setup Cloud Deps
+description: >-
+  Cache and install cloud/ workspace dependencies. cloud/ has its own
+  bun.lock and node_modules (it is NOT in the root bun workspaces), so the
+  root `bun install` never covers it — every job that runs the cloud suite
+  or the root `typecheck` chain (which ends in `cd cloud && tsc`) must stage
+  these deps explicitly.
+
+runs:
+  using: composite
+  steps:
+    - name: Cache cloud node_modules
+      uses: actions/cache@v4
+      with:
+        path: cloud/node_modules
+        key: cloud-install-${{ runner.os }}-${{ hashFiles('cloud/bun.lock', '.github/actions/setup-cloud/action.yml') }}
+        restore-keys: |
+          cloud-install-${{ runner.os }}-
+
+    - name: Install cloud dependencies
+      shell: bash
+      run: cd cloud && bun install --frozen-lockfile

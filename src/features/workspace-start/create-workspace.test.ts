@@ -176,6 +176,11 @@ describe("createWorkspaceFromStartComposer", () => {
 			workspaceId: "workspace-1",
 			sessionId: "session-1",
 			preparedWorkingDirectory: null,
+			prepared: {
+				workspaceId: "workspace-1",
+				initialSessionId: "session-1",
+				workingDirectory: null,
+			},
 		});
 	});
 
@@ -215,6 +220,11 @@ describe("createWorkspaceFromStartComposer", () => {
 			workspaceId: "workspace-1",
 			sessionId: "session-1",
 			preparedWorkingDirectory: null,
+			prepared: {
+				workspaceId: "workspace-1",
+				initialSessionId: "session-1",
+				workingDirectory: null,
+			},
 		});
 	});
 

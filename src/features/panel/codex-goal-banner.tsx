@@ -18,9 +18,9 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Goal, Play, X } from "lucide-react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { type CodexGoalState, mutateCodexGoal } from "@/lib/api";
+import { toastCaughtError } from "@/lib/error-toast";
 import { I18nText, useI18n } from "@/lib/i18n";
 import {
 	helmorQueryKeys,
@@ -87,7 +87,9 @@ export function CodexGoalBanner({
 			if (context?.previous !== undefined) {
 				queryClient.setQueryData(queryKey, context.previous);
 			}
-			toast.error(
+			// DF-R6-A: silent for typed asleep; same-text toasts don't stack.
+			toastCaughtError(
+				err,
 				err instanceof Error ? err.message : t("panelFailedClearGoal"),
 			);
 		},

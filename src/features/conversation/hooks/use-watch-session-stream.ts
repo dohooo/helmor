@@ -14,7 +14,7 @@
  */
 
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useStreamingStore } from "@/features/conversation/state/streaming-store";
 import { stabilizeStreamingMessages } from "@/features/conversation/streaming-tail-collapse";
 import {
@@ -23,8 +23,10 @@ import {
 	subscribeSessionStream,
 	type ThreadMessageLike,
 } from "@/lib/api";
+import { useCompanionIdleSuspended } from "@/lib/companion-suspend";
 import { sessionThreadMessagesQueryOptions } from "@/lib/query-client";
 import {
+	mergeRoomChatMessages,
 	readSessionThread,
 	replaceStreamingTail,
 } from "@/lib/session-thread-cache";
@@ -64,10 +66,34 @@ export function useWatchSessionStream({ sessionId, activeStreams }: Args) {
 		? activeStreams.some((stream) => stream.sessionId === sessionId)
 		: false;
 
-	const enabled = Boolean(sessionId) && hasRemoteStream && !isLocallyDriven;
+	// R2-E: TURN-DRIVEN. The watch attaches only while a remote turn is live
+	// (`hasRemoteStream`, event-driven via `activeStreamsChanged` over the
+	// TeamHub WS) — an idle displayed session holds NO container stream, so
+	// the sandbox can sleep. Ruling (correction B): a live remote turn
+	// OVERRIDES idle-suspend for the watch face only — suspend keeps gating
+	// polls, but a teammate's live turn must mirror even on a suspended app;
+	// when the turn ends (activeStreams empties) the watch detaches and the
+	// app falls back to suspended quiet.
+	const suspended = useCompanionIdleSuspended();
+	const remoteTurnActive = hasRemoteStream;
+	const enabled =
+		Boolean(sessionId) &&
+		!isLocallyDriven &&
+		hasRemoteStream &&
+		(!suspended || remoteTurnActive);
+
+	const isLocallyDrivenRef = useRef(isLocallyDriven);
+	isLocallyDrivenRef.current = isLocallyDriven;
+	const setMirroredActiveSession = useStreamingStore(
+		(state) => state.setMirroredActiveSession,
+	);
+	const clearMirroredActiveSession = useStreamingStore(
+		(state) => state.clearMirroredActiveSession,
+	);
 
 	useEffect(() => {
-		if (!enabled || !sessionId) return;
+		if (!enabled || !sessionId || !contextKey) return;
+		const activeContextKey = contextKey;
 		let disposed = false;
 		let unlisten: (() => void) | null = null;
 
@@ -142,14 +168,29 @@ export function useWatchSessionStream({ sessionId, activeStreams }: Args) {
 			}
 		};
 
+		const isRoomChatBroadcastEvent = (event: AgentStreamEvent) =>
+			event.kind === "update" &&
+			event.messages.length > 0 &&
+			event.messages.every((m) => m.isRoomChat === true);
+
 		const handle = (event: AgentStreamEvent) => {
 			if (event.kind === "update") {
+				// A room-chat broadcast carries a USER row (a teammate's, or the
+				// echo of our own), not an assistant tail — never tail-splice it.
+				// Fold it by message id: own echoes replace the optimistic row with
+				// the canonical backend shape, teammate rows append.
+				if (isRoomChatBroadcastEvent(event)) {
+					mergeRoomChatMessages(queryClient, sessionId, event.messages);
+					return;
+				}
+				setMirroredActiveSession(activeContextKey, sessionId);
 				accumulator.baseMessages = event.messages;
 				accumulator.pendingPartial = null;
 				scheduleFlush();
 				return;
 			}
 			if (event.kind === "streamingPartial") {
+				setMirroredActiveSession(activeContextKey, sessionId);
 				accumulator.pendingPartial = event.message;
 				scheduleFlush();
 				return;
@@ -175,6 +216,7 @@ export function useWatchSessionStream({ sessionId, activeStreams }: Args) {
 				}
 				flush();
 				// Reconcile to canonical DB rows now the turn is finalized.
+				clearMirroredActiveSession(activeContextKey);
 				void refreshFromDb();
 				useStreamingStore.getState().clearActiveTasks(sessionId);
 			}
@@ -184,9 +226,16 @@ export function useWatchSessionStream({ sessionId, activeStreams }: Args) {
 
 		const onEvent = (event: AgentStreamEvent) => {
 			if (disposed) return;
+			if (isRoomChatBroadcastEvent(event)) {
+				handle(event);
+				return;
+			}
 			if (event.kind === "taskStateUpdate") {
 				handle(event);
 				return;
+			}
+			if (event.kind === "update" || event.kind === "streamingPartial") {
+				setMirroredActiveSession(activeContextKey, sessionId);
 			}
 			if (!boundaryReady) {
 				queued.push(event);
@@ -233,9 +282,21 @@ export function useWatchSessionStream({ sessionId, activeStreams }: Args) {
 				window.clearTimeout(accumulator.fallbackTimerId);
 			}
 			unlisten?.();
-			// On teardown (turn ended or navigated away), pull canonical DB
-			// state so a half-streamed snapshot never lingers.
-			void refreshFromDb();
+			clearMirroredActiveSession(activeContextKey);
+			// On teardown (turn ended or navigated away) pull canonical DB state
+			// so a half-streamed snapshot never lingers — UNLESS this client just
+			// became the driver (isLocallyDriven): its own send path renders the
+			// turn and the optimistic row isn't persisted yet, so a refetch here
+			// would briefly clobber it (the "@agent message vanishes then
+			// reappears" bug).
+			if (!isLocallyDrivenRef.current) void refreshFromDb();
 		};
-	}, [enabled, sessionId, queryClient]);
+	}, [
+		enabled,
+		sessionId,
+		contextKey,
+		queryClient,
+		setMirroredActiveSession,
+		clearMirroredActiveSession,
+	]);
 }

@@ -49,15 +49,80 @@ pub(super) fn persist_user_message(
     conn.execute(
         r#"
             INSERT INTO session_messages (
-              id, session_id, role, content, created_at, sent_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+              id, session_id, role, content, created_at, sent_at, author_id
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)
             "#,
         params![
             user_message_id,
             ctx.helmor_session_id,
             MessageRole::User,
             content,
-            now
+            now,
+            // Cloud rooms only — the human author's team member id. `None`
+            // binds SQL NULL, so the local/desktop path's row (and its
+            // pipeline snapshots) is unchanged.
+            ctx.author_id,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Persist a room-chat message sent by a human teammate (NOT dispatched
+/// to the agent). Mirrors `persist_user_message` but uses
+/// `{"type":"room_chat","text":...}` content and binds `author_id`.
+///
+/// No new SQL column — reuses the shipped `author_id` column and the
+/// JSON-content convention already in place for `user_prompt`.
+#[allow(clippy::too_many_arguments)]
+pub fn persist_room_chat_message(
+    conn: &Connection,
+    helmor_session_id: &str,
+    msg_id: &str,
+    prompt: &str,
+    files: &[String],
+    images: &[String],
+    pasted_texts: &[crate::pipeline::types::PastedTextRange],
+    author_id: Option<&str>,
+) -> anyhow::Result<()> {
+    let now = current_timestamp_string()?;
+    let mut payload = serde_json::json!({
+        "type": "room_chat",
+        "text": prompt,
+    });
+    if !files.is_empty() {
+        payload["files"] = serde_json::Value::Array(
+            files
+                .iter()
+                .map(|path| serde_json::Value::String(path.clone()))
+                .collect(),
+        );
+    }
+    if !images.is_empty() {
+        payload["images"] = serde_json::Value::Array(
+            images
+                .iter()
+                .map(|path| serde_json::Value::String(path.clone()))
+                .collect(),
+        );
+    }
+    if !pasted_texts.is_empty() {
+        payload["pastedTexts"] = serde_json::to_value(pasted_texts)?;
+    }
+    let content = payload.to_string();
+
+    conn.execute(
+        r#"
+            INSERT INTO session_messages (
+              id, session_id, role, content, created_at, sent_at, author_id
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)
+            "#,
+        rusqlite::params![
+            msg_id,
+            helmor_session_id,
+            crate::pipeline::types::MessageRole::User,
+            content,
+            now,
+            author_id,
         ],
     )?;
     Ok(())
@@ -318,6 +383,7 @@ mod tests {
             model_id: "gpt-5.4".to_string(),
             model_provider: "codex".to_string(),
             user_message_id: "user-1".to_string(),
+            author_id: None,
         }
     }
 
@@ -369,7 +435,8 @@ mod tests {
                 role TEXT,
                 content TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                sent_at TEXT
+                sent_at TEXT,
+                author_id TEXT
             );
             "#,
         )

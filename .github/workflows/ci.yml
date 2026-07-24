@@ -10,6 +10,10 @@ name: CI
 # cross-cutting tooling change force-runs the full suite and can never
 # silently skip a lane. paths-filter flattens nested anchor lists.
 #
+# A terminal `ci-green` job aggregates every lane into the single required
+# status: skipped lanes stay green (that's the point of path filtering),
+# any failure or cancellation is red.
+#
 # macOS is the upstream reference platform; the windows-* jobs mirror the
 # platform-sensitive parts on windows-latest (process/fs/paths/executable
 # boundaries, the `.cmd` CLI shim, bundled-binary resolution, win32 vendor
@@ -34,6 +38,14 @@ permissions:
 env:
   CI: true
 
+# Red-light discipline (Round 6 class 0): every `run:` step gets an explicit
+# bash shell, which GitHub launches with `-eo pipefail` — a piped command can
+# never wash a non-zero exit code green. (The unspecified default on macOS
+# and Linux is `bash -e {0}`, WITHOUT pipefail.)
+defaults:
+  run:
+    shell: bash
+
 jobs:
   changes:
     name: Detect changes
@@ -46,6 +58,7 @@ jobs:
       e2e: ${{ steps.filter.outputs.e2e }}
       sidecar: ${{ steps.filter.outputs.sidecar }}
       rust: ${{ steps.filter.outputs.rust }}
+      cloud: ${{ steps.filter.outputs.cloud }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v4
@@ -81,6 +94,9 @@ jobs:
               - 'src-tauri/**'
               - 'sidecar/package.json'
               - 'sidecar/bun.lock'
+            cloud:
+              - *global
+              - 'cloud/**'
             e2e:
               - *global
               - 'src/**'
@@ -159,6 +175,11 @@ jobs:
 
       - name: Setup JS toolchain
         uses: ./.github/actions/setup-js
+
+      # Root `bun run typecheck` chains into cloud/ (own lockfile — the root
+      # install doesn't cover it), so its deps must be staged here too.
+      - name: Setup cloud deps
+        uses: ./.github/actions/setup-cloud
 
       - name: Run typecheck
         run: bun run typecheck
@@ -239,6 +260,34 @@ jobs:
       - name: Run Rust doctests
         shell: bash
         run: cd src-tauri && cargo test --doc
+
+  cloud-test:
+    name: Cloud Test
+    needs: changes
+    if: needs.changes.outputs.cloud == 'true'
+    # ubuntu, not macos: the suite runs inside workerd via
+    # @cloudflare/vitest-pool-workers (miniflare) — platform-neutral, and
+    # Linux is what the Worker deploys onto anyway. macOS runners bill 10x.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          # Keep in sync with .github/actions/setup-js's default.
+          bun-version: "1.3.2"
+
+      - name: Setup cloud deps
+        uses: ./.github/actions/setup-cloud
+
+      - name: Run cloud typecheck
+        run: cd cloud && bun run typecheck
+
+      - name: Run cloud tests
+        run: cd cloud && bun run test
 
   e2e-test:
     name: E2E Test
@@ -337,6 +386,11 @@ jobs:
           # on Windows runners; skip it.
           install-sccache: "false"
 
+      # Root `bun run typecheck` chains into cloud/ (own lockfile — the root
+      # install doesn't cover it), so its deps must be staged here too.
+      - name: Setup cloud deps
+        uses: ./.github/actions/setup-cloud
+
       # Covers the win32 branches added to sidecar/scripts/vendor-platform.ts
       # and the frontend, neither of which the macOS typecheck exercises with
       # `process.platform === "win32"`.
@@ -420,3 +474,38 @@ jobs:
       - name: Run Rust doctests
         shell: bash
         run: cd src-tauri && cargo test --doc
+
+  # ---------- Gate ----------
+
+  # Single required status for branch protection: any needed job that fails
+  # or is cancelled turns this red; `skipped` stays green (path filtering is
+  # intentional). `changes` itself is in the list so a filter-eval failure
+  # can't skip every suite and read as green. Round 6 class 0: a red light
+  # has exactly one place to show up and no way to hide.
+  ci-green:
+    name: CI Green
+    needs:
+      - changes
+      - biome
+      - clippy
+      - typecheck
+      - frontend-test
+      - sidecar-test
+      - rust-test
+      - cloud-test
+      - e2e-test
+      - app-build
+      - storybook-build
+      - windows-typecheck
+      - windows-sidecar-test
+      - windows-rust-test
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      NEEDS_JSON: ${{ toJSON(needs) }}
+    steps:
+      - name: Fail on any failed or cancelled gate job
+        run: |
+          echo "$NEEDS_JSON"
+          jq -e 'all(.[]; .result == "success" or .result == "skipped")' <<< "$NEEDS_JSON"

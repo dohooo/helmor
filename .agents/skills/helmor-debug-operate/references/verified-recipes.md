@@ -7,7 +7,7 @@ Use these recipes after loading `SKILL.md`. Each recipe below was exercised agai
 - Use `windowId: "main"` and the connected app default unless multiple apps are attached.
 - Prefer real UI input. Use `webview_execute_js` only for read-only rect/state inspection, selector repair, or the documented Lexical composer fallback.
 - When a recipe needs a Helmor app command, use `SKILL.md`'s **Call App Commands** helper. The Tauri MCP `ipc_execute_command` tool currently cannot invoke ordinary Helmor commands and returns `Unsupported Tauri command`; any `ipc_execute_command` examples should be treated as logical shorthand, not the literal MCP tool call.
-- For Radix triggers, `click` is not always sufficient. The most stable pattern is `webview_interact focus` followed by `webview_keyboard Enter` or `ArrowDown`.
+- For Radix triggers, `click` is not always sufficient, and the working activation key varies per menu and build: try `focus` + `Enter`, then `ArrowDown`, then `Space` (Space opened `DropdownMenuTrigger`s that ignored both clicks and Enter, observed 2/2). When the text strategy matches multiple elements (`+3 more matches`), locate the exact node with read-only JS and `el.focus()` it before the keypress; for combobox-style triggers a precise coordinate click on the chevron icon has also worked.
 - Closed Radix popovers may remain in the DOM with `data-state="closed"`. Verify open state with `data-state !== "closed"` instead of raw element count.
 - If Settings gets stuck visible with `data-state="closed"`, press `Cmd+,` to reopen it, then press `Escape`. Verify no `[role="dialog"]` remains and `main[aria-hidden]` is absent.
 - If `webview_execute_js` and `read_logs source=console` begin timing out while screenshots and `driver_session status` still work, restart only the MCP driver session. Use `driver_session { "action": "stop", "appIdentifier": 9223 }`, then `driver_session { "action": "start", "port": 9223 }`. This restored JS execution without restarting the Helmor dev build.
@@ -210,6 +210,17 @@ webview_execute_js {
 
 Observed 3 collapse/expand cycles passed for `In progress3`, with child rows `Add Search`, `Initial Greeting 2`, and `Initial Greeting 4`.
 
+## Workspace Row Actions
+
+### Hover-Only Row Actions (Archive / Delete) — UNSTABLE, conflicting observations
+
+Row action buttons (`Archive workspace`, `Confirm archive workspace`, `Delete permanently`) sit in an `opacity-0 pointer-events-none` container until `group-hover/row` or `group-focus-within/row`. MCP coordinate clicks do not produce a persistent `:hover`.
+
+- One session (2026-07-04, live regression) verified this recipe: install the selector shim → tag the target button with a temporary id via read-only JS → `webview_interact focus selector=#tmp-id` (container becomes interactive via `group-focus-within`) → coordinate-click the button center. Re-tag after every re-render (temporary ids are lost). Two-step confirms (Archive → Confirm) repeat the tag/focus/click cycle.
+- A later session (2026-07-06) could NOT reproduce: `document.activeElement` was inside the row yet `row.matches(':focus-within')` returned `false`, and no working path was found (Enter opened only the preview card).
+
+Treat as unstable: attempt the focus recipe, verify `pointer-events` on the container before clicking, and stop after three failures per the ground rules (use backend helper commands for setup/cleanup instead, with user consent).
+
 ## Composer Controls
 
 ### Model Menu
@@ -375,6 +386,8 @@ Do not immediately run `insertText` again after an empty first read; a delayed u
 6. For temporary sessions, close with `Cmd+W` after verification.
 
 Observed 3x pass. One run duplicated to `smokesmoke` when insertion was retried too soon; the send still worked, but the stable recipe is to read back before reinserting.
+
+If `Send` stays disabled even though content is visible and read-backs have settled, suspect stale frontend query state rather than the input path — observed once: after an app restart the very same draft was sendable. Do not keep hammering input retries against a disabled Send.
 
 ## Inspector And Editor
 

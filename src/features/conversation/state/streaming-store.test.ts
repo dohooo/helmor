@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	__resetStreamingStoreForTests,
+	resetStreamingStore,
 	useStreamingStore,
 } from "./streaming-store";
 
@@ -220,5 +221,49 @@ describe("useStreamingStore", () => {
 		expect(snapshot.pendingUserInputByContext[KEY]).toEqual(
 			makePendingUserInput("tool-late"),
 		);
+	});
+
+	it("resetStreamingStore wipes the backend-keyed slices (transport-switch safety)", () => {
+		const store = useStreamingStore.getState();
+		// Populate the slices that would bleed the OLD backend's session ids into
+		// a new transport (plan §6.7): active-session gating, in-flight sending
+		// set, adopted live session, pending permission.
+		store.setActiveSession(KEY, {
+			stopSessionId: "old-sess",
+			provider: "claude",
+		});
+		store.markSendingState(KEY);
+		store.setLiveSession(KEY, {
+			provider: "claude",
+			providerSessionId: "old-provider-sess",
+		});
+		store.appendPendingPermission(KEY, {
+			permissionId: "p1",
+			toolName: "Bash",
+			toolInput: { command: "ls" },
+		});
+		store.setPendingUserInput(KEY, makePendingUserInput());
+
+		resetStreamingStore();
+
+		const s = useStreamingStore.getState();
+		expect(s.activeSessionByContext).toEqual({});
+		expect(s.sendingContextKeys.size).toBe(0);
+		expect(s.liveSessionsByContext).toEqual({});
+		expect(s.pendingPermissionsByContext).toEqual({});
+		expect(s.pendingUserInputByContext).toEqual({});
+		// Actions stay attached after a merge-mode reset.
+		expect(typeof s.markSendingState).toBe("function");
+	});
+
+	it("resetStreamingStore builds a fresh sendingContextKeys Set each call", () => {
+		resetStreamingStore();
+		const firstSet = useStreamingStore.getState().sendingContextKeys;
+		useStreamingStore.getState().markSendingState(KEY);
+		resetStreamingStore();
+		const secondSet = useStreamingStore.getState().sendingContextKeys;
+		// A new Set identity — no shared mutable reference across resets.
+		expect(secondSet).not.toBe(firstSet);
+		expect(secondSet.size).toBe(0);
 	});
 });

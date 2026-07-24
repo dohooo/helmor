@@ -33,6 +33,19 @@ vi.mock("@/lib/api", async () => {
 	};
 });
 
+// The bridge now reads the local team identity (WP3 sender-aware room-chat
+// handling). These hook tests don't exercise identity, so stub it — otherwise
+// its `useForgeAccountsAll` (a `useQuery`) would need a QueryClientProvider in
+// every `renderHook` wrapper. Behavioral sender-aware coverage lives in the
+// sibling `use-ui-sync-bridge.test.ts` (calls `handleUiMutation` directly).
+vi.mock("@/features/team/use-team-identity", () => ({
+	useTeamIdentity: () => ({
+		identity: null,
+		isLoading: false,
+		refetch: vi.fn(),
+	}),
+}));
+
 function makeClient() {
 	return new QueryClient({
 		defaultOptions: { queries: { retry: false } },

@@ -64,6 +64,7 @@ type StreamingState = {
 	liveSessionsByContext: Record<string, LiveSessionInfo>;
 	sendErrorsByContext: Record<string, string | null>;
 	activeSessionByContext: Record<string, ActiveSessionInfo>;
+	mirroredActiveSessionByContext: Record<string, string>;
 	sendingContextKeys: ReadonlySet<string>;
 	pendingPermissionsByContext: Record<string, PendingPermission[]>;
 	pendingUserInputByContext: Record<string, PendingUserInput | null>;
@@ -91,6 +92,8 @@ type StreamingActions = {
 	setSendError(contextKey: string, error: string | null): void;
 	setActiveSession(contextKey: string, info: ActiveSessionInfo): void;
 	clearActiveSession(contextKey: string): void;
+	setMirroredActiveSession(contextKey: string, sessionId: string): void;
+	clearMirroredActiveSession(contextKey: string): void;
 	setLiveSession(contextKey: string, info: LiveSessionInfo): void;
 	rememberInteractionWorkspace(
 		contextKey: string,
@@ -105,20 +108,25 @@ type StreamingActions = {
 
 export type StreamingStore = StreamingState & StreamingActions;
 
-const INITIAL_STATE: StreamingState = {
-	composerRestore: null,
-	liveSessionsByContext: {},
-	sendErrorsByContext: {},
-	activeSessionByContext: {},
-	sendingContextKeys: new Set<string>(),
-	pendingPermissionsByContext: {},
-	pendingUserInputByContext: {},
-	userInputResponsePendingByContext: {},
-	activeTasksBySession: {},
-	interactionWorkspaceByContext: {},
-	planReviewByContext: {},
-	activeFastPreludes: {},
-};
+function freshInitialState(): StreamingState {
+	return {
+		composerRestore: null,
+		liveSessionsByContext: {},
+		sendErrorsByContext: {},
+		activeSessionByContext: {},
+		mirroredActiveSessionByContext: {},
+		sendingContextKeys: new Set<string>(),
+		pendingPermissionsByContext: {},
+		pendingUserInputByContext: {},
+		userInputResponsePendingByContext: {},
+		activeTasksBySession: {},
+		interactionWorkspaceByContext: {},
+		planReviewByContext: {},
+		activeFastPreludes: {},
+	};
+}
+
+const INITIAL_STATE: StreamingState = freshInitialState();
 
 export const EMPTY_PENDING_PERMISSIONS: readonly PendingPermission[] =
 	Object.freeze([]);
@@ -333,6 +341,29 @@ export const useStreamingStore = create<StreamingStore>((set) => ({
 			return { activeSessionByContext: stripped };
 		}),
 
+	setMirroredActiveSession: (contextKey, sessionId) =>
+		set((state) => {
+			if (state.mirroredActiveSessionByContext[contextKey] === sessionId) {
+				return state;
+			}
+			return {
+				mirroredActiveSessionByContext: {
+					...state.mirroredActiveSessionByContext,
+					[contextKey]: sessionId,
+				},
+			};
+		}),
+
+	clearMirroredActiveSession: (contextKey) =>
+		set((state) => {
+			const stripped = omitKey(
+				state.mirroredActiveSessionByContext,
+				contextKey,
+			);
+			if (stripped === state.mirroredActiveSessionByContext) return state;
+			return { mirroredActiveSessionByContext: stripped };
+		}),
+
 	// -------------------------------------------------------------------
 	// liveSessionsByContext — adopted provider session id per context
 	// -------------------------------------------------------------------
@@ -424,14 +455,29 @@ export const useStreamingStore = create<StreamingStore>((set) => ({
 }));
 
 /**
- * Test-only helper — reset every slice back to the initial state.
- * Production code MUST NOT call this (mutating the store imperatively
- * outside the actions defeats the point of typed mutations).
+ * Reset every slice back to the initial state. This is a MODULE-LEVEL singleton
+ * store (intentionally — channel callbacks write here regardless of which
+ * component is mounted), so it SURVIVES the app-subtree remount on a team↔local
+ * transport switch. After such a switch the per-context slices
+ * (`activeSessionByContext` / `sendingContextKeys` / `liveSessionsByContext` /
+ * …) hold session ids from the OLD backend, which would (a) leak the old
+ * backend's "a stream is live" gating onto the new transport and (b) pair stale
+ * stop-session ids with the new backend. The transport-switch effect in
+ * `app-providers.tsx` calls this so the new transport starts from a clean slate.
  *
- * Uses Zustand's merge mode (no second `true` arg) so the action methods
- * stay attached — `setState(state, true)` replaces the whole object and
- * would nuke every action.
+ * Uses Zustand's merge mode (no second `true` arg) so the action methods stay
+ * attached — `setState(state, true)` replaces the whole object and would nuke
+ * every action. A fresh initial state (new `sendingContextKeys` Set) is built
+ * each call so no two resets share a mutable reference.
+ */
+export function resetStreamingStore(): void {
+	useStreamingStore.setState(freshInitialState());
+}
+
+/**
+ * Test-only alias for {@link resetStreamingStore}. Kept as a separate named
+ * export so existing test imports stay valid.
  */
 export function __resetStreamingStoreForTests(): void {
-	useStreamingStore.setState({ ...INITIAL_STATE });
+	resetStreamingStore();
 }

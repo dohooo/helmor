@@ -89,6 +89,19 @@ export function clearSessionThreadPaginationState(sessionId: string) {
 }
 
 /**
+ * Drop ALL per-session pagination state. This module-level store is keyed by
+ * `sessionId`; on a team↔local transport switch the QueryClient (and its thread
+ * caches) is recreated, so any retained entries reference the OLD backend's
+ * sessions. Clear them on switch so the "Load earlier" affordance starts clean
+ * for the new backend. (Stale entries are otherwise inert — a new backend's
+ * session ids miss and fall back to the default — but clearing keeps the store
+ * aligned with the fresh cache.)
+ */
+export function resetSessionThreadPagination(): void {
+	useSessionThreadPaginationStore.setState({ bySessionId: {} });
+}
+
+/**
  * React hook — re-renders when the named session's pagination state
  * changes. Returns the default `{ hasMore: false, loadedTailLimit: null }`
  * for unknown sessions (matches a session that has never been loaded).

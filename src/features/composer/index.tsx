@@ -59,9 +59,16 @@ import type {
 } from "@/lib/composer-insert";
 import { recordComposerRender } from "@/lib/dev-render-debug";
 import { I18nText, useI18n } from "@/lib/i18n";
+import { warmUpSandbox } from "@/lib/team-api";
+import { getTeamConfig, isTeamModeActive } from "@/lib/team-mode";
 import { cn } from "@/lib/utils";
 import { clampEffort } from "@/lib/workspace-helpers";
 import { ComposerButton } from "./button";
+import {
+	classifyCloudError,
+	describeCloudError,
+	isRetryableSendError,
+} from "./cloud-error-cta";
 import { ContextBar } from "./context-bar";
 import { ContextUsageRing } from "./context-usage-ring";
 import { clearPersistedDraft } from "./draft-storage";
@@ -71,6 +78,7 @@ import {
 	type AddDirPickerEntry,
 	AddDirTypeaheadPlugin,
 } from "./editor/add-dir/typeahead-plugin";
+import { AgentMentionNode } from "./editor/agent-mention-node";
 import { CustomTagBadgeNode } from "./editor/custom-tag-badge-node";
 import { FileBadgeNode } from "./editor/file-badge-node";
 import { ImageBadgeNode } from "./editor/image-badge-node";
@@ -107,6 +115,23 @@ import type { UserInputResponseHandler } from "./user-input";
 import { UserInputPanel } from "./user-input-panel";
 
 const OPEN_SETTINGS_EVENT = "helmor:open-settings";
+
+// Stage D → R2-E: pre-warm the team sandbox on the first TYPED INPUT (not mere
+// focus — clicking around must not wake a sleeping container; typing signals
+// send intent, so warming here hides the cold start behind composition time).
+// Team mode only + throttled. Best-effort: warmUpSandbox swallows errors and
+// the Worker returns 202 at once.
+const WARM_UP_THROTTLE_MS = 60_000;
+let lastWarmUpAt = 0;
+function maybeWarmUpTeamSandbox(): void {
+	if (!isTeamModeActive()) return;
+	const now = Date.now();
+	if (now - lastWarmUpAt < WARM_UP_THROTTLE_MS) return;
+	const cfg = getTeamConfig();
+	if (!cfg) return;
+	lastWarmUpAt = now;
+	void warmUpSandbox(cfg);
+}
 
 type WorkspaceComposerProps = {
 	contextKey: string;
@@ -146,6 +171,11 @@ type WorkspaceComposerProps = {
 	/** false → OpenCode picker shows an "Add custom model…" jump. */
 	hasOpencodeCustomProviders?: boolean;
 	modelsLoading?: boolean;
+	/** F-2: the model-catalog query failed (e.g. a transient team-backend
+	 *  outage) — the picker shows an in-place error row with a Retry. */
+	modelsError?: boolean;
+	/** F-2: refetch the model catalog (wired to the picker's Retry row). */
+	onRetryModels?: () => void;
 	onSelectModel: (modelId: string, provider: string | null) => void;
 	provider?: string;
 	effortLevel: string;
@@ -239,6 +269,9 @@ type WorkspaceComposerProps = {
 	 *  first. Called by `HistoryRecallPlugin` on each ArrowUp/Down so the
 	 *  composer doesn't have to re-render when the thread cache changes. */
 	getInputHistory?: () => readonly InputHistoryEntry[];
+	/** Fires on each content-dirtying edit (not selection-only). Used to
+	 *  report typing presence in shared team workspaces. */
+	onEditing?: () => void;
 };
 
 /**
@@ -302,6 +335,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	modelSections,
 	hasOpencodeCustomProviders = false,
 	modelsLoading = false,
+	modelsError = false,
+	onRetryModels,
 	onSelectModel,
 	provider: _provider = "claude",
 	effortLevel,
@@ -358,6 +393,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	onStartSubmitModeChange,
 	focusScope = "workspace-composer",
 	getInputHistory,
+	onEditing,
 }: WorkspaceComposerProps) {
 	const { t } = useI18n();
 	const instanceIdRef = useRef(
@@ -524,6 +560,26 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			}),
 		);
 	}, []);
+	// Cloud-error recovery CTA: in team mode, classify a cloud send-error so
+	// the error box can offer a one-click fix (re-auth / Team settings). Off
+	// team mode this is always null → the plain box renders, byte-identical to
+	// single-user today.
+	const cloudErrorCta = isTeamModeActive()
+		? classifyCloudError(sendError)
+		: null;
+	// In team mode, map raw fetch/stream errors ("Load failed", the Worker's
+	// permanent container error) to friendly copy; single-user shows the message
+	// verbatim (byte-identical to today).
+	const displaySendError = isTeamModeActive()
+		? describeCloudError(sendError)
+		: sendError;
+	const handleOpenTeamSettings = useCallback(() => {
+		window.dispatchEvent(
+			new CustomEvent(OPEN_SETTINGS_EVENT, {
+				detail: { section: "team" },
+			}),
+		);
+	}, []);
 	const composerToolbarTriggerClassName =
 		"cursor-interactive rounded-[9px] px-1 py-0.5 text-ui font-medium transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50";
 	const composerToolbarActiveClassName =
@@ -552,6 +608,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		namespace: "WorkspaceComposer",
 		theme: EDITOR_THEME,
 		nodes: [
+			AgentMentionNode,
 			ImageBadgeNode,
 			FileBadgeNode,
 			CustomTagBadgeNode,
@@ -894,7 +951,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						<LexicalComposer initialConfig={initialConfig}>
 							<div
 								className="relative"
-								onFocusCapture={() => setIsInputFocused(true)}
+								onFocusCapture={() => {
+									setIsInputFocused(true);
+								}}
 								onBlurCapture={(event) => {
 									if (
 										event.currentTarget.contains(
@@ -1008,7 +1067,15 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								/>
 							) : null}
 							<EditablePlugin disabled={inputDisabled} />
-							<HasContentPlugin onChange={setHasContent} />
+							<HasContentPlugin
+								onChange={setHasContent}
+								onEditing={() => {
+									// R2-E: warm the sandbox on typed input (send intent),
+									// not on focus — see maybeWarmUpTeamSandbox.
+									maybeWarmUpTeamSandbox();
+									onEditing?.();
+								}}
+							/>
 							<ShimmerKeywordPlugin keywords={SHIMMER_KEYWORDS} />
 							<TerminalDirectivePlugin
 								enabled={Boolean(onChangeTerminalMode) && !inputDisabled}
@@ -1018,7 +1085,37 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 
 						{sendError ? (
 							<div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-small text-muted-foreground">
-								{sendError}
+								{displaySendError}
+								{cloudErrorCta ? (
+									<div className="mt-2">
+										<Button
+											type="button"
+											variant="outline"
+											size="xs"
+											onClick={handleOpenTeamSettings}
+										>
+											{cloudErrorCta === "auth"
+												? "Re-authorize"
+												: "View Team settings"}
+										</Button>
+									</div>
+								) : isRetryableSendError(sendError) ? (
+									// DF-5: transport-level failure — offer the retry the
+									// copy promises. `submitDraft` reads the editor
+									// directly (the restored draft is still in it), so
+									// this works even before the hasContent flag settles.
+									<div className="mt-2">
+										<Button
+											type="button"
+											variant="outline"
+											size="xs"
+											disabled={sending}
+											onClick={handleSubmit}
+										>
+											<I18nText source="retry" />
+										</Button>
+									</div>
+								) : null}
 							</div>
 						) : null}
 
@@ -1064,6 +1161,24 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 												sideOffset={4}
 												className="min-w-[17rem]"
 											>
+												{/* F-2: after a transient backend outage the catalog
+												    query can settle in an error/empty state without
+												    self-recovering — never show a silently empty menu;
+												    surface the failure in place with a Retry. */}
+												{modelsError ||
+												modelSections.every((s) => s.options.length === 0) ? (
+													<div className="px-2 py-1.5">
+														<p className="mb-1.5 text-muted-foreground text-xs">
+															<I18nText source="modelsLoadFailed" />
+														</p>
+														<DropdownMenuItem
+															onClick={() => onRetryModels?.()}
+															className="justify-center font-medium"
+														>
+															<I18nText source="retry" />
+														</DropdownMenuItem>
+													</div>
+												) : null}
 												{modelSections.map((section, index) => (
 													<DropdownMenuGroup key={section.id}>
 														{index > 0 ? <DropdownMenuSeparator /> : null}
@@ -1527,7 +1642,21 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 
 				{sendError && hasPendingUserInput ? (
 					<div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-small text-muted-foreground">
-						{sendError}
+						{displaySendError}
+						{cloudErrorCta ? (
+							<div className="mt-2">
+								<Button
+									type="button"
+									variant="outline"
+									size="xs"
+									onClick={handleOpenTeamSettings}
+								>
+									{cloudErrorCta === "auth"
+										? "Re-authorize"
+										: "View Team settings"}
+								</Button>
+							</div>
+						) : null}
 					</div>
 				) : null}
 			</div>

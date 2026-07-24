@@ -694,6 +694,7 @@ impl StreamAccumulator {
             raw_json: entry.raw_json.clone(),
             parsed: entry.parsed.clone(),
             created_at: entry.created_at.clone(),
+            author_id: entry.author_id.clone(),
             is_streaming: true,
         })
     }
@@ -708,6 +709,7 @@ impl StreamAccumulator {
             raw_json: entry.raw_json.clone(),
             parsed: entry.parsed.clone(),
             created_at: entry.created_at.clone(),
+            author_id: entry.author_id.clone(),
             is_streaming: true,
         })
     }
@@ -722,6 +724,7 @@ impl StreamAccumulator {
             raw_json: entry.raw_json.clone(),
             parsed: entry.parsed.clone(),
             created_at: entry.created_at.clone(),
+            author_id: entry.author_id.clone(),
             is_streaming: true,
         })
     }
@@ -969,6 +972,7 @@ impl StreamAccumulator {
             raw_json: NOTICE_JSON.to_string(),
             parsed: Some(parsed),
             created_at: chrono::Utc::now().to_rfc3339(),
+            author_id: None,
             is_streaming: false,
         });
         self.turns.push(CollectedTurn {
@@ -1250,7 +1254,9 @@ impl StreamAccumulator {
         // never enter `collected[]` — they don't cross IPC, don't render,
         // don't waste downstream work. Edit that file to toggle.
         if let Some(subtype) = value.get("subtype").and_then(Value::as_str) {
-            if crate::pipeline::event_filter::is_suppressed_system_subtype(subtype) {
+            if crate::pipeline::event_filter::is_suppressed_system_subtype(subtype)
+                || crate::pipeline::event_filter::is_ingest_only_suppressed_system_subtype(subtype)
+            {
                 return;
             }
         }
@@ -1356,6 +1362,9 @@ impl StreamAccumulator {
             raw_json: raw.to_string(),
             parsed: Some(parsed.clone()),
             created_at,
+            // Accumulator-collected turns are agent / SDK output — never a
+            // human-authored prompt, so they carry no author.
+            author_id: None,
             is_streaming: false,
         });
     }

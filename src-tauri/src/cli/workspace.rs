@@ -158,7 +158,7 @@ fn list(
         });
     }
 
-    let groups = workspaces::list_workspace_groups()?;
+    let groups = workspaces::list_workspace_groups(None)?;
     let repo_filter = match repo_ref {
         Some(r) => Some(service::resolve_repo_ref(r)?),
         None => None,

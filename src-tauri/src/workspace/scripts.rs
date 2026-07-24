@@ -44,6 +44,89 @@ pub enum ScriptEvent {
 /// Key = (repo_id, script_type, workspace_id)
 type ProcessKey = (String, String, Option<String>);
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptOutputBufferSummary {
+    pub repo_id: String,
+    pub workspace_id: Option<String>,
+    pub script_type: String,
+    pub kind: String,
+    pub target_id: Option<String>,
+    pub command: Option<String>,
+    pub status: String,
+    pub exit_code: Option<i32>,
+    pub buffered_bytes: usize,
+    pub chunk_count: usize,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptOutputBufferSnapshot {
+    pub repo_id: String,
+    pub workspace_id: Option<String>,
+    pub script_type: String,
+    pub kind: String,
+    pub target_id: Option<String>,
+    pub command: Option<String>,
+    pub status: String,
+    pub exit_code: Option<i32>,
+    pub buffered_bytes: usize,
+    pub returned_bytes: usize,
+    pub omitted_head_bytes: usize,
+    pub chunk_count: usize,
+    pub truncated: bool,
+    pub data: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ScriptOutputStatus {
+    Running,
+    Exited,
+}
+
+impl ScriptOutputStatus {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Exited => "exited",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ScriptOutputBuffer {
+    chunks: Vec<String>,
+    buffered_bytes: usize,
+    truncated: bool,
+    status: ScriptOutputStatus,
+    exit_code: Option<i32>,
+    command: Option<String>,
+}
+
+impl ScriptOutputBuffer {
+    fn new(command: Option<String>) -> Self {
+        Self {
+            chunks: Vec::new(),
+            buffered_bytes: 0,
+            truncated: false,
+            status: ScriptOutputStatus::Running,
+            exit_code: None,
+            command,
+        }
+    }
+
+    fn append(&mut self, data: &str) {
+        self.chunks.push(data.to_string());
+        self.buffered_bytes += data.len();
+        while self.buffered_bytes > DEBUG_OUTPUT_BUFFER_BYTES && self.chunks.len() > 1 {
+            let dropped = self.chunks.remove(0);
+            self.buffered_bytes -= dropped.len();
+            self.truncated = true;
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptKillAttempt {
     pub repo_id: String,
@@ -66,6 +149,9 @@ const STOP_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const PTY_FLUSH_INTERVAL: Duration = Duration::from_millis(8);
 const PTY_FLUSH_BYTES: usize = 16 * 1024;
 const PTY_READ_BUF_BYTES: usize = 16 * 1024;
+/// Debug-only terminal output retention, mirrored from PTY chunks so agents
+/// can inspect run/setup/terminal logs without relying on visible xterm DOM.
+const DEBUG_OUTPUT_BUFFER_BYTES: usize = 2 * 1024 * 1024;
 
 /// Graceful-stop bundle: the user-provided cleanup command + everything
 /// `graceful_kill` needs to spawn it (same env, same cwd, output piped
@@ -118,11 +204,107 @@ struct ProcessHandle {
 #[derive(Clone, Default)]
 pub struct ScriptProcessManager {
     processes: Arc<Mutex<HashMap<ProcessKey, ProcessHandle>>>,
+    output_buffers: Arc<Mutex<HashMap<ProcessKey, ScriptOutputBuffer>>>,
 }
 
 impl ScriptProcessManager {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn reset_output_buffer(&self, key: &ProcessKey, command: Option<String>) {
+        let mut buffers = self
+            .output_buffers
+            .lock()
+            .expect("output buffer map poisoned");
+        buffers.insert(key.clone(), ScriptOutputBuffer::new(command));
+    }
+
+    fn append_output_chunk(&self, key: &ProcessKey, data: &str) {
+        let mut buffers = self
+            .output_buffers
+            .lock()
+            .expect("output buffer map poisoned");
+        let entry = buffers
+            .entry(key.clone())
+            .or_insert_with(|| ScriptOutputBuffer::new(None));
+        entry.append(data);
+    }
+
+    fn finish_output_buffer(&self, key: &ProcessKey, exit_code: Option<i32>) {
+        let mut buffers = self
+            .output_buffers
+            .lock()
+            .expect("output buffer map poisoned");
+        let entry = buffers
+            .entry(key.clone())
+            .or_insert_with(|| ScriptOutputBuffer::new(None));
+        entry.status = ScriptOutputStatus::Exited;
+        entry.exit_code = exit_code;
+    }
+
+    pub fn debug_list_output_buffers(&self) -> Vec<ScriptOutputBufferSummary> {
+        let buffers = self
+            .output_buffers
+            .lock()
+            .expect("output buffer map poisoned");
+        let mut summaries: Vec<_> = buffers
+            .iter()
+            .map(|(key, entry)| output_summary_for(key, entry))
+            .collect();
+        summaries.sort_by(|a, b| {
+            (
+                a.repo_id.as_str(),
+                a.workspace_id.as_deref().unwrap_or(""),
+                a.kind.as_str(),
+                a.script_type.as_str(),
+            )
+                .cmp(&(
+                    b.repo_id.as_str(),
+                    b.workspace_id.as_deref().unwrap_or(""),
+                    b.kind.as_str(),
+                    b.script_type.as_str(),
+                ))
+        });
+        summaries
+    }
+
+    pub fn debug_read_output_buffer(
+        &self,
+        repo_id: &str,
+        script_type: &str,
+        workspace_id: Option<&str>,
+        max_bytes: Option<usize>,
+    ) -> Option<ScriptOutputBufferSnapshot> {
+        let key: ProcessKey = (
+            repo_id.to_string(),
+            script_type.to_string(),
+            workspace_id.map(str::to_string),
+        );
+        let buffers = self
+            .output_buffers
+            .lock()
+            .expect("output buffer map poisoned");
+        let entry = buffers.get(&key)?;
+        let joined = entry.chunks.join("");
+        let (data, omitted_head_bytes) = tail_by_bytes(&joined, max_bytes);
+        let (kind, target_id) = classify_output_script_type(script_type);
+        Some(ScriptOutputBufferSnapshot {
+            repo_id: repo_id.to_string(),
+            workspace_id: workspace_id.map(str::to_string),
+            script_type: script_type.to_string(),
+            kind,
+            target_id,
+            command: entry.command.clone(),
+            status: entry.status.as_str().to_string(),
+            exit_code: entry.exit_code,
+            buffered_bytes: entry.buffered_bytes,
+            returned_bytes: data.len(),
+            omitted_head_bytes,
+            chunk_count: entry.chunks.len(),
+            truncated: entry.truncated,
+            data,
+        })
     }
 
     /// Publish a newly-spawned process so `kill`, `write_stdin`, and `resize`
@@ -359,6 +541,51 @@ impl ScriptProcessManager {
         file.resize(cols, rows)?;
         Ok(true)
     }
+}
+
+fn classify_output_script_type(script_type: &str) -> (String, Option<String>) {
+    if let Some(id) = script_type.strip_prefix("run:") {
+        return ("run".to_string(), Some(id.to_string()));
+    }
+    if let Some(id) = script_type.strip_prefix("terminal:") {
+        return ("terminal".to_string(), Some(id.to_string()));
+    }
+    if let Some(rest) = script_type.strip_prefix("agent-login:") {
+        return ("agent-login".to_string(), Some(rest.to_string()));
+    }
+    (script_type.to_string(), None)
+}
+
+fn output_summary_for(key: &ProcessKey, entry: &ScriptOutputBuffer) -> ScriptOutputBufferSummary {
+    let (kind, target_id) = classify_output_script_type(&key.1);
+    ScriptOutputBufferSummary {
+        repo_id: key.0.clone(),
+        workspace_id: key.2.clone(),
+        script_type: key.1.clone(),
+        kind,
+        target_id,
+        command: entry.command.clone(),
+        status: entry.status.as_str().to_string(),
+        exit_code: entry.exit_code,
+        buffered_bytes: entry.buffered_bytes,
+        chunk_count: entry.chunks.len(),
+        truncated: entry.truncated,
+    }
+}
+
+fn tail_by_bytes(data: &str, max_bytes: Option<usize>) -> (String, usize) {
+    let Some(max_bytes) = max_bytes else {
+        return (data.to_string(), 0);
+    };
+    if data.len() <= max_bytes {
+        return (data.to_string(), 0);
+    }
+
+    let mut start = data.len().saturating_sub(max_bytes);
+    while start < data.len() && !data.is_char_boundary(start) {
+        start += 1;
+    }
+    (data[start..].to_string(), start)
 }
 
 /// Send SIGTERM (and SIGKILL after a short grace period) to a process group
@@ -955,20 +1182,23 @@ pub(crate) fn run_script_with_shell(
     let pid = child.id() as Pid;
     let pgid = session.pgid;
 
-    let _ = channel.send(ScriptEvent::Started {
-        pid: pid as u32,
-        command: script.map(str::to_string).unwrap_or_else(|| {
-            // Terminal mode: no command was fed; report the shell invocation
-            // so frontends can show a stable label in the Started event.
-            format!("{shell_path} {}", shell_args.join(" "))
-        }),
-    });
-
     let key: ProcessKey = (
         repo_id.to_string(),
         script_type.to_string(),
         workspace_id.map(str::to_string),
     );
+    let command_label = script.map(str::to_string).unwrap_or_else(|| {
+        // Terminal mode: no command was fed; report the shell invocation
+        // so frontends can show a stable label in the Started event.
+        format!("{shell_path} {}", shell_args.join(" "))
+    });
+    manager.reset_output_buffer(&key, Some(command_label.clone()));
+
+    let _ = channel.send(ScriptEvent::Started {
+        pid: pid as u32,
+        command: command_label,
+    });
+
     let killed = manager.register(key.clone(), pid, pgid, stdin.clone(), stop);
 
     // Persist a registry row so the next launch's crash-recovery
@@ -1008,6 +1238,8 @@ pub(crate) fn run_script_with_shell(
     // re-entering poll for each chunk; write_stdin also benefits (PTY full
     // → WouldBlock instead of blocking the IPC thread).
     let ch = channel.clone();
+    let output_manager = manager.clone();
+    let output_key = key.clone();
     let stop_reader = Arc::new(AtomicBool::new(false));
     let stop_reader_in_thread = stop_reader.clone();
     let reader = std::thread::Builder::new()
@@ -1041,6 +1273,7 @@ pub(crate) fn run_script_with_shell(
                     // lossily once it exceeds the max UTF-8 sequence length.
                     if pending.len() > 4 {
                         let data = String::from_utf8_lossy(pending).into_owned();
+                        output_manager.append_output_chunk(&output_key, &data);
                         let _ = ch.send(ScriptEvent::Stdout { data });
                         pending.clear();
                         *last_flush = Instant::now();
@@ -1048,6 +1281,7 @@ pub(crate) fn run_script_with_shell(
                     return;
                 }
                 let data = String::from_utf8_lossy(&pending[..valid]).into_owned();
+                output_manager.append_output_chunk(&output_key, &data);
                 let _ = ch.send(ScriptEvent::Stdout { data });
                 pending.drain(..valid);
                 *last_flush = Instant::now();
@@ -1139,6 +1373,7 @@ pub(crate) fn run_script_with_shell(
             // trailing sequence) so the tail isn't dropped on exit.
             if !pending.is_empty() {
                 let data = String::from_utf8_lossy(&pending).into_owned();
+                output_manager.append_output_chunk(&output_key, &data);
                 let _ = ch.send(ScriptEvent::Stdout { data });
             }
         })
@@ -1203,6 +1438,7 @@ pub(crate) fn run_script_with_shell(
         status.and_then(|s| s.code())
     };
 
+    manager.finish_output_buffer(&key, exit_code);
     let _ = channel.send(ScriptEvent::Exited { code: exit_code });
     Ok(exit_code)
 }
@@ -2457,6 +2693,37 @@ mod cross_platform_tests {
         let mgr = ScriptProcessManager::new();
         let key: ProcessKey = ("nope".into(), "run".into(), None);
         assert!(!mgr.kill(&key));
+    }
+
+    #[test]
+    fn debug_output_buffer_lists_and_reads_terminal_output() {
+        let mgr = ScriptProcessManager::new();
+        let key: ProcessKey = ("repo".into(), "run:dev".into(), Some("ws".into()));
+
+        mgr.reset_output_buffer(&key, Some("bun run dev".into()));
+        mgr.append_output_chunk(&key, "ready on http://localhost:1420\n");
+        mgr.finish_output_buffer(&key, Some(0));
+
+        let list = mgr.debug_list_output_buffers();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].kind, "run");
+        assert_eq!(list[0].target_id.as_deref(), Some("dev"));
+        assert_eq!(list[0].status, "exited");
+        assert_eq!(list[0].exit_code, Some(0));
+
+        let snapshot = mgr
+            .debug_read_output_buffer("repo", "run:dev", Some("ws"), None)
+            .expect("snapshot");
+        assert_eq!(snapshot.data, "ready on http://localhost:1420\n");
+        assert_eq!(snapshot.returned_bytes, snapshot.data.len());
+        assert_eq!(snapshot.omitted_head_bytes, 0);
+    }
+
+    #[test]
+    fn debug_output_buffer_tail_respects_utf8_boundary() {
+        let (tail, omitted) = tail_by_bytes("alpha 日本語", Some(7));
+        assert_eq!(tail, "本語");
+        assert!(omitted > 0);
     }
 
     #[test]

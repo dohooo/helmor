@@ -268,7 +268,16 @@ pub async fn complete_workspace_setup(app: AppHandle, workspace_id: String) -> C
 
 #[tauri::command]
 pub async fn list_workspace_groups() -> CmdResult<Vec<workspaces::WorkspaceSidebarGroup>> {
-    run_blocking(workspaces::list_workspace_groups).await
+    run_blocking(|| workspaces::list_workspace_groups(None)).await
+}
+
+/// Companion/team variant: `member_id` is the server-derived trusted member id
+/// (the desktop command above passes `None` → global unread). Per-member unread
+/// is computed from `session_read_state`.
+pub async fn list_workspace_groups_for_member(
+    member_id: Option<String>,
+) -> CmdResult<Vec<workspaces::WorkspaceSidebarGroup>> {
+    run_blocking(move || workspaces::list_workspace_groups(member_id.as_deref())).await
 }
 
 #[tauri::command]

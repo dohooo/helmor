@@ -924,6 +924,7 @@
 	"modelNewChats": "新聊天模型",
 	"modelPrsMrsCommitPush": "PR/MR 与提交推送模型",
 	"models": "模型",
+	"modelsLoadFailed": "模型列表加载失败。",
 	"modified": "已修改",
 	"moonshotOpenAICompatible": "Moonshot 的 OpenAI 兼容 API。",
 	"more": "更多",
@@ -1496,6 +1497,7 @@
 	"system": "系统",
 	"systemProxy": "系统代理",
 	"targetUrl": "目标 URL",
+	"teamRoomMentionAgentForReply": "@agent 才会回复 —— 普通消息只发给队友",
 	"taskPanelCollapse": "收起任务面板",
 	"taskPanelFallbackHeading": "实时进程回退信息",
 	"taskPanelPillDone": "{count} 个任务",
@@ -1655,5 +1657,7 @@
 	"workspacesCanNowArchiveThemselvesAutomatically": "工作区现在可以在关联的 PR/MR 合并后自动归档。",
 	"yes": "是",
 	"zoom": "放大",
-	"zoomOut": "缩小"
+	"zoomOut": "缩小",
+	"connectRepoLink": "连接一个仓库",
+	"connectRepoRest": "以开始构建 — 也可以直接聊天。"
 }

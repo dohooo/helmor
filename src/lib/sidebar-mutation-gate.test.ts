@@ -2,6 +2,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	beginSidebarMutation,
+	cancelSidebarListQueries,
 	createScopedSidebarGate,
 	endSidebarMutation,
 	holdSidebarMutation,
@@ -82,6 +83,22 @@ describe("sidebar-mutation-gate", () => {
 		it("excess end with queryClient still triggers a single reconcile pass", () => {
 			endSidebarMutation(queryClient);
 			expect(invalidateSpy).toHaveBeenCalledTimes(2);
+		});
+	});
+
+	describe("cancelSidebarListQueries (R2-B pre-write abort)", () => {
+		it("cancels exactly the two sidebar list keys", () => {
+			const cancelSpy = vi.spyOn(queryClient, "cancelQueries");
+			cancelSidebarListQueries(queryClient);
+			expect(cancelSpy).toHaveBeenCalledTimes(2);
+			expect(cancelSpy).toHaveBeenCalledWith({
+				queryKey: ["workspaceGroups"],
+			});
+			expect(cancelSpy).toHaveBeenCalledWith({
+				queryKey: ["archivedWorkspaces"],
+			});
+			// It must never invalidate — cancel only kills in-flight fetches.
+			expect(invalidateSpy).not.toHaveBeenCalled();
 		});
 	});
 

@@ -238,7 +238,8 @@ fn list_session_historical_records_windowed_with_connection(
                   sm.id,
                   sm.role,
                   sm.content,
-                  sm.created_at
+                  sm.created_at,
+                  sm.author_id
                 FROM session_messages sm
                 WHERE sm.session_id = ?1
                 ORDER BY sm.sent_at DESC, sm.rowid DESC
@@ -263,7 +264,8 @@ fn list_session_historical_records_windowed_with_connection(
               sm.id,
               sm.role,
               sm.content,
-              sm.created_at
+              sm.created_at,
+              sm.author_id
             FROM session_messages sm
             WHERE sm.session_id = ?1
             ORDER BY sm.sent_at ASC, sm.rowid ASC
@@ -292,6 +294,7 @@ fn map_historical_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoricalRec
         content,
         parsed_content,
         created_at: row.get(3)?,
+        author_id: row.get(4)?,
     })
 }
 
@@ -394,6 +397,27 @@ pub fn mark_session_read(session_id: &str) -> Result<()> {
     transaction
         .commit()
         .context("Failed to commit session read transaction")
+}
+
+/// Team mode: move `member_id`'s read cursor for `session_id` to now. Unread is
+/// derived per-member from `session_read_state` vs message timestamps, so this
+/// only advances this member's cursor; the global `unread_count` (local mode) is
+/// left untouched.
+pub fn mark_session_read_for_member(session_id: &str, member_id: &str) -> Result<()> {
+    let now = db::current_timestamp()?;
+    let connection = db::write_conn()?;
+    connection
+        .execute(
+            "INSERT INTO session_read_state (member_id, session_id, last_read_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(member_id, session_id)
+             DO UPDATE SET last_read_at = excluded.last_read_at",
+            rusqlite::params![member_id, session_id, now],
+        )
+        .with_context(|| {
+            format!("Failed to record read state for session {session_id} (member {member_id})")
+        })?;
+    Ok(())
 }
 
 pub fn mark_session_unread(session_id: &str) -> Result<()> {
@@ -629,11 +653,17 @@ pub fn create_session(
         action_kind,
     )?;
 
+    // DF-2: bind created_at/updated_at explicitly (RFC 3339 millis, UTC "Z") —
+    // the same format the workspace-creation seed session uses — instead of
+    // falling back to the schema's `datetime('now')` default (space-separated).
+    // The D1 session mirror sorts by the raw string, so a second format breaks
+    // ordering (space 0x20 < 'T' 0x54). Keep every writer on one format.
+    let created_at = db::current_timestamp()?;
     transaction
         .execute(
             r#"
-            INSERT INTO sessions (id, workspace_id, status, title, permission_mode, action_kind, model, effort_level, fast_mode, session_kind, agent_type)
-            VALUES (?1, ?2, 'idle', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            INSERT INTO sessions (id, workspace_id, status, title, permission_mode, action_kind, model, effort_level, fast_mode, session_kind, agent_type, created_at, updated_at)
+            VALUES (?1, ?2, 'idle', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)
             "#,
             (
                 &session_id,
@@ -646,6 +676,7 @@ pub fn create_session(
                 fast_mode as i64,
                 session_kind,
                 overrides.agent_type,
+                &created_at,
             ),
         )
         .context("Failed to create session")?;
@@ -807,9 +838,12 @@ pub fn set_session_draft(session_id: &str, draft_state: Option<&str>) -> Result<
 }
 
 pub fn rename_session(session_id: &str, title: &str) -> Result<()> {
-    let connection = db::write_conn()?;
+    let mut connection = db::write_conn()?;
+    let transaction = connection
+        .transaction()
+        .context("Failed to start rename-session transaction")?;
 
-    let updated_rows = connection
+    let updated_rows = transaction
         .execute(
             "UPDATE sessions SET title = ?1 WHERE id = ?2",
             (title, session_id),
@@ -820,7 +854,33 @@ pub fn rename_session(session_id: &str, title: &str) -> Result<()> {
         bail!("Session rename affected {updated_rows} rows for session {session_id}");
     }
 
-    Ok(())
+    // R2-C (R5): chat-workspace name freeze. This is the SINGLE choke point
+    // where session titles change (auto-title generation AND manual rename
+    // both land here), so the FIRST real title a chat workspace's session
+    // acquires is persisted as the workspace `custom_name` — first writer
+    // freezes. From then on `display_title()`'s existing custom_name
+    // priority short-circuits the primary/active derivation, so switching
+    // sessions can never flip the sidebar name again. Clearing the name via
+    // `rename_workspace("")` is an explicit UNFREEZE: the title floats
+    // (derived) until the next session-title write re-freezes it.
+    let real_title = title.trim();
+    if !real_title.is_empty() && real_title != "Untitled" {
+        transaction
+            .execute(
+                "UPDATE workspaces SET custom_name = ?1
+                 WHERE id = (SELECT workspace_id FROM sessions WHERE id = ?2)
+                   AND mode = 'chat'
+                   AND (custom_name IS NULL OR TRIM(custom_name) = '')",
+                (real_title, session_id),
+            )
+            .with_context(|| {
+                format!("Failed to freeze chat workspace name for session {session_id}")
+            })?;
+    }
+
+    transaction
+        .commit()
+        .context("Failed to commit rename-session transaction")
 }
 
 pub fn hide_session(session_id: &str) -> Result<()> {
@@ -1665,5 +1725,107 @@ mod tests {
         .unwrap();
         let meta = read_session_context_usage(&conn, "s1").unwrap();
         assert_eq!(meta, None);
+    }
+
+    // ── R2-C: chat-workspace name freeze on first real session title ──
+
+    fn seed_chat_env(env: &crate::testkit::TestEnv, custom_name: Option<&str>) {
+        let conn = env.db_connection();
+        conn.execute(
+            "INSERT INTO repos (id, name) VALUES ('r1', 'test-repo')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (id, repository_id, directory_name, state, status, mode, custom_name, display_order) \
+             VALUES ('wc', 'r1', '2026-07-03/new-chat-1', 'active', 'in-progress', 'chat', ?1, 1000)",
+            [custom_name],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (id, repository_id, directory_name, state, status, mode, display_order) \
+             VALUES ('ww', 'r1', 'feature-dir', 'active', 'in-progress', 'worktree', 2000)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, workspace_id, status, title) VALUES ('sc', 'wc', 'idle', 'Untitled')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, workspace_id, status, title) VALUES ('sw', 'ww', 'idle', 'Untitled')",
+            [],
+        )
+        .unwrap();
+    }
+
+    fn custom_name_of(env: &crate::testkit::TestEnv, workspace_id: &str) -> Option<String> {
+        env.db_connection()
+            .query_row(
+                "SELECT custom_name FROM workspaces WHERE id = ?1",
+                [workspace_id],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn rename_freezes_unnamed_chat_workspace_on_first_real_title() {
+        let env = crate::testkit::TestEnv::new("freeze-first-title");
+        seed_chat_env(&env, None);
+        rename_session("sc", "Fix login flow").unwrap();
+        assert_eq!(
+            custom_name_of(&env, "wc").as_deref(),
+            Some("Fix login flow")
+        );
+    }
+
+    #[test]
+    fn rename_never_overwrites_an_already_frozen_name() {
+        let env = crate::testkit::TestEnv::new("freeze-no-overwrite");
+        seed_chat_env(&env, Some("Frozen name"));
+        rename_session("sc", "Different title").unwrap();
+        assert_eq!(custom_name_of(&env, "wc").as_deref(), Some("Frozen name"));
+        // The session title itself still updates as usual.
+        let title: String = env
+            .db_connection()
+            .query_row("SELECT title FROM sessions WHERE id = 'sc'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(title, "Different title");
+    }
+
+    #[test]
+    fn rename_does_not_touch_non_chat_workspaces() {
+        let env = crate::testkit::TestEnv::new("freeze-non-chat");
+        seed_chat_env(&env, None);
+        rename_session("sw", "Some feature work").unwrap();
+        assert_eq!(custom_name_of(&env, "ww"), None);
+    }
+
+    #[test]
+    fn rename_with_placeholder_or_blank_title_does_not_freeze() {
+        let env = crate::testkit::TestEnv::new("freeze-placeholder");
+        seed_chat_env(&env, None);
+        rename_session("sc", "Untitled").unwrap();
+        assert_eq!(custom_name_of(&env, "wc"), None);
+        rename_session("sc", "   ").unwrap();
+        assert_eq!(custom_name_of(&env, "wc"), None);
+    }
+
+    #[test]
+    fn clearing_custom_name_unfreezes_until_next_title_write() {
+        let env = crate::testkit::TestEnv::new("freeze-refreeze");
+        seed_chat_env(&env, None);
+        rename_session("sc", "First title").unwrap();
+        assert_eq!(custom_name_of(&env, "wc").as_deref(), Some("First title"));
+        // Explicit unfreeze (rename_workspace("") semantics).
+        crate::models::workspaces::update_workspace_custom_name("wc", None).unwrap();
+        assert_eq!(custom_name_of(&env, "wc"), None);
+        // Next real title write re-freezes.
+        rename_session("sc", "Second title").unwrap();
+        assert_eq!(custom_name_of(&env, "wc").as_deref(), Some("Second title"));
     }
 }

@@ -43,6 +43,58 @@ const BROWSER_UNSUPPORTED: &[&str] = &[
     "subscribe_local_llm_downloads",
 ];
 
+/// Frontend commands that always run on the LOCAL Tauri backend, even in
+/// team/companion mode (see `LOCAL_ONLY_INVOKES` in `src/lib/ipc.ts`). They route
+/// to the desktop host, never the container, so they are intentionally absent
+/// from the companion dispatch. `authorize_cloud_codex_identity` runs
+/// `codex login` and `authorize_cloud_claude_identity` drives our own Claude
+/// OAuth (PKCE) flow — both capture the subscription OAuth credential on the
+/// user's own machine (a browser sign-in + loopback callback), which cannot
+/// happen in the cloud container — and upload it to the Worker over the team-api
+/// route.
+const LOCAL_ONLY: &[&str] = &[
+    "authorize_cloud_codex_identity",
+    "authorize_cloud_claude_identity",
+    // Forge creds are captured from THIS Mac's keychain / config files; the
+    // cloud container cannot read them, so the command runs on the desktop host.
+    "authorize_cloud_forge_identity",
+    // Auto-deploy drives wrangler (OAuth + deploy) on THIS Mac; it can't run in
+    // the cloud container.
+    "deploy_team_cloud",
+    // Dev-tools: list/delete remote Cloudflare Containers via wrangler on this Mac.
+    "list_team_containers",
+    "delete_team_container",
+    // Dev-only desktop inspection helpers read buffers owned by the Tauri host.
+    "debug_list_terminal_buffers",
+    "debug_read_terminal_buffer",
+    // Stage B: render team D1 mirror rows into the thread via the local pipeline.
+    // Pure CPU on the desktop — never proxied to the container, which would defeat
+    // reading history while the sandbox sleeps.
+    "convert_historical_records",
+    // P1-2b: an arbitrary-ABSOLUTE-path write whose only safety model is the
+    // local save dialog. Over team RPC any member could write any container
+    // file, and a phone browser cannot open the dialog to produce a path in
+    // the first place — zero legitimate remote use, so the dispatch arm is
+    // deliberately deleted (guarded by rpc.rs's
+    // `desktop_host_commands_stay_delisted_from_team_rpc`).
+    "save_text_file_as",
+];
+// NOTE (R2-D): `read/write/delete_query_cache` are NOT in this list even
+// though the frontend's `LOCAL_ONLY_INVOKES` forces them local — the
+// companion dispatch DOES implement them (this list tracks dispatch-absent
+// commands only). The frontend override is a ROUTING decision: the React
+// Query persistence cache is desktop disk state (per-backend buckets), so in
+// team mode it must hit this Mac's files, never the container's.
+//
+// NOTE (R3-A): `detect_installed_editors` follows the same precedent — the
+// frontend registry (`src/lib/command-classes.ts`) classifies it LOCAL_ONLY
+// (editors are installed on the user's Mac; detecting them inside the cloud
+// container answered the wrong question and woke the sandbox on boot), but
+// the dispatch arm in rpc.rs stays: frontend routing decision ≠ container
+// capability gap, and removing it would force an image bump for nothing.
+// The frontend's full wake/passive classification lives in that registry,
+// enforced by src/lib/command-classes.test.ts (this test's TS twin).
+
 #[test]
 fn every_frontend_invoke_is_reachable_in_the_companion() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -75,7 +127,11 @@ fn every_frontend_invoke_is_reachable_in_the_companion() {
         extract_quoted_names(&src, &mut handled);
     }
 
-    let allow: BTreeSet<&str> = BROWSER_UNSUPPORTED.iter().copied().collect();
+    let allow: BTreeSet<&str> = BROWSER_UNSUPPORTED
+        .iter()
+        .chain(LOCAL_ONLY)
+        .copied()
+        .collect();
 
     let missing: Vec<&String> = frontend
         .iter()
@@ -103,12 +159,13 @@ fn every_frontend_invoke_is_reachable_in_the_companion() {
     // got wired into the dispatch) is dead and should be removed.
     let stale: Vec<&str> = BROWSER_UNSUPPORTED
         .iter()
+        .chain(LOCAL_ONLY)
         .filter(|cmd| !frontend.contains(**cmd) || handled.contains(**cmd))
         .copied()
         .collect();
     assert!(
         stale.is_empty(),
-        "BROWSER_UNSUPPORTED has stale entries (no longer invoked, or now handled): {stale:?} — \
+        "BROWSER_UNSUPPORTED / LOCAL_ONLY has stale entries (no longer invoked, or now handled): {stale:?} — \
          remove them.",
     );
 }

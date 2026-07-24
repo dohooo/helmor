@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod bootstrap;
 pub mod cli;
 pub(crate) mod codex_config;
 pub(crate) mod commands;
@@ -24,9 +25,11 @@ pub mod provider;
 pub mod quick_panel;
 pub mod rate_limits;
 pub mod schema;
+pub mod serve;
 pub mod service;
 mod shell_env;
 pub mod sidecar;
+pub mod sidecar_host;
 pub mod slack;
 mod system_limits;
 pub mod terminal;
@@ -72,9 +75,19 @@ pub fn schema_init(conn: &rusqlite::Connection) {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    system_limits::raise_nofile_soft_limit();
+/// Which host we're building: the interactive desktop GUI, or the headless
+/// `helmor serve` companion host (windowless Wry, validated by the S1 spike).
+#[derive(Clone, Copy, PartialEq)]
+enum AppMode {
+    Desktop,
+    Serve,
+}
 
+/// Build the Tauri app shared by both hosts. The plugin set, managed state,
+/// invoke handler, and embedded assets are identical; only the `setup` hook
+/// (the mode branch below) and the window configuration differ, so the desktop
+/// and serve hosts can never drift apart.
+fn build_app(mode: AppMode) -> tauri::App {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
@@ -121,7 +134,7 @@ pub fn run() {
     #[cfg(debug_assertions)]
     let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
 
-    let app = builder
+    let builder = builder
         .manage(sidecar::ManagedSidecar::new())
         .manage(agents::ActiveStreams::new())
         .manage(agents::SessionStreamHub::new())
@@ -140,41 +153,24 @@ pub fn run() {
         .manage(global_hotkey::GlobalHotkeyState::default())
         .manage(commands::forge_commands::ForgeAuthEdgeStore::default())
         .manage(companion::CompanionState::new())
+        // Stage B data-plane mirror. Inert unless HELMOR_SYNC_URL +
+        // HELMOR_COMPANION_TOKEN are set (the cloud serve host), so the desktop
+        // app manages a disabled instance.
+        .manage(companion::TeamSync::from_env())
         .manage(companion::TunnelState::new())
-        .setup(|app| {
-            // Ensure data directory structure exists
-            data_dir::ensure_directory_structure()?;
+        .setup(move |app| {
+            // Deterministic startup core: data dir, logging, DB schema, pools,
+            // and the synthetic chat repo name refresh. Shared verbatim with
+            // both the desktop and headless serve hosts (see `bootstrap::init_core`).
+            bootstrap::init_core()?;
 
-            // Initialize structured logging (must come before any tracing macro call).
-            // Logs live in `<data_dir>/logs/{rust,sidecar}.jsonl` with a `.1` backup;
-            // the size-ring appender bounds disk use without a cleanup pass.
-            let logs_dir = data_dir::logs_dir()?;
-            logging::init(&logs_dir)?;
-
-            // Initialize database schema. We apply the same PRAGMA init as
-            // the pools to get WAL mode persisted to the file before any
-            // pool connection opens.
-            let db_path = data_dir::db_path()?;
-            let connection = rusqlite::Connection::open(&db_path)?;
-            db::init_connection(&connection, true)?;
-            schema::ensure_schema(&connection)?;
-            drop(connection);
-
-            // Build read/write connection pools (must happen after schema).
-            db::init_pools()?;
-
-            // Refresh the synthetic chat repo's display name in case the
-            // canonical value moved between releases. No-op for installs
-            // that have never created a chat workspace (no row to update).
-            if let Err(error) = models::repos::refresh_system_chat_repo_name_if_exists() {
-                tracing::warn!(%error, "Failed to refresh chat repo name");
+            // Headless serve wires only the "functional trio" + companion
+            // server and returns early — none of the desktop-only background
+            // workers / GUI wiring below run in a container.
+            if mode == AppMode::Serve {
+                serve::setup(app)?;
+                return Ok(());
             }
-
-            tracing::info!(
-                mode = data_dir::data_mode_label(),
-                data = %db_path.display(),
-                "Helmor started"
-            );
 
             // Sweep `.trash-*` dirs left over from a prior run (worker killed
             // mid-cleanup, OS crash). Hands them to the global serial queue so
@@ -307,6 +303,11 @@ pub fn run() {
             updater::configure()?;
             updater::spawn_startup_check(app.handle().clone());
             updater::spawn_interval_worker(app.handle().clone());
+
+            // Reverse-IPC dispatcher (sidecar hostRequest -> Rust hostResponse).
+            // Shared with the headless serve host. Installed early to skip
+            // early-boot warnings; ordering isn't load-bearing.
+            sidecar_host::spawn_host_dispatcher(app.handle().clone());
 
             // Per-version silent re-check of the Helmor CLI symlink and
             // the Helmor Skills package. Runs once per app version
@@ -478,6 +479,7 @@ pub fn run() {
             agents::list_opencode_models,
             agents::list_provider_capabilities,
             agents::send_agent_message_stream,
+            agents::post_room_chat_message,
             agents::subscribe_session_stream,
             agents::unsubscribe_session_stream,
             agents::stop_agent_stream,
@@ -489,6 +491,7 @@ pub fn run() {
             agents::list_slash_commands,
             agents::prewarm_slash_commands_for_workspace,
             agents::prewarm_slash_commands_for_repo,
+            commands::presence_commands::report_presence,
             commands::workspace_commands::prepare_archive_workspace,
             commands::workspace_commands::start_archive_workspace,
             commands::workspace_commands::validate_archive_workspace,
@@ -584,6 +587,8 @@ pub fn run() {
             commands::script_commands::stop_repo_script,
             commands::script_commands::write_repo_script_stdin,
             commands::script_commands::resize_repo_script,
+            commands::script_commands::debug_list_terminal_buffers,
+            commands::script_commands::debug_read_terminal_buffer,
             commands::script_commands::create_repo_run_action,
             commands::script_commands::update_repo_run_action,
             commands::script_commands::delete_repo_run_action,
@@ -596,6 +601,7 @@ pub fn run() {
             commands::terminal_commands::set_terminal_session_busy,
             commands::terminal_commands::convert_session_to_terminal,
             commands::session_commands::list_session_thread_messages,
+            commands::session_commands::convert_historical_records,
             commands::workspace_commands::list_workspace_groups,
             commands::session_commands::list_workspace_sessions,
             commands::session_commands::create_session,
@@ -695,10 +701,30 @@ pub fn run() {
             commands::companion_commands::companion_revoke_device,
             commands::companion_commands::companion_sign_in_cloudflare,
             commands::companion_commands::companion_allocate_stable_url,
-            commands::companion_commands::companion_destroy_stable_url
-        ])
-        .build(tauri::generate_context!())
-        .expect("error while building tauri application");
+            commands::companion_commands::companion_destroy_stable_url,
+            commands::cloud_identity::authorize_cloud_codex_identity,
+            commands::cloud_identity::authorize_cloud_claude_identity,
+            commands::cloud_identity::authorize_cloud_forge_identity,
+            commands::team_cloud::deploy_team_cloud,
+            commands::team_cloud::list_team_containers,
+            commands::team_cloud::delete_team_container
+        ]);
+
+    let mut context = tauri::generate_context!();
+    // Serve is windowless: clearing the window configs means `build` creates no
+    // webview (S1 spike). The embedded SPA is still reachable through the
+    // companion asset resolver, so the browser/desktop client renders normally.
+    if mode == AppMode::Serve {
+        context.config_mut().app.windows.clear();
+    }
+    builder
+        .build(context)
+        .expect("error while building tauri application")
+}
+
+pub fn run() {
+    system_limits::raise_nofile_soft_limit();
+    let app = build_app(AppMode::Desktop);
 
     // App-exit paths are intercepted here. On macOS, closing the window
     // (red button, Cmd+W on the last tab, Cmd+Shift+W) does NOT quit the
@@ -793,6 +819,25 @@ pub fn run() {
             updater::install_pending_on_exit_blocking();
         }
         _ => {}
+    });
+}
+
+/// Headless `helmor serve` host: build the windowless app and run its event
+/// loop. The serve-mode `setup` hook (which runs `init_core` and binds the
+/// companion server on `0.0.0.0:$PORT`) only fires once the event loop starts,
+/// so we must call `app.run()` — parking the main thread alone never triggers
+/// setup, leaving the process alive but uninitialised. The app has no windows,
+/// so `prevent_exit` keeps it running if the runtime ever signals an exit. In a
+/// container the boot script starts an Xvfb display first so the GTK/WebKit
+/// runtime the binary links against can initialise.
+pub fn serve() {
+    system_limits::raise_nofile_soft_limit();
+    let app = build_app(AppMode::Serve);
+    tracing::info!("helmor serve: headless host up; running event loop");
+    app.run(|_app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { api, .. } = event {
+            api.prevent_exit();
+        }
     });
 }
 

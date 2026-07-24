@@ -68,6 +68,27 @@ fn err_role_plain_text() {
     assert_yaml_snapshot!(run_normalized(msgs));
 }
 
+// P1-5a: the cloud auto-push failure notice — a `role=system` row with the
+// existing `type:"error"` content shape, inserted out-of-band by
+// `cloud_autopush::record_autopush_failure`. Locks that it renders as a
+// system error label (via the adapter's error arm) on historical reload.
+#[test]
+fn cloud_autopush_failure_notice_renders_as_system_error() {
+    let content = json!({
+        "type": "error",
+        "message": "Cloud auto-push failed — this turn's work is NOT backed up \
+                    to the git remote and may be lost when the workspace goes \
+                    to sleep. (Failed to push branch main to origin: fatal: \
+                    unable to access 'https://github.com/o/r.git/')",
+    });
+    let msgs = vec![make_record(
+        "ap1",
+        "system",
+        &serde_json::to_string(&content).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
 #[test]
 fn err_raw_json_content() {
     let raw = serde_json::to_string(&json!({ "content": "inner error" })).unwrap();
@@ -105,6 +126,28 @@ fn user_prompt_wrapped() {
     // {"type":"user_prompt","text":"..."}.
     let msgs = vec![user_prompt("u1", "hello assistant")];
     assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn user_prompt_with_author_id_renders_author_end_to_end() {
+    // Full pipeline reload (the production `convert_historical` path) for a
+    // human-authored cloud-room prompt: a non-NULL `author_id` on the
+    // `HistoricalRecord` must surface as `ThreadMessageLike.author` with the
+    // member id, display fields left None (the frontend hydrates those). Not a
+    // normalized snapshot — `NormThreadMessage` drops `author`, so we assert
+    // the field directly.
+    let records = vec![user_prompt_with_author("u1", "hello team", "member-7")];
+    let rendered = MessagePipeline::convert_historical(&records);
+    assert_eq!(rendered.len(), 1);
+    let author = rendered[0].author.as_ref().expect("author populated");
+    assert_eq!(author.id, "member-7");
+    assert_eq!(author.display_name, None);
+    assert_eq!(author.avatar_url, None);
+
+    // The single-user path (no author_id) leaves author None, so the wire
+    // shape stays byte-identical to the pre-author pipeline.
+    let plain = MessagePipeline::convert_historical(&[user_prompt("u2", "hello team")]);
+    assert!(plain[0].author.is_none(), "no author_id ⇒ author omitted");
 }
 
 #[test]
@@ -1311,9 +1354,78 @@ fn sys_error_max_turns_rendered() {
     assert_yaml_snapshot!(run_normalized(msgs));
 }
 
+/// R4-A: lazy rematerialize persists a `workspace_rebuilt` system row when a
+/// worktree is rebuilt from the repo default branch (its own branch was never
+/// pushed). Must render as a visible Warning notice on historical reload —
+/// not get swallowed as an unknown subtype.
+#[test]
+fn sys_workspace_rebuilt_renders_warning_notice() {
+    let msgs = vec![system_json(
+        "s1",
+        json!({
+            "subtype": "workspace_rebuilt",
+            "message": "Branch feat/x was never pushed; workspace was rebuilt from origin/main. Unpushed work is not recoverable.",
+        }),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
 #[test]
 fn sys_no_subtype() {
     let msgs = vec![system_json("s1", json!({}))];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+/// R2-A: live ingest DROPS `codex_reconnecting` (folded into the transient
+/// `AgentStreamEvent::RetryStatus` at the streaming layer) — it must never
+/// become a persisted turn / thread Warning.
+#[test]
+fn sys_codex_reconnecting_live_ingest_suppressed() {
+    let mut pipeline =
+        helmor_lib::pipeline::MessagePipeline::new("codex", "test-model", "ctx", "sess");
+    let event = json!({
+        "type": "system",
+        "subtype": "codex_reconnecting",
+        "attempt": 2,
+        "max_retries": 5,
+        "retry_delay_ms": 0,
+        "error": "Reconnecting... Attempt 2/5",
+    });
+    let emit = pipeline.push_event(&event, &serde_json::to_string(&event).unwrap());
+    // The `system` arm finalizes (emits a Full snapshot), but the suppressed
+    // subtype must not have collected anything — the snapshot stays empty.
+    match emit {
+        helmor_lib::pipeline::PipelineEmit::Full(messages) => {
+            assert!(
+                messages.is_empty(),
+                "codex_reconnecting must not render on live ingest, got {messages:?}"
+            );
+        }
+        helmor_lib::pipeline::PipelineEmit::None => {}
+        helmor_lib::pipeline::PipelineEmit::Partial(_) => {
+            panic!("unexpected Partial emit for codex_reconnecting")
+        }
+    }
+    assert!(
+        pipeline.finish().is_empty(),
+        "codex_reconnecting must not persist any message"
+    );
+}
+
+/// R2-A: rows persisted by PRE-R2-A code versions still render their Warning
+/// notice on historical reload (`labels.rs` legacy branch) — old sessions and
+/// fixtures must not drift.
+#[test]
+fn sys_codex_reconnecting_historical_renders_legacy_warning() {
+    let msgs = vec![system_json(
+        "s1",
+        json!({
+            "subtype": "codex_reconnecting",
+            "attempt": 2,
+            "max_retries": 5,
+            "error": "Reconnecting... Attempt 2/5",
+        }),
+    )];
     assert_yaml_snapshot!(run_normalized(msgs));
 }
 
@@ -2746,6 +2858,105 @@ fn auq_claude_split_rows_still_merge_answers() {
         make_record("u1", "user", &serde_json::to_string(&result_msg).unwrap()),
     ];
     assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+// ============================================================================
+// Room-chat messages (Bp-b snapshot coverage)
+// ============================================================================
+
+/// Basic room-chat without an author — the `is_room_chat` marker must be
+/// set; `author` must be absent (desktop / local path).
+#[test]
+fn room_basic_no_author_sets_is_room_chat_marker() {
+    let records = vec![room_chat("rc1", "hello team")];
+    let rendered = MessagePipeline::convert_historical(&records);
+    assert_eq!(rendered.len(), 1);
+    assert!(rendered[0].is_room_chat, "is_room_chat must be true");
+    assert!(rendered[0].author.is_none(), "author must be absent");
+    assert_eq!(
+        rendered[0].role,
+        helmor_lib::pipeline::types::MessageRole::User
+    );
+    // Normalized snapshot pins the structural shape.
+    assert_yaml_snapshot!(run_normalized(vec![room_chat("rc1", "hello team")]));
+}
+
+/// Room-chat with an author id — marker present, author id stamped.
+#[test]
+fn room_with_author_stamps_author_and_marker() {
+    let records = vec![room_chat_with_author("rc1", "hi", "member-42")];
+    let rendered = MessagePipeline::convert_historical(&records);
+    assert_eq!(rendered.len(), 1);
+    assert!(rendered[0].is_room_chat, "is_room_chat must be true");
+    let author = rendered[0].author.as_ref().expect("author must be present");
+    assert_eq!(author.id, "member-42");
+    assert!(author.display_name.is_none(), "display_name stays None");
+    // Normalized snapshot (author field stripped by normalizer — assert
+    // directly above; snapshot pins the content/status shape).
+    assert_yaml_snapshot!(run_normalized(vec![room_chat_with_author(
+        "rc1",
+        "hi",
+        "member-42"
+    )]));
+}
+
+/// Room-chat with file + image + pasted-text attachments.
+#[test]
+fn room_with_attachments_renders_correct_parts() {
+    let msgs = vec![room_chat_with_attachments(
+        "rc1",
+        "check @src/foo.rs",
+        &["src/foo.rs"],
+        &["/tmp/screenshot.png"],
+        &[],
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+/// Turn boundary interleave: user_prompt → assistant → room_chat → user_prompt.
+/// Verifies the room_chat branch does NOT interfere with surrounding messages.
+#[test]
+fn room_interleaved_with_agent_turns() {
+    let msgs = vec![
+        user_prompt("u1", "start the task @agent"),
+        assistant_json(
+            "a1",
+            json!([{"type": "text", "text": "Working on it."}]),
+            None,
+        ),
+        room_chat_with_author("rc1", "looks good so far", "member-7"),
+        user_prompt("u2", "continue @agent"),
+    ];
+    let rendered = MessagePipeline::convert_historical(&msgs);
+    assert_eq!(rendered.len(), 4, "four distinct messages");
+    // room_chat row is the third message.
+    assert!(rendered[2].is_room_chat, "third msg must be room_chat");
+    // Other rows must NOT have the marker.
+    assert!(
+        !rendered[0].is_room_chat,
+        "user_prompt must NOT be room_chat"
+    );
+    assert!(!rendered[1].is_room_chat, "assistant must NOT be room_chat");
+    assert!(
+        !rendered[3].is_room_chat,
+        "second user_prompt must NOT be room_chat"
+    );
+    assert_yaml_snapshot!(run_normalized(msgs.clone()));
+}
+
+/// Existing single-user messages MUST NOT be affected — zero drift guard.
+#[test]
+fn room_non_room_rows_have_no_marker_in_serialized_wire() {
+    // Serialize a plain user_prompt and verify `isRoomChat` key is absent.
+    let records = vec![user_prompt("u1", "plain prompt")];
+    let rendered = MessagePipeline::convert_historical(&records);
+    assert_eq!(rendered.len(), 1);
+    assert!(!rendered[0].is_room_chat, "is_room_chat must be false");
+    let wire = serde_json::to_value(&rendered[0]).unwrap();
+    assert!(
+        wire.get("isRoomChat").is_none(),
+        "isRoomChat key must be absent from wire when false"
+    );
 }
 
 /// Freezes the persisted `task_snapshot` storage shape: the exact system row

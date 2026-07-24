@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	cleanup,
 	fireEvent,
@@ -6,12 +7,24 @@ import {
 	within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { WorkspaceGroup, WorkspaceRow } from "@/lib/api";
 
 import { WorkspacesSidebar } from "./index";
+
+// WorkspacesSidebar reads the team roster via `useQuery` (presence lookup), so
+// renders need a QueryClient. Team mode is off in jsdom (empty localStorage),
+// so that query stays disabled — the provider just satisfies the hook.
+const queryClient = new QueryClient();
+function Wrap({ children }: { children: ReactNode }) {
+	return (
+		<QueryClientProvider client={queryClient}>
+			<TooltipProvider delayDuration={0}>{children}</TooltipProvider>
+		</QueryClientProvider>
+	);
+}
 
 const workspaceRow: WorkspaceRow = {
 	id: "workspace-1",
@@ -96,14 +109,14 @@ afterEach(() => {
 describe("WorkspacesSidebar", () => {
 	it("shows the Helmor thinking indicator when a workspace enters sending state", () => {
 		const { rerender } = render(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={workspaceGroups}
 					archivedRows={[]}
 					selectedWorkspaceId="workspace-1"
 					busyWorkspaceIds={new Set()}
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		const initialRow = screen.getByRole("button", { name: "Workspace 1" });
@@ -112,14 +125,14 @@ describe("WorkspacesSidebar", () => {
 		).toBeNull();
 
 		rerender(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={workspaceGroups}
 					archivedRows={[]}
 					selectedWorkspaceId="workspace-1"
 					busyWorkspaceIds={new Set(["workspace-1"])}
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		const updatedRow = screen.getByRole("button", { name: "Workspace 1" });
@@ -130,7 +143,7 @@ describe("WorkspacesSidebar", () => {
 
 	it("keeps the unread dot visible for the selected workspace", () => {
 		render(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={[
 						{
@@ -143,7 +156,7 @@ describe("WorkspacesSidebar", () => {
 					archivedRows={[]}
 					selectedWorkspaceId="workspace-1"
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		expect(screen.getByLabelText("Unread")).toBeInTheDocument();
@@ -153,14 +166,14 @@ describe("WorkspacesSidebar", () => {
 		const onSelectWorkspace = vi.fn();
 
 		render(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={twoWorkspaceGroups}
 					archivedRows={[]}
 					selectedWorkspaceId="workspace-1"
 					onSelectWorkspace={onSelectWorkspace}
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		const currentRow = screen.getByRole("button", { name: "Workspace 1" });
@@ -186,13 +199,13 @@ describe("WorkspacesSidebar", () => {
 		const onOpenNewWorkspace = vi.fn();
 
 		const { container } = render(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={workspaceGroups}
 					archivedRows={[]}
 					onOpenNewWorkspace={onOpenNewWorkspace}
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		const [newWorkspaceButton] = within(container).getAllByRole("button", {
@@ -233,9 +246,9 @@ describe("WorkspacesSidebar", () => {
 		}
 
 		render(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<ControlledSidebar />
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		await user.click(
@@ -256,14 +269,14 @@ describe("WorkspacesSidebar", () => {
 
 	it("opens sidebar filter controls from the app shortcut event", () => {
 		render(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={repoWorkspaceGroups}
 					archivedRows={[]}
 					availableRepositories={repositoryOptions}
 					sidebarFilterShortcut="Mod+Shift+F"
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		fireEvent(window, new CustomEvent("helmor:open-sidebar-filter"));
@@ -277,7 +290,7 @@ describe("WorkspacesSidebar", () => {
 		const onSidebarGroupingChange = vi.fn();
 
 		render(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={repoWorkspaceGroups}
 					archivedRows={[]}
@@ -285,7 +298,7 @@ describe("WorkspacesSidebar", () => {
 					sidebarGrouping="status"
 					onSidebarGroupingChange={onSidebarGroupingChange}
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		await user.click(
@@ -301,7 +314,7 @@ describe("WorkspacesSidebar", () => {
 		const onSidebarRepoFilterChange = vi.fn();
 
 		render(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={[
 						{
@@ -316,7 +329,7 @@ describe("WorkspacesSidebar", () => {
 					sidebarRepoFilterIds={["repo-alpha"]}
 					onSidebarRepoFilterChange={onSidebarRepoFilterChange}
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		expect(
@@ -335,7 +348,7 @@ describe("WorkspacesSidebar", () => {
 
 	it("hides the repo drag handle when sort is not custom", () => {
 		const { container } = render(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={[
 						{
@@ -351,7 +364,7 @@ describe("WorkspacesSidebar", () => {
 					sidebarSort="updatedAt"
 					onMoveRepositoryInSidebar={vi.fn()}
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		expect(container.querySelector("[data-repo-dnd-handle='true']")).toBeNull();
@@ -361,7 +374,7 @@ describe("WorkspacesSidebar", () => {
 		const onMoveRepositoryInSidebar = vi.fn();
 
 		const { container } = render(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={[
 						{
@@ -383,7 +396,7 @@ describe("WorkspacesSidebar", () => {
 					sidebarSort="custom"
 					onMoveRepositoryInSidebar={onMoveRepositoryInSidebar}
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		const repoHandle = container.querySelector("[data-repo-dnd-handle='true']");
@@ -414,13 +427,13 @@ describe("WorkspacesSidebar", () => {
 		const onOpenInFinder = vi.fn();
 
 		render(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={workspaceGroups}
 					archivedRows={[]}
 					onOpenInFinder={onOpenInFinder}
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		fireEvent.contextMenu(screen.getByRole("button", { name: "Workspace 1" }));
@@ -438,13 +451,13 @@ describe("WorkspacesSidebar", () => {
 		};
 
 		render(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={workspaceGroups}
 					archivedRows={[archivedRow]}
 					selectedWorkspaceId={null}
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		expect(
@@ -465,9 +478,9 @@ describe("WorkspacesSidebar", () => {
 		];
 
 		const { container } = render(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar groups={emptyGroups} archivedRows={[]} />
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		expect(screen.getByRole("button", { name: "Done" })).toHaveAttribute(
@@ -505,14 +518,14 @@ describe("WorkspacesSidebar", () => {
 		];
 
 		render(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={groups}
 					archivedRows={[]}
 					onArchiveWorkspace={onArchiveWorkspace}
 					archivingWorkspaceIds={new Set(["workspace-1"])}
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		const archiveButtons = screen.getAllByRole("button", {
@@ -541,13 +554,13 @@ describe("WorkspacesSidebar", () => {
 		const onArchiveWorkspace = vi.fn();
 
 		render(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={workspaceGroups}
 					archivedRows={[]}
 					onArchiveWorkspace={onArchiveWorkspace}
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		await user.click(screen.getByRole("button", { name: "Archive workspace" }));
@@ -571,14 +584,14 @@ describe("WorkspacesSidebar", () => {
 		const onArchiveWorkspace = vi.fn();
 
 		render(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={workspaceGroups}
 					archivedRows={[]}
 					onArchiveWorkspace={onArchiveWorkspace}
 					creatingWorkspaceRepoId="repo-1"
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		const [archiveButton] = screen.getAllByRole("button", {
@@ -606,13 +619,13 @@ describe("WorkspacesSidebar", () => {
 		];
 
 		const { unmount } = render(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={collapsedGroups}
 					archivedRows={[]}
 					selectedWorkspaceId={null}
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		expect(
@@ -627,13 +640,13 @@ describe("WorkspacesSidebar", () => {
 		unmount();
 
 		render(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={collapsedGroups}
 					archivedRows={[]}
 					selectedWorkspaceId={null}
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		expect(
@@ -659,7 +672,7 @@ describe("WorkspacesSidebar", () => {
 		];
 
 		render(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={groups}
 					archivedRows={[]}
@@ -668,7 +681,7 @@ describe("WorkspacesSidebar", () => {
 						new Set(["workspace-1", "workspace-2"])
 					}
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		const selectedRow = screen.getByRole("button", { name: "Workspace 1" });
@@ -694,13 +707,13 @@ describe("WorkspacesSidebar", () => {
 		];
 
 		const { rerender } = render(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={groups}
 					archivedRows={[]}
 					selectedWorkspaceId="workspace-1"
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		expect(
@@ -715,13 +728,13 @@ describe("WorkspacesSidebar", () => {
 
 		// Simulate a groups refetch (new array reference, same data)
 		rerender(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={[...groups.map((g) => ({ ...g, rows: [...g.rows] }))]}
 					archivedRows={[]}
 					selectedWorkspaceId="workspace-1"
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		// Group should stay collapsed
@@ -749,13 +762,13 @@ describe("WorkspacesSidebar", () => {
 		];
 
 		const { rerender } = render(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={initialGroups}
 					archivedRows={[]}
 					selectedWorkspaceId="ws-move"
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		// Collapse the "Done" group
@@ -784,13 +797,13 @@ describe("WorkspacesSidebar", () => {
 		];
 
 		rerender(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={afterMoveGroups}
 					archivedRows={[]}
 					selectedWorkspaceId="ws-move"
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		// "Done" should stay collapsed — the workspace moved there but
@@ -821,13 +834,13 @@ describe("WorkspacesSidebar", () => {
 		];
 
 		const { rerender } = render(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={groups}
 					archivedRows={[]}
 					selectedWorkspaceId="workspace-1"
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		// Collapse "Done"
@@ -838,13 +851,13 @@ describe("WorkspacesSidebar", () => {
 
 		// Select a workspace inside the collapsed "Done" group
 		rerender(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={groups}
 					archivedRows={[]}
 					selectedWorkspaceId="ws-completed"
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		// Group should expand because selectedWorkspaceId changed
@@ -855,13 +868,13 @@ describe("WorkspacesSidebar", () => {
 
 	it("shows workspace hover actions without an opacity transition", () => {
 		render(
-			<TooltipProvider delayDuration={0}>
+			<Wrap>
 				<WorkspacesSidebar
 					groups={workspaceGroups}
 					archivedRows={[]}
 					onArchiveWorkspace={vi.fn()}
 				/>
-			</TooltipProvider>,
+			</Wrap>,
 		);
 
 		const actionButton = screen.getByRole("button", {
@@ -895,14 +908,14 @@ describe("WorkspacesSidebar", () => {
 			const onCreateWorkspaceForRepo = vi.fn();
 
 			render(
-				<TooltipProvider delayDuration={0}>
+				<Wrap>
 					<WorkspacesSidebar
 						groups={repoGroups}
 						archivedRows={[]}
 						sidebarGrouping="repo"
 						onCreateWorkspaceForRepo={onCreateWorkspaceForRepo}
 					/>
-				</TooltipProvider>,
+				</Wrap>,
 			);
 
 			const addButton = screen.getByRole("button", {
@@ -916,14 +929,14 @@ describe("WorkspacesSidebar", () => {
 
 		it("doesn't expose row count badge / chevron for repo groups", () => {
 			render(
-				<TooltipProvider delayDuration={0}>
+				<Wrap>
 					<WorkspacesSidebar
 						groups={repoGroups}
 						archivedRows={[]}
 						sidebarGrouping="repo"
 						onCreateWorkspaceForRepo={vi.fn()}
 					/>
-				</TooltipProvider>,
+				</Wrap>,
 			);
 
 			// Repo header is a div role="button" (not a <button>) so the
@@ -943,14 +956,14 @@ describe("WorkspacesSidebar", () => {
 			const onCreateWorkspaceForRepo = vi.fn();
 
 			render(
-				<TooltipProvider delayDuration={0}>
+				<Wrap>
 					<WorkspacesSidebar
 						groups={repoGroups}
 						archivedRows={[]}
 						sidebarGrouping="repo"
 						onCreateWorkspaceForRepo={onCreateWorkspaceForRepo}
 					/>
-				</TooltipProvider>,
+				</Wrap>,
 			);
 
 			// Row visible BEFORE click.
@@ -970,14 +983,14 @@ describe("WorkspacesSidebar", () => {
 			const user = userEvent.setup();
 
 			render(
-				<TooltipProvider delayDuration={0}>
+				<Wrap>
 					<WorkspacesSidebar
 						groups={repoGroups}
 						archivedRows={[]}
 						sidebarGrouping="repo"
 						onCreateWorkspaceForRepo={vi.fn()}
 					/>
-				</TooltipProvider>,
+				</Wrap>,
 			);
 
 			expect(screen.getByLabelText("Workspace 1")).toBeInTheDocument();

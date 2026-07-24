@@ -924,6 +924,7 @@
 	"modelNewChats": "Model for new chats",
 	"modelPrsMrsCommitPush": "Model for PRs/MRs and commit-and-push",
 	"models": "Models",
+	"modelsLoadFailed": "Couldn't load the model list.",
 	"modified": "Modified",
 	"moonshotOpenAICompatible": "Moonshot's OpenAI-compatible API.",
 	"more": "more",
@@ -1496,6 +1497,7 @@
 	"system": "System",
 	"systemProxy": "System proxy",
 	"targetUrl": "Target URL",
+	"teamRoomMentionAgentForReply": "@agent to get a reply — plain messages go to teammates",
 	"taskPanelCollapse": "Collapse task panel",
 	"taskPanelFallbackHeading": "Live process fallback",
 	"taskPanelPillDone": "{count} tasks",
@@ -1655,5 +1657,7 @@
 	"workspacesCanNowArchiveThemselvesAutomatically": "Workspaces can now archive themselves automatically once their linked PR/MR is merged.",
 	"yes": "Yes",
 	"zoom": "Zoom in",
-	"zoomOut": "Zoom out"
+	"zoomOut": "Zoom out",
+	"connectRepoLink": "Connect a repository",
+	"connectRepoRest": " to start building — or just chat."
 }
