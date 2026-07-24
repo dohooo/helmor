@@ -6,7 +6,12 @@ import {
 	stopRepoScript,
 	writeRepoScriptStdin,
 } from "@/lib/api";
-import { dedupUrlKey, extractLocalUrls } from "./detect-urls";
+import {
+	dedupUrlKey,
+	extractDeclaredUrls,
+	extractLocalUrls,
+	trailingPartialLine,
+} from "./detect-urls";
 
 export type ScriptStatus = "idle" | "running" | "exited";
 
@@ -49,6 +54,12 @@ type StatusListener = (
  */
 const MAX_CHUNK_BYTES = 2 * 1024 * 1024;
 
+/**
+ * Cheap case-insensitive probe for "could this chunk contain a URL?". No `g`
+ * flag, so it carries no `lastIndex` state between calls.
+ */
+const HTTP_HINT_RE = /http/i;
+
 /** Inserted once at the head of replay when earlier output was dropped. */
 export const TRUNCATION_NOTICE =
 	"\r\n\x1b[2m… earlier output truncated (buffer limit reached) …\x1b[0m\r\n";
@@ -80,7 +91,28 @@ export type ScriptEntry = {
 	 * to its pre-run glyph. Cleared on the next `startScript`.
 	 */
 	userStopped: boolean;
+	/**
+	 * URLs the script explicitly declared via `helmor:url=<URL>` lines. When
+	 * non-empty these fully replace {@link urls} in the Open menu — a script
+	 * that declares its address is telling us the sniffed localhost ports are
+	 * wrong (typically ephemeral ports behind a reverse proxy), not that they
+	 * are extra options worth offering.
+	 */
+	declaredUrls: string[];
+	/**
+	 * Trailing partial line carried over from the previous chunk, so marker
+	 * lines split across PTY chunk boundaries are still detected.
+	 */
+	tail: string;
 };
+
+/**
+ * URLs to surface in the Open menu: explicitly declared ones win over sniffed
+ * localhost banners.
+ */
+export function effectiveScriptUrls(entry: ScriptEntry): string[] {
+	return entry.declaredUrls.length > 0 ? entry.declaredUrls : entry.urls;
+}
 
 /** Append a chunk and evict from the head until under the byte cap. */
 function appendChunk(entry: ScriptEntry, data: string) {
@@ -192,6 +224,8 @@ function runScriptInternal(
 		urls: [],
 		stopping: false,
 		userStopped: false,
+		declaredUrls: [],
+		tail: "",
 	};
 	entries.set(k, entry);
 
@@ -231,17 +265,64 @@ function runScriptInternal(
 
 				// Cheap short-circuit: once a dev server has settled into
 				// steady-state, ~every chunk is HMR / request-log noise with
-				// no URL. Skip the regex work when the chunk can't possibly
-				// contain one. `event.data.includes("http")` is a plain
-				// substring scan — ~100x faster than the ANSI+URL regex
-				// combo and totally safe (any real localhost URL has "http"
-				// verbatim in bytes, even when wrapped in ANSI).
+				// no URL. Skip the heavy work when the chunk can't possibly
+				// contain one — any real URL, sniffed or declared, has "http"
+				// in its bytes even when wrapped in ANSI.
+				//
+				// The probe must be case-INsensitive to match the parsers it
+				// guards: both URL regexes carry the `i` flag, so a bare
+				// `includes("http")` would silently drop a script printing
+				// `helmor:url=HTTPS://…`. A no-flag regex `test` stays cheap
+				// (no allocation, unlike `toLowerCase()`) while keeping the
+				// fast path and the parsers in agreement.
 				//
 				// We still run detection on every chunk until we've seen at
 				// least one URL, so the initial banner is never missed.
-				if (entry.urls.length > 0 && !event.data.includes("http")) {
+				//
+				// The probe must also look at the rejoined tail + chunk, not
+				// the fresh chunk alone: a marker split across a PTY boundary
+				// can leave its "http" bytes in the carried tail while the
+				// completing fragment has none — probing only `event.data`
+				// would send that chunk down the fast path and discard the
+				// very line the tail was carried to protect.
+				const scan = entry.tail + event.data;
+				if (
+					entry.urls.length + entry.declaredUrls.length > 0 &&
+					!HTTP_HINT_RE.test(scan)
+				) {
+					entry.tail = trailingPartialLine(scan);
 					break;
 				}
+
+				// Consider only the newline-terminated portion of the rejoined
+				// text. A marker split across a PTY chunk boundary would
+				// otherwise be committed truncated — `helmor:url=https://ach`
+				// is a perfectly well-formed URL as far as the regex is
+				// concerned, so waiting for the terminating newline is the
+				// only safe signal that we have the whole thing.
+				const lastNewline = scan.lastIndexOf("\n");
+				const completeLines =
+					lastNewline === -1 ? "" : scan.slice(0, lastNewline + 1);
+				entry.tail = trailingPartialLine(scan);
+
+				// Explicit `helmor:url=` declarations win outright: once a script
+				// has told us its address, sniffed localhost banners are noise
+				// (ephemeral ports behind a reverse proxy) and we stop collecting
+				// them entirely.
+				const declared = extractDeclaredUrls(completeLines);
+				if (declared.length > 0) {
+					let changed = false;
+					for (const url of declared) {
+						if (!entry.declaredUrls.includes(url)) {
+							entry.declaredUrls.push(url);
+							changed = true;
+						}
+					}
+					if (changed) {
+						listeners.get(k)?.onUrlsChange?.([...entry.declaredUrls]);
+					}
+				}
+				if (entry.declaredUrls.length > 0) break;
 
 				// Scan the fresh chunk for dev-server URLs. We keep a deduped,
 				// first-seen-ordered list on the entry and only fire the listener
