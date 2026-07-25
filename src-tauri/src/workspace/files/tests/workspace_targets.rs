@@ -192,6 +192,37 @@ fn query_target_by_id_disambiguates_local_workspaces_on_same_repo_root() {
 }
 
 #[test]
+fn query_target_by_id_matches_custom_worktree_parent_path() {
+    let custom_root = tempfile::tempdir().unwrap();
+    let workspace_root = custom_root.path().join("ws-dir");
+    fs::create_dir_all(&workspace_root).unwrap();
+    let conn = Connection::open_in_memory().unwrap();
+    crate::schema::ensure_schema(&conn).unwrap();
+    conn.execute(
+        "INSERT INTO repos (id, name, root_path, default_branch, remote, workspace_root_path)
+         VALUES ('r1', 'test-repo', '/tmp/source', 'main', 'origin', ?1)",
+        [custom_root.path().display().to_string()],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO workspaces (id, repository_id, directory_name, state, status, intended_target_branch, worktree_parent_path, display_order)
+         VALUES ('w1', 'r1', 'ws-dir', 'ready', 'in-progress', 'develop', ?1, ?2)",
+        rusqlite::params![
+            custom_root.path().display().to_string(),
+            crate::workspace::sidebar_order::ORDER_STEP,
+        ],
+    )
+    .unwrap();
+
+    let result = query_workspace_target_by_id(&conn, "w1", &workspace_root);
+
+    assert_eq!(
+        result,
+        Some((Some("origin".to_string()), "develop".to_string()))
+    );
+}
+
+#[test]
 fn resolve_target_ref_uses_configured_target_branch() {
     let _lock = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
     let test_dir = TestDataDir::new("merge-base-target");

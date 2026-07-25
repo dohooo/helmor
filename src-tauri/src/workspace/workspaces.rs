@@ -1448,7 +1448,7 @@ pub fn purge_orphaned_workspaces() -> Result<usize> {
     // missing (the user might be on a removable drive). Filter them out
     // server-side via `w.mode = 'worktree'`.
     let mut stmt = connection.prepare(&format!(
-        "SELECT w.id, r.name, w.directory_name, w.state
+        "SELECT w.id, r.name, w.directory_name, w.state, w.worktree_parent_path
          FROM workspaces w
          JOIN repos r ON r.id = w.repository_id
          WHERE w.state {} AND COALESCE(w.mode, 'worktree') = 'worktree'",
@@ -1461,14 +1461,14 @@ pub fn purge_orphaned_workspaces() -> Result<usize> {
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, WorkspaceState>(3)?,
+                row.get::<_, Option<String>>(4)?,
             ))
         })?
         .filter_map(|r| r.ok())
-        .filter(|(_, repo_name, dir_name, _)| {
-            crate::data_dir::workspace_dir(repo_name, dir_name)
-                .map(|p| !p.is_dir())
-                .unwrap_or(false)
+        .filter(|(_, repo_name, dir_name, _, worktree_parent_path)| {
+            should_degrade_missing_worktree(repo_name, dir_name, worktree_parent_path.as_deref())
         })
+        .map(|(id, repo_name, dir_name, state, _)| (id, repo_name, dir_name, state))
         .collect();
     // Release the read connection so `degrade_workspace_to_archived`
     // (which takes a write conn) doesn't deadlock on SQLite.
@@ -1507,6 +1507,38 @@ pub fn purge_orphaned_workspaces() -> Result<usize> {
         }
     }
     Ok(count)
+}
+
+fn should_degrade_missing_worktree(
+    repo_name: &str,
+    dir_name: &str,
+    worktree_parent_path: Option<&str>,
+) -> bool {
+    let custom_parent = worktree_parent_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    if let Some(parent) = custom_parent {
+        let parent_path = std::path::Path::new(parent);
+        let workspace_path = parent_path.join(dir_name);
+        if workspace_path.is_dir() {
+            return false;
+        }
+        if !parent_path.is_dir() {
+            tracing::warn!(
+                repo_name,
+                dir_name,
+                parent = %parent_path.display(),
+                "Skipping orphan reconcile for custom worktree parent that is unavailable",
+            );
+            return false;
+        }
+        return true;
+    }
+
+    super::helpers::worktree_workspace_dir(repo_name, dir_name, None)
+        .map(|path| !path.is_dir())
+        .unwrap_or(false)
 }
 
 /// Flip a single workspace row from its current operational state to
@@ -1577,12 +1609,13 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
         String,
         WorkspaceState,
         crate::workspace_state::WorkspaceMode,
+        Option<String>,
     )> = connection
         .query_row(
-            "SELECT r.name, w.directory_name, w.state, COALESCE(w.mode, 'worktree')
+            "SELECT r.name, w.directory_name, w.state, COALESCE(w.mode, 'worktree'), w.worktree_parent_path
                  FROM workspaces w JOIN repos r ON r.id = w.repository_id WHERE w.id = ?1",
             [workspace_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         )
         .ok();
 
@@ -1640,10 +1673,14 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
     //   Local: it's the user's repo, never delete it.
     //   Chat: own scratch dir under <data_dir>/chats/<date>/<name>,
     //         safe to wipe.
-    if let Some((repo_name, directory_name, _state, mode)) = record {
+    if let Some((repo_name, directory_name, _state, mode, worktree_parent_path)) = record {
         match mode {
             crate::workspace_state::WorkspaceMode::Worktree => {
-                if let Ok(ws_dir) = crate::data_dir::workspace_dir(&repo_name, &directory_name) {
+                if let Ok(ws_dir) = super::helpers::worktree_workspace_dir(
+                    &repo_name,
+                    &directory_name,
+                    worktree_parent_path.as_deref(),
+                ) {
                     if ws_dir.is_dir() {
                         std::fs::remove_dir_all(&ws_dir).ok();
                     }
@@ -1894,6 +1931,73 @@ mod tests {
             count_session_messages(&env, "w-ready"),
             1,
             "chat history must survive the degrade",
+        );
+    }
+
+    #[test]
+    fn purge_skips_custom_worktree_when_parent_dir_is_unavailable() {
+        let env = TestEnv::new("purge-custom-parent-missing");
+        let conn = env.db_connection();
+        insert_repo(&conn, "r1", "demo", None);
+        insert_workspace(
+            &conn,
+            &WorkspaceFixture {
+                id: "w-custom",
+                repo_id: "r1",
+                directory_name: "epsilon",
+                state: WorkspaceState::Ready.as_str(),
+                branch: Some("feature/epsilon"),
+                intended_target_branch: None,
+            },
+        );
+        let custom_parent = env.root.join("external-drive").join("demo-workspaces");
+        conn.execute(
+            "UPDATE workspaces SET worktree_parent_path = ?1 WHERE id = 'w-custom'",
+            [custom_parent.display().to_string()],
+        )
+        .unwrap();
+        assert!(!custom_parent.exists());
+
+        let degraded = purge_orphaned_workspaces().unwrap();
+
+        assert_eq!(
+            degraded, 0,
+            "missing custom parent may be a temporarily unavailable volume"
+        );
+        assert_eq!(workspace_state(&env, "w-custom").as_deref(), Some("ready"));
+    }
+
+    #[test]
+    fn purge_degrades_custom_worktree_when_parent_exists_but_workspace_dir_is_missing() {
+        let env = TestEnv::new("purge-custom-child-missing");
+        let conn = env.db_connection();
+        insert_repo(&conn, "r1", "demo", None);
+        insert_workspace(
+            &conn,
+            &WorkspaceFixture {
+                id: "w-custom",
+                repo_id: "r1",
+                directory_name: "zeta",
+                state: WorkspaceState::Ready.as_str(),
+                branch: Some("feature/zeta"),
+                intended_target_branch: None,
+            },
+        );
+        let custom_parent = env.root.join("mounted-drive").join("demo-workspaces");
+        fs::create_dir_all(&custom_parent).unwrap();
+        conn.execute(
+            "UPDATE workspaces SET worktree_parent_path = ?1 WHERE id = 'w-custom'",
+            [custom_parent.display().to_string()],
+        )
+        .unwrap();
+        assert!(!custom_parent.join("zeta").exists());
+
+        let degraded = purge_orphaned_workspaces().unwrap();
+
+        assert_eq!(degraded, 1);
+        assert_eq!(
+            workspace_state(&env, "w-custom").as_deref(),
+            Some("archived")
         );
     }
 

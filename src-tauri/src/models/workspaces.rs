@@ -21,6 +21,8 @@ pub struct WorkspaceRecord {
     pub remote_url: Option<String>,
     pub default_branch: Option<String>,
     pub root_path: Option<String>,
+    pub repo_workspace_root_path: Option<String>,
+    pub worktree_parent_path: Option<String>,
     pub directory_name: String,
     pub state: WorkspaceState,
     pub has_unread: bool,
@@ -156,6 +158,8 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
       r.remote_url,
       r.default_branch,
       r.root_path,
+      r.workspace_root_path,
+      w.worktree_parent_path,
       w.directory_name,
       w.state,
       CASE
@@ -303,6 +307,18 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
             |row| row.get::<_, i64>(0),
         )
         .context("Failed to compute next workspace display order")?;
+    let worktree_parent_path = if mode == WorkspaceMode::Worktree {
+        Some(
+            crate::workspace::helpers::repo_worktree_parent_dir(
+                &repository.name,
+                repository.workspace_root_path.as_deref(),
+            )?
+            .display()
+            .to_string(),
+        )
+    } else {
+        None
+    };
 
     transaction
         .execute(
@@ -318,12 +334,13 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
               intended_target_branch,
               mode,
               branch_intent,
+              worktree_parent_path,
               display_order,
               status,
               unread,
               created_at,
               updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0, ?13, ?13)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 0, ?14, ?14)
             "#,
             (
                 workspace_id,
@@ -336,6 +353,7 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
                 default_branch,
                 mode,
                 branch_intent,
+                worktree_parent_path.as_deref(),
                 next_order,
                 status,
                 timestamp,
@@ -473,6 +491,7 @@ pub(crate) fn convert_to_worktree(
     branch: &str,
     intended_target_branch: &str,
     initialization_parent_branch: &str,
+    worktree_parent_path: &str,
     timestamp: &str,
 ) -> Result<()> {
     let connection = db::write_conn()?;
@@ -485,7 +504,8 @@ pub(crate) fn convert_to_worktree(
                 branch = ?3,
                 intended_target_branch = ?4,
                 initialization_parent_branch = ?5,
-                updated_at = ?6
+                worktree_parent_path = ?6,
+                updated_at = ?7
             WHERE id = ?1 AND COALESCE(mode, 'worktree') = 'local'
             "#,
             (
@@ -494,6 +514,7 @@ pub(crate) fn convert_to_worktree(
                 branch,
                 intended_target_branch,
                 initialization_parent_branch,
+                worktree_parent_path,
                 timestamp,
             ),
         )
@@ -700,44 +721,46 @@ fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRecord>
         remote_url: row.get(3)?,
         default_branch: row.get(4)?,
         root_path: row.get(5)?,
-        directory_name: row.get(6)?,
-        state: row.get(7)?,
-        has_unread: row.get::<_, i64>(8)? != 0,
-        workspace_unread: row.get(9)?,
-        unread_session_count: row.get(10)?,
-        status: row.get(11)?,
-        branch: row.get(12)?,
-        initialization_parent_branch: row.get(13)?,
-        intended_target_branch: row.get(14)?,
-        mode: row.get(15)?,
-        branch_intent: row.get(16)?,
-        pinned_at: row.get(17)?,
-        active_session_id: row.get(18)?,
-        active_session_title: row.get(19)?,
-        active_session_agent_type: row.get(20)?,
-        active_session_status: row.get(21)?,
-        primary_session_id: row.get(22)?,
-        primary_session_title: row.get(23)?,
-        primary_session_agent_type: row.get(24)?,
-        pr_title: row.get(25)?,
-        pr_sync_state: row.get(26)?,
-        pr_url: row.get(27)?,
-        archive_commit: row.get(28)?,
-        session_count: row.get(29)?,
-        message_count: row.get(30)?,
-        remote: row.get(31)?,
-        forge_provider: row.get(32)?,
-        forge_login: row.get(33)?,
-        display_order: row.get(34)?,
-        repo_sidebar_order: row.get(35)?,
-        created_at: row.get(36)?,
-        updated_at: row.get(37)?,
-        last_user_message_at: row.get(38)?,
-        setup_completed_at: row.get(39)?,
-        active_run_action_id: row.get(40)?,
-        ai_priming_consumed: row.get::<_, i64>(41)? != 0,
-        parent_workspace_id: row.get(42)?,
-        custom_name: row.get(43)?,
+        repo_workspace_root_path: row.get(6)?,
+        worktree_parent_path: row.get(7)?,
+        directory_name: row.get(8)?,
+        state: row.get(9)?,
+        has_unread: row.get::<_, i64>(10)? != 0,
+        workspace_unread: row.get(11)?,
+        unread_session_count: row.get(12)?,
+        status: row.get(13)?,
+        branch: row.get(14)?,
+        initialization_parent_branch: row.get(15)?,
+        intended_target_branch: row.get(16)?,
+        mode: row.get(17)?,
+        branch_intent: row.get(18)?,
+        pinned_at: row.get(19)?,
+        active_session_id: row.get(20)?,
+        active_session_title: row.get(21)?,
+        active_session_agent_type: row.get(22)?,
+        active_session_status: row.get(23)?,
+        primary_session_id: row.get(24)?,
+        primary_session_title: row.get(25)?,
+        primary_session_agent_type: row.get(26)?,
+        pr_title: row.get(27)?,
+        pr_sync_state: row.get(28)?,
+        pr_url: row.get(29)?,
+        archive_commit: row.get(30)?,
+        session_count: row.get(31)?,
+        message_count: row.get(32)?,
+        remote: row.get(33)?,
+        forge_provider: row.get(34)?,
+        forge_login: row.get(35)?,
+        display_order: row.get(36)?,
+        repo_sidebar_order: row.get(37)?,
+        created_at: row.get(38)?,
+        updated_at: row.get(39)?,
+        last_user_message_at: row.get(40)?,
+        setup_completed_at: row.get(41)?,
+        active_run_action_id: row.get(42)?,
+        ai_priming_consumed: row.get::<_, i64>(43)? != 0,
+        parent_workspace_id: row.get(44)?,
+        custom_name: row.get(45)?,
     })
 }
 

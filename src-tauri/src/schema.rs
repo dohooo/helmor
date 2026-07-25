@@ -535,6 +535,12 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add branch_prefix_custom column")?;
     }
 
+    if has_table(connection, "repos") && !has_column(connection, "repos", "workspace_root_path") {
+        connection
+            .execute_batch("ALTER TABLE repos ADD COLUMN workspace_root_path TEXT")
+            .context("Failed to add repos.workspace_root_path column")?;
+    }
+
     // Re-add the per-repo `branch_prefix_type` column. Earlier shipped
     // releases dropped it via DEAD_COLUMNS; the multi-account refactor
     // brings it back as the canonical place for the override. No data
@@ -879,6 +885,14 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add workspaces.branch_intent column")?;
     }
 
+    if has_table(connection, "workspaces")
+        && !has_column(connection, "workspaces", "worktree_parent_path")
+    {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN worktree_parent_path TEXT")
+            .context("Failed to add workspaces.worktree_parent_path column")?;
+    }
+
     materialize_review_pr_model_defaults(connection)?;
 
     // Smart Triage columns (idempotent ALTERs for pre-triage upgrades).
@@ -1106,6 +1120,7 @@ CREATE TABLE IF NOT EXISTS repos (
     forge_login TEXT,
     branch_prefix_type TEXT,
     branch_prefix_custom TEXT,
+    workspace_root_path TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -1151,6 +1166,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
     port_count INTEGER,
     branch_intent TEXT DEFAULT 'from_branch',
     active_run_action_id TEXT,
+    worktree_parent_path TEXT,
     ai_priming_consumed INTEGER NOT NULL DEFAULT 0,
     triage_source_type TEXT,
     triage_source_ref TEXT,

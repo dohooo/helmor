@@ -14,6 +14,15 @@ const apiMocks = vi.hoisted(() => ({
 	loadRepoScripts: vi.fn(),
 	prefetchRemoteRefs: vi.fn(),
 	updateRepositoryBranchPrefix: vi.fn(),
+	updateRepositoryWorkspaceRoot: vi.fn(),
+}));
+
+const dialogMocks = vi.hoisted(() => ({
+	open: vi.fn(),
+}));
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+	open: dialogMocks.open,
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -28,6 +37,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		loadRepoScripts: apiMocks.loadRepoScripts,
 		prefetchRemoteRefs: apiMocks.prefetchRemoteRefs,
 		updateRepositoryBranchPrefix: apiMocks.updateRepositoryBranchPrefix,
+		updateRepositoryWorkspaceRoot: apiMocks.updateRepositoryWorkspaceRoot,
 	};
 });
 
@@ -91,12 +101,47 @@ describe("RepositorySettingsPanel branch prefix", () => {
 		});
 		apiMocks.prefetchRemoteRefs.mockResolvedValue({ fetched: false });
 		apiMocks.updateRepositoryBranchPrefix.mockResolvedValue(undefined);
+		apiMocks.updateRepositoryWorkspaceRoot.mockResolvedValue(undefined);
+		dialogMocks.open.mockResolvedValue(null);
 	});
 
 	afterEach(() => {
 		cleanup();
 		vi.useRealTimers();
 		vi.clearAllMocks();
+	});
+
+	it("saves a picked workspace location for the repository", async () => {
+		dialogMocks.open.mockResolvedValue("/Users/me/custom-workspaces");
+		renderPanel(
+			repo({
+				workspaceRootPath: null,
+			}),
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: /browse folder/i }));
+		await vi.runAllTimersAsync();
+
+		expect(apiMocks.updateRepositoryWorkspaceRoot).toHaveBeenCalledWith(
+			"repo-a",
+			"/Users/me/custom-workspaces",
+		);
+	});
+
+	it("resets the repository workspace location to the default", async () => {
+		renderPanel(
+			repo({
+				workspaceRootPath: "/Users/me/custom-workspaces",
+			}),
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: /reset to default/i }));
+		await vi.runAllTimersAsync();
+
+		expect(apiMocks.updateRepositoryWorkspaceRoot).toHaveBeenCalledWith(
+			"repo-a",
+			null,
+		);
 	});
 
 	it("cancels a pending custom-prefix save when switching repositories", () => {

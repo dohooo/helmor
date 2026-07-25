@@ -37,6 +37,7 @@ pub struct RepositoryCreateOption {
     /// `Username` by the resolver, matching the explicit default.
     pub branch_prefix_type: Option<crate::settings::BranchPrefixType>,
     pub branch_prefix_custom: Option<String>,
+    pub workspace_root_path: Option<String>,
     pub forge_provider: Option<String>,
     /// gh/glab account login bound to this repo. NULL when no logged-in
     /// account had access at add-repo time; UI surfaces a "Connect"
@@ -90,6 +91,9 @@ pub(crate) struct RepositoryRecord {
     pub remote: Option<String>,
     pub default_branch: Option<String>,
     pub root_path: String,
+    /// Optional per-repo parent directory for Helmor-managed worktree
+    /// workspaces. NULL means use the default data-dir layout.
+    pub workspace_root_path: Option<String>,
     pub setup_script: Option<String>,
     /// Auto-run the setup script when a workspace is created.
     /// Defaults to true; users disable it from repo settings.
@@ -121,7 +125,8 @@ pub fn list_repositories() -> Result<Vec<RepositoryCreateOption>> {
               forge_provider,
               forge_login,
               branch_prefix_type,
-              branch_prefix_custom
+              branch_prefix_custom,
+              workspace_root_path
             FROM repos
             WHERE COALESCE(hidden, 0) = 0
             ORDER BY COALESCE(display_order, 0) ASC, LOWER(name) ASC
@@ -154,6 +159,7 @@ pub fn list_repositories() -> Result<Vec<RepositoryCreateOption>> {
                 default_branch: row.get(2)?,
                 repo_icon_src: icon_src,
                 repo_initials: initials,
+                workspace_root_path: row.get(10)?,
             })
         })
         .context("Failed to load repositories")?;
@@ -234,7 +240,7 @@ pub(crate) fn load_repository_by_id(repo_id: &str) -> Result<Option<RepositoryRe
     let mut statement = connection
         .prepare(
             r#"
-            SELECT id, name, remote, default_branch, root_path, setup_script, auto_run_setup, forge_provider, forge_login
+            SELECT id, name, remote, default_branch, root_path, workspace_root_path, setup_script, auto_run_setup, forge_provider, forge_login
             FROM repos
             WHERE id = ?1
             "#,
@@ -249,10 +255,11 @@ pub(crate) fn load_repository_by_id(repo_id: &str) -> Result<Option<RepositoryRe
                 remote: row.get(2)?,
                 default_branch: row.get(3)?,
                 root_path: row.get(4)?,
-                setup_script: row.get(5)?,
-                auto_run_setup: row.get::<_, Option<i64>>(6)?.unwrap_or(1) != 0,
-                forge_provider: row.get(7)?,
-                forge_login: row.get(8)?,
+                workspace_root_path: row.get(5)?,
+                setup_script: row.get(6)?,
+                auto_run_setup: row.get::<_, Option<i64>>(7)?.unwrap_or(1) != 0,
+                forge_provider: row.get(8)?,
+                forge_login: row.get(9)?,
             })
         })
         .with_context(|| format!("Failed to query repository {repo_id}"))?;
@@ -304,7 +311,7 @@ fn query_repository_by_root_path(
     let mut statement = connection
         .prepare(
             r#"
-            SELECT id, name, remote, default_branch, root_path, setup_script, auto_run_setup, forge_provider, forge_login
+            SELECT id, name, remote, default_branch, root_path, workspace_root_path, setup_script, auto_run_setup, forge_provider, forge_login
             FROM repos
             WHERE root_path = ?1
             ORDER BY created_at ASC
@@ -321,10 +328,11 @@ fn query_repository_by_root_path(
                 remote: row.get(2)?,
                 default_branch: row.get(3)?,
                 root_path: row.get(4)?,
-                setup_script: row.get(5)?,
-                auto_run_setup: row.get::<_, Option<i64>>(6)?.unwrap_or(1) != 0,
-                forge_provider: row.get(7)?,
-                forge_login: row.get(8)?,
+                workspace_root_path: row.get(5)?,
+                setup_script: row.get(6)?,
+                auto_run_setup: row.get::<_, Option<i64>>(7)?.unwrap_or(1) != 0,
+                forge_provider: row.get(8)?,
+                forge_login: row.get(9)?,
             })
         })
         .with_context(|| format!("Failed to query repository row for {root_path}"))?;
@@ -345,7 +353,7 @@ fn query_repository_candidates_by_name(
     let mut statement = connection
         .prepare(
             r#"
-            SELECT id, name, remote, default_branch, root_path, setup_script, auto_run_setup, forge_provider, forge_login
+            SELECT id, name, remote, default_branch, root_path, workspace_root_path, setup_script, auto_run_setup, forge_provider, forge_login
             FROM repos
             WHERE name = ?1 OR root_path LIKE ?2
             ORDER BY created_at ASC
@@ -363,10 +371,11 @@ fn query_repository_candidates_by_name(
                 remote: row.get(2)?,
                 default_branch: row.get(3)?,
                 root_path: row.get(4)?,
-                setup_script: row.get(5)?,
-                auto_run_setup: row.get::<_, Option<i64>>(6)?.unwrap_or(1) != 0,
-                forge_provider: row.get(7)?,
-                forge_login: row.get(8)?,
+                workspace_root_path: row.get(5)?,
+                setup_script: row.get(6)?,
+                auto_run_setup: row.get::<_, Option<i64>>(7)?.unwrap_or(1) != 0,
+                forge_provider: row.get(8)?,
+                forge_login: row.get(9)?,
             })
         })
         .with_context(|| format!("Failed to query repository candidates for {repository_name}"))?;
@@ -805,6 +814,66 @@ pub fn update_repository_branch_prefix(
     }
 
     Ok(())
+}
+
+pub fn update_repository_workspace_root(
+    repo_id: &str,
+    workspace_root_path: Option<&str>,
+) -> Result<()> {
+    let repository = load_repository_by_id(repo_id)?
+        .with_context(|| format!("Repository not found: {repo_id}"))?;
+    let normalized = normalize_workspace_root_input(&repository.root_path, workspace_root_path)?;
+
+    let connection = db::write_conn()?;
+    let updated = connection
+        .execute(
+            "UPDATE repos SET workspace_root_path = ?1, updated_at = datetime('now') WHERE id = ?2",
+            rusqlite::params![normalized.as_deref(), repo_id],
+        )
+        .with_context(|| format!("Failed to update workspace root for {repo_id}"))?;
+
+    if updated != 1 {
+        bail!("Repository not found: {repo_id}");
+    }
+
+    Ok(())
+}
+
+fn normalize_workspace_root_input(
+    repo_root_path: &str,
+    workspace_root_path: Option<&str>,
+) -> Result<Option<String>> {
+    let Some(raw) = workspace_root_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+
+    let candidate = Path::new(raw);
+    if !candidate.is_absolute() {
+        bail!("Workspace location must be an absolute path: {raw}");
+    }
+    if !candidate.is_dir() {
+        bail!(
+            "Workspace location is not a directory: {}",
+            candidate.display()
+        );
+    }
+    let normalized_candidate = normalize_filesystem_path(candidate)
+        .with_context(|| format!("Failed to canonicalize {}", candidate.display()))?;
+    let normalized_repo = normalize_filesystem_path(Path::new(repo_root_path))
+        .unwrap_or_else(|| normalize_path_separators(repo_root_path.to_string()));
+    let candidate_path = Path::new(&normalized_candidate);
+    let repo_path = Path::new(&normalized_repo);
+    if candidate_path == repo_path || candidate_path.starts_with(repo_path) {
+        bail!(
+            "Workspace location must be outside the repository source directory: {}",
+            repo_path.display()
+        );
+    }
+
+    Ok(Some(normalized_candidate))
 }
 
 #[derive(Debug, Clone, Serialize)]

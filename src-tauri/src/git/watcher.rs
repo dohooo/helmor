@@ -85,14 +85,17 @@ struct WatchableWorkspace {
     target_branch: Option<String>,
     mode: WorkspaceMode,
     root_path: Option<String>,
+    worktree_parent_path: Option<String>,
 }
 
 impl WatchableWorkspace {
     fn workspace_path(&self) -> Result<std::path::PathBuf> {
         match self.mode {
-            WorkspaceMode::Worktree => {
-                crate::data_dir::workspace_dir(&self.repo_name, &self.directory_name)
-            }
+            WorkspaceMode::Worktree => crate::workspace::helpers::worktree_workspace_dir(
+                &self.repo_name,
+                &self.directory_name,
+                self.worktree_parent_path.as_deref(),
+            ),
             WorkspaceMode::Local | WorkspaceMode::NonGit => self
                 .root_path
                 .as_deref()
@@ -639,15 +642,15 @@ fn lookup_fetch_target(workspace_id: &str) -> Result<(PathBuf, String, String, S
     let sql = format!(
         "SELECT r.name, w.directory_name, r.remote,
                 COALESCE(w.intended_target_branch, r.default_branch), r.id,
-                COALESCE(w.mode, 'worktree'), r.root_path
+                COALESCE(w.mode, 'worktree'), r.root_path, w.worktree_parent_path
          FROM workspaces w
          JOIN repos r ON r.id = w.repository_id
          WHERE w.id = ?1 AND w.state {}",
         workspace_state::OPERATIONAL_FILTER,
     );
     let mut stmt = connection.prepare(&sql)?;
-    let (repo_name, dir_name, remote, branch, repo_id, mode, root_path) = stmt
-        .query_row(rusqlite::params![workspace_id], |row| {
+    let (repo_name, dir_name, remote, branch, repo_id, mode, root_path, worktree_parent_path) =
+        stmt.query_row(rusqlite::params![workspace_id], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -656,6 +659,7 @@ fn lookup_fetch_target(workspace_id: &str) -> Result<(PathBuf, String, String, S
                 row.get::<_, String>(4)?,
                 row.get::<_, WorkspaceMode>(5)?,
                 row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
             ))
         })
         .context("Workspace not found or archived")?;
@@ -663,7 +667,11 @@ fn lookup_fetch_target(workspace_id: &str) -> Result<(PathBuf, String, String, S
     let remote = remote.context("No remote configured")?;
     let branch = branch.context("No target branch configured")?;
     let workspace_dir = match mode {
-        WorkspaceMode::Worktree => crate::data_dir::workspace_dir(&repo_name, &dir_name)?,
+        WorkspaceMode::Worktree => crate::workspace::helpers::worktree_workspace_dir(
+            &repo_name,
+            &dir_name,
+            worktree_parent_path.as_deref(),
+        )?,
         WorkspaceMode::Local | WorkspaceMode::NonGit => root_path
             .map(PathBuf::from)
             .context("Workspace is missing repo root_path")?,
@@ -787,7 +795,7 @@ fn load_watchable_workspaces() -> Result<Vec<WatchableWorkspace>> {
     let mut stmt = connection.prepare(
         "SELECT w.id, r.name, w.directory_name, w.branch, w.state,
                 r.remote, COALESCE(w.intended_target_branch, r.default_branch), r.id,
-                COALESCE(w.mode, 'worktree'), r.root_path
+                COALESCE(w.mode, 'worktree'), r.root_path, w.worktree_parent_path
          FROM workspaces w
          JOIN repos r ON r.id = w.repository_id
          WHERE COALESCE(w.mode, 'worktree') NOT IN ('chat', 'non_git')",
@@ -804,6 +812,7 @@ fn load_watchable_workspaces() -> Result<Vec<WatchableWorkspace>> {
             repo_id: row.get(7)?,
             mode: row.get(8)?,
             root_path: row.get(9)?,
+            worktree_parent_path: row.get(10)?,
         })
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)

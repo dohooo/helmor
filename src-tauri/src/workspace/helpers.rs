@@ -23,9 +23,11 @@ use crate::{
 /// `directory_name` and resolve it under the `chats` data dir.
 pub fn workspace_path(record: &WorkspaceRecord) -> Result<PathBuf> {
     match record.mode {
-        WorkspaceMode::Worktree => {
-            crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)
-        }
+        WorkspaceMode::Worktree => worktree_workspace_dir(
+            &record.repo_name,
+            &record.directory_name,
+            record.worktree_parent_path.as_deref(),
+        ),
         WorkspaceMode::Local | WorkspaceMode::NonGit => non_empty(&record.root_path)
             .map(PathBuf::from)
             .with_context(|| format!("Workspace {} is missing repo root_path", record.id)),
@@ -37,6 +39,43 @@ pub fn workspace_path(record: &WorkspaceRecord) -> Result<PathBuf> {
             Ok(crate::data_dir::chats_dir()?.join(dir_name))
         }
     }
+}
+
+/// Parent directory for new worktree workspaces in a repo. A repo-level
+/// override owns the repo's workspace namespace directly:
+/// `<workspace_root_path>/<directory_name>`. Without an override, Helmor
+/// keeps the existing data-dir grouping:
+/// `<data>/workspaces/<repo_name>/<directory_name>`.
+pub fn repo_worktree_parent_dir(
+    repo_name: &str,
+    repo_workspace_root_path: Option<&str>,
+) -> Result<PathBuf> {
+    if let Some(custom) = repo_workspace_root_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(PathBuf::from(custom));
+    }
+
+    Ok(crate::data_dir::workspaces_dir()?.join(repo_name))
+}
+
+/// Resolve a worktree workspace path from its materialized parent path.
+/// Legacy rows have no materialized parent; those keep the old data-dir
+/// layout regardless of the repo's current override.
+pub fn worktree_workspace_dir(
+    repo_name: &str,
+    directory_name: &str,
+    worktree_parent_path: Option<&str>,
+) -> Result<PathBuf> {
+    if let Some(parent) = worktree_parent_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(PathBuf::from(parent).join(directory_name));
+    }
+
+    crate::data_dir::workspace_dir(repo_name, directory_name)
 }
 
 // ---- Display / naming helpers ----
@@ -805,16 +844,23 @@ pub fn allocate_chat_workspace_dir() -> Result<(String, PathBuf)> {
     bail!("Unable to allocate a chat workspace directory under {date_dir:?}")
 }
 
-fn lookup_repo_name(connection: &rusqlite::Connection, repo_id: &str) -> Result<Option<String>> {
+fn lookup_repo_workspace_root(
+    connection: &rusqlite::Connection,
+    repo_id: &str,
+) -> Result<Option<PathBuf>> {
     let mut stmt = connection
-        .prepare("SELECT name FROM repos WHERE id = ?1")
-        .context("Failed to prepare repo name lookup")?;
-    let mut rows = stmt
-        .query_map([repo_id], |row| row.get::<_, String>(0))
-        .context("Failed to query repo name")?;
-    match rows.next() {
-        Some(name) => Ok(Some(name?)),
-        None => Ok(None),
+        .prepare("SELECT name, workspace_root_path FROM repos WHERE id = ?1")
+        .context("Failed to prepare repo workspace root lookup")?;
+    let row = stmt.query_row([repo_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+    });
+    match row {
+        Ok((name, workspace_root_path)) => Ok(Some(repo_worktree_parent_dir(
+            &name,
+            workspace_root_path.as_deref(),
+        )?)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(error) => Err(error).context("Failed to query repo workspace root"),
     }
 }
 
@@ -845,14 +891,12 @@ pub fn allocate_directory_name_with_conn(
     // repo's workspace root. Orphan dirs (DB row gone but folder still on
     // disk) would otherwise cause `prepare → finalize` to fail later with a
     // "target already exists" error.
-    if let Some(repo_name) = lookup_repo_name(connection, repo_id)? {
-        if let Ok(workspaces_root) = crate::data_dir::workspace_dir(&repo_name, "") {
-            if let Ok(entries) = std::fs::read_dir(&workspaces_root) {
-                for entry in entries.flatten() {
-                    if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                        if let Some(name) = entry.file_name().to_str() {
-                            used.insert(name.to_ascii_lowercase());
-                        }
+    if let Some(workspaces_root) = lookup_repo_workspace_root(connection, repo_id)? {
+        if let Ok(entries) = std::fs::read_dir(&workspaces_root) {
+            for entry in entries.flatten() {
+                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    if let Some(name) = entry.file_name().to_str() {
+                        used.insert(name.to_ascii_lowercase());
                     }
                 }
             }
@@ -899,6 +943,8 @@ mod tests {
             remote_url: None,
             default_branch: Some("main".to_string()),
             root_path,
+            repo_workspace_root_path: None,
+            worktree_parent_path: None,
             directory_name: "cebu".to_string(),
             state: crate::workspace_state::WorkspaceState::Ready,
             has_unread: false,
@@ -952,6 +998,18 @@ mod tests {
             temp.path().join("workspaces").join("demo").join("cebu")
         );
         std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    #[test]
+    fn workspace_path_for_worktree_uses_materialized_parent_path() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let parent = temp.path().join("repo-workspaces");
+        let mut record = fixture_record(WorkspaceMode::Worktree, None);
+        record.worktree_parent_path = Some(parent.display().to_string());
+
+        let path = workspace_path(&record).unwrap();
+
+        assert_eq!(path, parent.join("cebu"));
     }
 
     #[test]
@@ -1611,6 +1669,30 @@ mod tests {
         );
 
         std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    #[test]
+    fn allocate_skips_orphan_directories_under_repo_workspace_root() {
+        let (conn, _db_dir) = test_db();
+        let temp = tempfile::TempDir::new().unwrap();
+        let custom_root = temp.path().join("custom-root");
+        std::fs::create_dir_all(&custom_root).unwrap();
+        conn.execute(
+            "UPDATE repos SET workspace_root_path = ?1 WHERE id = 'r1'",
+            [custom_root.display().to_string()],
+        )
+        .unwrap();
+
+        let squatted = WORKSPACE_NAMES.first().copied().unwrap();
+        std::fs::create_dir_all(custom_root.join(squatted)).unwrap();
+
+        for _ in 0..50 {
+            let name = allocate_directory_name_with_conn(&conn, "r1").unwrap();
+            assert_ne!(
+                name, squatted,
+                "Allocator must not return a name whose directory already exists under the custom workspace root"
+            );
+        }
     }
 
     /// Regression guard for the on-disk dedupe: a single orphan directory
