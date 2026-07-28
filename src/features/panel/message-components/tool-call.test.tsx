@@ -137,3 +137,69 @@ describe("AssistantToolCall sub-agent live tail", () => {
 		).not.toBeInTheDocument();
 	});
 });
+
+describe("AssistantToolCall agent block — collapsible", () => {
+	it("renders an open <details> by default and hides children when collapsed", () => {
+		const { container } = render(
+			<AssistantToolCall
+				toolName="Agent"
+				args={{ description: "Investigate" }}
+				result="done"
+				childParts={[
+					{
+						type: "tool-call",
+						toolCallId: "tc1",
+						toolName: "Read",
+						args: { file_path: "/src/foo.ts" },
+						argsText: "",
+						result: "contents",
+					},
+				]}
+			/>,
+		);
+
+		const details = container.querySelector(
+			"details",
+		) as HTMLDetailsElement | null;
+		expect(details).not.toBeNull();
+		expect(details!.open).toBe(true);
+		// Child tool is visible while open.
+		expect(screen.getByText("foo.ts")).toBeInTheDocument();
+
+		// Collapse: child disappears.
+		details!.open = false;
+		fireEvent(details!, new Event("toggle"));
+		expect(screen.queryByText("foo.ts")).not.toBeInTheDocument();
+	});
+});
+
+describe("AssistantToolCall Skill tool", () => {
+	it("renders the Skill result text when the skill finishes", () => {
+		render(
+			<AssistantToolCall
+				toolName="Skill"
+				args={{ name: "commit-changes" }}
+				result="SKILL OUTPUT HERE"
+				childParts={[{ type: "text", id: "t1", text: "running skill…" }]}
+			/>,
+		);
+
+		expect(screen.getByText("SKILL OUTPUT HERE")).toBeInTheDocument();
+	});
+
+	it("keeps the Skill block collapsible", () => {
+		const { container } = render(
+			<AssistantToolCall
+				toolName="Skill"
+				args={{ name: "commit-changes" }}
+				result="done"
+				childParts={[{ type: "text", id: "t1", text: "skill child text" }]}
+			/>,
+		);
+		const details = container.querySelector(
+			"details",
+		) as HTMLDetailsElement | null;
+		expect(details).not.toBeNull();
+		expect(details!.open).toBe(true);
+	});
+});
