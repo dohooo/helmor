@@ -235,6 +235,10 @@ export const OPENCODE_SHA256: Readonly<
 		arm64: "783e75c1bd8662b51ff2a72aac8c88de466c811a6ee8ada96daebb0adf9a3b88",
 		x64: "4322661965f71c3c80b2b8c866b4e73725d0b1ed681ab0cccb9246819726096f",
 	},
+	"1.18.7": {
+		arm64: "efe1a848c28d1ce20ed77087e487405e6991559af86112969defa8f25011bbef",
+		x64: "718d8488e828ee2bd54023d90a095b10efe297865df00ee13475f180cadb39ed",
+	},
 };
 
 // Kimi Code CLI ships per-platform native binaries (Node SEA) as zip release
@@ -242,7 +246,7 @@ export const OPENCODE_SHA256: Readonly<
 // release URL rather than from node_modules. Bumping: pull each platform's
 // SHA256 from the release's `*.zip.sha256` sidecar (or the GitHub asset
 // `digest`) and wipe sidecar/.bundle-cache. Keyed `version → platformSlug`.
-export const KIMI_VERSION = "0.29.1";
+export const KIMI_VERSION = "0.29.2";
 export const KIMI_SHA256: Readonly<Record<string, Record<string, string>>> = {
 	"0.19.1": {
 		"darwin-arm64":
@@ -293,6 +297,16 @@ export const KIMI_SHA256: Readonly<Record<string, Record<string, string>>> = {
 			"269559f980a0d64a14e58df00187ea5f6711312fb395335eaa01de2b9da11a22",
 		"win32-x64":
 			"f1447930a2d5422ae15bb0c73a7a5fba5fdb679beecf162cc460439785014310",
+	},
+	"0.29.2": {
+		"darwin-arm64":
+			"33fe10b7059ec39eecad8fc36b25059abc80c3d64d6d3975aa15c8fe183f5784",
+		"darwin-x64":
+			"5e206bfe7251aa391b6700a53f6431dd2d9bf89e2693ab6eb440e20a332a72df",
+		"win32-arm64":
+			"379be73d6b7fb9fbb582c3187e90251efddaf5a18caf16c77dfc5158c39b1a5c",
+		"win32-x64":
+			"0abd43b7428f493b2736ac3a4c8fc315e5fc4aa22dfb26dd764e1348e5b80718",
 	},
 };
 
