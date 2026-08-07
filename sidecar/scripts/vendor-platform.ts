@@ -275,6 +275,10 @@ export const OPENCODE_SHA256: Readonly<
 		arm64: "fd0ce07182a81c93a875d17c5e47b80b430b9ae6b0137275a7c198f2eac2baf5",
 		x64: "d0d189714bc48acebb0f366164292216cbbd9138c05590e6b3f68b422238d807",
 	},
+	"1.18.15": {
+		arm64: "d08bf6dc6c8d2c4ee60c7d4b53d1f29f94c6b8ac7ce8c9b1536f078b6c201965",
+		x64: "ac6e91c2907ac92278f7d93ffe27ea1908704b09e1a12e18886fca4b6f555a6d",
+	},
 };
 
 // Kimi Code CLI ships per-platform native binaries (Node SEA) as zip release
