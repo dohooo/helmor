@@ -206,6 +206,10 @@ export const CLAUDE_CODE_SHA256: Readonly<
 		arm64: "f3caa07c133d8bb540eb59b56985552f18623814805036817afe1f80982abf9d",
 		x64: "f723735b00d692abf4f7b9d141ef6236fee0199cb5d62b91c5f34d2872281e86",
 	},
+	"2.1.229": {
+		arm64: "d8bf3203231f18e585d2fc88d36c8a8a22fa980a458e16304ea9944cc586fb59",
+		x64: "810cbd454a1c72ac139c3df111764fa8b3441a557b63290600a975f131e75e4b",
+	},
 };
 
 export const OPENCODE_SHA256: Readonly<
@@ -287,6 +291,10 @@ export const OPENCODE_SHA256: Readonly<
 		arm64: "3084a0c32d35f6387c6823027391532181e882c59851020605a922659e3bb6d0",
 		x64: "b6ced1c08321380f75dcbeb37869df5953defdd79053c80a39e0f6914ac9f106",
 	},
+	"1.18.18": {
+		arm64: "9d62f72654b27c4fae220ce09fcea4e1364ff52225086feab94a35c6b0c0b4a7",
+		x64: "3aab5936282912155f5878228692336c9e712775491cf97c880daa99edc16e98",
+	},
 };
 
 // Kimi Code CLI ships per-platform native binaries (Node SEA) as zip release
@@ -294,7 +302,7 @@ export const OPENCODE_SHA256: Readonly<
 // release URL rather than from node_modules. Bumping: pull each platform's
 // SHA256 from the release's `*.zip.sha256` sidecar (or the GitHub asset
 // `digest`) and wipe sidecar/.bundle-cache. Keyed `version → platformSlug`.
-export const KIMI_VERSION = "0.34.0";
+export const KIMI_VERSION = "0.35.0";
 export const KIMI_SHA256: Readonly<Record<string, Record<string, string>>> = {
 	"0.19.1": {
 		"darwin-arm64":
@@ -395,6 +403,16 @@ export const KIMI_SHA256: Readonly<Record<string, Record<string, string>>> = {
 			"6a44c456058898e7eea18b0bfbe7f893c706661d39e3d5d9ba6384a39e95a79a",
 		"win32-x64":
 			"13cae7d4e7f09a29892922b46bd82322b835acc1ae40cbf15e42081178eaca4f",
+	},
+	"0.35.0": {
+		"darwin-arm64":
+			"18a4a6cda3bda4270d5ab34152d1701f04397514db278bbbe21906027199f0de",
+		"darwin-x64":
+			"6e59d8dd5a5088bc308270f02cadb74e09af39b6dd7638377d73902950abe781",
+		"win32-arm64":
+			"3593f24380799723693dcb2024617185f208edd342e441e6c0dcf56a4a156535",
+		"win32-x64":
+			"6d67a508c51f6e2cc8dc5abd9de14c446a70a8d2eacfc5e2884cca6f935ca12c",
 	},
 };
 
