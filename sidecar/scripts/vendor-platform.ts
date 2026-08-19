@@ -113,6 +113,10 @@ export const CODEX_SHA256: Readonly<
 		arm64: "493de2d788c6ff01de222307c767231c1e6c802d5dd808523550fad6d972f4d3",
 		x64: "43cd79decdd0c110daa90a0fd34e73523c7a10fb0e4d5d9bf1437d9298be08b6",
 	},
+	"0.148.0": {
+		arm64: "b20357817b1b11dab7a6696b051965aaad4311a690f2bac7d87678a92aa8bead",
+		x64: "598f242bc4c29d5e0d43bc693df8f59bc23a4c968bd1d98fc7f00b97a93b2515",
+	},
 };
 
 export const CLAUDE_CODE_SHA256: Readonly<
@@ -214,6 +218,10 @@ export const CLAUDE_CODE_SHA256: Readonly<
 		arm64: "a56373192dfec21b03697ecfd3cfd14c9eaa8336d752179be78c675f3e234edd",
 		x64: "2c3ea49d9e5446c3d1a9b5db737972ca1815894aaa994b048dff94ed9321393a",
 	},
+	"2.1.235": {
+		arm64: "fc84dc9855565bae4a80d893ad8efcb767c9a0084b187073a3dd88464a3a8e9e",
+		x64: "306371c9b27a86136023368ae13521c8042e5bc57fd6d71ec679faa7886833f7",
+	},
 };
 
 export const OPENCODE_SHA256: Readonly<
@@ -306,7 +314,7 @@ export const OPENCODE_SHA256: Readonly<
 // release URL rather than from node_modules. Bumping: pull each platform's
 // SHA256 from the release's `*.zip.sha256` sidecar (or the GitHub asset
 // `digest`) and wipe sidecar/.bundle-cache. Keyed `version → platformSlug`.
-export const KIMI_VERSION = "0.36.1";
+export const KIMI_VERSION = "0.37.2";
 export const KIMI_SHA256: Readonly<Record<string, Record<string, string>>> = {
 	"0.19.1": {
 		"darwin-arm64":
@@ -437,6 +445,16 @@ export const KIMI_SHA256: Readonly<Record<string, Record<string, string>>> = {
 			"89b684be9eeae8f07106e27f650ddd6880900a99c6c30b5bb06a79cde58f0286",
 		"win32-x64":
 			"eefcd15ef3f35480221b758f60e9568d8166b2776190c24131f162a2f89b6e1b",
+	},
+	"0.37.2": {
+		"darwin-arm64":
+			"d5256d7dc5f43bda1cddbdccd810d247becbc4884d6c971e465044e3a6999c7a",
+		"darwin-x64":
+			"711d6bd91bd3ccc085fad5045e0142b06ea02315407d157e2fa4e59802f002d7",
+		"win32-arm64":
+			"e14999694dde56733c65e6439b1727ef24b3c4a556510dc859102b01a586b5c6",
+		"win32-x64":
+			"b03fe5e9529df921ff79b3618acfaf53433ca852ed799a158ad3b809d1be7a27",
 	},
 };
 
