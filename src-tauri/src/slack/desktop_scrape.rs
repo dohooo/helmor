@@ -356,8 +356,10 @@ fn decode_local_storage_value(value: &[u8]) -> Result<String> {
     }
     if body.len().is_multiple_of(2) {
         let units: Vec<u16> = body
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
             .collect();
         if let Ok(s) = String::from_utf16(&units) {
             return Ok(s);
