@@ -1,11 +1,8 @@
 {
-  "mcpServers": {
-    "knos": {
-      "command": "python",
-      "args": [
-        "-m",
-        "knos.mcp"
-      ]
-    }
-  }
+	"mcpServers": {
+		"knos": {
+			"command": "python",
+			"args": ["-m", "knos.mcp"]
+		}
+	}
 }
