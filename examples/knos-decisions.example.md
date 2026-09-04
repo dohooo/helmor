@@ -5,8 +5,8 @@
 
 ## Decisions
 
-- **rule 1** - **Rust backend** (`src-tauri/src/`): Tauri host, SQLite database, spawns and supervises the sidecar. _(source: CLAUDE.md)_
-- **rule 2** - `pipeline_scenarios.rs` -- Handcrafted edge cases (70+ tests). Normalized snapshots. _(source: CLAUDE.md)_
+- **Rust backend** (`src-tauri/src/`): Tauri host, SQLite database, spawns and supervises the sidecar. _(source: CLAUDE.md)_
+- `pipeline_scenarios.rs` -- Handcrafted edge cases (70+ tests). Normalized snapshots. _(source: CLAUDE.md)_
 
 ## Being worked on right now
 
