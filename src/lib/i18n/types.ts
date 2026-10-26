@@ -1,8 +1,12 @@
-export type AppLanguage = "en" | "zh-CN";
+export type AppLanguage = "en" | "zh-CN" | "pt-BR";
 
 export const DEFAULT_APP_LANGUAGE: AppLanguage = "en";
 
-export const VALID_APP_LANGUAGES: readonly AppLanguage[] = ["en", "zh-CN"];
+export const VALID_APP_LANGUAGES: readonly AppLanguage[] = [
+	"en",
+	"zh-CN",
+	"pt-BR",
+];
 
 export const APP_LANGUAGE_OPTIONS: readonly {
 	value: AppLanguage;
@@ -10,6 +14,7 @@ export const APP_LANGUAGE_OPTIONS: readonly {
 }[] = [
 	{ value: "en", label: "English" },
 	{ value: "zh-CN", label: "简体中文" },
+	{ value: "pt-BR", label: "Português (Brasil)" },
 ];
 
 export function isAppLanguage(value: unknown): value is AppLanguage {
